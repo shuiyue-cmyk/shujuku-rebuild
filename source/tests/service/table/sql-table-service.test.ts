@@ -42,6 +42,8 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   get settings_ACU() { return mockLockSettings.value; },
   currentChatFileIdentifier_ACU: 'test-chat',
   getCurrentIsolationKey_ACU: () => 'iso-key',
+  // 冷加载接线的取消信号：单测默认没有在飞的聊天变更，返回 null（与生产未中断时同形态）。
+  getChatMutationAbortSignal_ACU: () => null,
 }));
 
 // mock settings-service（helpers-table-lock 的持久化依赖）

@@ -5,7 +5,7 @@ import { SCRIPT_ID_PREFIX_ACU } from '../../shared/constants';
 import { escapeHtml_ACU } from '../../shared/html-helpers';
 import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU } from '../../shared/utils';
 import { getActiveTemplatePresetMeta_ACU } from '../../service/template/template-preset-service';
-import { resolveTableHistoryStateFromChat_ACU } from '../../service/table/table-history';
+import { resolveTableHistoryStatesFromChat_ACU } from '../../service/table/table-history';
 import { $popupInstance_ACU, $cardUpdateStatusDisplay_ACU } from '../state/ui-refs';
 import { countAiFloors_ACU } from '../../shared/ai-floor';
 /**
@@ -55,6 +55,18 @@ import { countAiFloors_ACU } from '../../shared/ai-floor';
       let nextUpdates: any[] = [];
       let tableStatusRows = "";
 
+      // 批量解析所有表的历史状态（单次扫描 chat），与 v2 仪表页同款接线：
+      // 逐表解析会让每张表各做一次全量逆扫，表数一多就是 N 倍扫描成本。
+      // 批量与逐表 API 对同一 chat 逐字段等价（resolveTableHistoryStateFromChat_ACU
+      // 本身就是批量 API 的单键包装），因此逐行读数不变。
+      const currentIsolationKey = getCurrentIsolationKey_ACU();
+      const historyStates = resolveTableHistoryStatesFromChat_ACU(chatHistory, sheetKeys.map(key => ({
+          sheetKey: key,
+          isSummaryTable: isSummaryOrOutlineTable_ACU(currentJsonTableData_ACU[key]?.name),
+          isolationKey: currentIsolationKey,
+          settings: settings_ACU,
+      })));
+
       sheetKeys.forEach(key => {
         const table = currentJsonTableData_ACU[key];
         if (!table) return;
@@ -65,7 +77,6 @@ import { countAiFloors_ACU } from '../../shared/ai-floor';
 
         // 计算每个表的状态
         const tableConfig = table.updateConfig || {};
-        const isSummary = isSummaryOrOutlineTable_ACU(table.name);
         
         // 确定参数
         const globalFrequency = settings_ACU.autoUpdateFrequency || 1;
@@ -76,18 +87,12 @@ import { countAiFloors_ACU } from '../../shared/ai-floor';
         const rawSkip = Number.isFinite(tableConfig.skipFloors) ? tableConfig.skipFloors : -1;
         const frequency = (rawFreq === -1) ? globalFrequency : rawFreq;
         
-        // [重构] 上次更新楼层计算：扫描聊天记录
-        // 寻找该表格在历史记录中最后一次被更新的楼层
-        // 支持合并更新逻辑：只要合并更新组内有任意表被修改，整组表都视为已更新
-        const currentIsolationKey = getCurrentIsolationKey_ACU();
-        const history = resolveTableHistoryStateFromChat_ACU(chatHistory, {
-            sheetKey: key,
-            isSummaryTable: isSummary,
-            isolationKey: currentIsolationKey,
-            settings: settings_ACU,
-        });
-        const lastUpdatedAiFloor = history.lastTrackedUpdateAiFloor;
-        const foundInHistory = history.hasTrackedUpdate;
+        // [重构] 上次更新楼层：取上面那次批量解析的结果。
+        // 批量层只丢弃空 sheetKey（getSortedSheetKeys_ACU 不产出空键），
+        // 缺失兜底沿用逐表 API 的默认形态：未记录、无上次更新楼层。
+        const history = historyStates.get(key);
+        const lastUpdatedAiFloor = history?.lastTrackedUpdateAiFloor || 0;
+        const foundInHistory = history?.hasTrackedUpdate === true;
         
         const skipFloors = Math.max(0, (rawSkip === -1) ? globalSkip : rawSkip);
 

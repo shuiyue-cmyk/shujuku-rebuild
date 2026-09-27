@@ -10,6 +10,7 @@ import {
   useVisualizerStore,
   type VisualizerOpenSource,
 } from '../../stores/visualizer-store';
+import { readVisualizerSourceRevision_ACU } from '../../../service/visualizer/visualizer-source-revision';
 
 interface OpenVisualizerSurfaceOptions {
   source?: VisualizerOpenSource;
@@ -68,7 +69,9 @@ export async function openVisualizerSurface_ACU(
 export async function requestVisualizerExternalRefresh_ACU(): Promise<void> {
   const pinia = getAcuV2PiniaForBridge();
   if (!pinia) return;
-  useVisualizerStore(pinia).requestExternalRefresh();
+  // 带上当前数据源 revision：store 据此把同一轮的重复请求合并成一次重载，
+  // 并在数据源没变时直接跳过（省掉整表重载与两次全库克隆）。
+  useVisualizerStore(pinia).requestExternalRefresh(readVisualizerSourceRevision_ACU());
 }
 
 /**

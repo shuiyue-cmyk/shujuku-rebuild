@@ -34,9 +34,21 @@ export function isAiFloor_ACU(message: any): boolean {
     return true;
 }
 
-/** 统计 AI 楼总数（宽档）。 */
+/**
+ * 统计 AI 楼总数（宽档）。
+ *
+ * 循环计数而非 `chat.filter(isAiFloor_ACU).length`：filter 会为整条聊天数组
+ * 分配一份等长拷贝，而本函数是每次「同步段」都要跑的计数口径（长会话下
+ * 单次就是几百上千条）。filter 对稀疏数组跳过空洞，循环读到 undefined 也
+ * 判非 AI 楼，两者在空洞上的结果同样为「不计数」。
+ */
 export function countAiFloors_ACU(chat: any): number {
-    return Array.isArray(chat) ? chat.filter(isAiFloor_ACU).length : 0;
+    if (!Array.isArray(chat)) return 0;
+    let count = 0;
+    for (let index = 0; index < chat.length; index += 1) {
+        if (isAiFloor_ACU(chat[index])) count += 1;
+    }
+    return count;
 }
 
 /** 判断一个聊天消息是否为「模型产出的 AI 楼」（窄档：宽档再排除 narrator 旁白）。 */
@@ -45,9 +57,14 @@ export function isAiModelOutputFloor_ACU(message: any): boolean {
     return message.extra?.type !== 'narrator';
 }
 
-/** 统计模型产出的 AI 楼总数（窄档）。 */
+/** 统计模型产出的 AI 楼总数（窄档）。同样循环计数，不为整条聊天数组分配拷贝。 */
 export function countAiModelOutputFloors_ACU(chat: any): number {
-    return Array.isArray(chat) ? chat.filter(isAiModelOutputFloor_ACU).length : 0;
+    if (!Array.isArray(chat)) return 0;
+    let count = 0;
+    for (let index = 0; index < chat.length; index += 1) {
+        if (isAiModelOutputFloor_ACU(chat[index])) count += 1;
+    }
+    return count;
 }
 
 /**

@@ -82,3 +82,72 @@ describe('isDataBearingMessage_ACU（数据承载档：任意非 user 消息）'
     expect(isDataBearingMessage_ACU('x')).toBe(false);
   });
 });
+
+/**
+ * 给整条聊天数组装一个 filter 探针：一旦计数实现改回 `chat.filter(...).length`，
+ * 探针就会记录到一次「为整条数组分配等长拷贝」的调用。
+ * Array.prototype.filter 是普通数据属性，数组实例上的自有属性会先命中，
+ * 因此探针既能观测旧实现，也能要求新实现保持零调用。
+ */
+function withFilterSpy(chat: any[]) {
+  const probe = { filterCalls: 0, resultSizes: [] as number[] };
+  Object.defineProperty(chat, 'filter', {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: (predicate: (value: any, index: number, array: any[]) => unknown) => {
+      probe.filterCalls += 1;
+      const matched = Array.prototype.filter.call(chat, predicate);
+      probe.resultSizes.push(matched.length);
+      return matched;
+    },
+  });
+  return probe;
+}
+
+function buildFloorChat(size: number): any[] {
+  const chat: any[] = [];
+  for (let index = 0; index < size; index += 1) {
+    if (index % 4 === 0) chat.push({ is_user: true, mes: `用户 ${index}` });
+    else if (index % 7 === 0) chat.push({ is_user: false, is_system: true, mes: `隐藏 ${index}` });
+    else if (index % 11 === 0) chat.push({ role: 'tool', is_system: true, mes: `工具 ${index}` });
+    else if (index % 13 === 0) chat.push({ is_user: false, mes: `旁白 ${index}`, extra: { type: 'narrator' } });
+    else chat.push({ is_user: false, mes: `AI ${index}` });
+  }
+  return chat;
+}
+
+describe('计数函数不再为整条聊天数组分配拷贝（P2-1）', () => {
+  it('宽档计数在 5000 楼聊天上零 filter 调用，计数与 filter 基线相等', () => {
+    const chat = buildFloorChat(5000);
+    const probe = withFilterSpy(chat);
+
+    const count = countAiFloors_ACU(chat);
+
+    expect(probe.filterCalls).toBe(0);
+    expect(probe.resultSizes).toEqual([]);
+    expect(count).toBe(chat.filter(isAiFloor_ACU).length);
+    expect(count).toBeGreaterThan(0);
+  });
+
+  it('窄档计数同样零 filter 调用，计数与 filter 基线相等', () => {
+    const chat = buildFloorChat(5000);
+    const probe = withFilterSpy(chat);
+
+    const count = countAiModelOutputFloors_ACU(chat);
+
+    expect(probe.filterCalls).toBe(0);
+    expect(count).toBe(buildFloorChat(5000).filter(isAiModelOutputFloor_ACU).length);
+  });
+
+  it('稀疏数组与非法入参下计数与旧 filter 实现一致', () => {
+    const sparse = new Array(6);
+    sparse[0] = { is_user: false, mes: 'AI' };
+    sparse[3] = { is_user: false, mes: 'AI', extra: { type: 'narrator' } };
+    sparse[5] = { is_user: true, mes: '用户' };
+    expect(countAiFloors_ACU(sparse)).toBe(sparse.filter(isAiFloor_ACU).length);
+    expect(countAiModelOutputFloors_ACU(sparse)).toBe(sparse.filter(isAiModelOutputFloor_ACU).length);
+    expect(countAiFloors_ACU(null as any)).toBe(0);
+    expect(countAiModelOutputFloors_ACU({ length: 3 } as any)).toBe(0);
+  });
+});

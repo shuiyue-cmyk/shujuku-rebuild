@@ -885,3 +885,57 @@ describe('ContinuationPage', () => {
     expect(requirementModule.dirty).toBe(true);
   });
 });
+
+  it('倒计时时钟只在存在 deadlineAt 时启动：无任务时 1s 心跳不产生定时器', async () => {
+    vi.useFakeTimers();
+    const intervalSpy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      // 无任务（deadlineAt 为 undefined）：整页没有任何依赖时钟的读数，不该有心跳。
+      const { app, el } = await mountPage();
+      expect(el.textContent).toContain('倒计时 未设置');
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(intervalSpy).not.toHaveBeenCalled();
+      expect(el.textContent).toContain('倒计时 未设置');
+      app.unmount();
+    } finally {
+      intervalSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('倒计时时钟：有 deadlineAt 时每秒推进读数，deadline 消失后心跳停摆', async () => {
+    vi.useFakeTimers();
+    const intervalSpy = vi.spyOn(globalThis, 'setInterval');
+    try {
+      setTask();
+      task.value.deadlineAt = Date.now() + 5_000;
+      const { app, el } = await mountPage();
+      expect(el.textContent).toContain('倒计时 00:00:05');
+      expect(intervalSpy).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await nextTick();
+      expect(el.textContent).toContain('倒计时 00:00:04');
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await nextTick();
+      expect(el.textContent).toContain('倒计时 00:00:02');
+
+      // 任务被清空（切聊天/结束）后不再有心跳：继续推进时间读数保持不变。
+      task.value = null;
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await nextTick();
+      expect(el.textContent).toContain('倒计时 未设置');
+      expect(intervalSpy).toHaveBeenCalledTimes(1);
+
+      // 卸载后不留悬挂定时器。
+      app.unmount();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      intervalSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });

@@ -85,22 +85,38 @@ describe('openVisualizerSurface_ACU', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('安装独立 v2 全局接口：未打开时忽略，打开后记录刷新请求', async () => {
+  it('安装独立 v2 全局接口：未打开时忽略；打开后按数据源 revision 决定是否重载', async () => {
     persistAdvancedMode();
     const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
     const mount = await import('../../../src/presentation-v2/bootstrap/mount');
+    const state = await import('../../../src/service/runtime/state-manager');
     const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
     expect(typeof (window as any).AutoCardUpdaterV2API?.open).toBe('function');
     expect(typeof (window as any).AutoCardUpdaterV2API?.openVisualizer).toBe('function');
     expect(typeof (window as any).AutoCardUpdaterV2API?.refreshVisualizer).toBe('function');
 
+    // 未打开：请求被忽略。
     await (window as any).AutoCardUpdaterV2API.refreshVisualizer();
     await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await (window as any).AutoCardUpdaterV2API.refreshVisualizer();
-    await Promise.resolve();
-
+    await new Promise(resolve => setTimeout(resolve, 600));
     const pinia = mount.getAcuV2PiniaForBridge();
     expect(pinia).not.toBeNull();
+    expect(useVisualizerStore(pinia!).externalRefreshTick).toBe(0);
+
+    // 已打开但数据源没变（打开时已载入同一份）：请求被 revision 守卫跳过，不重载。
+    await (window as any).AutoCardUpdaterV2API.refreshVisualizer();
+    await new Promise(resolve => setTimeout(resolve, 600));
+    expect(useVisualizerStore(pinia!).externalRefreshTick).toBe(0);
+
+    // 外部真的改了表数据：请求先进 500ms 合并窗口（同轮多条通知合并为一次重载），
+    // 窗口末尾才结算成一次 ++externalRefreshTick。
+    state._set_currentJsonTableData_ACU({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: { uid: 'sheet_a', name: '外部改动', orderNo: 0, content: [[null, '姓名'], [null, 'A']] },
+    });
+    await (window as any).AutoCardUpdaterV2API.refreshVisualizer();
+    expect(useVisualizerStore(pinia!).externalRefreshTick).toBe(0);
+    await new Promise(resolve => setTimeout(resolve, 600));
     expect(useVisualizerStore(pinia!).externalRefreshTick).toBe(1);
     mount.__resetAcuV2MountForTests();
   });

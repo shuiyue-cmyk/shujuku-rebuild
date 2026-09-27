@@ -10,6 +10,7 @@ import {
   coreApisAreReady_ACU,
   currentChatFileIdentifier_ACU,
   currentJsonTableData_ACU,
+  getChatMutationAbortSignal_ACU,
   getCurrentIsolationKey_ACU,
   settings_ACU,
   _set_currentJsonTableData_ACU,
@@ -92,6 +93,10 @@ import {
   type NullRowCleanupPersistStatus_ACU
 } from '../table/storage-frame-v2-persist';
 import {
+  COLD_REPLAY_YIELD_BUDGET_MS_ACU,
+  V2ReplayAbortedError_ACU
+} from '../table/storage-frame-v2-replay';
+import {
   allocConsecutiveOrderBlock_ACU,
   applyPlacementToEntry_ACU,
   buildDefaultGlobalInjectionConfig_ACU,
@@ -145,8 +150,32 @@ export   async function updateReadableLorebookEntry_ACU(createIfNeeded = false, 
         mergedData = currentJsonTableData_ACU;
     } else {
         // 冷启动/切换聊天/显式刷新时，才使用全表合并逻辑从整段聊天记录恢复最新版本。
+        // 冷入口接线（P1-c 续）：长聊天全量回放按统一预算在 frame/entry 边界让出事件循环，
+        // 并接入聊天变更取消信号（删楼/ROLL/切聊天）。
+        // 本函数全程不持任何锁（世界书更新链无互斥量，让出不会让出到半完成的临界区），
+        // 但让出窗口内可能切聊，因此 await 之后必须复检聊天身份：陈旧结果一律丢弃，
+        // 既不写内存表数据也不更新任何世界书条目（与可视化器载入的 contextKey 校验同口径）。
+        const mergeChatKey = String(currentChatFileIdentifier_ACU || '');
+        const mergeIsolationKey = String(getCurrentIsolationKey_ACU() || '');
         await loadAllChatMessages_ACU();
-        const mergedFromHistory = await mergeAllIndependentTables_ACU();
+        let mergedFromHistory: Record<string, any> | null = null;
+        try {
+            mergedFromHistory = await mergeAllIndependentTables_ACU({
+                yieldBudgetMs: COLD_REPLAY_YIELD_BUDGET_MS_ACU,
+                signal: getChatMutationAbortSignal_ACU(),
+            });
+        } catch (error) {
+            if (error instanceof V2ReplayAbortedError_ACU) {
+                logDebug_ACU('[Worldbook] 冷回放因聊天变更中止，丢弃本次世界书派生刷新。');
+                return;
+            }
+            throw error;
+        }
+        if (String(currentChatFileIdentifier_ACU || '') !== mergeChatKey
+            || String(getCurrentIsolationKey_ACU() || '') !== mergeIsolationKey) {
+            logDebug_ACU('[Worldbook] 冷回放期间聊天身份已变化，丢弃陈旧的世界书派生刷新。');
+            return;
+        }
         if (mergedFromHistory) {
             mergedData = mergedFromHistory;
             // 同步内存中的全局数据，确保后续调用保持一致

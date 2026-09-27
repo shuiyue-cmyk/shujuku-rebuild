@@ -34538,6 +34538,54 @@ function getRuntimeEffectiveSchema_ACU(sheet) {
     return value;
 }
 /**
+ * DDL 列解析记忆化。
+ *
+ * getSheetColumnProjection_ACU 被 UI 与生成链 19 处共用，每次调用都要把整条 DDL
+ * 从零重解一遍（逐列分词、注释剥离、DEFAULT 表达式扫描、多趟正则）。而它读到的
+ * 输入只有三样：DDL 串、表头行 content[0]、隐藏列配置 hiddenPhysicalColumns。
+ * 其中只有 DDL 串需要重解析，另两样是逐元素读取，因此：
+ * - 记忆化键＝DDL 串逐字相等（parseDDLColumnInfos_ACU 是 DDL 串的纯函数）；
+ * - 表头行与隐藏列配置每次现读现算，令牌不覆盖的输入一律不省略；
+ * - 只缓存解析产物、不缓存投影结果对象：结果每次新建，调用方之间不共享可变结构
+ *   （本仓 v9.6.6 有过「共享引用被就地改」的事故）。
+ *
+ * 失败路径（非法隐藏列配置）不缓存：照旧每次现算并抛出新的 Error。
+ * 缓存条目数上限固定，超限整表清空后按需重建（表结构是有限集）。
+ */
+const DDL_COLUMN_MEMO_LIMIT_ACU = 128;
+const ddlColumnMemo_ACU = new Map();
+const projectionMemoCounters_ACU = { ddlParses: 0, memoHits: 0 };
+let projectionMemoCountersEnabled_ACU = false;
+/** 仅供测试：打开计数并清空记忆化。 */
+function __resetSheetColumnProjectionMemoForTests_ACU() {
+    projectionMemoCounters_ACU.ddlParses = 0;
+    projectionMemoCounters_ACU.memoHits = 0;
+    projectionMemoCountersEnabled_ACU = true;
+    ddlColumnMemo_ACU.clear();
+}
+/** 仅供测试：读取计数快照。 */
+function __readSheetColumnProjectionMemoCountersForTests_ACU() {
+    return { ...projectionMemoCounters_ACU };
+}
+/** DDL 串 → 列解析产物。空 DDL 不入缓存（解析本身已是空结果，不值得占位）。 */
+function resolveDdlColumnsMemoized_ACU(ddl) {
+    if (!ddl)
+        return [];
+    const hit = ddlColumnMemo_ACU.get(ddl);
+    if (hit) {
+        if (projectionMemoCountersEnabled_ACU)
+            projectionMemoCounters_ACU.memoHits += 1;
+        return hit;
+    }
+    const parsed = parseDDLColumnInfos_ACU(ddl);
+    if (projectionMemoCountersEnabled_ACU)
+        projectionMemoCounters_ACU.ddlParses += 1;
+    if (ddlColumnMemo_ACU.size >= DDL_COLUMN_MEMO_LIMIT_ACU)
+        ddlColumnMemo_ACU.clear();
+    ddlColumnMemo_ACU.set(ddl, parsed);
+    return parsed;
+}
+/**
  * Resolves the persisted physical-column visibility contract without changing
  * the sheet's schema or row layout. Consumers must keep sourceIndex when they
  * project rows; a visible array index is not a physical column index.
@@ -34546,7 +34594,7 @@ function getSheetColumnProjection_ACU(sheet) {
     const headers = Array.isArray(sheet?.content?.[0])
         ? sheet.content[0].map(value => String(value ?? ''))
         : [];
-    const ddlColumns = parseDDLColumnInfos_ACU(String(sheet?.sourceData?.ddl || ''));
+    const ddlColumns = resolveDdlColumnsMemoized_ACU(String(sheet?.sourceData?.ddl || ''));
     const rawHidden = sheet?.sourceData?.hiddenPhysicalColumns;
     if (rawHidden !== undefined && !Array.isArray(rawHidden)) {
         throw new Error('hiddenPhysicalColumns 必须是 physical column 字符串数组。');
@@ -34601,7 +34649,7 @@ function projectSheetDDLForVisibleColumns_ACU(sheet, ddlOverride) {
     if (projection.hiddenPhysicalColumns.length === 0)
         return ddl;
     const bounds = findCreateTableDefinitionBounds_ACU(ddl);
-    const infos = parseDDLColumnInfos_ACU(ddl);
+    const infos = resolveDdlColumnsMemoized_ACU(ddl);
     if (!bounds || infos.length !== projection.columns.length) {
         throw new Error('无法为隐藏列构建安全的可见 DDL 投影。');
     }
@@ -43250,9 +43298,23 @@ function isAiFloor_ACU(message) {
         return false;
     return true;
 }
-/** 统计 AI 楼总数（宽档）。 */
+/**
+ * 统计 AI 楼总数（宽档）。
+ *
+ * 循环计数而非 `chat.filter(isAiFloor_ACU).length`：filter 会为整条聊天数组
+ * 分配一份等长拷贝，而本函数是每次「同步段」都要跑的计数口径（长会话下
+ * 单次就是几百上千条）。filter 对稀疏数组跳过空洞，循环读到 undefined 也
+ * 判非 AI 楼，两者在空洞上的结果同样为「不计数」。
+ */
 function countAiFloors_ACU(chat) {
-    return Array.isArray(chat) ? chat.filter(isAiFloor_ACU).length : 0;
+    if (!Array.isArray(chat))
+        return 0;
+    let count = 0;
+    for (let index = 0; index < chat.length; index += 1) {
+        if (isAiFloor_ACU(chat[index]))
+            count += 1;
+    }
+    return count;
 }
 /** 判断一个聊天消息是否为「模型产出的 AI 楼」（窄档：宽档再排除 narrator 旁白）。 */
 function isAiModelOutputFloor_ACU(message) {
@@ -43260,9 +43322,16 @@ function isAiModelOutputFloor_ACU(message) {
         return false;
     return message.extra?.type !== 'narrator';
 }
-/** 统计模型产出的 AI 楼总数（窄档）。 */
+/** 统计模型产出的 AI 楼总数（窄档）。同样循环计数，不为整条聊天数组分配拷贝。 */
 function countAiModelOutputFloors_ACU(chat) {
-    return Array.isArray(chat) ? chat.filter(isAiModelOutputFloor_ACU).length : 0;
+    if (!Array.isArray(chat))
+        return 0;
+    let count = 0;
+    for (let index = 0; index < chat.length; index += 1) {
+        if (isAiModelOutputFloor_ACU(chat[index]))
+            count += 1;
+    }
+    return count;
 }
 /**
  * 判断一个聊天消息是否可能承载本库的表数据（数据承载档：任意非 user 消息）。
@@ -66842,6 +66911,9 @@ function consumeLastMergeSourceInventory_ACU() {
  * @param options.yieldBudgetMs 冷回放让步预算（P1-c）。缺省/非正数 = 永不让出，
  *   既有调用方行为完全不变；显式传入时按 COLD_REPLAY_YIELD_BUDGET_MS_ACU 让出事件循环，
  *   并显式声明只读路径（updateRuntimeState:false）——回放核心仅在该路径接受让步。
+ * @param options.signal 聊天变更取消信号（取自 getChatMutationAbortSignal_ACU）。
+ *   缺省 = 不接受取消，既有行为不变；显式传入时同样要求只读路径，命中取消由回放核心
+ *   在 frame/entry 边界抛 V2ReplayAbortedError_ACU，调用方须据此丢弃本次结果。
  */
 async function mergeAllIndependentTables_ACU(options = {}) {
     const chat = getChatArray_ACU();
@@ -66856,10 +66928,20 @@ async function mergeAllIndependentTables_ACU(options = {}) {
     });
     if (strategy.mode === 'v2') {
         const yieldBudgetMs = Number(options.yieldBudgetMs) > 0 ? Number(options.yieldBudgetMs) : 0;
+        const replaySignal = options.signal || null;
         let mergedData = await loadTableStateFromFramesV2_ACU(chat, currentIsolationKey, {
             allowTemporaryTemplateBaseline: true,
-            // 让步只在只读路径生效：副作用路径中途让出会引入重入窗口。
-            ...(yieldBudgetMs > 0 ? { updateRuntimeState: false, yieldBudgetMs } : {}),
+            // 让步与取消都只在只读路径生效：副作用路径改写全局 schedule state，
+            // 中途让出/抛出会留下半完成 mutation，比不让出更危险。
+            // 路径翻转**只由预算决定**：只传 signal 不传预算时不翻转——宁可这次没有取消，
+            // 也不能把副作用路径悄悄降级成只读（那会静默丢失 updateRuntimeState 的写入）。
+            ...(yieldBudgetMs > 0
+                ? {
+                    updateRuntimeState: false,
+                    yieldBudgetMs,
+                    ...(replaySignal ? { signal: replaySignal } : {}),
+                }
+                : {}),
         });
         // [修复顺序] 历史 auto_merged 越界尾列（行宽 = 表头 + 1 且尾格为 'auto_merged'）
         // 必须在 guide 结构比较之前剥离，否则 +1 宽度差会被误判为结构不一致。
@@ -69690,14 +69772,26 @@ class SqlTableService {
      * 从聊天消息加载表格数据到 SQLite
      * 仅保留兼容入口：回放后委托 loadFromData() 初始化 runtime，
      * 防止聊天回放和 SQLite hydrate 拥有两套不同逻辑。
+     *
+     * 冷入口接线（P1-c 续）：长聊天的全量回放按统一预算在 frame/entry 边界让出事件循环，
+     * 并接入聊天变更取消信号（删楼/ROLL/切聊天）——让出窗口内切聊时回放在边界抛
+     * V2ReplayAbortedError，此处按「回放中止」返回，绝不进入 loadFromData 发布半成品 runtime。
      */
     async loadFromChat() {
         try {
-            const mergedData = await mergeAllIndependentTables_ACU();
+            const mergedData = await mergeAllIndependentTables_ACU({
+                yieldBudgetMs: COLD_REPLAY_YIELD_BUDGET_MS_ACU,
+                signal: getChatMutationAbortSignal_ACU(),
+            });
             return await this.loadFromData(mergedData);
         }
         catch (e) {
             const errMsg = e?.message || String(e);
+            // 中止与真失败必须可区分：调用方（storage strategy）按前缀决定是否可重试加载。
+            if (e instanceof V2ReplayAbortedError_ACU) {
+                logDebug_ACU('[SqlTableService] 回放因聊天变更中止，丢弃本次冷加载结果。');
+                return { loaded: false, source: 'empty', error: `replay_aborted: ${errMsg}` };
+            }
             logError_ACU(`[SqlTableService] 回放聊天数据失败: ${errMsg}`);
             return { loaded: false, source: 'empty', error: `replay_failed: ${errMsg}` };
         }
@@ -91318,7 +91412,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.1" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.2" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -95129,8 +95223,33 @@ async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport 
     }
     else {
         // 冷启动/切换聊天/显式刷新时，才使用全表合并逻辑从整段聊天记录恢复最新版本。
+        // 冷入口接线（P1-c 续）：长聊天全量回放按统一预算在 frame/entry 边界让出事件循环，
+        // 并接入聊天变更取消信号（删楼/ROLL/切聊天）。
+        // 本函数全程不持任何锁（世界书更新链无互斥量，让出不会让出到半完成的临界区），
+        // 但让出窗口内可能切聊，因此 await 之后必须复检聊天身份：陈旧结果一律丢弃，
+        // 既不写内存表数据也不更新任何世界书条目（与可视化器载入的 contextKey 校验同口径）。
+        const mergeChatKey = String(currentChatFileIdentifier_ACU || '');
+        const mergeIsolationKey = String(getCurrentIsolationKey_ACU() || '');
         await loadAllChatMessages_ACU();
-        const mergedFromHistory = await mergeAllIndependentTables_ACU();
+        let mergedFromHistory = null;
+        try {
+            mergedFromHistory = await mergeAllIndependentTables_ACU({
+                yieldBudgetMs: COLD_REPLAY_YIELD_BUDGET_MS_ACU,
+                signal: getChatMutationAbortSignal_ACU(),
+            });
+        }
+        catch (error) {
+            if (error instanceof V2ReplayAbortedError_ACU) {
+                logDebug_ACU('[Worldbook] 冷回放因聊天变更中止，丢弃本次世界书派生刷新。');
+                return;
+            }
+            throw error;
+        }
+        if (String(currentChatFileIdentifier_ACU || '') !== mergeChatKey
+            || String(getCurrentIsolationKey_ACU() || '') !== mergeIsolationKey) {
+            logDebug_ACU('[Worldbook] 冷回放期间聊天身份已变化，丢弃陈旧的世界书派生刷新。');
+            return;
+        }
         if (mergedFromHistory) {
             mergedData = mergedFromHistory;
             // 同步内存中的全局数据，确保后续调用保持一致
@@ -107831,6 +107950,17 @@ async function updateCardUpdateStatusDisplay_ACU() {
         let totalRowCount = 0;
         let nextUpdates = [];
         let tableStatusRows = "";
+        // 批量解析所有表的历史状态（单次扫描 chat），与 v2 仪表页同款接线：
+        // 逐表解析会让每张表各做一次全量逆扫，表数一多就是 N 倍扫描成本。
+        // 批量与逐表 API 对同一 chat 逐字段等价（resolveTableHistoryStateFromChat_ACU
+        // 本身就是批量 API 的单键包装），因此逐行读数不变。
+        const currentIsolationKey = getCurrentIsolationKey_ACU();
+        const historyStates = resolveTableHistoryStatesFromChat_ACU(chatHistory, sheetKeys.map(key => ({
+            sheetKey: key,
+            isSummaryTable: isSummaryOrOutlineTable_ACU(currentJsonTableData_ACU[key]?.name),
+            isolationKey: currentIsolationKey,
+            settings: settings_ACU,
+        })));
         sheetKeys.forEach(key => {
             const table = currentJsonTableData_ACU[key];
             if (!table)
@@ -107840,7 +107970,6 @@ async function updateCardUpdateStatusDisplay_ACU() {
             }
             // 计算每个表的状态
             const tableConfig = table.updateConfig || {};
-            const isSummary = isSummaryOrOutlineTable_ACU(table.name);
             // 确定参数
             const globalFrequency = settings_ACU.autoUpdateFrequency || 1;
             const globalSkip = settings_ACU.skipUpdateFloors || 0;
@@ -107848,18 +107977,12 @@ async function updateCardUpdateStatusDisplay_ACU() {
             const rawFreq = Number.isFinite(tableConfig.updateFrequency) ? tableConfig.updateFrequency : -1;
             const rawSkip = Number.isFinite(tableConfig.skipFloors) ? tableConfig.skipFloors : -1;
             const frequency = (rawFreq === -1) ? globalFrequency : rawFreq;
-            // [重构] 上次更新楼层计算：扫描聊天记录
-            // 寻找该表格在历史记录中最后一次被更新的楼层
-            // 支持合并更新逻辑：只要合并更新组内有任意表被修改，整组表都视为已更新
-            const currentIsolationKey = getCurrentIsolationKey_ACU();
-            const history = resolveTableHistoryStateFromChat_ACU(chatHistory, {
-                sheetKey: key,
-                isSummaryTable: isSummary,
-                isolationKey: currentIsolationKey,
-                settings: settings_ACU,
-            });
-            const lastUpdatedAiFloor = history.lastTrackedUpdateAiFloor;
-            const foundInHistory = history.hasTrackedUpdate;
+            // [重构] 上次更新楼层：取上面那次批量解析的结果。
+            // 批量层只丢弃空 sheetKey（getSortedSheetKeys_ACU 不产出空键），
+            // 缺失兜底沿用逐表 API 的默认形态：未记录、无上次更新楼层。
+            const history = historyStates.get(key);
+            const lastUpdatedAiFloor = history?.lastTrackedUpdateAiFloor || 0;
+            const foundInHistory = history?.hasTrackedUpdate === true;
             const skipFloors = Math.max(0, (rawSkip === -1) ? globalSkip : rawSkip);
             // 下次触发 (包含skip)
             let triggerFloor = "N/A";
@@ -110893,20 +111016,36 @@ function resolveAiFloorSignature_ACU(chat) {
  * 纯函数：聊天数组由调用方读一次传入。
  */
 function resolveAiFloorSignatureEx_ACU(chat) {
-    const base = resolveAiFloorSignature_ACU(chat);
+    return toAiFloorSignatureEx_ACU(scanAiFloorSignature_ACU(chat));
+}
+function scanAiFloorSignature_ACU(chat) {
     const list = Array.isArray(chat) ? chat : [];
+    let aiFloorCount = 0;
+    let aiModelOutputCount = 0;
+    let latestMessageId = null;
     let latestMes;
-    for (let index = list.length - 1; index >= 0; index -= 1) {
+    for (let index = 0; index < list.length; index += 1) {
         const message = list[index];
         if (!isAiFloor_ACU(message))
             continue;
+        aiFloorCount += 1;
+        if (isAiModelOutputFloor_ACU(message))
+            aiModelOutputCount += 1;
+        latestMessageId = message.message_id ?? null;
         latestMes = message?.mes;
-        break;
     }
     return {
-        aiFloorCount: base.aiFloorCount,
-        latestAiMessageId: base.latestAiMessageId,
-        latestContentHash: typeof latestMes === 'string' ? sha256HexSync_ACU(latestMes) : null,
+        signature: { aiFloorCount, latestAiMessageId: latestMessageId ?? null },
+        latestMes,
+        aiModelOutputCount,
+    };
+}
+/** 由单次扫描产物补出扩展签名的内容哈希（hash 只算一次，mes 非字符串时为 null）。 */
+function toAiFloorSignatureEx_ACU(scan) {
+    return {
+        aiFloorCount: scan.signature.aiFloorCount,
+        latestAiMessageId: scan.signature.latestAiMessageId,
+        latestContentHash: typeof scan.latestMes === 'string' ? sha256HexSync_ACU(scan.latestMes) : null,
     };
 }
 /**
@@ -144773,7 +144912,7 @@ function mainInitialize_ACU() {
                         // quiet/dryRun/续写桥逻辑一字不动。
                         let preSignature;
                         try {
-                            preSignature = resolveAiFloorSignatureEx_ACU(SillyTavern_API_ACU?.chat);
+                            preSignature = toAiFloorSignatureEx_ACU(scanAiFloorSignature_ACU(SillyTavern_API_ACU?.chat));
                         }
                         catch {
                             preSignature = undefined;
@@ -144814,9 +144953,14 @@ function mainInitialize_ACU() {
                 const onGenerationEnded = (message_id) => {
                     logDebug_ACU(`ACU GENERATION_ENDED event for message_id: ${message_id}`);
                     const chatAtCapture = SillyTavern_API_ACU?.chat || [];
+                    // 开头单次扫描产出本事件所需的全部楼层量（宽档签名 + 最新 AI 楼 mes + 窄档楼数）。
+                    // 旧实现对同一条 chat 重复全量扫描 3~4 趟（两次 filter 拷贝 + 两次逆扫 + sha256）。
+                    // 本函数从读到派发全程同步无 await，chat 数组在这段时间内不会被改写，
+                    // 因此一次扫描的产物可被下面全部分支复用（含放行后的诊断读数）。
+                    const floorScan_ACU = scanAiFloorSignature_ACU(chatAtCapture);
                     let endedSignatureEx;
                     try {
-                        endedSignatureEx = resolveAiFloorSignatureEx_ACU(chatAtCapture);
+                        endedSignatureEx = toAiFloorSignatureEx_ACU(floorScan_ACU);
                     }
                     catch {
                         endedSignatureEx = undefined;
@@ -144867,7 +145011,7 @@ function mainInitialize_ACU() {
                             isolationKey: getCurrentIsolationKey_ACU(),
                             capturedAt: Date.now(),
                             capturedChatLength: chatAtCapture.length,
-                            capturedAiFloorCount: countAiModelOutputFloors_ACU(chatAtCapture),
+                            capturedAiFloorCount: floorScan_ACU.aiModelOutputCount,
                             // 已配对时必须携带该轮自己的 seq；并发下不能用全局最新 seq 冒充较早 ENDED。
                             generationSeq: generationContext?.seq ?? (generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined),
                             // [配对零产出证据] 仅配对携带 STARTED 时刻的扩展签名；无配对时为 undefined，下游直接放行。
@@ -144876,7 +145020,7 @@ function mainInitialize_ACU() {
                         : undefined;
                     // [152 收紧] 「新 AI 楼证据」签名：本事件时刻的 AI 楼数 + 最新 AI 楼 message_id（含 narrator，
                     // 与 auto-fill-echo-guard 同口径）。聊天数组在这里读一次，交给门控自行决定无配对假 ended 的去留。
-                    const endedFloorSignature_ACU = resolveAiFloorSignature_ACU(chatAtCapture);
+                    const endedFloorSignature_ACU = floorScan_ACU.signature;
                     if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext, endedFloorSignature_ACU)) {
                         handleNewMessageDebounced_ACU('GENERATION_ENDED', autoFillIntent);
                     }
@@ -144891,7 +145035,7 @@ function mainInitialize_ACU() {
                             chatKey: currentChatFileIdentifier_ACU,
                             isolationKey: getCurrentIsolationKey_ACU(),
                             capturedChatLength: chatAtCapture.length,
-                            capturedAiFloorCount: countAiModelOutputFloors_ACU(chatAtCapture),
+                            capturedAiFloorCount: floorScan_ACU.aiModelOutputCount,
                             lastGenerationType: generationGate_ACU.lastGeneration?.type,
                         });
                     }
@@ -150843,7 +150987,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260927-08";
+        const stamp = "20260927-10";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -175035,6 +175179,24 @@ function buildSheetOrder(data, preferredOrder = []) {
     });
     return [...ordered, ...missing];
 }
+/**
+ * 外部刷新合并窗口（毫秒）。
+ *
+ * 同一轮提交/切聊会从两条独立路径各发一次「刷新可视化器」请求：
+ *   ① presentation/components/pipeline-ui-helpers：数据合并后 200ms 再刷一次；
+ *   ② presentation-v2 的模板运行时提交通知（useTemplateRuntimeChangeListener）。
+ * 两条最终都只 ++externalRefreshTick，编辑器据此整表重载，因此编辑器开着时每轮都会被
+ * 全量重载两次。这里把窗口内的请求合并为一次 tick。
+ *
+ * 窗口取 500ms：覆盖 ① 自身 200ms 定时器与其调度抖动。
+ * 窗口只推迟重载、不会丢重载——任何数据发布都发生在触发它的刷新通知之前，
+ * 而窗口末尾的结算一定晚于窗口内最后一条通知，因此结算时读到的必然是窗口内
+ * 全部发布之后的状态（与可视化器载入路径的 contextKey 校验同源思路）。
+ * 结算时刻会重判脏保护与 revision：期间变脏只记冲突不重载。
+ */
+const EXTERNAL_REFRESH_COALESCE_MS_ACU = 500;
+let externalRefreshFlushTimer_ACU;
+let externalRefreshPendingRevision_ACU = '';
 function applyOrderNumbers(data, orderedKeys) {
     if (!data)
         return;
@@ -175080,6 +175242,7 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
         assistantRiskConfirmations: {},
         draftContextKey: '',
         draftContextInvalid: false,
+        loadedSourceRevision: '',
     }),
     getters: {
         sheetItems(state) {
@@ -175143,7 +175306,7 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
         setSaving(saving) {
             this.isSaving = saving;
         },
-        loadSnapshot(data, orderedKeys = [], contextKey = '') {
+        loadSnapshot(data, orderedKeys = [], contextKey = '', sourceRevision = '') {
             const nextData = cloneData$3(data || { mate: { type: 'chatSheets', version: 1 } });
             if (!nextData.mate || typeof nextData.mate !== 'object') {
                 nextData.mate = { type: 'chatSheets', version: 1 };
@@ -175156,6 +175319,8 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
             this.templateBaseSheetOrder = [...nextOrder];
             this.draftContextKey = String(contextKey || '');
             this.draftContextInvalid = false;
+            // 记录本次载入读到的数据源版本：后续外部刷新据此判定「有没有真的变」。
+            this.loadedSourceRevision = String(sourceRevision || '');
             this.deletedSheetKeys = [];
             resetVisualizerPendingDataOps_ACU(this);
             this.lockDirty = false;
@@ -175490,18 +175655,59 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
             if (this.draftContextKey)
                 this.draftContextInvalid = true;
         },
-        requestExternalRefresh() {
+        /**
+         * 请求外部刷新。`sourceRevision` 由调用方从数据源现读（见 visualizer-source-revision）：
+         *   - 'ignored'   未激活；
+         *   - 'conflicted' 草稿未保存：只记冲突，绝不覆盖用户改动（脏保护语义不变）；
+         *   - 'unchanged' revision 与上次载入相同：重载只会得到同一份草稿，直接跳过；
+         *   - 'refreshed' 已排入合并窗口，由 flushPendingExternalRefresh 结算成一次 tick。
+         * 省略 revision（空串）＝不做变化判定，等价于旧行为（永远排一次刷新）。
+         */
+        requestExternalRefresh(sourceRevision = '') {
             if (!this.isActive)
                 return 'ignored';
             if (this.dirty) {
                 this.externalRevisionChanged = true;
                 return 'conflicted';
             }
-            this.externalRevisionChanged = false;
-            this.externalRefreshTick += 1;
+            const revision = String(sourceRevision || '');
+            if (revision && revision === this.loadedSourceRevision)
+                return 'unchanged';
+            externalRefreshPendingRevision_ACU = revision;
+            if (externalRefreshFlushTimer_ACU === undefined) {
+                externalRefreshFlushTimer_ACU = setTimeout(() => {
+                    externalRefreshFlushTimer_ACU = undefined;
+                    this.flushPendingExternalRefresh();
+                }, EXTERNAL_REFRESH_COALESCE_MS_ACU);
+            }
             return 'refreshed';
         },
+        /** 合并窗口末尾的统一结算：脏保护与 revision 复检都在这里做一次。 */
+        flushPendingExternalRefresh() {
+            const pendingRevision = externalRefreshPendingRevision_ACU;
+            externalRefreshPendingRevision_ACU = '';
+            if (!this.isActive)
+                return;
+            if (this.dirty) {
+                this.externalRevisionChanged = true;
+                return;
+            }
+            // 期间若有别的路径已经把这一版数据载进草稿，就不必再重载一次。
+            if (pendingRevision && pendingRevision === this.loadedSourceRevision)
+                return;
+            this.externalRevisionChanged = false;
+            this.externalRefreshTick += 1;
+        },
+        /** 丢弃待结算的刷新请求（surface 关闭时调用，避免关闭后再跳一次重载）。 */
+        clearPendingExternalRefresh() {
+            if (externalRefreshFlushTimer_ACU !== undefined) {
+                clearTimeout(externalRefreshFlushTimer_ACU);
+                externalRefreshFlushTimer_ACU = undefined;
+            }
+            externalRefreshPendingRevision_ACU = '';
+        },
         closeSurface() {
+            this.clearPendingExternalRefresh();
             const snapshot = this.entrySnapshot;
             this.isActive = false;
             this.mode = 'data';
@@ -175525,6 +175731,7 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
             this.assistantTableApiPreset = '';
             this.draftContextKey = '';
             this.draftContextInvalid = false;
+            this.loadedSourceRevision = '';
             this.clearAssistantDraftState();
             return {
                 shouldCloseShell: snapshot ? !snapshot.wasShellOpen : false,
@@ -175533,6 +175740,50 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
         },
     },
 });
+
+/**
+ * service/visualizer/visualizer-source-revision.ts
+ *
+ * 可视化器「外部数据源 revision」：一个常数时间、却能唯一回答
+ * 「下一次重载读到的东西是不是和上次一样」的令牌。
+ *
+ * 构成：聊天文件标识 ＋ 隔离键 ＋ 当前内存表数据的对象身份。
+ * - 前两项是上下文：切聊 / 切隔离必然是新的 revision。
+ * - 末项是数据版本：表数据以 `_set_currentJsonTableData_ACU` 整体替换发布为主，每次发布
+ *   都是新构造的对象（SQLite 导出 / 模板提交 / 合并结果 / hydrate），于是「引用相同 ⇒ 内容相同」
+ *   在主路径上成立。
+ *
+ * 已知例外（就地改写，引用键看不到，勿再声称"仓内不存在"）：
+ * - `service/template/chat-scope/chat-scope-guide.ts` 的 seedRows 注入：对当前表**直接赋值**
+ *   `table[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU]`，不发布。调用方是每次生成的 prompt prepare
+ *   与模板初始化。影响面：seedRows 是辅助字段，可视化器既不展示也不以它为保存来源
+ *   （保存时的 seedRows 取自模板/Guide），故最坏结果是运行时 seedRows 偏旧到下一次真重载，
+ *   **不会写错用户数据**。若将来可视化器开始展示/保存 seedRows，必须先给这条路径加发布。
+ * - `service/summary/merge-logic.ts` 的 `table.content = ...`：跨一次 await 就地赋值，但紧随其后
+ *   的 `runTableUpdateCommit_ACU` 会用 clone 发布把内容归一（失败则回滚到原 content），净效果被
+ *   发布覆盖，引用键因此仍能收敛。
+ *
+ * 刻意不做内容哈希：整库序列化与一次全量重载同量级，做了等于把优化换成另一种开销。
+ * 漏检方向是保守的：引用键漏检只会少一次重载（读到与上次相同引用的数据），
+ * 不会把旧数据写进草稿；反之 `loadedSourceRevision` 只增不减，切聊/换隔离一定被认作新版本。
+ */
+let nextDataRevisionId_ACU = 1;
+const dataRevisionIdByObject_ACU = new WeakMap();
+function dataRevisionId_ACU(data) {
+    if (!data || typeof data !== 'object')
+        return 0;
+    const cached = dataRevisionIdByObject_ACU.get(data);
+    if (cached !== undefined)
+        return cached;
+    nextDataRevisionId_ACU += 1;
+    dataRevisionIdByObject_ACU.set(data, nextDataRevisionId_ACU);
+    return nextDataRevisionId_ACU;
+}
+/** 当前外部数据源 revision（`data` 为空时末段恒为 0，仍是合法令牌）。 */
+function readVisualizerSourceRevision_ACU() {
+    const context = `${String(currentChatFileIdentifier_ACU || '')}::${String(getCurrentIsolationKey_ACU() || '')}`;
+    return `${context}#${dataRevisionId_ACU(currentJsonTableData_ACU)}`;
+}
 
 async function openAcuV2Shell_ACU() {
     try {
@@ -175575,7 +175826,9 @@ async function requestVisualizerExternalRefresh_ACU() {
     const pinia = getAcuV2PiniaForBridge();
     if (!pinia)
         return;
-    useVisualizerStore(pinia).requestExternalRefresh();
+    // 带上当前数据源 revision：store 据此把同一轮的重复请求合并成一次重载，
+    // 并在数据源没变时直接跳过（省掉整表重载与两次全库克隆）。
+    useVisualizerStore(pinia).requestExternalRefresh(readVisualizerSourceRevision_ACU());
 }
 /**
  * 返回 V2 可视化表面当前是否处于激活（打开）状态。
@@ -187858,6 +188111,28 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
         const materialsPanel = ref(null);
         const clock = ref(Date.now());
         let countdownTimer;
+        function stopCountdownTimer() {
+            if (countdownTimer === undefined)
+                return;
+            clearInterval(countdownTimer);
+            countdownTimer = undefined;
+        }
+        /**
+         * 倒计时心跳按需启停：只有任务带 deadlineAt 时才需要每秒推进 clock。
+         * 整页模板都读 clock，无条件 1s 心跳会让「没有任务」的页面也整页重渲染每秒一次。
+         * deadline 出现/消失（含任务被清空、切聊天）时由 watch 启停，卸载清理语义不变。
+         */
+        function syncCountdownTimer(deadlineAt) {
+            if (deadlineAt === null || deadlineAt === undefined) {
+                stopCountdownTimer();
+                return;
+            }
+            if (countdownTimer !== undefined)
+                return;
+            clock.value = Date.now();
+            countdownTimer = setInterval(() => { clock.value = Date.now(); }, 1000);
+        }
+        watch(() => runtime.task.value?.deadlineAt, syncCountdownTimer, { immediate: true });
         async function repairMaterials(modules) {
             if (await runtime.repairPendingMaterials(modules))
                 materialsPanel.value?.reload({ preserveDirty: true });
@@ -188444,11 +188719,9 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
         onMounted(() => {
             apiStore.refreshFromSettings();
             void runtime.initialize();
-            countdownTimer = setInterval(() => { clock.value = Date.now(); }, 1000);
         });
         onBeforeUnmount(() => {
-            if (countdownTimer !== undefined)
-                clearInterval(countdownTimer);
+            stopCountdownTimer();
             // 防抖窗口内离开页面时冲刷一次未落盘的改动，避免"改了像改了、重进没了"。
             if (settingsSaveTimer !== undefined) {
                 clearTimeout(settingsSaveTimer);
@@ -188491,14 +188764,14 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             scheduleSettingsSave();
         }, { deep: true });
         watch(() => `${runtime.activeStage.value?.stageId ?? ''}:${runtime.activeRevision.value?.revision ?? ''}`, syncOutlineDraft, { immediate: true });
-        const __returned__ = { runtime, runtimeSettingsIdentity, dialog, session, apiStore, followActiveApiLabel, continuationApiPresetOptions, settingsDraft, draftChatIdentity, outlineDraft, messageDraft, messageSending, outlineDraftError, settingsError, settingsNotice, materialsPanel, clock, get countdownTimer() { return countdownTimer; }, set countdownTimer(v) { countdownTimer = v; }, repairMaterials, stageText, deadlineText, continuationApiPresetValue, applyContinuationApiPreset, continuationRoleOptions, maxConsecutivePressureTurnsMax, INHERIT_CHANNEL_VALUE, agentChannelRoles, webSearchProviderOptions, expandedGroups, isGroupExpanded, toggleGroup, runGroupMeta, contextGroupMeta, budgetGroupMeta, finalReviewGroupMeta, workflowGroupMeta, webResearchGroupMeta, channelGroupMeta, rulesGroupMeta, agentChannelOptions, agentChannelValue, applyAgentChannel, saveSettingsImmediately, cloneSettings, syncOutlineDraft, parseOutlineDraft, acceptOutlineDraft, confirmFirstSendRpmWarning, currentDraftChatIdentity, ensureCurrentDraftChat, sendMessage, saveOutline, clearData, requiredInteger, requiredBoundedInteger, requiredRangeInteger, normalizedReadBudget, normalizeSettingsDraft, presetExists, get lastPersistedSettingsJson() { return lastPersistedSettingsJson; }, set lastPersistedSettingsJson(v) { lastPersistedSettingsJson = v; }, get settingsSaveTimer() { return settingsSaveTimer; }, set settingsSaveTimer(v) { settingsSaveTimer = v; }, scheduleSettingsSave, saveSettingsNow, promptGroups, promptGroupMeta, promptList, addPrompt, deletePrompt, movePrompt, updatePrompt, restorePrompt, promptImportInput, promptIoError, promptIoNotice, exportPrompts, onImportPromptsFile, refreshAll, refreshAfterChatMutation, AcuButton, AcuCheckbox, AcuDisclosureGroup, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, AcuPromptSegments, AcuRulePairList, AcuSelect, AcuTextarea, ContinuationChat, ContinuationMaterialsPanel };
+        const __returned__ = { runtime, runtimeSettingsIdentity, dialog, session, apiStore, followActiveApiLabel, continuationApiPresetOptions, settingsDraft, draftChatIdentity, outlineDraft, messageDraft, messageSending, outlineDraftError, settingsError, settingsNotice, materialsPanel, clock, get countdownTimer() { return countdownTimer; }, set countdownTimer(v) { countdownTimer = v; }, stopCountdownTimer, syncCountdownTimer, repairMaterials, stageText, deadlineText, continuationApiPresetValue, applyContinuationApiPreset, continuationRoleOptions, maxConsecutivePressureTurnsMax, INHERIT_CHANNEL_VALUE, agentChannelRoles, webSearchProviderOptions, expandedGroups, isGroupExpanded, toggleGroup, runGroupMeta, contextGroupMeta, budgetGroupMeta, finalReviewGroupMeta, workflowGroupMeta, webResearchGroupMeta, channelGroupMeta, rulesGroupMeta, agentChannelOptions, agentChannelValue, applyAgentChannel, saveSettingsImmediately, cloneSettings, syncOutlineDraft, parseOutlineDraft, acceptOutlineDraft, confirmFirstSendRpmWarning, currentDraftChatIdentity, ensureCurrentDraftChat, sendMessage, saveOutline, clearData, requiredInteger, requiredBoundedInteger, requiredRangeInteger, normalizedReadBudget, normalizeSettingsDraft, presetExists, get lastPersistedSettingsJson() { return lastPersistedSettingsJson; }, set lastPersistedSettingsJson(v) { lastPersistedSettingsJson = v; }, get settingsSaveTimer() { return settingsSaveTimer; }, set settingsSaveTimer(v) { settingsSaveTimer = v; }, scheduleSettingsSave, saveSettingsNow, promptGroups, promptGroupMeta, promptList, addPrompt, deletePrompt, movePrompt, updatePrompt, restorePrompt, promptImportInput, promptIoError, promptIoNotice, exportPrompts, onImportPromptsFile, refreshAll, refreshAfterChatMutation, AcuButton, AcuCheckbox, AcuDisclosureGroup, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, AcuPromptSegments, AcuRulePairList, AcuSelect, AcuTextarea, ContinuationChat, ContinuationMaterialsPanel };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-continuation-page[data-v-dde556d6] { min-height: 100%; padding: 20px; display: grid; gap: 18px;\n}\n.acu-v2-continuation-page__layout[data-v-dde556d6] { align-items: start;\n}\n.acu-v2-continuation-page__actions[data-v-dde556d6] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px;\n}\n.acu-v2-continuation-page__actions--start[data-v-dde556d6] { justify-content: flex-start; margin-top: 0; margin-bottom: 12px;\n}\n.acu-v2-continuation-page__file-input[data-v-dde556d6] { display: none;\n}\n.acu-v2-continuation-page__error[data-v-dde556d6] { color: var(--acu-danger, #d65b5b); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__meta[data-v-dde556d6] { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__settings-grid[data-v-dde556d6] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start;\n}\n.acu-v2-continuation-page__settings-grid label[data-v-dde556d6] { display: grid; gap: 5px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-page__settings-grid select[data-v-dde556d6] { min-height: 30px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); border-radius: 4px; background: var(--acu-bg-2); color: var(--acu-text-1);\n}\n.acu-v2-continuation-page__toggles[data-v-dde556d6] { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0;\n}\n.acu-v2-continuation-page__groups[data-v-dde556d6] { display: flex; flex-direction: column; gap: 8px; margin-top: 4px;\n}\n.acu-v2-continuation-page__group[data-v-dde556d6] {\r\n  border: 1px solid var(--acu-border, color-mix(in srgb, var(--acu-text-3) 18%, transparent));\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-continuation-page__group[data-v-dde556d6] .acu-disclosure-group__header { border-radius: var(--acu-radius-sm);\n}\n.acu-v2-continuation-page__group[data-v-dde556d6] .acu-disclosure-group__body { gap: 12px; padding: 12px;\n}\n.acu-v2-continuation-page__group[data-v-dde556d6] .acu-disclosure-group__meta { max-width: 55%; overflow: hidden; text-overflow: ellipsis;\n}\n.acu-v2-continuation-page__group .acu-v2-continuation-page__actions[data-v-dde556d6] { margin-top: 0;\n}\n.acu-v2-continuation-page__subheading[data-v-dde556d6] { margin: 4px 0 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); font-weight: 600;\n}\n.acu-v2-continuation-page__subheading[data-v-dde556d6]:first-child { margin-top: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-dde556d6] { padding: 14px;\n}\n}\n@media (max-width: 640px) {\n.acu-v2-continuation-page[data-v-dde556d6] { padding: 10px; gap: 12px;\n}\n.acu-v2-continuation-page__settings-grid[data-v-dde556d6] { grid-template-columns: 1fr;\n}\n.acu-v2-continuation-page__actions[data-v-dde556d6] > * { flex: 1 1 auto;\n}\n.acu-v2-continuation-page__group[data-v-dde556d6] .acu-disclosure-group__meta { display: none;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-dde556d6");
-var ContinuationPage_vue_vue_type_style_index_0_scoped_dde556d6_lang = null;
+injectSfcStyle("\n.acu-v2-continuation-page[data-v-87e4ac3c] { min-height: 100%; padding: 20px; display: grid; gap: 18px;\n}\n.acu-v2-continuation-page__layout[data-v-87e4ac3c] { align-items: start;\n}\n.acu-v2-continuation-page__actions[data-v-87e4ac3c] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px;\n}\n.acu-v2-continuation-page__actions--start[data-v-87e4ac3c] { justify-content: flex-start; margin-top: 0; margin-bottom: 12px;\n}\n.acu-v2-continuation-page__file-input[data-v-87e4ac3c] { display: none;\n}\n.acu-v2-continuation-page__error[data-v-87e4ac3c] { color: var(--acu-danger, #d65b5b); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__meta[data-v-87e4ac3c] { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__settings-grid[data-v-87e4ac3c] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start;\n}\n.acu-v2-continuation-page__settings-grid label[data-v-87e4ac3c] { display: grid; gap: 5px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-page__settings-grid select[data-v-87e4ac3c] { min-height: 30px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); border-radius: 4px; background: var(--acu-bg-2); color: var(--acu-text-1);\n}\n.acu-v2-continuation-page__toggles[data-v-87e4ac3c] { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0;\n}\n.acu-v2-continuation-page__groups[data-v-87e4ac3c] { display: flex; flex-direction: column; gap: 8px; margin-top: 4px;\n}\n.acu-v2-continuation-page__group[data-v-87e4ac3c] {\r\n  border: 1px solid var(--acu-border, color-mix(in srgb, var(--acu-text-3) 18%, transparent));\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-continuation-page__group[data-v-87e4ac3c] .acu-disclosure-group__header { border-radius: var(--acu-radius-sm);\n}\n.acu-v2-continuation-page__group[data-v-87e4ac3c] .acu-disclosure-group__body { gap: 12px; padding: 12px;\n}\n.acu-v2-continuation-page__group[data-v-87e4ac3c] .acu-disclosure-group__meta { max-width: 55%; overflow: hidden; text-overflow: ellipsis;\n}\n.acu-v2-continuation-page__group .acu-v2-continuation-page__actions[data-v-87e4ac3c] { margin-top: 0;\n}\n.acu-v2-continuation-page__subheading[data-v-87e4ac3c] { margin: 4px 0 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); font-weight: 600;\n}\n.acu-v2-continuation-page__subheading[data-v-87e4ac3c]:first-child { margin-top: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-87e4ac3c] { padding: 14px;\n}\n}\n@media (max-width: 640px) {\n.acu-v2-continuation-page[data-v-87e4ac3c] { padding: 10px; gap: 12px;\n}\n.acu-v2-continuation-page__settings-grid[data-v-87e4ac3c] { grid-template-columns: 1fr;\n}\n.acu-v2-continuation-page__actions[data-v-87e4ac3c] > * { flex: 1 1 auto;\n}\n.acu-v2-continuation-page__group[data-v-87e4ac3c] .acu-disclosure-group__meta { display: none;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-87e4ac3c");
+var ContinuationPage_vue_vue_type_style_index_0_scoped_87e4ac3c_lang = null;
 
 const _hoisted_1$l = { class: "acu-v2-continuation-page" };
 const _hoisted_2$j = {
@@ -189572,7 +189845,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-dde556d6"]]);
+var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-87e4ac3c"]]);
 
 var _sfc_main$k = /*@__PURE__*/ defineComponent({
     __name: 'AcuStatsList',
@@ -194688,7 +194961,14 @@ function clearMessageAndToast(store, kind, text, options) {
     store.message = null;
     useToastStore()[kind](text, options);
 }
+/** 指纹构建次数（仅供测试观测）。生产路径只多一次整数自增。 */
+let promptFingerprintBuilds_ACU = 0;
+/** 仅供测试：读取「提示词指纹」被真实构建的次数（记忆化命中不计数）。 */
+function __readContentReplacePromptFingerprintCountForTests_ACU() {
+    return promptFingerprintBuilds_ACU;
+}
 function promptFingerprint(segments) {
+    promptFingerprintBuilds_ACU += 1;
     return JSON.stringify(segments.map(seg => ({
         role: seg.role,
         content: seg.content,
@@ -194700,14 +194980,24 @@ function promptFingerprint(segments) {
 function defaultPromptGroup() {
     return clone(buildDefaultContentOptimizationPromptGroup_ACU());
 }
-function findMatchingPresetName(promptGroup, presets, preferredName = '') {
-    const fingerprint = promptFingerprint(promptGroup);
+/**
+ * 默认提示词组是模块常量构造的纯数据（每次调用都返回新副本，不会被调用方就地改写），
+ * 因此它的指纹与段数在模块级算一次即可：四个 UI getter 同帧读取时不必各跑一次
+ * 「深拷贝默认组 + stringify 默认组」。
+ */
+const DEFAULT_PROMPT_FINGERPRINT_ACU = promptFingerprint(buildDefaultContentOptimizationPromptGroup_ACU());
+const DEFAULT_PROMPT_SEGMENT_COUNT_ACU = buildDefaultContentOptimizationPromptGroup_ACU().length;
+/** 用已算好的草稿指纹匹配预设名，避免调用方重复构建同一份草稿指纹。 */
+function findMatchingPresetNameByFingerprint_ACU(presets, preferredName, fingerprint) {
     const preferred = preferredName
         ? presets.find(preset => preset.name === preferredName)
         : null;
     if (preferred && promptFingerprint(preferred.promptGroup) === fingerprint)
         return preferred.name;
     return presets.find(preset => promptFingerprint(preset.promptGroup) === fingerprint)?.name || '';
+}
+function findMatchingPresetName(promptGroup, presets, preferredName = '') {
+    return findMatchingPresetNameByFingerprint_ACU(presets, preferredName, promptFingerprint(promptGroup));
 }
 function uniquePresetName(existing, baseName) {
     const base = String(baseName || '').trim() || '新正文替换预设';
@@ -194791,36 +195081,41 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         message: null,
     }),
     getters: {
-        hasSelectedPreset(state) {
-            const selected = findMatchingPresetName(state.promptGroup, state.promptPresets, state.activePresetHint);
-            return !!selected;
+        /**
+         * 提示词身份（唯一派生点）：草稿指纹 + 是否等于默认预设 + 命中的预设名。
+         *
+         * hasSelectedPreset / selectedPresetName / activePresetLabel / promptTemplateMode
+         * 四个 getter 在同一帧里都会读它，Pinia getter 是 computed，因此整帧只构建一次指纹；
+         * 草稿或预设变动时 computed 失效，下一帧重算——取值不会陈旧。
+         */
+        promptIdentity(state) {
+            const fingerprint = promptFingerprint(state.promptGroup);
+            return {
+                fingerprint,
+                isDefault: fingerprint === DEFAULT_PROMPT_FINGERPRINT_ACU,
+                presetName: findMatchingPresetNameByFingerprint_ACU(state.promptPresets, state.activePresetHint, fingerprint),
+            };
         },
-        selectedPresetName(state) {
-            const selected = findMatchingPresetName(state.promptGroup, state.promptPresets, state.activePresetHint);
-            if (selected)
-                return selected;
-            if (promptFingerprint(state.promptGroup) === promptFingerprint(defaultPromptGroup()))
-                return '';
-            return CUSTOM_CONTENT_REPLACE_PRESET_VALUE;
+        hasSelectedPreset() {
+            return !!this.promptIdentity.presetName;
+        },
+        selectedPresetName() {
+            if (this.promptIdentity.presetName)
+                return this.promptIdentity.presetName;
+            return this.promptIdentity.isDefault ? '' : CUSTOM_CONTENT_REPLACE_PRESET_VALUE;
         },
         promptSegmentCount(state) {
             return state.promptGroup.length;
         },
         defaultPromptSegmentCount() {
-            return defaultPromptGroup().length;
+            return DEFAULT_PROMPT_SEGMENT_COUNT_ACU;
         },
-        activePresetLabel(state) {
-            const selected = findMatchingPresetName(state.promptGroup, state.promptPresets, state.activePresetHint);
-            if (selected)
-                return selected;
-            return promptFingerprint(state.promptGroup) === promptFingerprint(defaultPromptGroup())
-                ? DEFAULT_CONTENT_REPLACE_PRESET_NAME
-                : '自定义提示词';
+        activePresetLabel() {
+            return this.promptIdentity.presetName
+                || (this.promptIdentity.isDefault ? DEFAULT_CONTENT_REPLACE_PRESET_NAME : '自定义提示词');
         },
-        promptTemplateMode(state) {
-            return promptFingerprint(state.promptGroup) === promptFingerprint(defaultPromptGroup())
-                ? 'default'
-                : 'custom';
+        promptTemplateMode() {
+            return this.promptIdentity.isDefault ? 'default' : 'custom';
         },
         lastOptimizedLabel(state) {
             return state.lastOptimizedMessageIndex >= 0
@@ -196754,7 +197049,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260927-08";
+        const stamp = "20260927-10";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -196763,7 +197058,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.8.1";
+        const v = "9.8.2";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -199343,14 +199638,16 @@ function useVisualizerData() {
                 }
             }
             if (!hasSheetData(data)) {
-                visualizer.loadSnapshot({ mate: { type: 'chatSheets', version: 1 } }, [], contextKey);
+                // revision 在「数据已就绪」的时点读取：冷加载分支上面刚发布过合并结果，
+                // 此刻的令牌才代表草稿真正读到的那一版。
+                visualizer.loadSnapshot({ mate: { type: 'chatSheets', version: 1 } }, [], contextKey, readVisualizerSourceRevision_ACU());
                 visualizer.loadLockDrafts({});
                 return true;
             }
             const orderedKeys = buildOrderedKeys(data);
             if (currentVisualizerContextKey$1() !== contextKey)
                 return false;
-            visualizer.loadSnapshot(data, orderedKeys, contextKey);
+            visualizer.loadSnapshot(data, orderedKeys, contextKey, readVisualizerSourceRevision_ACU());
             visualizer.loadLockDrafts(buildLockDrafts(orderedKeys, data));
             return true;
         }

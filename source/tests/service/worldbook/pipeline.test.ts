@@ -155,6 +155,8 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   get coreApisAreReady_ACU() { return mockCoreApisAreReady.value; },
   get currentChatFileIdentifier_ACU() { return mockCurrentChatFileIdentifier.value; },
   getCurrentIsolationKey_ACU: mockGetCurrentIsolationKey,
+  // 冷回放接线的取消信号：单测默认没有在飞的聊天变更，返回 null（与生产未中断时同形态）。
+  getChatMutationAbortSignal_ACU: () => null,
   _set_currentJsonTableData_ACU: mockSetCurrentJsonTableData,
   _set_allChatMessages_ACU: mockSetAllChatMessages,
 }));

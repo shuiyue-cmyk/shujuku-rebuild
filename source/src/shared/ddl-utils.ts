@@ -231,6 +231,63 @@ export function getRuntimeEffectiveSchema_ACU(sheet: unknown): unknown {
 }
 
 /**
+ * DDL 列解析记忆化。
+ *
+ * getSheetColumnProjection_ACU 被 UI 与生成链 19 处共用，每次调用都要把整条 DDL
+ * 从零重解一遍（逐列分词、注释剥离、DEFAULT 表达式扫描、多趟正则）。而它读到的
+ * 输入只有三样：DDL 串、表头行 content[0]、隐藏列配置 hiddenPhysicalColumns。
+ * 其中只有 DDL 串需要重解析，另两样是逐元素读取，因此：
+ * - 记忆化键＝DDL 串逐字相等（parseDDLColumnInfos_ACU 是 DDL 串的纯函数）；
+ * - 表头行与隐藏列配置每次现读现算，令牌不覆盖的输入一律不省略；
+ * - 只缓存解析产物、不缓存投影结果对象：结果每次新建，调用方之间不共享可变结构
+ *   （本仓 v9.6.6 有过「共享引用被就地改」的事故）。
+ *
+ * 失败路径（非法隐藏列配置）不缓存：照旧每次现算并抛出新的 Error。
+ * 缓存条目数上限固定，超限整表清空后按需重建（表结构是有限集）。
+ */
+const DDL_COLUMN_MEMO_LIMIT_ACU = 128;
+const ddlColumnMemo_ACU = new Map<string, DDLColumnInfo_ACU[]>();
+
+/** 解析次数与命中次数（仅测试打开）。生产路径只有一次 Map 查找。 */
+interface SheetProjectionMemoCounters_ACU {
+  /** 真正跑过 DDL 重解析的次数（记忆化未命中的 DDL 串数）。 */
+  ddlParses: number;
+  /** 命中记忆化的次数。 */
+  memoHits: number;
+}
+
+const projectionMemoCounters_ACU: SheetProjectionMemoCounters_ACU = { ddlParses: 0, memoHits: 0 };
+let projectionMemoCountersEnabled_ACU = false;
+
+/** 仅供测试：打开计数并清空记忆化。 */
+export function __resetSheetColumnProjectionMemoForTests_ACU(): void {
+  projectionMemoCounters_ACU.ddlParses = 0;
+  projectionMemoCounters_ACU.memoHits = 0;
+  projectionMemoCountersEnabled_ACU = true;
+  ddlColumnMemo_ACU.clear();
+}
+
+/** 仅供测试：读取计数快照。 */
+export function __readSheetColumnProjectionMemoCountersForTests_ACU(): SheetProjectionMemoCounters_ACU {
+  return { ...projectionMemoCounters_ACU };
+}
+
+/** DDL 串 → 列解析产物。空 DDL 不入缓存（解析本身已是空结果，不值得占位）。 */
+function resolveDdlColumnsMemoized_ACU(ddl: string): DDLColumnInfo_ACU[] {
+  if (!ddl) return [];
+  const hit = ddlColumnMemo_ACU.get(ddl);
+  if (hit) {
+    if (projectionMemoCountersEnabled_ACU) projectionMemoCounters_ACU.memoHits += 1;
+    return hit;
+  }
+  const parsed = parseDDLColumnInfos_ACU(ddl);
+  if (projectionMemoCountersEnabled_ACU) projectionMemoCounters_ACU.ddlParses += 1;
+  if (ddlColumnMemo_ACU.size >= DDL_COLUMN_MEMO_LIMIT_ACU) ddlColumnMemo_ACU.clear();
+  ddlColumnMemo_ACU.set(ddl, parsed);
+  return parsed;
+}
+
+/**
  * Resolves the persisted physical-column visibility contract without changing
  * the sheet's schema or row layout. Consumers must keep sourceIndex when they
  * project rows; a visible array index is not a physical column index.
@@ -243,7 +300,7 @@ export function getSheetColumnProjection_ACU(sheet: Sheet_ACU): {
   const headers = Array.isArray(sheet?.content?.[0])
     ? sheet.content[0].map(value => String(value ?? ''))
     : [];
-  const ddlColumns = parseDDLColumnInfos_ACU(String(sheet?.sourceData?.ddl || ''));
+  const ddlColumns = resolveDdlColumnsMemoized_ACU(String(sheet?.sourceData?.ddl || ''));
   const rawHidden = sheet?.sourceData?.hiddenPhysicalColumns;
   if (rawHidden !== undefined && !Array.isArray(rawHidden)) {
     throw new Error('hiddenPhysicalColumns 必须是 physical column 字符串数组。');
@@ -297,7 +354,7 @@ export function projectSheetDDLForVisibleColumns_ACU(sheet: Sheet_ACU, ddlOverri
   const projection = getSheetColumnProjection_ACU(sheet);
   if (projection.hiddenPhysicalColumns.length === 0) return ddl;
   const bounds = findCreateTableDefinitionBounds_ACU(ddl);
-  const infos = parseDDLColumnInfos_ACU(ddl);
+  const infos = resolveDdlColumnsMemoized_ACU(ddl);
   if (!bounds || infos.length !== projection.columns.length) {
     throw new Error('无法为隐藏列构建安全的可见 DDL 投影。');
   }

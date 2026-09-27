@@ -26,9 +26,11 @@ import { SqliteEngine } from '../../data/sqlite/sqlite-engine';
 import { SyncBridge } from '../../data/sqlite/sync-bridge';
 import {
   currentJsonTableData_ACU,
+  getChatMutationAbortSignal_ACU,
   _set_currentJsonTableData_ACU,
 } from '../runtime/state-manager';
 import { mergeAllIndependentTables_ACU } from '../runtime/helpers-data-merge';
+import { COLD_REPLAY_YIELD_BUDGET_MS_ACU, V2ReplayAbortedError_ACU } from './storage-frame-v2-replay';
 import { hashUserInput_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU, stripSeedRowsFromTemplate_ACU } from '../../shared/utils';
 import {
   createNameMapperOwnerToken_ACU,
@@ -1586,6 +1588,10 @@ export class SqlTableService implements ITableStorageProvider {
    * 从聊天消息加载表格数据到 SQLite
    * 仅保留兼容入口：回放后委托 loadFromData() 初始化 runtime，
    * 防止聊天回放和 SQLite hydrate 拥有两套不同逻辑。
+   *
+   * 冷入口接线（P1-c 续）：长聊天的全量回放按统一预算在 frame/entry 边界让出事件循环，
+   * 并接入聊天变更取消信号（删楼/ROLL/切聊天）——让出窗口内切聊时回放在边界抛
+   * V2ReplayAbortedError，此处按「回放中止」返回，绝不进入 loadFromData 发布半成品 runtime。
    */
   async loadFromChat(): Promise<{
     loaded: boolean;
@@ -1593,10 +1599,18 @@ export class SqlTableService implements ITableStorageProvider {
     error?: string;
   }> {
     try {
-      const mergedData = await mergeAllIndependentTables_ACU();
+      const mergedData = await mergeAllIndependentTables_ACU({
+        yieldBudgetMs: COLD_REPLAY_YIELD_BUDGET_MS_ACU,
+        signal: getChatMutationAbortSignal_ACU(),
+      });
       return await this.loadFromData(mergedData as TableDataObject_ACU | null);
     } catch (e: any) {
       const errMsg = e?.message || String(e);
+      // 中止与真失败必须可区分：调用方（storage strategy）按前缀决定是否可重试加载。
+      if (e instanceof V2ReplayAbortedError_ACU) {
+        logDebug_ACU('[SqlTableService] 回放因聊天变更中止，丢弃本次冷加载结果。');
+        return { loaded: false, source: 'empty', error: `replay_aborted: ${errMsg}` };
+      }
       logError_ACU(`[SqlTableService] 回放聊天数据失败: ${errMsg}`);
       return { loaded: false, source: 'empty', error: `replay_failed: ${errMsg}` };
     }

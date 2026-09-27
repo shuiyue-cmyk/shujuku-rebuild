@@ -84,8 +84,7 @@ import {
 import {
   emitMessageUpdated_ACU
 } from '../../data/gateways/chat-gateway';
-import { resolveAiFloorSignature_ACU, resolveAiFloorSignatureEx_ACU } from '../../service/table/auto-fill-echo-guard';
-import { countAiModelOutputFloors_ACU } from '../../shared/ai-floor';
+import { scanAiFloorSignature_ACU, toAiFloorSignatureEx_ACU } from '../../service/table/auto-fill-echo-guard';
 import { notifyAcuTauriVersionIfOutdated_ACU } from './tauri-version-gate';
 import {
   refreshMergedDataAndNotifyWithUI_ACU
@@ -691,7 +690,7 @@ export   function mainInitialize_ACU() {
               // quiet/dryRun/续写桥逻辑一字不动。
               let preSignature: AiFloorSignatureEx_ACU | undefined;
               try {
-                preSignature = resolveAiFloorSignatureEx_ACU(SillyTavern_API_ACU?.chat);
+                preSignature = toAiFloorSignatureEx_ACU(scanAiFloorSignature_ACU(SillyTavern_API_ACU?.chat));
               } catch {
                 preSignature = undefined;
               }
@@ -729,9 +728,14 @@ export   function mainInitialize_ACU() {
             const onGenerationEnded = (message_id: any) => {
                 logDebug_ACU(`ACU GENERATION_ENDED event for message_id: ${message_id}`);
                 const chatAtCapture = SillyTavern_API_ACU?.chat || [];
+                // 开头单次扫描产出本事件所需的全部楼层量（宽档签名 + 最新 AI 楼 mes + 窄档楼数）。
+                // 旧实现对同一条 chat 重复全量扫描 3~4 趟（两次 filter 拷贝 + 两次逆扫 + sha256）。
+                // 本函数从读到派发全程同步无 await，chat 数组在这段时间内不会被改写，
+                // 因此一次扫描的产物可被下面全部分支复用（含放行后的诊断读数）。
+                const floorScan_ACU = scanAiFloorSignature_ACU(chatAtCapture);
                 let endedSignatureEx: AiFloorSignatureEx_ACU | undefined;
                 try {
-                    endedSignatureEx = resolveAiFloorSignatureEx_ACU(chatAtCapture);
+                    endedSignatureEx = toAiFloorSignatureEx_ACU(floorScan_ACU);
                 } catch {
                     endedSignatureEx = undefined;
                 }
@@ -781,7 +785,7 @@ export   function mainInitialize_ACU() {
                       isolationKey: getCurrentIsolationKey_ACU(),
                       capturedAt: Date.now(),
                       capturedChatLength: chatAtCapture.length,
-                      capturedAiFloorCount: countAiModelOutputFloors_ACU(chatAtCapture),
+                      capturedAiFloorCount: floorScan_ACU.aiModelOutputCount,
                       // 已配对时必须携带该轮自己的 seq；并发下不能用全局最新 seq 冒充较早 ENDED。
                       generationSeq: generationContext?.seq ?? (generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined),
                       // [配对零产出证据] 仅配对携带 STARTED 时刻的扩展签名；无配对时为 undefined，下游直接放行。
@@ -790,7 +794,7 @@ export   function mainInitialize_ACU() {
                   : undefined;
                 // [152 收紧] 「新 AI 楼证据」签名：本事件时刻的 AI 楼数 + 最新 AI 楼 message_id（含 narrator，
                 // 与 auto-fill-echo-guard 同口径）。聊天数组在这里读一次，交给门控自行决定无配对假 ended 的去留。
-                const endedFloorSignature_ACU = resolveAiFloorSignature_ACU(chatAtCapture);
+                const endedFloorSignature_ACU = floorScan_ACU.signature;
                 if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext, endedFloorSignature_ACU)) {
                   handleNewMessageDebounced_ACU('GENERATION_ENDED', autoFillIntent);
                 } else if (generationContext) {
@@ -804,7 +808,7 @@ export   function mainInitialize_ACU() {
                     chatKey: currentChatFileIdentifier_ACU,
                     isolationKey: getCurrentIsolationKey_ACU(),
                     capturedChatLength: chatAtCapture.length,
-                    capturedAiFloorCount: countAiModelOutputFloors_ACU(chatAtCapture),
+                    capturedAiFloorCount: floorScan_ACU.aiModelOutputCount,
                     lastGenerationType: generationGate_ACU.lastGeneration?.type,
                   });
                 }

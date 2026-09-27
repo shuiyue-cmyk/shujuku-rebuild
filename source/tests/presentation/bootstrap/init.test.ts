@@ -55,6 +55,9 @@ const m = vi.hoisted(() => ({
   setWasStoppedByUser: vi.fn((value: boolean) => { m.wasStoppedByUser = value; }),
   capturePlotScope: vi.fn(),
   isSamePlotScope: vi.fn(),
+  // AI 楼判定的实际执行次数（GENERATION_ENDED 单次扫描的判别计数）。
+  aiFloorReads: 0,
+  logAutoFillSkip: vi.fn(),
 }));
 
 vi.mock('../../../src/shared/host-api', () => ({ SillyTavern_API_ACU: m.api }));
@@ -99,6 +102,21 @@ vi.mock('../../../src/service/worldbook/pipeline', () => ({ loadAllChatMessages_
 vi.mock('../../../src/presentation/components/pipeline-ui-helpers', () => ({ refreshMergedDataAndNotifyWithUI_ACU: m.refresh }));
 
 vi.mock('../../../src/shared/defaults-json.js', () => ({ DEFAULT_PLOT_SETTINGS_ACU: { loopSettings: {} } }));
+// AI 楼判定是 GENERATION_ENDED 里唯一的全量扫描成本：包一层计数，其他导出原样透出。
+vi.mock('../../../src/shared/ai-floor', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../src/shared/ai-floor')>();
+  return {
+    ...actual,
+    isAiFloor_ACU: (message: any) => {
+      m.aiFloorReads += 1;
+      return actual.isAiFloor_ACU(message);
+    },
+  };
+});
+vi.mock('../../../src/shared/trigger-diagnostics', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../src/shared/trigger-diagnostics')>();
+  return { ...actual, logAutoFillSkip_ACU: (...args: any[]) => m.logAutoFillSkip(...args) };
+});
 vi.mock('../../../src/shared/utils', () => ({ cleanChatName_ACU: vi.fn((name: string) => name), logDebug_ACU: vi.fn(), logError_ACU: vi.fn(), logWarn_ACU: vi.fn() }));
 vi.mock('../../../src/service/plot/plot-orchestrator', () => ({
   orchestrateAfterCommandsStrategy1_ACU: (...args: any[]) => m.orchestrate(...args),
@@ -156,6 +174,7 @@ beforeEach(() => {
   m.orchestrate.mockResolvedValue({ action: 'passthrough' });
   m.shouldProcessSummary.mockReturnValue(false);
   m.wasStoppedByUser = false;
+  m.aiFloorReads = 0;
   m.capturePlotScope.mockImplementation(() => ({
     chatId: m.currentChatKey || 'chat-a',
     characterId: m.currentChatKey === 'chat-b' ? 'char-b' : 'char-a',
@@ -847,3 +866,96 @@ describe('mainInitialize_ACU 续写资料基线调度接线（TT-only）', () =>
   });
 });
 
+
+/**
+ * [P2-2] GENERATION_ENDED 的判定量改为开头单次扫描。
+ *
+ * 判别点：一次事件对同一条 chat 只允许扫一遍（旧实现 3~4 遍：宽档签名正序 + 两次逆扫、
+ * 窄档计数两次 filter 拷贝），并且放行 / 跳过 / 早退三个分支的对外载荷逐字不变。
+ */
+describe('mainInitialize_ACU GENERATION_ENDED 单次扫描', () => {
+  const longChat = () => Array.from({ length: 40 }, (_, index) => (
+    index % 4 === 0
+      ? { is_user: true, message_id: index, mes: `用户 ${index}` }
+      : index % 9 === 0
+        ? { is_user: false, extra: { type: 'narrator' }, message_id: index, mes: '旁白' }
+        : { is_user: false, message_id: index, mes: `正文 ${index}` }
+  ));
+
+  afterEach(async () => {
+    m.aiFloorReads = 0;
+    const internal = await import('../../../src/service/continuation/internal-ai-events');
+    vi.mocked(internal.consumeContinuationInternalAiGenerationEnded_ACU).mockReturnValue(null);
+  });
+
+  it('放行分支：40 楼聊天只扫一遍，且派发载荷逐字不变', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    m.consumeGenerationContext.mockReturnValue(undefined);
+    m.api.chat = longChat();
+    const before = m.aiFloorReads;
+
+    m.generationEndedHandler!(39);
+
+    // 一遍扫描 = 每条消息各判一次 AI 楼（逆扫取末楼的那几趟已消失）。
+    expect(m.aiFloorReads - before).toBe(m.api.chat.length);
+    expect(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).toHaveBeenCalledWith(undefined, {
+      aiFloorCount: 30,
+      latestAiMessageId: 39,
+    });
+    expect(m.handleNewMessage).toHaveBeenCalledTimes(1);
+    const [eventType, intent] = m.handleNewMessage.mock.calls[0];
+    expect(eventType).toBe('GENERATION_ENDED');
+    expect(intent).toEqual({
+      eventMessageId: 39,
+      chatKey: '',
+      isolationKey: '',
+      capturedAt: expect.any(Number),
+      capturedChatLength: 40,
+      capturedAiFloorCount: 27,
+      generationSeq: 3,
+      preSignature: undefined,
+    });
+  });
+
+  it('跳过分支：门控判否后不派发，诊断载荷里的窄档计数与放行分支同源', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(false);
+    m.consumeGenerationContext.mockReturnValue({ seq: 3, type: 'quiet', params: { quiet_prompt: '后台' }, dryRun: false, at: 1 });
+    m.api.chat = longChat();
+    const before = m.aiFloorReads;
+
+    m.generationEndedHandler!(39);
+
+    expect(m.aiFloorReads - before).toBe(m.api.chat.length);
+    expect(m.handleNewMessage).not.toHaveBeenCalled();
+    expect(m.logAutoFillSkip).toHaveBeenCalledTimes(1);
+    expect(m.logAutoFillSkip.mock.calls[0][0]).toBe('quiet_or_background_generation');
+    expect(m.logAutoFillSkip.mock.calls[0][1]).toEqual({
+      eventType: 'GENERATION_ENDED',
+      messageId: 39,
+      eventMessageId: 39,
+      chatKey: '',
+      isolationKey: '',
+      capturedChatLength: 40,
+      capturedAiFloorCount: 27,
+      lastGenerationType: undefined,
+    });
+  });
+
+  it('早退分支：配对歧义时既不读第二遍签名也不派发', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    m.generationEndMatchStatus = 'ambiguous';
+    m.consumeGenerationContext.mockReturnValue({ seq: 9, type: 'quiet', params: {}, dryRun: false, at: 1 });
+    m.api.chat = longChat();
+    const before = m.aiFloorReads;
+
+    m.generationEndedHandler!(39);
+
+    // 歧义早退只需要配对用的扩展签名：一次正序扫描（不再额外逆扫取末楼）。
+    expect(m.aiFloorReads - before).toBe(m.api.chat.length);
+    expect(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).not.toHaveBeenCalled();
+    expect(m.handleNewMessage).not.toHaveBeenCalled();
+  });
+});

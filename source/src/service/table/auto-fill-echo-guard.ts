@@ -23,7 +23,7 @@ import {
 } from '../../data/storage/optimization-cache-storage';
 import { logDebug_ACU } from '../../shared/utils';
 import { sha256HexSync_ACU } from '../../shared/sha256-sync';
-import { isAiFloor_ACU } from '../../shared/ai-floor';
+import { isAiFloor_ACU, isAiModelOutputFloor_ACU } from '../../shared/ai-floor';
 import type { AiFloorSignature_ACU, AiFloorSignatureEx_ACU } from '../runtime/state-manager';
 
 export interface AutoFillFloor_ACU {
@@ -81,19 +81,52 @@ export function resolveAiFloorSignature_ACU(chat: any): AiFloorSignature_ACU {
  * 纯函数：聊天数组由调用方读一次传入。
  */
 export function resolveAiFloorSignatureEx_ACU(chat: any): AiFloorSignatureEx_ACU {
-    const base = resolveAiFloorSignature_ACU(chat);
+    return toAiFloorSignatureEx_ACU(scanAiFloorSignature_ACU(chat));
+}
+
+/**
+ * 一次正序扫描产出 GENERATION_ENDED 需要的全部楼层量。
+ *
+ * 旧实现对同一条 chat 重复扫描：宽档签名（正序计数 + 一次逆扫找末楼 + 再一次逆扫取 mes）
+ * ＋窄档 AI 楼数（每次都新建一份等长 filter 拷贝）。这里一次遍历同时得到三者，
+ * 口径仍全部来自 shared/ai-floor 的两个谓词（不新增第二套 AI 楼判定）。
+ */
+export interface AiFloorScan_ACU {
+    /** 宽档签名，与 resolveAiFloorSignature_ACU 逐字同构。 */
+    signature: AiFloorSignature_ACU;
+    /** 最新 AI 楼的 mes（无 AI 楼时为 undefined）；hash 由 toAiFloorSignatureEx_ACU 按需计算。 */
+    latestMes: unknown;
+    /** 窄档 AI 楼数，与 countAiModelOutputFloors_ACU 同口径。 */
+    aiModelOutputCount: number;
+}
+
+export function scanAiFloorSignature_ACU(chat: any): AiFloorScan_ACU {
     const list = Array.isArray(chat) ? chat : [];
+    let aiFloorCount = 0;
+    let aiModelOutputCount = 0;
+    let latestMessageId: number | null = null;
     let latestMes: unknown;
-    for (let index = list.length - 1; index >= 0; index -= 1) {
+    for (let index = 0; index < list.length; index += 1) {
         const message = list[index];
         if (!isAiFloor_ACU(message)) continue;
+        aiFloorCount += 1;
+        if (isAiModelOutputFloor_ACU(message)) aiModelOutputCount += 1;
+        latestMessageId = message.message_id ?? null;
         latestMes = message?.mes;
-        break;
     }
     return {
-        aiFloorCount: base.aiFloorCount,
-        latestAiMessageId: base.latestAiMessageId,
-        latestContentHash: typeof latestMes === 'string' ? sha256HexSync_ACU(latestMes) : null,
+        signature: { aiFloorCount, latestAiMessageId: latestMessageId ?? null },
+        latestMes,
+        aiModelOutputCount,
+    };
+}
+
+/** 由单次扫描产物补出扩展签名的内容哈希（hash 只算一次，mes 非字符串时为 null）。 */
+export function toAiFloorSignatureEx_ACU(scan: AiFloorScan_ACU): AiFloorSignatureEx_ACU {
+    return {
+        aiFloorCount: scan.signature.aiFloorCount,
+        latestAiMessageId: scan.signature.latestAiMessageId,
+        latestContentHash: typeof scan.latestMes === 'string' ? sha256HexSync_ACU(scan.latestMes) : null,
     };
 }
 

@@ -397,6 +397,29 @@ const materialsPanel = ref<InstanceType<typeof ContinuationMaterialsPanel> | nul
 const clock = ref(Date.now());
 let countdownTimer: ReturnType<typeof setInterval> | undefined;
 
+function stopCountdownTimer(): void {
+  if (countdownTimer === undefined) return;
+  clearInterval(countdownTimer);
+  countdownTimer = undefined;
+}
+
+/**
+ * 倒计时心跳按需启停：只有任务带 deadlineAt 时才需要每秒推进 clock。
+ * 整页模板都读 clock，无条件 1s 心跳会让「没有任务」的页面也整页重渲染每秒一次。
+ * deadline 出现/消失（含任务被清空、切聊天）时由 watch 启停，卸载清理语义不变。
+ */
+function syncCountdownTimer(deadlineAt: number | null | undefined): void {
+  if (deadlineAt === null || deadlineAt === undefined) {
+    stopCountdownTimer();
+    return;
+  }
+  if (countdownTimer !== undefined) return;
+  clock.value = Date.now();
+  countdownTimer = setInterval(() => { clock.value = Date.now(); }, 1_000);
+}
+
+watch(() => runtime.task.value?.deadlineAt, syncCountdownTimer, { immediate: true });
+
 async function repairMaterials(
   modules: readonly import('../../service/continuation/agent/agent-model').AgentWritableModule_ACU[],
 ): Promise<void> {
@@ -994,10 +1017,9 @@ function refreshAfterChatMutation(): void {
 onMounted(() => {
   apiStore.refreshFromSettings();
   void runtime.initialize();
-  countdownTimer = setInterval(() => { clock.value = Date.now(); }, 1_000);
 });
 onBeforeUnmount(() => {
-  if (countdownTimer !== undefined) clearInterval(countdownTimer);
+  stopCountdownTimer();
   // 防抖窗口内离开页面时冲刷一次未落盘的改动，避免"改了像改了、重进没了"。
   if (settingsSaveTimer !== undefined) {
     clearTimeout(settingsSaveTimer);

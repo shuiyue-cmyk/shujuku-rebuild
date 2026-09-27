@@ -173,7 +173,16 @@ function clearMessageAndToast(store: ContentReplaceState, kind: 'success' | 'inf
   useToastStore()[kind](text, options);
 }
 
+/** 指纹构建次数（仅供测试观测）。生产路径只多一次整数自增。 */
+let promptFingerprintBuilds_ACU = 0;
+
+/** 仅供测试：读取「提示词指纹」被真实构建的次数（记忆化命中不计数）。 */
+export function __readContentReplacePromptFingerprintCountForTests_ACU(): number {
+  return promptFingerprintBuilds_ACU;
+}
+
 function promptFingerprint(segments: ContentReplacePromptSegment[]): string {
+  promptFingerprintBuilds_ACU += 1;
   return JSON.stringify(
     segments.map(seg => ({
       role: seg.role,
@@ -189,17 +198,33 @@ function defaultPromptGroup(): ContentReplacePromptSegment[] {
   return clone(buildDefaultContentOptimizationPromptGroup_ACU());
 }
 
-function findMatchingPresetName(
-  promptGroup: ContentReplacePromptSegment[],
+/**
+ * 默认提示词组是模块常量构造的纯数据（每次调用都返回新副本，不会被调用方就地改写），
+ * 因此它的指纹与段数在模块级算一次即可：四个 UI getter 同帧读取时不必各跑一次
+ * 「深拷贝默认组 + stringify 默认组」。
+ */
+const DEFAULT_PROMPT_FINGERPRINT_ACU = promptFingerprint(buildDefaultContentOptimizationPromptGroup_ACU());
+const DEFAULT_PROMPT_SEGMENT_COUNT_ACU = buildDefaultContentOptimizationPromptGroup_ACU().length;
+
+/** 用已算好的草稿指纹匹配预设名，避免调用方重复构建同一份草稿指纹。 */
+function findMatchingPresetNameByFingerprint_ACU(
   presets: ContentReplacePreset[],
-  preferredName = '',
+  preferredName: string,
+  fingerprint: string,
 ): string {
-  const fingerprint = promptFingerprint(promptGroup);
   const preferred = preferredName
     ? presets.find(preset => preset.name === preferredName)
     : null;
   if (preferred && promptFingerprint(preferred.promptGroup) === fingerprint) return preferred.name;
   return presets.find(preset => promptFingerprint(preset.promptGroup) === fingerprint)?.name || '';
+}
+
+function findMatchingPresetName(
+  promptGroup: ContentReplacePromptSegment[],
+  presets: ContentReplacePreset[],
+  preferredName = '',
+): string {
+  return findMatchingPresetNameByFingerprint_ACU(presets, preferredName, promptFingerprint(promptGroup));
 }
 
 function uniquePresetName(existing: ContentReplacePreset[], baseName: string): string {
@@ -288,33 +313,40 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
     message: null,
   }),
   getters: {
-    hasSelectedPreset(state): boolean {
-      const selected = findMatchingPresetName(state.promptGroup, state.promptPresets, state.activePresetHint);
-      return !!selected;
+    /**
+     * 提示词身份（唯一派生点）：草稿指纹 + 是否等于默认预设 + 命中的预设名。
+     *
+     * hasSelectedPreset / selectedPresetName / activePresetLabel / promptTemplateMode
+     * 四个 getter 在同一帧里都会读它，Pinia getter 是 computed，因此整帧只构建一次指纹；
+     * 草稿或预设变动时 computed 失效，下一帧重算——取值不会陈旧。
+     */
+    promptIdentity(state): { fingerprint: string; isDefault: boolean; presetName: string } {
+      const fingerprint = promptFingerprint(state.promptGroup);
+      return {
+        fingerprint,
+        isDefault: fingerprint === DEFAULT_PROMPT_FINGERPRINT_ACU,
+        presetName: findMatchingPresetNameByFingerprint_ACU(state.promptPresets, state.activePresetHint, fingerprint),
+      };
     },
-    selectedPresetName(state): string {
-      const selected = findMatchingPresetName(state.promptGroup, state.promptPresets, state.activePresetHint);
-      if (selected) return selected;
-      if (promptFingerprint(state.promptGroup) === promptFingerprint(defaultPromptGroup())) return '';
-      return CUSTOM_CONTENT_REPLACE_PRESET_VALUE;
+    hasSelectedPreset(): boolean {
+      return !!this.promptIdentity.presetName;
+    },
+    selectedPresetName(): string {
+      if (this.promptIdentity.presetName) return this.promptIdentity.presetName;
+      return this.promptIdentity.isDefault ? '' : CUSTOM_CONTENT_REPLACE_PRESET_VALUE;
     },
     promptSegmentCount(state): number {
       return state.promptGroup.length;
     },
     defaultPromptSegmentCount(): number {
-      return defaultPromptGroup().length;
+      return DEFAULT_PROMPT_SEGMENT_COUNT_ACU;
     },
-    activePresetLabel(state): string {
-      const selected = findMatchingPresetName(state.promptGroup, state.promptPresets, state.activePresetHint);
-      if (selected) return selected;
-      return promptFingerprint(state.promptGroup) === promptFingerprint(defaultPromptGroup())
-        ? DEFAULT_CONTENT_REPLACE_PRESET_NAME
-        : '自定义提示词';
+    activePresetLabel(): string {
+      return this.promptIdentity.presetName
+        || (this.promptIdentity.isDefault ? DEFAULT_CONTENT_REPLACE_PRESET_NAME : '自定义提示词');
     },
-    promptTemplateMode(state): 'default' | 'custom' {
-      return promptFingerprint(state.promptGroup) === promptFingerprint(defaultPromptGroup())
-        ? 'default'
-        : 'custom';
+    promptTemplateMode(): 'default' | 'custom' {
+      return this.promptIdentity.isDefault ? 'default' : 'custom';
     },
     lastOptimizedLabel(state): string {
       return state.lastOptimizedMessageIndex >= 0

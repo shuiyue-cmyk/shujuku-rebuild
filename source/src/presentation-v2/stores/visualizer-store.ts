@@ -111,6 +111,8 @@ interface VisualizerState {
   assistantRiskConfirmations: Record<string, boolean>;
   draftContextKey: string;
   draftContextInvalid: boolean;
+  /** 最近一次载入实际读到的外部数据源 revision（空串＝尚未载入过）。 */
+  loadedSourceRevision: string;
 }
 
 function cloneData<T>(value: T): T {
@@ -151,6 +153,25 @@ function buildSheetOrder(data: Record<string, any>, preferredOrder: string[] = [
 
   return [...ordered, ...missing];
 }
+
+/**
+ * 外部刷新合并窗口（毫秒）。
+ *
+ * 同一轮提交/切聊会从两条独立路径各发一次「刷新可视化器」请求：
+ *   ① presentation/components/pipeline-ui-helpers：数据合并后 200ms 再刷一次；
+ *   ② presentation-v2 的模板运行时提交通知（useTemplateRuntimeChangeListener）。
+ * 两条最终都只 ++externalRefreshTick，编辑器据此整表重载，因此编辑器开着时每轮都会被
+ * 全量重载两次。这里把窗口内的请求合并为一次 tick。
+ *
+ * 窗口取 500ms：覆盖 ① 自身 200ms 定时器与其调度抖动。
+ * 窗口只推迟重载、不会丢重载——任何数据发布都发生在触发它的刷新通知之前，
+ * 而窗口末尾的结算一定晚于窗口内最后一条通知，因此结算时读到的必然是窗口内
+ * 全部发布之后的状态（与可视化器载入路径的 contextKey 校验同源思路）。
+ * 结算时刻会重判脏保护与 revision：期间变脏只记冲突不重载。
+ */
+const EXTERNAL_REFRESH_COALESCE_MS_ACU = 500;
+let externalRefreshFlushTimer_ACU: ReturnType<typeof setTimeout> | undefined;
+let externalRefreshPendingRevision_ACU = '';
 
 function applyOrderNumbers(data: Record<string, any> | null, orderedKeys: string[]): void {
   if (!data) return;
@@ -197,6 +218,7 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
     assistantRiskConfirmations: {},
     draftContextKey: '',
     draftContextInvalid: false,
+    loadedSourceRevision: '',
   }),
   getters: {
     sheetItems(state): VisualizerSheetItem[] {
@@ -255,7 +277,7 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
     setSaving(saving: boolean): void {
       this.isSaving = saving;
     },
-    loadSnapshot(data: Record<string, any>, orderedKeys: string[] = [], contextKey = ''): void {
+    loadSnapshot(data: Record<string, any>, orderedKeys: string[] = [], contextKey = '', sourceRevision = ''): void {
       const nextData = cloneData(data || { mate: { type: 'chatSheets', version: 1 } });
       if (!nextData.mate || typeof nextData.mate !== 'object') {
         nextData.mate = { type: 'chatSheets', version: 1 };
@@ -269,6 +291,8 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
       this.templateBaseSheetOrder = [...nextOrder];
       this.draftContextKey = String(contextKey || '');
       this.draftContextInvalid = false;
+      // 记录本次载入读到的数据源版本：后续外部刷新据此判定「有没有真的变」。
+      this.loadedSourceRevision = String(sourceRevision || '');
       this.deletedSheetKeys = [];
       resetVisualizerPendingDataOps_ACU(this);
       this.lockDirty = false;
@@ -559,17 +583,55 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
     invalidateDraftContext(): void {
       if (this.draftContextKey) this.draftContextInvalid = true;
     },
-    requestExternalRefresh(): 'ignored' | 'refreshed' | 'conflicted' {
+    /**
+     * 请求外部刷新。`sourceRevision` 由调用方从数据源现读（见 visualizer-source-revision）：
+     *   - 'ignored'   未激活；
+     *   - 'conflicted' 草稿未保存：只记冲突，绝不覆盖用户改动（脏保护语义不变）；
+     *   - 'unchanged' revision 与上次载入相同：重载只会得到同一份草稿，直接跳过；
+     *   - 'refreshed' 已排入合并窗口，由 flushPendingExternalRefresh 结算成一次 tick。
+     * 省略 revision（空串）＝不做变化判定，等价于旧行为（永远排一次刷新）。
+     */
+    requestExternalRefresh(sourceRevision = ''): 'ignored' | 'refreshed' | 'conflicted' | 'unchanged' {
       if (!this.isActive) return 'ignored';
       if (this.dirty) {
         this.externalRevisionChanged = true;
         return 'conflicted';
       }
-      this.externalRevisionChanged = false;
-      this.externalRefreshTick += 1;
+      const revision = String(sourceRevision || '');
+      if (revision && revision === this.loadedSourceRevision) return 'unchanged';
+      externalRefreshPendingRevision_ACU = revision;
+      if (externalRefreshFlushTimer_ACU === undefined) {
+        externalRefreshFlushTimer_ACU = setTimeout(() => {
+          externalRefreshFlushTimer_ACU = undefined;
+          this.flushPendingExternalRefresh();
+        }, EXTERNAL_REFRESH_COALESCE_MS_ACU);
+      }
       return 'refreshed';
     },
+    /** 合并窗口末尾的统一结算：脏保护与 revision 复检都在这里做一次。 */
+    flushPendingExternalRefresh(): void {
+      const pendingRevision = externalRefreshPendingRevision_ACU;
+      externalRefreshPendingRevision_ACU = '';
+      if (!this.isActive) return;
+      if (this.dirty) {
+        this.externalRevisionChanged = true;
+        return;
+      }
+      // 期间若有别的路径已经把这一版数据载进草稿，就不必再重载一次。
+      if (pendingRevision && pendingRevision === this.loadedSourceRevision) return;
+      this.externalRevisionChanged = false;
+      this.externalRefreshTick += 1;
+    },
+    /** 丢弃待结算的刷新请求（surface 关闭时调用，避免关闭后再跳一次重载）。 */
+    clearPendingExternalRefresh(): void {
+      if (externalRefreshFlushTimer_ACU !== undefined) {
+        clearTimeout(externalRefreshFlushTimer_ACU);
+        externalRefreshFlushTimer_ACU = undefined;
+      }
+      externalRefreshPendingRevision_ACU = '';
+    },
     closeSurface(): VisualizerCloseResult {
+      this.clearPendingExternalRefresh();
       const snapshot = this.entrySnapshot;
       this.isActive = false;
       this.mode = 'data';
@@ -593,6 +655,7 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
       this.assistantTableApiPreset = '';
       this.draftContextKey = '';
       this.draftContextInvalid = false;
+      this.loadedSourceRevision = '';
       this.clearAssistantDraftState();
       return {
         shouldCloseShell: snapshot ? !snapshot.wasShellOpen : false,
