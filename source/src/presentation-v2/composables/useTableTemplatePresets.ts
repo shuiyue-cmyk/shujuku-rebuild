@@ -7,7 +7,7 @@ import {
   ensureUniqueTemplatePresetName_ACU,
   getDefaultTemplateSnapshot_ACU,
   getTemplatePreset_ACU,
-  listTemplatePresetNames_ACU,
+  readTemplatePresetLibrarySnapshot_ACU,
   normalizeTemplateForPresetSave_ACU,
   getRuntimeTemplateSnapshot_ACU,
   parseImportedTemplateData_ACU,
@@ -97,6 +97,46 @@ function formatSheetCountMeta(templateSource: unknown): string | undefined {
   return count ? `${count} 张表` : undefined;
 }
 
+/**
+ * 预设表数量记忆化：按预设名缓存，命中条件是模板串逐字相同。
+ *
+ * 之所以比对模板串而不是 updatedAt：表数量是模板串的纯函数，内容相同即结果相同，
+ * 这样即便某条写入路径没有 updatedAt 也绝不会返回陈旧计数。缓存跨 refresh 复用
+ * （面板每次操作后都会 refresh），条目数上限固定，清空后按需重建。
+ */
+const PRESET_SHEET_COUNT_CACHE_LIMIT_ACU = 64;
+const presetSheetCountCache_ACU = new Map<string, { templateStr: string; count: number | null }>();
+
+function cachedPresetSheetCountMeta(name: string, templateStr: string): string | undefined {
+  const hit = presetSheetCountCache_ACU.get(name);
+  if (!hit || hit.templateStr !== templateStr) {
+    if (presetSheetCountCache_ACU.size >= PRESET_SHEET_COUNT_CACHE_LIMIT_ACU) presetSheetCountCache_ACU.clear();
+    presetSheetCountCache_ACU.set(name, { templateStr, count: countTemplateSheets(templateStr) });
+  }
+  const count = presetSheetCountCache_ACU.get(name)!.count;
+  return count ? `${count} 张表` : undefined;
+}
+
+/** 预设库读视图：一次 refresh 取一次库快照，之后列表/表数量/偏离判定全部复用它。 */
+interface PresetLibraryView_ACU {
+  names: string[];
+  templateStrOf(name: string): string | null;
+  sheetCountMetaOf(name: string): string | undefined;
+}
+
+function createPresetLibraryView_ACU(): PresetLibraryView_ACU {
+  const snapshot = readTemplatePresetLibrarySnapshot_ACU();
+  const entryOf = (name: string) => snapshot.byName.get(name) || null;
+  return {
+    names: snapshot.names,
+    templateStrOf: (name: string) => entryOf(name)?.templateStr || null,
+    sheetCountMetaOf: (name: string) => {
+      const templateStr = entryOf(name)?.templateStr;
+      return templateStr ? cachedPresetSheetCountMeta(name, templateStr) : undefined;
+    },
+  };
+}
+
 function formatArchiveMeta(entry: TemplateArchiveEntry): string | undefined {
   const parts = [formatSheetCountMeta(entry?.templateStr)].filter(Boolean) as string[];
   const source = String(entry?.presetName || '').trim();
@@ -156,12 +196,13 @@ function formatTemplateOperationError(error: unknown): string {
 function computeChatSnapshotDiff(
   snapshotTemplateStr: unknown,
   presetName: string,
+  library: PresetLibraryView_ACU,
 ): { differs: boolean; reason: 'diverged' | 'library_preset_missing' | null } {
   const chatSanitized = sanitizeTemplateSnapshotForChat_ACU(snapshotTemplateStr || null);
   if (!chatSanitized?.templateStr) return { differs: false, reason: null };
   let librarySanitized: { templateStr?: string } | null;
   if (presetName) {
-    const libraryStr = getTemplatePreset_ACU(presetName)?.templateStr;
+    const libraryStr = library.templateStrOf(presetName);
     if (!libraryStr) return { differs: true, reason: 'library_preset_missing' };
     librarySanitized = sanitizeTemplateSnapshotForChat_ACU(libraryStr);
   } else {
@@ -212,7 +253,7 @@ export function useTableTemplatePresets() {
   const isChatOverridden = computed(() => activeTemplateScope.value === 'chat');
 
   function buildChatPresetItems(
-    globalNames: string[],
+    library: PresetLibraryView_ACU,
     _currentGlobalPreset: string,
     activeMeta: ReturnType<typeof getActiveTemplatePresetMeta_ACU>,
     runtimeItem: PresetItem | null,
@@ -225,13 +266,13 @@ export function useTableTemplatePresets() {
       items.push(runtimeItem);
       seen.add(RUNTIME_PRESET_VALUE);
     }
-    for (const name of globalNames) {
+    for (const name of library.names) {
       const normalized = normalizeTemplatePresetSelectionValue_ACU(name);
       if (!normalized) continue;
       const value = encodeChatPresetValue('global', normalized);
       if (seen.has(value)) continue;
       seen.add(value);
-      items.push({ value, label: `${normalized}（全局预设）`, meta: formatSheetCountMeta(getTemplatePreset_ACU(normalized)?.templateStr) });
+      items.push({ value, label: `${normalized}（全局预设）`, meta: library.sheetCountMetaOf(normalized) });
     }
     chatSnapshotDiffersFromLibrary.value = false;
     if (activeMeta.mode === 'chat_override') {
@@ -244,7 +285,7 @@ export function useTableTemplatePresets() {
       if (!seen.has(value)) {
         seen.add(value);
         // S3-8：快照内容偏离库中同名预设时在标签处明示，避免同名不同内容的静默混淆。
-        const diff = computeChatSnapshotDiff(currentScope?.templateStr, normalized);
+        const diff = computeChatSnapshotDiff(currentScope?.templateStr, normalized, library);
         chatSnapshotDiffersFromLibrary.value = diff.differs;
         const divergenceSuffix = diff.reason === 'diverged' ? '（内容已偏离库预设）' : '';
         const metaParts = [formatSheetCountMeta(currentScope?.templateStr)].filter(Boolean) as string[];
@@ -269,7 +310,7 @@ export function useTableTemplatePresets() {
     return encodeChatPresetValue('global', currentGlobalPreset || '');
   }
 
-  function computeRuntimeViews(): { item: PresetItem | null; available: boolean; differsFromLibrary: boolean } {
+  function computeRuntimeViews(library: PresetLibraryView_ACU): { item: PresetItem | null; available: boolean; differsFromLibrary: boolean } {
     const runtimeSnapshot = getRuntimeTemplateSnapshot_ACU();
     if (!runtimeSnapshot?.templateStr || !runtimeSnapshot?.templateObj) {
       return { item: null, available: false, differsFromLibrary: false };
@@ -281,36 +322,34 @@ export function useTableTemplatePresets() {
     };
 
     const activeName = normalizeTemplatePresetSelectionValue_ACU(resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true }));
-    let libraryStr: string | null = null;
-    if (activeName) {
-      libraryStr = getTemplatePreset_ACU(activeName)?.templateStr || null;
-    } else {
-      libraryStr = getDefaultTemplateSnapshot_ACU()?.templateStr || null;
-    }
+    const libraryStr: string | null = activeName
+      ? library.templateStrOf(activeName)
+      : (getDefaultTemplateSnapshot_ACU()?.templateStr || null);
     const differsFromLibrary = libraryStr != null && runtimeSnapshot.templateStr !== libraryStr;
     return { item, available: true, differsFromLibrary };
   }
 
   function refresh(): void {
-    const nextGlobalNames = listTemplatePresetNames_ACU();
+    // 一次 refresh 只取一次库快照：列表名、每个预设的表数量、runtime/快照偏离判定都复用它。
+    const library = createPresetLibraryView_ACU();
     const nextChatArchives = listChatTemplateArchiveEntries_ACU();
     const nextSelectedGlobal = normalizeTemplatePresetSelectionValue_ACU(
       getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false }),
     );
     const activeMeta = getActiveTemplatePresetMeta_ACU();
-    const runtimeViews = computeRuntimeViews();
+    const runtimeViews = computeRuntimeViews(library);
     runtimeTemplateItem.value = runtimeViews.item;
     runtimeTemplateAvailable.value = runtimeViews.available;
     runtimeDiffersFromLibrary.value = runtimeViews.differsFromLibrary;
     const nextItems = buildChatPresetItems(
-      nextGlobalNames,
+      library,
       nextSelectedGlobal,
       activeMeta,
       runtimeViews.item,
     );
     const nextSelectedChat = resolveSelectedChatPresetValue(activeMeta, nextSelectedGlobal);
 
-    globalPresetNames.value = nextGlobalNames;
+    globalPresetNames.value = library.names;
     chatArchiveEntries.value = nextChatArchives;
     selectedGlobalPreset.value = nextSelectedGlobal;
     selectedGlobalPresetValue.value = encodeChatPresetValue('global', nextSelectedGlobal || '');

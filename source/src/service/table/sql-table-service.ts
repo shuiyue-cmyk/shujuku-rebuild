@@ -15,6 +15,7 @@ import type {
   FrozenSheetRuntimeSchema_ACU,
   SqlQueryResult,
   SqlMutationResult,
+  SqlMutationResultWithView_ACU,
   ApplyEditsWithRowIdMaterializationResult_ACU,
   ApplyEditsResult,
   SqlQueryExecutionOptions_ACU,
@@ -709,6 +710,16 @@ export function computeRuntimeSchemaDigest_ACU(
   return hashUserInput_ACU(lines.join('\n'));
 }
 
+/**
+ * 冻结视图的表集合过滤谓词（两条构建路径共用，避免过滤语义各自漂移）。
+ *
+ * 语义与历史导出版本逐字一致：activeSheetKeys 缺省或为空集时不过滤（视为“全部参与”），
+ * 只有非空集合才按成员过滤。
+ */
+function isFrozenSchemaSheetKey_ACU(sheetKey: string, activeSheetKeys: ReadonlySet<string> | null | undefined): boolean {
+  return !(activeSheetKeys && activeSheetKeys.size > 0) || activeSheetKeys.has(sheetKey);
+}
+
 /** 从冻结的完整 runtimeData 中构建窄 schema 视图（只保留 schema 证据，不复制业务行）。 */
 export function freezeRuntimeSchemaFromData_ACU(
   runtimeData: TableDataObject_ACU | null | undefined,
@@ -718,7 +729,7 @@ export function freezeRuntimeSchemaFromData_ACU(
   const bySheetKey = new Map<string, FrozenSheetRuntimeSchema_ACU>();
   const activeKeys = activeSheetKeys ? activeSheetKeys : new Set(Object.keys(runtimeData).filter(key => key.startsWith('sheet_')));
   for (const sheetKey of Object.keys(runtimeData).filter(key => key.startsWith('sheet_'))) {
-    if (activeKeys.size > 0 && !activeKeys.has(sheetKey)) continue;
+    if (!isFrozenSchemaSheetKey_ACU(sheetKey, activeKeys)) continue;
     const sheet = (runtimeData as any)[sheetKey];
     if (!sheet || typeof sheet !== 'object') continue;
     const descriptor = getRuntimeEffectiveSchema_ACU(sheet) as {
@@ -729,6 +740,48 @@ export function freezeRuntimeSchemaFromData_ACU(
       return null;
     }
     const physicalTableName = getPhysicalTableNameForSheet_ACU(runtimeData, sheetKey);
+    bySheetKey.set(sheetKey, {
+      sheetKey,
+      physicalTableName,
+      effectiveDDL: String(descriptor.effectiveDDL || ''),
+      columnMap: descriptor.columnMap,
+      source: String(descriptor.source || ''),
+      diagnostics: Array.isArray(descriptor.diagnostics) ? descriptor.diagnostics : [],
+    });
+  }
+  if (bySheetKey.size === 0) return null;
+  return { bySheetKey, sheetKeys: Array.from(bySheetKey.keys()).sort(), digest: computeRuntimeSchemaDigest_ACU(bySheetKey) };
+}
+
+/**
+ * 从 SyncBridge 窄 schema 接口构建冻结视图：只读 runtime effective schema 快照与物理表名表。
+ *
+ * 与 freezeRuntimeSchemaFromData_ACU 的 digest 输入逐字等价（只取 sheetKey / effectiveDDL /
+ * columnMap，业务行不参与），但不需要把每张表整行导出。提交前的 live schema 一致性门禁
+ * 每批 AI 填表都要跑一次，用这条路径可去掉与 digest 无关的全库行导出。
+ *
+ * @param runtimeSchemas SyncBridge 实际执行到 runtime SQLite 的 schema 快照（键即 runtime 表集合）。
+ * @param activeSheetKeys 请求级活动表集合；缺省或空集表示不过滤（与导出版本同语义）。
+ * @param physicalTableNames 已解析的 sheetKey → 物理表名表；缺失键记空串（digest 不消费该字段）。
+ */
+export function freezeRuntimeSchemaFromSchemas_ACU(
+  runtimeSchemas: ReadonlyMap<string, { effectiveDDL?: string; columnMap?: unknown; source?: string; diagnostics?: readonly string[] }>,
+  activeSheetKeys: ReadonlySet<string> | null | undefined,
+  physicalTableNames: ReadonlyMap<string, string>,
+): RuntimeSchemaFreeze_ACU | null {
+  if (!runtimeSchemas || typeof runtimeSchemas !== 'object') return null;
+  const bySheetKey = new Map<string, FrozenSheetRuntimeSchema_ACU>();
+  for (const [sheetKey, descriptor] of runtimeSchemas) {
+    if (!isFrozenSchemaSheetKey_ACU(sheetKey, activeSheetKeys)) continue;
+    if (!descriptor || typeof descriptor !== 'object') {
+      // runtime schema 证据损坏视为契约失败（fail-closed），与导出版本同一处理。
+      return null;
+    }
+    const physicalTableName = physicalTableNames.get(sheetKey) || '';
+    if (!physicalTableName) {
+      // 物理表名不参与 digest，仅作可观测提示：JSON 镜像缺该键时不能反向猜测表名。
+      logDebug_ACU(`[SqlTableService] schema 门禁：canonical 视图缺少 ${sheetKey} 的物理表名证据（digest 不受影响）。`);
+    }
     bySheetKey.set(sheetKey, {
       sheetKey,
       physicalTableName,
@@ -1958,9 +2011,10 @@ export class SqlTableService implements ITableStorageProvider {
 
   /**
    * 执行 SQL 变更语句（INSERT/UPDATE/DELETE）
-   * 执行后自动同步到 JSON 视图
+   * 执行后自动同步到 JSON 视图，并把本次已发布的视图随结果带回（syncedView），
+   * 让提交链无需紧接着再导一次全库。同步失败时 syncedView 为 null，调用方回退 getCurrentData()。
    */
-  executeMutation(sql: string, params?: (string | number | null)[]): SqlMutationResult & JsonViewSyncDiagnostics_ACU {
+  executeMutation(sql: string, params?: (string | number | null)[]): SqlMutationResultWithView_ACU & JsonViewSyncDiagnostics_ACU {
     this._ensureInitialized();
     this._ensureTablesFromTemplate();
     try {
@@ -1972,13 +2026,14 @@ export class SqlTableService implements ITableStorageProvider {
       )[0];
       const result = this.engine.run(runtimeSql, params);
       const syncedView = this._syncToJson();
-      return { changes: result.changes, errors: [], ...jsonViewSyncDiagnostics_ACU('executeMutation', syncedView) };
+      return { changes: result.changes, errors: [], syncedView, ...jsonViewSyncDiagnostics_ACU('executeMutation', syncedView) };
     } catch (e: any) {
       // 同步 JSON 视图避免 SQLite/JSON 状态分裂
       const syncedView = this._syncToJson();
       return {
         changes: 0,
         errors: [e?.message || String(e)],
+        syncedView,
         ...jsonViewSyncDiagnostics_ACU('executeMutation（语句失败后的视图同步同样未成功）', syncedView),
       };
     }
@@ -2267,8 +2322,10 @@ export class SqlTableService implements ITableStorageProvider {
    * 提交前 schema 一致性 gate：live SQLite runtime 与请求前冻结的 runtime schema
    * 必须一致，否则任何 SQLite mutation 都不得执行（fail-closed，零写入）。
    *
-   * 比较依据是冻结 digest 与当前实时导出（仅 activeSheetKeys 参与）的 digest。
-   * 无冻结 scope 时跳过（旧调用方/低层工具路径），不收紧 Native 与历史 replay。
+   * 比较依据是冻结 digest 与当前 live runtime schema（仅 activeSheetKeys 参与）的 digest。
+   * digest 只由 sheetKey / effectiveDDL / columnMap 决定，因此这里走 SyncBridge 窄 schema
+   * 接口（getRuntimeEffectiveSchemas_ACU）与物理表名解析表即可，不再为算纯 schema 指纹
+   * 把每张表整行导出。无冻结 scope 时跳过（旧调用方/低层工具路径），不收紧 Native 与历史 replay。
    */
   private _assertRuntimeSchemaCurrent(scope?: SqlTableApplyScope_ACU): void {
     const frozenDigest = scope?.runtimeSchema?.digest;
@@ -2276,20 +2333,20 @@ export class SqlTableService implements ITableStorageProvider {
     if (!this._initialized || !this.engine.isReady) {
       throw new SqlRuntimeSchemaInvalidError_ACU('SQLite 运行时未就绪，无法验证冻结 schema 一致性，已阻止本轮写入。');
     }
-    let currentData: TableDataObject_ACU | null;
-    try {
-      const mate = (this._readCanonicalView_ACU()?.mate as Mate_ACU) || DEFAULT_MATE_ACU;
-      // 非 strict 导出：收集跳过明细并聚合 warn，schema gate 可观测部分导出。
-      const exportWarnings: string[] = [];
-      currentData = this.syncBridge.exportToTableData(mate, { warnings: exportWarnings });
-      if (exportWarnings.length > 0) {
-        logWarn_ACU(`[SqlTableService] schema 一致性导出部分表被跳过（${exportWarnings.length}）：${exportWarnings.join('；')}`);
-      }
-    } catch (error: any) {
-      throw new SqlRuntimeSchemaInvalidError_ACU(`无法导出当前 SQLite schema 用于一致性验证：${String(error?.message || error)}`);
-    }
     const activeSheetKeys = scope?.activeSheetKeys ? new Set(scope.activeSheetKeys) : undefined;
-    const current = freezeRuntimeSchemaFromData_ACU(currentData, activeSheetKeys);
+    let current: RuntimeSchemaFreeze_ACU | null;
+    try {
+      // 物理表名只作冻结视图的证据字段（digest 不消费），从 canonical JSON 镜像解析即可：
+      // 物理名是 sheet 显示名的确定性纯函数，无需重新读 SQLite 整库行数据。
+      const physicalTableNames = resolvePhysicalTableNames_ACU(this._readCanonicalView_ACU() || {});
+      current = freezeRuntimeSchemaFromSchemas_ACU(
+        this.syncBridge.getRuntimeEffectiveSchemas_ACU(),
+        activeSheetKeys,
+        physicalTableNames,
+      );
+    } catch (error: any) {
+      throw new SqlRuntimeSchemaInvalidError_ACU(`无法读取当前 SQLite runtime schema 用于一致性验证：${String(error?.message || error)}`);
+    }
     if (!current || current.digest !== frozenDigest) {
       throw new SqlRuntimeSchemaStaleError_ACU(
         'SQLite runtime schema 在 AI 请求等待期间发生变化，与请求前冻结的 schema 不一致，已阻止本轮写入（零 mutation）。请重新发起本轮填表。',

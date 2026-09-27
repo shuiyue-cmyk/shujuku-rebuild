@@ -707,6 +707,55 @@ describe('useVisualizerAssistant', () => {
     expect(getTurnApplyPayload(emptyOpTurn as any)).toBeNull();
   });
 
+  it('草稿指纹每次 tempData 变化只算一次：全卡片共用，原地改行后必重算', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');
+    const visualizer = useVisualizerStore();
+    visualizer.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: { uid: 'sheet_a', name: 'A表', orderNo: 0, content: [[null, '姓名'], [null, 'A']] },
+      sheet_b: { uid: 'sheet_b', name: 'B表', orderNo: 1, content: [[null, '状态'], [null, '平静']] },
+    }, ['sheet_a', 'sheet_b']);
+
+    mockRunSession.mockImplementation(async (input: any) => buildResult(input, {
+      compileResult: {
+        candidateData: {
+          mate: { type: 'chatSheets', version: 1 },
+          sheet_a: { uid: 'sheet_a', name: 'A表', orderNo: 0, content: [[null, '姓名', '状态'], [null, 'A', '警觉']] },
+        },
+        orderedSheetKeys: ['sheet_a'],
+      },
+    }));
+
+    const assistant = useVisualizerAssistant();
+    assistant.userRequest.value = '生成草稿';
+    await assistant.run();
+    await assistant.runWithRepairFeedback('再来一版');
+    const turns = assistant.turns.value;
+    const finalTurn = turns.find(turn => turn.type === 'final') as any;
+    assistant.setRiskConfirmation(finalTurn.id, 0, true);
+
+    // 面板每张卡片每次渲染调 canApplyTurn + getTurnApplyBlockReason 多次。
+    mockFingerprint.mockClear();
+    for (const turn of turns) {
+      assistant.getTurnApplyBlockReason(turn);
+      assistant.canApplyTurn(turn);
+    }
+    // 旧行为：每张可应用卡片各算一次全草稿指纹。
+    expect(mockFingerprint).toHaveBeenCalledTimes(1);
+
+    // 幂等：状态未变时重复取同一结果不再计算。
+    expect(assistant.getTurnApplyBlockReason(finalTurn)).toBe('');
+    expect(assistant.canApplyTurn(finalTurn)).toBe(true);
+    expect(mockFingerprint).toHaveBeenCalledTimes(1);
+
+    // 原地改一行（Pinia 深响应式，tempData 引用不变）：必须重算并判定结构已变化。
+    visualizer.tempData!.sheet_a.content[1][1] = '改名';
+    expect(assistant.getTurnApplyBlockReason(finalTurn)).toContain('结构已变化');
+    expect(assistant.canApplyTurn(finalTurn)).toBe(false);
+    expect(mockFingerprint).toHaveBeenCalledTimes(2);
+  });
+
   it('canApplyTurn：指纹不一致 / 未确认高风险 / 锚点不符 → false，确认后 true', async () => {
     const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
     const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');

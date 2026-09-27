@@ -124,6 +124,8 @@ import {
   buildSqlSheetBatchOperations_ACU,
   captureSqlTableApplyScope_ACU,
   extractRowIdsFromSqlSheetBatch_ACU,
+  freezeRuntimeSchemaFromData_ACU,
+  freezeRuntimeSchemaFromSchemas_ACU,
   materializeSystemRowIdsForSqlInserts_ACU,
   normalizeSqlStatementsForRuntimeLog_ACU,
   rebindSqlMutationIdentifiers_ACU,
@@ -1780,7 +1782,9 @@ describe('SqlTableService', () => {
         [1, '玄关重逢'],
       );
 
-      expect(result).toEqual({ changes: 1, errors: [] });
+      // 返回值带上本次已发布到 canonical 视图的同一份数据（提交链据此免掉第二次全库导出）。
+      expect(result).toMatchObject({ changes: 1, errors: [] });
+      expect(result.syncedView?.sheet_1?.content).toEqual([['row_id', 'summary'], ['1', '玄关重逢']]);
       expect(service.executeQuery('SELECT summary FROM historysummary WHERE row_id = 1').values).toEqual([['玄关重逢']]);
     });
 
@@ -2244,6 +2248,158 @@ describe('SqlTableService', () => {
       // 零 mutation：stale gate 阻止了本轮 AI SQL 写入（reload 自带的数据行不算）。
       expect(service.executeQuery('SELECT COUNT(*) AS cnt FROM inventory WHERE item_name = \'不应写入\'').values[0][0]).toBe(0);
       expect(service.executeQuery('SELECT COUNT(*) AS cnt FROM inventory').values[0][0]).toBe(1);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // schema 门禁 digest 输入走窄接口（不做全库整行导出）
+  // ═══════════════════════════════════════════════════════════════
+  describe('schema 门禁 digest 输入（窄接口路径）', () => {
+    const singleSheetTemplate = () => ({
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        uid: 'inventory', name: 'inventory',
+        sourceData: { ddl: TEST_DDL },
+        content: [['row_id', 'item_name', 'quantity']],
+        updateConfig: {}, exportConfig: {}, orderNo: 0,
+      },
+    });
+
+    beforeEach(async () => {
+      mockMergeAll.mockResolvedValue(JSON.parse(JSON.stringify(testTableData)));
+      await service.loadFromChat();
+      service.applyEdits('DELETE FROM inventory;');
+      mockGetEffectiveSeedRows.mockReturnValue([]);
+    });
+
+    /** 统计 schema 门禁期间发生的全库整行导出次数（旧实现每次 gate 必导一次）。 */
+    function countExportsDuring(fn: () => void): number {
+      const bridge = (service as any).syncBridge;
+      const original = bridge.exportToTableData.bind(bridge);
+      let count = 0;
+      bridge.exportToTableData = (...args: any[]) => { count += 1; return original(...args); };
+      try { fn(); } finally { bridge.exportToTableData = original; }
+      return count;
+    }
+
+    it('AI 写入批 commit 期间 schema 门禁不再触发全库整行导出', () => {
+      mockGetCurrentChatTemplateScopeState.mockReturnValue({
+        mode: 'chat_override',
+        templateStr: JSON.stringify(singleSheetTemplate()),
+      });
+      const scope = captureSqlTableApplyScope_ACU({
+        chat: [{ mes: 'narrow-digest' }],
+        isolationKey: 'narrow-digest',
+        runtimeData: service.getCurrentData(),
+      });
+      expect(scope.runtimeSchema?.digest).toBeTruthy();
+
+      // 钉死新值：门禁零全库导出（同批其余导出为写前像/finalize/lock 差异比对所需）。
+      const exportCount = countExportsDuring(() => {
+        const result = service.applyEditsWithSystemRowIds([
+          "INSERT INTO inventory (row_id, item_name, quantity) VALUES (900, '窄接口写入', 1);",
+        ], 'auto_standard', scope);
+        expect(result.success).toBe(true);
+      });
+      expect(exportCount).toBe(2);
+    });
+
+    it('窄接口 digest 与旧全量导出算法在固定 fixture 下逐字相等（含 activeSheetKeys 过滤）', async () => {
+      // 顶层 utils mock 把 hashUserInput_ACU 固定成常量，无法比对 digest；
+      // 此处临时换成基于输入的 digest，验证后立即恢复。
+      const utilsModule = await import('../../../src/shared/utils');
+      const originalHashImpl = (utilsModule as any).hashUserInput_ACU.getMockImplementation();
+      (utilsModule as any).hashUserInput_ACU.mockImplementation((text: string) => (text ? `digest:${text}` : ''));
+      try {
+        const twoSheetTemplate = {
+          mate: { type: 'acu', version: 1 },
+          sheet_0: {
+            uid: 'inventory', name: 'inventory',
+            sourceData: { ddl: TEST_DDL },
+            content: [['row_id', 'item_name', 'quantity']],
+            updateConfig: {}, exportConfig: {}, orderNo: 0,
+          },
+          sheet_1: {
+            uid: 'logistics', name: 'logistics',
+            sourceData: { ddl: 'CREATE TABLE logistics (\n  row_id INTEGER PRIMARY KEY,\n  route TEXT NOT NULL\n);' },
+            content: [['row_id', 'route']],
+            updateConfig: {}, exportConfig: {}, orderNo: 1,
+          },
+        };
+        mockGetCurrentChatTemplateScopeState.mockReturnValue({
+          mode: 'chat_override',
+          templateStr: JSON.stringify(twoSheetTemplate),
+        });
+        // 两表都建进 runtime（不传 activeSheetKeys 过滤，冻结侧覆盖全部表）。
+        await service.loadFromData(JSON.parse(JSON.stringify(twoSheetTemplate)) as any);
+
+        const liveData = service.getCurrentData() as any;
+        const bridge = (service as any).syncBridge;
+
+        for (const activeSheetKeys of [undefined, [], ['sheet_0'], ['sheet_0', 'sheet_1'], ['sheet_missing']]) {
+          const legacyFreeze = freezeRuntimeSchemaFromData_ACU(liveData, activeSheetKeys ? new Set(activeSheetKeys) : undefined);
+          const narrowFreeze = freezeRuntimeSchemaFromSchemas_ACU(
+            bridge.getRuntimeEffectiveSchemas_ACU(),
+            activeSheetKeys ? new Set(activeSheetKeys) : undefined,
+            new Map(Object.keys(liveData)
+              .filter(key => key.startsWith('sheet_'))
+              .map(key => [key, String(liveData[key]?.name || '')])),
+          );
+          expect(narrowFreeze?.sheetKeys).toEqual(legacyFreeze?.sheetKeys);
+          expect(narrowFreeze?.digest).toBe(legacyFreeze?.digest);
+        }
+      } finally {
+        (utilsModule as any).hashUserInput_ACU.mockImplementation(originalHashImpl);
+      }
+    });
+
+    it('schema 漂移仍抛原错误码与原错误信息，正常提交不抛', async () => {
+      const utilsModule = await import('../../../src/shared/utils');
+      const originalHashImpl = (utilsModule as any).hashUserInput_ACU.getMockImplementation();
+      (utilsModule as any).hashUserInput_ACU.mockImplementation((text: string) => (text ? `digest:${text}` : ''));
+      try {
+        mockGetCurrentChatTemplateScopeState.mockReturnValue({
+          mode: 'chat_override',
+          templateStr: JSON.stringify(singleSheetTemplate()),
+        });
+        const scope = captureSqlTableApplyScope_ACU({
+          chat: [{ mes: 'narrow-drift' }],
+          isolationKey: 'narrow-drift',
+          runtimeData: service.getCurrentData(),
+        });
+        const frozenDigest = scope.runtimeSchema?.digest;
+        expect(frozenDigest).toBeTruthy();
+
+        // 一致路径：正常提交不抛，digest 门禁放行。
+        const ok = service.applyEditsWithSystemRowIds([
+          "INSERT INTO inventory (row_id, item_name, quantity) VALUES (901, '一致', 1);",
+        ], 'auto_standard', scope);
+        expect(ok.success).toBe(true);
+
+        // 漂移路径：DDL 变更后 digest 改变，gate fail-closed。
+        const driftedData = JSON.parse(JSON.stringify(await mockMergeAll()));
+        driftedData.sheet_0.sourceData.ddl = `CREATE TABLE inventory (\n  row_id INTEGER PRIMARY KEY, -- 行号\n  item_name TEXT, -- 物品名\n  quantity INTEGER, -- 数量\n  extra_col TEXT -- 新增列\n);`;
+        driftedData.sheet_0.content = [['row_id', '物品名', '数量', '新增列'], ['1', '铁剑', '3', 'x']];
+        const reloadResult = await service.loadFromData(driftedData);
+        expect(reloadResult.loaded).toBe(true);
+
+        let caught: unknown;
+        try {
+          service.applyEditsWithSystemRowIds([
+            "INSERT INTO inventory (item_name, quantity) VALUES ('不应写入', 1);",
+          ], 'auto_standard', scope);
+        } catch (error: any) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(SqlRuntimeSchemaStaleError_ACU);
+        expect(caught instanceof Error && String((caught as any).code)).toBe('SQL_RUNTIME_SCHEMA_STALE_ACU');
+        expect(caught instanceof Error ? caught.message : '').toBe(
+          'SQLite runtime schema 在 AI 请求等待期间发生变化，与请求前冻结的 schema 不一致，已阻止本轮写入（零 mutation）。请重新发起本轮填表。',
+        );
+        expect(service.executeQuery('SELECT COUNT(*) AS cnt FROM inventory').values[0][0]).toBe(1);
+      } finally {
+        (utilsModule as any).hashUserInput_ACU.mockImplementation(originalHashImpl);
+      }
     });
   });
   // ═══════════════════════════════════════════════════════════════

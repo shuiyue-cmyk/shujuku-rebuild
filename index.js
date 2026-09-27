@@ -44321,6 +44321,15 @@ function buildInflightReplayKey_ACU(chat, isolationKey, options, structureMappin
         'alias', options.enableAliasContext === false ? 0 : 1,
     ].join('|');
 }
+/**
+ * P1-c：冷回放入口统一使用的让步预算（毫秒）。
+ *
+ * 长聊天冷 hydrate（切聊加载、可视化器打开）是一次同步密集的全量回放，
+ * 在 frame/entry 边界按预算让出事件循环可避免主线程长冻结。
+ * 取 12ms：落在回放文档建议的 8～16ms 区间内，且远小于用户可感知的交互阈值。
+ * 缺省不传 = 永不让出（既有调用方语义不变）；只有显式传参的冷入口才让出。
+ */
+const COLD_REPLAY_YIELD_BUDGET_MS_ACU = 12;
 function hasStructuralReplayCompatibilityRepairs_ACU(repairs) {
     return Boolean(repairs?.some(repair => repair.severity !== 'provisional'));
 }
@@ -62948,6 +62957,27 @@ function listTemplatePresetNames_ACU() {
     const s = loadTemplatePresetsStore_ACU();
     return Object.keys(s.presets || {}).sort((a, b) => String(a).localeCompare(String(b)));
 }
+/**
+ * 一次读出的预设库快照（窄读取接口）。
+ *
+ * 面板类调用方一次要遍历全部预设名、逐个取模板串并统计表数量：逐个调
+ * listTemplatePresetNames/getTemplatePreset 会把整个预设库反复读+parse。
+ * 这里一次读出 { names, byName }，调用方在同一份快照上完成列表与统计。
+ */
+function readTemplatePresetLibrarySnapshot_ACU() {
+    const store = loadTemplatePresetsStore_ACU();
+    const presets = store?.presets && typeof store.presets === 'object' ? store.presets : {};
+    const byName = new Map();
+    for (const name of Object.keys(presets)) {
+        const preset = presets[name];
+        if (preset && typeof preset === 'object')
+            byName.set(name, preset);
+    }
+    // 名称与 listTemplatePresetNames_ACU 同源：损坏的非对象条目仍要出现在列表里（只是没有表数量 meta），
+    // 否则快照会把它们从 UI 里悄悄抹掉——快照只该省重复解析，不该收窄可见集合。
+    const names = Object.keys(presets).sort((a, b) => String(a).localeCompare(String(b)));
+    return { names, byName };
+}
 function getTemplatePreset_ACU(name) {
     const s = loadTemplatePresetsStore_ACU();
     const p = s?.presets?.[String(name || '')];
@@ -66806,7 +66836,14 @@ function consumeLastMergeSourceInventory_ACU() {
     lastMergeSourceInventory = new Map();
     return inventory;
 }
-async function mergeAllIndependentTables_ACU() {
+/**
+ * 合并全聊天表格数据（V2 路径走冷回放）。
+ *
+ * @param options.yieldBudgetMs 冷回放让步预算（P1-c）。缺省/非正数 = 永不让出，
+ *   既有调用方行为完全不变；显式传入时按 COLD_REPLAY_YIELD_BUDGET_MS_ACU 让出事件循环，
+ *   并显式声明只读路径（updateRuntimeState:false）——回放核心仅在该路径接受让步。
+ */
+async function mergeAllIndependentTables_ACU(options = {}) {
     const chat = getChatArray_ACU();
     if (!chat || chat.length === 0) {
         logDebug_ACU('Cannot merge data: Chat history is empty.');
@@ -66818,8 +66855,11 @@ async function mergeAllIndependentTables_ACU() {
         code: settings_ACU.dataIsolationCode,
     });
     if (strategy.mode === 'v2') {
+        const yieldBudgetMs = Number(options.yieldBudgetMs) > 0 ? Number(options.yieldBudgetMs) : 0;
         let mergedData = await loadTableStateFromFramesV2_ACU(chat, currentIsolationKey, {
             allowTemporaryTemplateBaseline: true,
+            // 让步只在只读路径生效：副作用路径中途让出会引入重入窗口。
+            ...(yieldBudgetMs > 0 ? { updateRuntimeState: false, yieldBudgetMs } : {}),
         });
         // [修复顺序] 历史 auto_merged 越界尾列（行宽 = 表头 + 1 且尾格为 'auto_merged'）
         // 必须在 guide 结构比较之前剥离，否则 +1 宽度差会被误判为结构不一致。
@@ -68862,6 +68902,15 @@ function computeRuntimeSchemaDigest_ACU(bySheetKey) {
     });
     return hashUserInput_ACU(lines.join('\n'));
 }
+/**
+ * 冻结视图的表集合过滤谓词（两条构建路径共用，避免过滤语义各自漂移）。
+ *
+ * 语义与历史导出版本逐字一致：activeSheetKeys 缺省或为空集时不过滤（视为“全部参与”），
+ * 只有非空集合才按成员过滤。
+ */
+function isFrozenSchemaSheetKey_ACU(sheetKey, activeSheetKeys) {
+    return !(activeSheetKeys && activeSheetKeys.size > 0) || activeSheetKeys.has(sheetKey);
+}
 /** 从冻结的完整 runtimeData 中构建窄 schema 视图（只保留 schema 证据，不复制业务行）。 */
 function freezeRuntimeSchemaFromData_ACU(runtimeData, activeSheetKeys) {
     if (!runtimeData || typeof runtimeData !== 'object')
@@ -68869,7 +68918,7 @@ function freezeRuntimeSchemaFromData_ACU(runtimeData, activeSheetKeys) {
     const bySheetKey = new Map();
     const activeKeys = activeSheetKeys ? activeSheetKeys : new Set(Object.keys(runtimeData).filter(key => key.startsWith('sheet_')));
     for (const sheetKey of Object.keys(runtimeData).filter(key => key.startsWith('sheet_'))) {
-        if (activeKeys.size > 0 && !activeKeys.has(sheetKey))
+        if (!isFrozenSchemaSheetKey_ACU(sheetKey, activeKeys))
             continue;
         const sheet = runtimeData[sheetKey];
         if (!sheet || typeof sheet !== 'object')
@@ -68880,6 +68929,46 @@ function freezeRuntimeSchemaFromData_ACU(runtimeData, activeSheetKeys) {
             return null;
         }
         const physicalTableName = getPhysicalTableNameForSheet_ACU(runtimeData, sheetKey);
+        bySheetKey.set(sheetKey, {
+            sheetKey,
+            physicalTableName,
+            effectiveDDL: String(descriptor.effectiveDDL || ''),
+            columnMap: descriptor.columnMap,
+            source: String(descriptor.source || ''),
+            diagnostics: Array.isArray(descriptor.diagnostics) ? descriptor.diagnostics : [],
+        });
+    }
+    if (bySheetKey.size === 0)
+        return null;
+    return { bySheetKey, sheetKeys: Array.from(bySheetKey.keys()).sort(), digest: computeRuntimeSchemaDigest_ACU(bySheetKey) };
+}
+/**
+ * 从 SyncBridge 窄 schema 接口构建冻结视图：只读 runtime effective schema 快照与物理表名表。
+ *
+ * 与 freezeRuntimeSchemaFromData_ACU 的 digest 输入逐字等价（只取 sheetKey / effectiveDDL /
+ * columnMap，业务行不参与），但不需要把每张表整行导出。提交前的 live schema 一致性门禁
+ * 每批 AI 填表都要跑一次，用这条路径可去掉与 digest 无关的全库行导出。
+ *
+ * @param runtimeSchemas SyncBridge 实际执行到 runtime SQLite 的 schema 快照（键即 runtime 表集合）。
+ * @param activeSheetKeys 请求级活动表集合；缺省或空集表示不过滤（与导出版本同语义）。
+ * @param physicalTableNames 已解析的 sheetKey → 物理表名表；缺失键记空串（digest 不消费该字段）。
+ */
+function freezeRuntimeSchemaFromSchemas_ACU(runtimeSchemas, activeSheetKeys, physicalTableNames) {
+    if (!runtimeSchemas || typeof runtimeSchemas !== 'object')
+        return null;
+    const bySheetKey = new Map();
+    for (const [sheetKey, descriptor] of runtimeSchemas) {
+        if (!isFrozenSchemaSheetKey_ACU(sheetKey, activeSheetKeys))
+            continue;
+        if (!descriptor || typeof descriptor !== 'object') {
+            // runtime schema 证据损坏视为契约失败（fail-closed），与导出版本同一处理。
+            return null;
+        }
+        const physicalTableName = physicalTableNames.get(sheetKey) || '';
+        if (!physicalTableName) {
+            // 物理表名不参与 digest，仅作可观测提示：JSON 镜像缺该键时不能反向猜测表名。
+            logDebug_ACU(`[SqlTableService] schema 门禁：canonical 视图缺少 ${sheetKey} 的物理表名证据（digest 不受影响）。`);
+        }
         bySheetKey.set(sheetKey, {
             sheetKey,
             physicalTableName,
@@ -69963,7 +70052,8 @@ class SqlTableService {
     }
     /**
      * 执行 SQL 变更语句（INSERT/UPDATE/DELETE）
-     * 执行后自动同步到 JSON 视图
+     * 执行后自动同步到 JSON 视图，并把本次已发布的视图随结果带回（syncedView），
+     * 让提交链无需紧接着再导一次全库。同步失败时 syncedView 为 null，调用方回退 getCurrentData()。
      */
     executeMutation(sql, params) {
         this._ensureInitialized();
@@ -69974,7 +70064,7 @@ class SqlTableService {
             const runtimeSql = rebindSqlMutationIdentifiers_ACU([normalizedSql], (this._readCanonicalView_ACU() || { mate: DEFAULT_MATE_ACU }))[0];
             const result = this.engine.run(runtimeSql, params);
             const syncedView = this._syncToJson();
-            return { changes: result.changes, errors: [], ...jsonViewSyncDiagnostics_ACU('executeMutation', syncedView) };
+            return { changes: result.changes, errors: [], syncedView, ...jsonViewSyncDiagnostics_ACU('executeMutation', syncedView) };
         }
         catch (e) {
             // 同步 JSON 视图避免 SQLite/JSON 状态分裂
@@ -69982,6 +70072,7 @@ class SqlTableService {
             return {
                 changes: 0,
                 errors: [e?.message || String(e)],
+                syncedView,
                 ...jsonViewSyncDiagnostics_ACU('executeMutation（语句失败后的视图同步同样未成功）', syncedView),
             };
         }
@@ -70279,8 +70370,10 @@ class SqlTableService {
      * 提交前 schema 一致性 gate：live SQLite runtime 与请求前冻结的 runtime schema
      * 必须一致，否则任何 SQLite mutation 都不得执行（fail-closed，零写入）。
      *
-     * 比较依据是冻结 digest 与当前实时导出（仅 activeSheetKeys 参与）的 digest。
-     * 无冻结 scope 时跳过（旧调用方/低层工具路径），不收紧 Native 与历史 replay。
+     * 比较依据是冻结 digest 与当前 live runtime schema（仅 activeSheetKeys 参与）的 digest。
+     * digest 只由 sheetKey / effectiveDDL / columnMap 决定，因此这里走 SyncBridge 窄 schema
+     * 接口（getRuntimeEffectiveSchemas_ACU）与物理表名解析表即可，不再为算纯 schema 指纹
+     * 把每张表整行导出。无冻结 scope 时跳过（旧调用方/低层工具路径），不收紧 Native 与历史 replay。
      */
     _assertRuntimeSchemaCurrent(scope) {
         const frozenDigest = scope?.runtimeSchema?.digest;
@@ -70289,21 +70382,17 @@ class SqlTableService {
         if (!this._initialized || !this.engine.isReady) {
             throw new SqlRuntimeSchemaInvalidError_ACU('SQLite 运行时未就绪，无法验证冻结 schema 一致性，已阻止本轮写入。');
         }
-        let currentData;
+        const activeSheetKeys = scope?.activeSheetKeys ? new Set(scope.activeSheetKeys) : undefined;
+        let current;
         try {
-            const mate = this._readCanonicalView_ACU()?.mate || DEFAULT_MATE_ACU;
-            // 非 strict 导出：收集跳过明细并聚合 warn，schema gate 可观测部分导出。
-            const exportWarnings = [];
-            currentData = this.syncBridge.exportToTableData(mate, { warnings: exportWarnings });
-            if (exportWarnings.length > 0) {
-                logWarn_ACU(`[SqlTableService] schema 一致性导出部分表被跳过（${exportWarnings.length}）：${exportWarnings.join('；')}`);
-            }
+            // 物理表名只作冻结视图的证据字段（digest 不消费），从 canonical JSON 镜像解析即可：
+            // 物理名是 sheet 显示名的确定性纯函数，无需重新读 SQLite 整库行数据。
+            const physicalTableNames = resolvePhysicalTableNames_ACU(this._readCanonicalView_ACU() || {});
+            current = freezeRuntimeSchemaFromSchemas_ACU(this.syncBridge.getRuntimeEffectiveSchemas_ACU(), activeSheetKeys, physicalTableNames);
         }
         catch (error) {
-            throw new SqlRuntimeSchemaInvalidError_ACU(`无法导出当前 SQLite schema 用于一致性验证：${String(error?.message || error)}`);
+            throw new SqlRuntimeSchemaInvalidError_ACU(`无法读取当前 SQLite runtime schema 用于一致性验证：${String(error?.message || error)}`);
         }
-        const activeSheetKeys = scope?.activeSheetKeys ? new Set(scope.activeSheetKeys) : undefined;
-        const current = freezeRuntimeSchemaFromData_ACU(currentData, activeSheetKeys);
         if (!current || current.digest !== frozenDigest) {
             throw new SqlRuntimeSchemaStaleError_ACU('SQLite runtime schema 在 AI 请求等待期间发生变化，与请求前冻结的 schema 不一致，已阻止本轮写入（零 mutation）。请重新发起本轮填表。');
         }
@@ -91229,7 +91318,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.7.5" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.0" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -91916,7 +92005,9 @@ async function loadOrCreateJsonTableFromChatHistory_ACU() {
             data: currentJsonTableData_ACU,
         };
     }
-    const mergedData = await mergeAllIndependentTables_ACU();
+    // 冷加载（切聊/打开数据管理）：长聊天全量回放按统一预算在 frame/entry 边界让出，
+    // 避免主线程长冻结。scope 校验紧随其后，让出窗口内切聊仍按 scope_changed 拒绝发布。
+    const mergedData = await mergeAllIndependentTables_ACU({ yieldBudgetMs: COLD_REPLAY_YIELD_BUDGET_MS_ACU });
     if (!scopeStillCurrent())
         return scopeChangedResult();
     if (mergedData) {
@@ -102933,7 +103024,9 @@ async function runSqliteRuntimeMutationCommit_ACU(options) {
         if (mutationResult.errors?.length) {
             return { success: false, error: mutationResult.errors.join(', '), mutationResult };
         }
-        const tableData = provider.getCurrentData();
+        // executeMutation 内部已把本次写入同步到 canonical 视图并把同一份对象带回；
+        // 中间无 mutation，直接复用，省掉紧接着那次全库二次导出。视图未同步成功才回落导出。
+        const tableData = mutationResult.syncedView ?? provider.getCurrentData();
         if (!tableData) {
             return { success: false, error: 'SQLite runtime data export failed', mutationResult };
         }
@@ -120140,9 +120233,86 @@ function entryHasArtifacts_ACU(entry) {
         || !!entry.spv79TransitionCheckpoint
         || !!entry.compatTransitionCheckpoint;
 }
+const EMPTY_REFS_ACU = new Map();
+function isSameArtifactHead_ACU(left, right) {
+    if (left.full !== right.full
+        || left.perSheetContainer !== right.perSheetContainer
+        || left.vectorFrame !== right.vectorFrame
+        || left.vectorCheckpoint !== right.vectorCheckpoint
+        || left.vectorSourceTableKey !== right.vectorSourceTableKey
+        || left.spv79 !== right.spv79
+        || left.compat !== right.compat)
+        return false;
+    if (left.perSheetRefs.size !== right.perSheetRefs.size)
+        return false;
+    for (const [sheetKey, ref] of left.perSheetRefs) {
+        if (right.perSheetRefs.get(sheetKey) !== ref)
+            return false;
+    }
+    return true;
+}
+function readPerSheetRefs_ACU(container) {
+    if (!hasEntries_ACU(container))
+        return EMPTY_REFS_ACU;
+    const refs = new Map();
+    for (const [sheetKey, checkpoint] of Object.entries(container))
+        refs.set(sheetKey, checkpoint);
+    return refs;
+}
+/**
+ * 产物克隆记忆化：键是「根对象引用」（每楼每隔离键的 tagData，帧与过渡根的共同根），
+ * 值是本轮 head 标识与已克隆产物。同一对象再出现且 head 完全一致时直接复用上轮克隆——
+ * 每次落盘只为真正变化的产物重新深克隆整库 checkpoint，其余只刷新增量信标（messageRef 等）。
+ *
+ * 不变式：产物要么被换新对象（head 变化 → 重新克隆），要么内容不变；
+ * 本模块的嫁接写入也遵循该约定（整体替换对象，不原地改产物字段）。
+ */
+let vaultArtifactMemo_ACU = new WeakMap();
+function resolveVaultArtifacts_ACU(root, frame, spv79, compat) {
+    const vectorFrame = frame?.summaryVectorIndexFrame && typeof frame.summaryVectorIndexFrame === 'object'
+        ? frame.summaryVectorIndexFrame
+        : null;
+    const perSheetContainer = frame && hasEntries_ACU(frame.perSheetCheckpoints) ? frame.perSheetCheckpoints : null;
+    const head = {
+        full: frame?.checkpoint?.kind === 'full' ? frame.checkpoint : null,
+        perSheetContainer,
+        perSheetRefs: readPerSheetRefs_ACU(perSheetContainer),
+        vectorFrame,
+        vectorCheckpoint: vectorFrame?.checkpoint?.kind === 'vector_full' ? vectorFrame.checkpoint : null,
+        vectorSourceTableKey: vectorFrame ? String(vectorFrame.sourceTableKey || '') : '',
+        spv79: spv79 ?? null,
+        compat: compat ?? null,
+    };
+    const memo = vaultArtifactMemo_ACU.get(root);
+    if (memo && isSameArtifactHead_ACU(memo.head, head))
+        return memo.clones;
+    const clones = {
+        fullCheckpoint: head.full ? deepClone_ACU(head.full) : null,
+        perSheetCheckpoints: perSheetContainer
+            ? deepClone_ACU(perSheetContainer)
+            : null,
+        summaryVectorCheckpoint: head.vectorCheckpoint
+            ? {
+                sourceTableKey: head.vectorSourceTableKey,
+                checkpoint: deepClone_ACU(head.vectorCheckpoint),
+            }
+            : null,
+        spv79TransitionCheckpoint: head.spv79 ? deepClone_ACU(head.spv79) : null,
+        compatTransitionCheckpoint: head.compat ? deepClone_ACU(head.compat) : null,
+    };
+    vaultArtifactMemo_ACU.set(root, { head, clones });
+    return clones;
+}
+/** 测试用：丢弃记忆化（换新 WeakMap；条目本身不持有引用，无泄漏）。 */
+function resetVaultArtifactMemo_ACU() {
+    vaultArtifactMemo_ACU = new WeakMap();
+}
 /**
  * 以当前聊天为权威重建保管库。
  * 调用时机：聊天加载完成、插件保存成功后、恢复嫁接成功后。
+ *
+ * 单遍全聊天：每楼同时取表格产物条目与续写基线（旧实现两遍全聊天循环）。
+ * 产物克隆按「根对象引用 + head 标识」记忆化，未变化的楼层不再深克隆整库 checkpoint。
  */
 function captureCheckpointVaultForCurrentChat_ACU(chatArg) {
     const chat = Array.isArray(chatArg) ? chatArg : getChatArray_ACU();
@@ -120152,6 +120322,10 @@ function captureCheckpointVaultForCurrentChat_ACU(chatArg) {
     for (const message of chat) {
         if (!message || message.is_user)
             continue;
+        // 续写基线与表格产物同轮捕获：无容器的楼层同样可能有续写资料字段。
+        const continuation = captureMaterialCheckpointRecovery_ACU(message)?.continuation ?? null;
+        if (continuation)
+            materialEntries.push({ messageRef: message, continuation });
         const container = readIsolatedDataContainer_ACU(message);
         if (!container)
             continue;
@@ -120165,35 +120339,10 @@ function captureCheckpointVaultForCurrentChat_ACU(chatArg) {
                 ? tagData.compatTransitionCheckpoint : null;
             if (!frame && !spv79 && !compat)
                 continue;
-            const fullCheckpoint = frame?.checkpoint?.kind === 'full' ? deepClone_ACU(frame.checkpoint) : null;
-            const perSheetCheckpoints = frame && hasEntries_ACU(frame.perSheetCheckpoints)
-                ? deepClone_ACU(frame.perSheetCheckpoints) : null;
-            const vectorCheckpoint = frame?.summaryVectorIndexFrame?.checkpoint?.kind === 'vector_full'
-                ? {
-                    sourceTableKey: String(frame.summaryVectorIndexFrame.sourceTableKey || ''),
-                    checkpoint: deepClone_ACU(frame.summaryVectorIndexFrame.checkpoint),
-                }
-                : null;
             const entries = entriesByIsolationKey.get(isolationKey) || [];
-            entries.push({
-                messageRef: message,
-                fullCheckpoint,
-                perSheetCheckpoints,
-                summaryVectorCheckpoint: vectorCheckpoint,
-                spv79TransitionCheckpoint: spv79 ? deepClone_ACU(spv79) : null,
-                compatTransitionCheckpoint: compat ? deepClone_ACU(compat) : null,
-            });
+            entries.push({ messageRef: message, ...resolveVaultArtifacts_ACU(tagData, frame, spv79, compat) });
             entriesByIsolationKey.set(isolationKey, entries);
         }
-    }
-    for (const message of chat) {
-        if (!message || message.is_user)
-            continue;
-        const captured = captureMaterialCheckpointRecovery_ACU(message);
-        const continuation = captured?.continuation ?? null;
-        if (!continuation)
-            continue;
-        materialEntries.push({ messageRef: message, continuation });
     }
     vault_ACU = { chatKey, entriesByIsolationKey, materialEntries };
 }
@@ -120387,9 +120536,13 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
                         };
                     }
                     if (!frame.summaryVectorIndexFrame.checkpoint) {
-                        frame.summaryVectorIndexFrame.sourceTableKey = entry.summaryVectorCheckpoint.sourceTableKey
-                            || frame.summaryVectorIndexFrame.sourceTableKey;
-                        frame.summaryVectorIndexFrame.checkpoint = deepClone_ACU(entry.summaryVectorCheckpoint.checkpoint);
+                        // 整体换新向量帧对象（不原地改字段）：保管库记忆化以对象引用作 head 标识。
+                        frame.summaryVectorIndexFrame = {
+                            ...frame.summaryVectorIndexFrame,
+                            sourceTableKey: entry.summaryVectorCheckpoint.sourceTableKey
+                                || frame.summaryVectorIndexFrame.sourceTableKey,
+                            checkpoint: deepClone_ACU(entry.summaryVectorCheckpoint.checkpoint),
+                        };
                         graftedCount += 1;
                         logWarn_ACU(`[删楼守卫] 被删楼层携带的向量 checkpoint 已前移嫁接到楼层 #${targetIndex}。`);
                     }
@@ -120407,9 +120560,8 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
                         if (cloned.timeline) {
                             cloned.timeline = { ...cloned.timeline, activateAtMessageIndex: targetIndex, afterSeq: 0 };
                         }
-                        if (!frame.perSheetCheckpoints)
-                            frame.perSheetCheckpoints = {};
-                        frame.perSheetCheckpoints[sheetKey] = cloned;
+                        // 整体换新锚容器（不原地增删 key）：保管库记忆化以对象引用作 head 标识。
+                        frame.perSheetCheckpoints = { ...(frame.perSheetCheckpoints || {}), [sheetKey]: cloned };
                         graftedCount += 1;
                         logWarn_ACU(`[删楼守卫] 被删楼层携带的 ${sheetKey} per-sheet checkpoint（timeline=${checkpoint.timeline?.kind || 'legacy'}）已前移嫁接到楼层 #${targetIndex}。`);
                     }
@@ -120512,6 +120664,7 @@ function __getCheckpointVaultForTests_ACU() {
 function __resetCheckpointDeleteGuardForTests_ACU() {
     vault_ACU = null;
     installed_ACU$1 = false;
+    resetVaultArtifactMemo_ACU();
 }
 
 /**
@@ -150164,9 +150317,15 @@ function createSqlApi(ctx) {
                     await refreshMergedDataAndNotifyWithUI_ACU({ skipNotify: false });
                     logDebug_ACU('executeSqlMutation: refreshed merged data after raw SQL mutation.');
                 }
+                // 公开面只投影 changes/errors：mutationResult 上的内部复用通道（syncedView）
+                // 属 provider 视图对象，不得进入对外响应结构。
+                const publicMutation = {
+                    changes: commitResult.mutationResult.changes,
+                    errors: commitResult.mutationResult.errors,
+                };
                 return args.skipChatSave
-                    ? { ...commitResult.mutationResult }
-                    : { ...commitResult.mutationResult, saved: commitResult.saved, messageIndex: commitResult.messageIndex };
+                    ? publicMutation
+                    : { ...publicMutation, saved: commitResult.saved, messageIndex: commitResult.messageIndex };
             }
             catch (error) {
                 const message = error?.message || String(error);
@@ -150353,7 +150512,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260926-19";
+        const stamp = "20260927-07";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -175700,6 +175859,37 @@ function formatSheetCountMeta(templateSource) {
     const count = countTemplateSheets(templateSource);
     return count ? `${count} 张表` : undefined;
 }
+/**
+ * 预设表数量记忆化：按预设名缓存，命中条件是模板串逐字相同。
+ *
+ * 之所以比对模板串而不是 updatedAt：表数量是模板串的纯函数，内容相同即结果相同，
+ * 这样即便某条写入路径没有 updatedAt 也绝不会返回陈旧计数。缓存跨 refresh 复用
+ * （面板每次操作后都会 refresh），条目数上限固定，清空后按需重建。
+ */
+const PRESET_SHEET_COUNT_CACHE_LIMIT_ACU = 64;
+const presetSheetCountCache_ACU = new Map();
+function cachedPresetSheetCountMeta(name, templateStr) {
+    const hit = presetSheetCountCache_ACU.get(name);
+    if (!hit || hit.templateStr !== templateStr) {
+        if (presetSheetCountCache_ACU.size >= PRESET_SHEET_COUNT_CACHE_LIMIT_ACU)
+            presetSheetCountCache_ACU.clear();
+        presetSheetCountCache_ACU.set(name, { templateStr, count: countTemplateSheets(templateStr) });
+    }
+    const count = presetSheetCountCache_ACU.get(name).count;
+    return count ? `${count} 张表` : undefined;
+}
+function createPresetLibraryView_ACU() {
+    const snapshot = readTemplatePresetLibrarySnapshot_ACU();
+    const entryOf = (name) => snapshot.byName.get(name) || null;
+    return {
+        names: snapshot.names,
+        templateStrOf: (name) => entryOf(name)?.templateStr || null,
+        sheetCountMetaOf: (name) => {
+            const templateStr = entryOf(name)?.templateStr;
+            return templateStr ? cachedPresetSheetCountMeta(name, templateStr) : undefined;
+        },
+    };
+}
 function formatArchiveMeta(entry) {
     const parts = [formatSheetCountMeta(entry?.templateStr)].filter(Boolean);
     const source = String(entry?.presetName || '').trim();
@@ -175752,13 +175942,13 @@ function formatTemplateOperationError(error) {
  * 而库 preset 的 templateStr 是保存时的原始串——两侧都先 sanitize 同构化后再比较，
  * 否则序列化差异会造成恒误报。任一侧解析失败时宁可不标记也不误报。
  */
-function computeChatSnapshotDiff(snapshotTemplateStr, presetName) {
+function computeChatSnapshotDiff(snapshotTemplateStr, presetName, library) {
     const chatSanitized = sanitizeTemplateSnapshotForChat_ACU(snapshotTemplateStr || null);
     if (!chatSanitized?.templateStr)
         return { differs: false, reason: null };
     let librarySanitized;
     if (presetName) {
-        const libraryStr = getTemplatePreset_ACU(presetName)?.templateStr;
+        const libraryStr = library.templateStrOf(presetName);
         if (!libraryStr)
             return { differs: true, reason: 'library_preset_missing' };
         librarySanitized = sanitizeTemplateSnapshotForChat_ACU(libraryStr);
@@ -175808,7 +175998,7 @@ function useTableTemplatePresets() {
     /** S3-8：当前聊天快照内容是否偏离库中同名预设（仅 chat_override 模式下可能为 true）。 */
     const chatSnapshotDiffersFromLibrary = ref(false);
     const isChatOverridden = computed(() => activeTemplateScope.value === 'chat');
-    function buildChatPresetItems(globalNames, _currentGlobalPreset, activeMeta, runtimeItem) {
+    function buildChatPresetItems(library, _currentGlobalPreset, activeMeta, runtimeItem) {
         const seen = new Set();
         const defaultSnapshot = getDefaultTemplateSnapshot_ACU();
         const items = [defaultPresetItem('默认预设（全局）', formatSheetCountMeta(defaultSnapshot?.templateObj || defaultSnapshot?.templateStr), encodeChatPresetValue('global', ''))];
@@ -175817,7 +176007,7 @@ function useTableTemplatePresets() {
             items.push(runtimeItem);
             seen.add(RUNTIME_PRESET_VALUE);
         }
-        for (const name of globalNames) {
+        for (const name of library.names) {
             const normalized = normalizeTemplatePresetSelectionValue_ACU(name);
             if (!normalized)
                 continue;
@@ -175825,7 +176015,7 @@ function useTableTemplatePresets() {
             if (seen.has(value))
                 continue;
             seen.add(value);
-            items.push({ value, label: `${normalized}（全局预设）`, meta: formatSheetCountMeta(getTemplatePreset_ACU(normalized)?.templateStr) });
+            items.push({ value, label: `${normalized}（全局预设）`, meta: library.sheetCountMetaOf(normalized) });
         }
         chatSnapshotDiffersFromLibrary.value = false;
         if (activeMeta.mode === 'chat_override') {
@@ -175836,7 +176026,7 @@ function useTableTemplatePresets() {
             if (!seen.has(value)) {
                 seen.add(value);
                 // S3-8：快照内容偏离库中同名预设时在标签处明示，避免同名不同内容的静默混淆。
-                const diff = computeChatSnapshotDiff(currentScope?.templateStr, normalized);
+                const diff = computeChatSnapshotDiff(currentScope?.templateStr, normalized, library);
                 chatSnapshotDiffersFromLibrary.value = diff.differs;
                 const divergenceSuffix = diff.reason === 'diverged' ? '（内容已偏离库预设）' : '';
                 const metaParts = [formatSheetCountMeta(currentScope?.templateStr)].filter(Boolean);
@@ -175859,7 +176049,7 @@ function useTableTemplatePresets() {
             return encodeChatPresetValue('global', activeName);
         return encodeChatPresetValue('global', currentGlobalPreset || '');
     }
-    function computeRuntimeViews() {
+    function computeRuntimeViews(library) {
         const runtimeSnapshot = getRuntimeTemplateSnapshot_ACU();
         if (!runtimeSnapshot?.templateStr || !runtimeSnapshot?.templateObj) {
             return { item: null, available: false, differsFromLibrary: false };
@@ -175870,28 +176060,25 @@ function useTableTemplatePresets() {
             meta: formatSheetCountMeta(runtimeSnapshot.templateObj),
         };
         const activeName = normalizeTemplatePresetSelectionValue_ACU(resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true }));
-        let libraryStr = null;
-        if (activeName) {
-            libraryStr = getTemplatePreset_ACU(activeName)?.templateStr || null;
-        }
-        else {
-            libraryStr = getDefaultTemplateSnapshot_ACU()?.templateStr || null;
-        }
+        const libraryStr = activeName
+            ? library.templateStrOf(activeName)
+            : (getDefaultTemplateSnapshot_ACU()?.templateStr || null);
         const differsFromLibrary = libraryStr != null && runtimeSnapshot.templateStr !== libraryStr;
         return { item, available: true, differsFromLibrary };
     }
     function refresh() {
-        const nextGlobalNames = listTemplatePresetNames_ACU();
+        // 一次 refresh 只取一次库快照：列表名、每个预设的表数量、runtime/快照偏离判定都复用它。
+        const library = createPresetLibraryView_ACU();
         const nextChatArchives = listChatTemplateArchiveEntries_ACU();
         const nextSelectedGlobal = normalizeTemplatePresetSelectionValue_ACU(getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false }));
         const activeMeta = getActiveTemplatePresetMeta_ACU();
-        const runtimeViews = computeRuntimeViews();
+        const runtimeViews = computeRuntimeViews(library);
         runtimeTemplateItem.value = runtimeViews.item;
         runtimeTemplateAvailable.value = runtimeViews.available;
         runtimeDiffersFromLibrary.value = runtimeViews.differsFromLibrary;
-        const nextItems = buildChatPresetItems(nextGlobalNames, nextSelectedGlobal, activeMeta, runtimeViews.item);
+        const nextItems = buildChatPresetItems(library, nextSelectedGlobal, activeMeta, runtimeViews.item);
         const nextSelectedChat = resolveSelectedChatPresetValue(activeMeta, nextSelectedGlobal);
-        globalPresetNames.value = nextGlobalNames;
+        globalPresetNames.value = library.names;
         chatArchiveEntries.value = nextChatArchives;
         selectedGlobalPreset.value = nextSelectedGlobal;
         selectedGlobalPresetValue.value = encodeChatPresetValue('global', nextSelectedGlobal || '');
@@ -196236,7 +196423,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260926-19";
+        const stamp = "20260927-07";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -196245,7 +196432,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.7.5";
+        const v = "9.8.0";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -198813,7 +199000,9 @@ function useVisualizerData() {
                 await loadAllChatMessages_ACU();
                 if (currentVisualizerContextKey$1() !== contextKey)
                     return false;
-                const merged = await mergeAllIndependentTables_ACU();
+                // 冷打开（内存无表数据）：全量冷回放按统一预算让出事件循环，避免长聊天打开时主线程长冻结。
+                // 让出窗口内切聊/切表由紧随其后的 contextKey 校验拦截。
+                const merged = await mergeAllIndependentTables_ACU({ yieldBudgetMs: COLD_REPLAY_YIELD_BUDGET_MS_ACU });
                 if (currentVisualizerContextKey$1() !== contextKey)
                     return false;
                 if (hasSheetData(merged)) {
@@ -203851,6 +204040,20 @@ function recordAssistantCandidateDataOps(visualizer, previousData, candidateData
         }
     }
 }
+/**
+ * 草稿指纹 memo：把「全 sheet 全 content 的结构指纹」收敛为每次 tempData 变化只算一次，
+ * 面板上所有卡片（canApplyTurn / getTurnApplyBlockReason）共用同一份结果。
+ *
+ * 必须挂 Vue 响应式而不是对象引用缓存：tempData 是 Pinia 深响应式对象，编辑器存在
+ * 原地改行（单元格编辑、增删行/表）的路径，按引用缓存会在原地编辑后返回陈旧指纹，
+ * 让「当前结构已变化，草稿已失效」这道门禁失效。
+ *
+ * @param readTempData 响应式草稿读取器（读 tempData 本身，触发引用级依赖）。
+ * @param builder 指纹构造器（会遍历全部内容，依赖收集覆盖每个单元格）。
+ */
+function createDraftFingerprintMemo_ACU(readTempData, builder) {
+    return computed(() => builder(readTempData() || {}));
+}
 function useVisualizerAssistant() {
     const visualizer = useVisualizerStore();
     const toastStore = useToastStore();
@@ -203874,6 +204077,8 @@ function useVisualizerAssistant() {
     const latestResult = computed(() => visualizer.assistantLatestResult);
     const turns = computed(() => visualizer.assistantTurns);
     const riskConfirmations = computed(() => visualizer.assistantRiskConfirmations);
+    // 一次 tempData 变化只算一次结构指纹，全部卡片共用（见 createDraftFingerprintMemo_ACU）。
+    const currentDraftFingerprint = createDraftFingerprintMemo_ACU(() => visualizer.tempData, buildTemplateAssistantFingerprint_ACU);
     const apiPresetOptions = computed(() => [
         { value: '', label: '当前配置' },
         ...(Array.isArray(settings_ACU.apiPresets) ? settings_ACU.apiPresets : [])
@@ -204254,7 +204459,7 @@ function useVisualizerAssistant() {
         }
         if (payload && !payload.baselineFingerprint)
             return '缺少基线指纹，无法校验当前结构，请重新生成。';
-        const currentFingerprint = buildTemplateAssistantFingerprint_ACU(visualizer.tempData || {});
+        const currentFingerprint = currentDraftFingerprint.value;
         if (payload && payload.baselineFingerprint !== currentFingerprint) {
             return '当前结构已变化，该草稿已失效，请重新生成。';
         }

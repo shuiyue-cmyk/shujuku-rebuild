@@ -21,6 +21,7 @@ import { readIsolatedTagData_ACU, readLegacyIndependentData_ACU, isLegacyMatchFo
 import { isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-strategy-resolver';
 import { persistTableMutationLogV2_ACU, type ReplaceExistingIncrementalOptions_ACU } from './storage-frame-v2-persist';
 import { migrateLegacyStorageToV2OnLoad_ACU } from './storage-v2-migration';
+import { COLD_REPLAY_YIELD_BUDGET_MS_ACU } from './storage-frame-v2-replay';
 import type { ManualRefillProgressV2_ACU, TableCheckpointV2_ACU, TableMutationOperationV2_ACU, TableMutationSourceV2_ACU, TableWriteConflictUnitV2_ACU } from './storage-frame-v2-types';
 import type { TableWriteTransactionContext_ACU } from './table-write-transaction';
 import type { TableDataObject_ACU } from '../../shared/models/table-data';
@@ -424,7 +425,9 @@ export async function loadOrCreateJsonTableFromChatHistory_ACU(): Promise<{
     };
   }
 
-  const mergedData = await mergeAllIndependentTables_ACU();
+  // 冷加载（切聊/打开数据管理）：长聊天全量回放按统一预算在 frame/entry 边界让出，
+  // 避免主线程长冻结。scope 校验紧随其后，让出窗口内切聊仍按 scope_changed 拒绝发布。
+  const mergedData = await mergeAllIndependentTables_ACU({ yieldBudgetMs: COLD_REPLAY_YIELD_BUDGET_MS_ACU });
   if (!scopeStillCurrent()) return scopeChangedResult();
 
   if (mergedData) {

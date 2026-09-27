@@ -1,4 +1,4 @@
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, type ComputedRef } from 'vue';
 import { applySheetOrderNumbers_ACU, logWarn_ACU } from '../../../shared/utils';
 import { settings_ACU } from '../../../service/runtime/state-manager';
 import {
@@ -344,6 +344,24 @@ function recordAssistantCandidateDataOps(
   }
 }
 
+/**
+ * 草稿指纹 memo：把「全 sheet 全 content 的结构指纹」收敛为每次 tempData 变化只算一次，
+ * 面板上所有卡片（canApplyTurn / getTurnApplyBlockReason）共用同一份结果。
+ *
+ * 必须挂 Vue 响应式而不是对象引用缓存：tempData 是 Pinia 深响应式对象，编辑器存在
+ * 原地改行（单元格编辑、增删行/表）的路径，按引用缓存会在原地编辑后返回陈旧指纹，
+ * 让「当前结构已变化，草稿已失效」这道门禁失效。
+ *
+ * @param readTempData 响应式草稿读取器（读 tempData 本身，触发引用级依赖）。
+ * @param builder 指纹构造器（会遍历全部内容，依赖收集覆盖每个单元格）。
+ */
+export function createDraftFingerprintMemo_ACU(
+  readTempData: () => Record<string, any> | null | undefined,
+  builder: (tempData: Record<string, any>) => string,
+): ComputedRef<string> {
+  return computed(() => builder(readTempData() || {}));
+}
+
 export function useVisualizerAssistant() {
   const visualizer = useVisualizerStore();
   const toastStore = useToastStore();
@@ -370,6 +388,11 @@ export function useVisualizerAssistant() {
   const latestResult = computed(() => visualizer.assistantLatestResult as TemplateAssistantSessionResult_ACU | null);
   const turns = computed(() => visualizer.assistantTurns as VisualizerAssistantTurn[]);
   const riskConfirmations = computed(() => visualizer.assistantRiskConfirmations);
+  // 一次 tempData 变化只算一次结构指纹，全部卡片共用（见 createDraftFingerprintMemo_ACU）。
+  const currentDraftFingerprint = createDraftFingerprintMemo_ACU(
+    () => visualizer.tempData,
+    buildTemplateAssistantFingerprint_ACU,
+  );
 
   const apiPresetOptions = computed(() => [
     { value: '', label: '当前配置' },
@@ -782,7 +805,7 @@ export function useVisualizerAssistant() {
       return '这份草稿属于其他锚点表，请切回原表或重新生成。';
     }
     if (payload && !payload.baselineFingerprint) return '缺少基线指纹，无法校验当前结构，请重新生成。';
-    const currentFingerprint = buildTemplateAssistantFingerprint_ACU(visualizer.tempData || {});
+    const currentFingerprint = currentDraftFingerprint.value;
     if (payload && payload.baselineFingerprint !== currentFingerprint) {
       return '当前结构已变化，该草稿已失效，请重新生成。';
     }

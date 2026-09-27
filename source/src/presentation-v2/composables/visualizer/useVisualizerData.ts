@@ -20,6 +20,7 @@ import {
 } from '../../../service/template/chat-scope';
 import { getActiveTemplatePresetMeta_ACU } from '../../../service/template/template-preset-service';
 import { loadAllChatMessages_ACU } from '../../../service/worldbook/pipeline';
+import { COLD_REPLAY_YIELD_BUDGET_MS_ACU } from '../../../service/table/storage-frame-v2-replay';
 import { buildDefaultExportConfig_ACU } from '../../../service/worldbook/injection-engine';
 import { useToastStore } from '../../stores/toast-store';
 import { useVisualizerStore, type VisualizerLockDraft } from '../../stores/visualizer-store';
@@ -115,7 +116,9 @@ export function useVisualizerData() {
       if (!hasSheetData(data)) {
         await loadAllChatMessages_ACU();
         if (currentVisualizerContextKey() !== contextKey) return false;
-        const merged = await mergeAllIndependentTables_ACU();
+        // 冷打开（内存无表数据）：全量冷回放按统一预算让出事件循环，避免长聊天打开时主线程长冻结。
+        // 让出窗口内切聊/切表由紧随其后的 contextKey 校验拦截。
+        const merged = await mergeAllIndependentTables_ACU({ yieldBudgetMs: COLD_REPLAY_YIELD_BUDGET_MS_ACU });
         if (currentVisualizerContextKey() !== contextKey) return false;
         if (hasSheetData(merged)) {
           const stableKeys = getSortedSheetKeys_ACU(merged);

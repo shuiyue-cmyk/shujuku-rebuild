@@ -33,6 +33,21 @@ export interface SqlMutationResult {
   errors: string[];
 }
 
+/**
+ * Provider 内部 mutation 返回扩展：附带本次已发布到 canonical 视图的同一份数据。
+ *
+ * 语义：syncedView 就是本次写入后 provider 已发布的那个对象，与紧随其后的
+ * getCurrentData() 逐字等价（中间无 mutation）。字段可选：视图同步未成功时为 null，
+ * 调用方必须回退到 getCurrentData()，不得把 null 当作「无数据」。
+ *
+ * 公开 API 边界（sql-api 的 executeSqlMutation）只投影 changes/errors，
+ * 本字段属 provider 内部复用通道，不得外泄到对外响应结构。
+ */
+export interface SqlMutationResultWithView_ACU extends SqlMutationResult {
+  /** 本次写入后已发布到 canonical 视图的数据对象；同步未成功时为 null。 */
+  syncedView?: TableDataObject_ACU | null;
+}
+
 /** AI 编辑应用结果 */
 export interface ApplyEditsResult {
   /** 是否成功 */
@@ -280,8 +295,11 @@ export interface ITableStorageProvider {
   /**
    * 执行 SQL 变更语句（仅 sqlite 模式支持）
    * native 模式调用时抛出 Error
+   *
+   * 返回值可携带本次已发布的视图（syncedView），供提交链复用，免去紧接着的
+   * getCurrentData() 全库二次导出；未携带时调用方回退 getCurrentData()。
    */
-  executeMutation(sql: string, params?: (string | number | null)[]): SqlMutationResult;
+  executeMutation(sql: string, params?: (string | number | null)[]): SqlMutationResultWithView_ACU;
 
   /**
    * 销毁/清理资源

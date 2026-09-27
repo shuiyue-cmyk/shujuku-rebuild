@@ -594,7 +594,14 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
   }
 
 
-  export async function mergeAllIndependentTables_ACU() {
+  /**
+   * 合并全聊天表格数据（V2 路径走冷回放）。
+   *
+   * @param options.yieldBudgetMs 冷回放让步预算（P1-c）。缺省/非正数 = 永不让出，
+   *   既有调用方行为完全不变；显式传入时按 COLD_REPLAY_YIELD_BUDGET_MS_ACU 让出事件循环，
+   *   并显式声明只读路径（updateRuntimeState:false）——回放核心仅在该路径接受让步。
+   */
+  export async function mergeAllIndependentTables_ACU(options: { yieldBudgetMs?: number } = {}) {
       const chat = getChatArray_ACU();
       if (!chat || chat.length === 0) {
           logDebug_ACU('Cannot merge data: Chat history is empty.');
@@ -608,8 +615,11 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
       });
 
       if (strategy.mode === 'v2') {
+          const yieldBudgetMs = Number(options.yieldBudgetMs) > 0 ? Number(options.yieldBudgetMs) : 0;
           let mergedData = await loadTableStateFromFramesV2_ACU(chat, currentIsolationKey, {
               allowTemporaryTemplateBaseline: true,
+              // 让步只在只读路径生效：副作用路径中途让出会引入重入窗口。
+              ...(yieldBudgetMs > 0 ? { updateRuntimeState: false as const, yieldBudgetMs } : {}),
           }) as Record<string, any> | null;
           // [修复顺序] 历史 auto_merged 越界尾列（行宽 = 表头 + 1 且尾格为 'auto_merged'）
           // 必须在 guide 结构比较之前剥离，否则 +1 宽度差会被误判为结构不一致。

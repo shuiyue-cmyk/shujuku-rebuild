@@ -107,6 +107,16 @@ function buildInflightReplayKey_ACU(
 
 export type TableScheduleSummaryV2_ACU = NonNullable<TableCheckpointV2_ACU['scheduleSummary']>;
 
+/**
+ * P1-c：冷回放入口统一使用的让步预算（毫秒）。
+ *
+ * 长聊天冷 hydrate（切聊加载、可视化器打开）是一次同步密集的全量回放，
+ * 在 frame/entry 边界按预算让出事件循环可避免主线程长冻结。
+ * 取 12ms：落在回放文档建议的 8～16ms 区间内，且远小于用户可感知的交互阈值。
+ * 缺省不传 = 永不让出（既有调用方语义不变）；只有显式传参的冷入口才让出。
+ */
+export const COLD_REPLAY_YIELD_BUDGET_MS_ACU = 12;
+
 export type TableReplayBaseKindV2_ACU =
   | 'full_checkpoint'
   | 'replacement_anchor'

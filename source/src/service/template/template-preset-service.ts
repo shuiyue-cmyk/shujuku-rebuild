@@ -174,6 +174,35 @@ export function listTemplatePresetNames_ACU() {
     return Object.keys(s.presets || {}).sort((a, b) => String(a).localeCompare(String(b)));
 }
 
+export interface TemplatePresetLibraryEntry_ACU {
+    templateStr: string;
+    updatedAt?: number;
+}
+
+/**
+ * 一次读出的预设库快照（窄读取接口）。
+ *
+ * 面板类调用方一次要遍历全部预设名、逐个取模板串并统计表数量：逐个调
+ * listTemplatePresetNames/getTemplatePreset 会把整个预设库反复读+parse。
+ * 这里一次读出 { names, byName }，调用方在同一份快照上完成列表与统计。
+ */
+export function readTemplatePresetLibrarySnapshot_ACU(): {
+    names: string[];
+    byName: Map<string, TemplatePresetLibraryEntry_ACU>;
+} {
+    const store = loadTemplatePresetsStore_ACU();
+    const presets = store?.presets && typeof store.presets === 'object' ? store.presets : {};
+    const byName = new Map<string, TemplatePresetLibraryEntry_ACU>();
+    for (const name of Object.keys(presets)) {
+        const preset = presets[name];
+        if (preset && typeof preset === 'object') byName.set(name, preset as TemplatePresetLibraryEntry_ACU);
+    }
+    // 名称与 listTemplatePresetNames_ACU 同源：损坏的非对象条目仍要出现在列表里（只是没有表数量 meta），
+    // 否则快照会把它们从 UI 里悄悄抹掉——快照只该省重复解析，不该收窄可见集合。
+    const names = Object.keys(presets).sort((a, b) => String(a).localeCompare(String(b)));
+    return { names, byName };
+}
+
 export function getTemplatePreset_ACU(name: string) {
     const s = loadTemplatePresetsStore_ACU();
     const p = s?.presets?.[String(name || '')];

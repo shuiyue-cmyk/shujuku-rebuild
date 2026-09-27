@@ -30,6 +30,7 @@ import {
 import { readIsolatedDataContainer_ACU, readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
 import { reindexSpv79TransitionState_ACU } from '../table/compat-transition-checkpoint';
+import type { CompatTransitionCheckpointRef_ACU, Spv79TransitionCheckpointRef_ACU } from '../table/compat-transition-checkpoint';
 import { collectScheduleSummaryFromFramesV2_ACU, loadTableStateFromFramesV2Detailed_ACU, replayWithLegacyTolerances_ACU } from '../table/storage-frame-v2-replay';
 import { getTableDataFingerprint_ACU } from '../table/table-data-upgrade-audit';
 import { isV2TagData_ACU } from '../table/storage-strategy-resolver';
@@ -45,22 +46,27 @@ import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
 import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
 import { deepClone_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import type {
+    SummaryVectorIndexMirrorCheckpointV2_ACU,
     TableCheckpointV2_ACU,
     TableSheetCheckpointV2_ACU,
     TableStorageFrameV2_ACU,
 } from '../table/storage-frame-v2-types';
 
-interface CheckpointVaultFrameEntry_ACU {
-    /** 幸存判定锚：宿主 splice 不改变幸存消息的对象引用。 */
-    messageRef: any;
+/** 一楼不可替代产物的克隆集合（与信标 messageRef 分离，便于按引用记忆化复用）。 */
+interface CheckpointVaultFrameEntryArtifactSet_ACU {
     fullCheckpoint: TableCheckpointV2_ACU | null;
     perSheetCheckpoints: Record<string, TableSheetCheckpointV2_ACU> | null;
     summaryVectorCheckpoint: {
         sourceTableKey: string;
-        checkpoint: import('../table/storage-frame-v2-types').SummaryVectorIndexMirrorCheckpointV2_ACU;
+        checkpoint: SummaryVectorIndexMirrorCheckpointV2_ACU;
     } | null;
     spv79TransitionCheckpoint: any | null;
     compatTransitionCheckpoint: any | null;
+}
+
+interface CheckpointVaultFrameEntry_ACU extends CheckpointVaultFrameEntryArtifactSet_ACU {
+    /** 幸存判定锚：宿主 splice 不改变幸存消息的对象引用。 */
+    messageRef: any;
 }
 
 interface MaterialCheckpointVaultEntry_ACU {
@@ -100,8 +106,110 @@ function entryHasArtifacts_ACU(entry: CheckpointVaultFrameEntry_ACU): boolean {
 }
 
 /**
+ * 记忆化 head：上一轮（或本轮）克隆所依据的源对象/值集合。
+ * 全部按引用与原值比较，引用未变即认定产物内容未变。
+ */
+interface VaultArtifactHead_ACU {
+    /** 参与冻结的 full 回放根本体。 */
+    full: unknown;
+    /** per-sheet 锚容器（克隆源）。 */
+    perSheetContainer: unknown;
+    /** per-sheet 锚逐 sheetKey 的源对象引用：容器被原地增删也能被识别。 */
+    perSheetRefs: ReadonlyMap<string, unknown>;
+    /** 向量镜像帧（克隆源）。 */
+    vectorFrame: unknown;
+    vectorCheckpoint: unknown;
+    vectorSourceTableKey: string;
+    spv79: unknown;
+    compat: unknown;
+}
+
+const EMPTY_REFS_ACU: ReadonlyMap<string, unknown> = new Map<string, unknown>();
+
+function isSameArtifactHead_ACU(left: VaultArtifactHead_ACU, right: VaultArtifactHead_ACU): boolean {
+    if (left.full !== right.full
+        || left.perSheetContainer !== right.perSheetContainer
+        || left.vectorFrame !== right.vectorFrame
+        || left.vectorCheckpoint !== right.vectorCheckpoint
+        || left.vectorSourceTableKey !== right.vectorSourceTableKey
+        || left.spv79 !== right.spv79
+        || left.compat !== right.compat) return false;
+    if (left.perSheetRefs.size !== right.perSheetRefs.size) return false;
+    for (const [sheetKey, ref] of left.perSheetRefs) {
+        if (right.perSheetRefs.get(sheetKey) !== ref) return false;
+    }
+    return true;
+}
+
+function readPerSheetRefs_ACU(container: unknown): ReadonlyMap<string, unknown> {
+    if (!hasEntries_ACU(container as Record<string, unknown> | null | undefined)) return EMPTY_REFS_ACU;
+    const refs = new Map<string, unknown>();
+    for (const [sheetKey, checkpoint] of Object.entries(container as Record<string, unknown>)) refs.set(sheetKey, checkpoint);
+    return refs;
+}
+
+/**
+ * 产物克隆记忆化：键是「根对象引用」（每楼每隔离键的 tagData，帧与过渡根的共同根），
+ * 值是本轮 head 标识与已克隆产物。同一对象再出现且 head 完全一致时直接复用上轮克隆——
+ * 每次落盘只为真正变化的产物重新深克隆整库 checkpoint，其余只刷新增量信标（messageRef 等）。
+ *
+ * 不变式：产物要么被换新对象（head 变化 → 重新克隆），要么内容不变；
+ * 本模块的嫁接写入也遵循该约定（整体替换对象，不原地改产物字段）。
+ */
+let vaultArtifactMemo_ACU = new WeakMap<object, { head: VaultArtifactHead_ACU; clones: CheckpointVaultFrameEntryArtifactSet_ACU }>();
+
+function resolveVaultArtifacts_ACU(
+    root: object,
+    frame: TableStorageFrameV2_ACU | null,
+    spv79: Spv79TransitionCheckpointRef_ACU | null,
+    compat: CompatTransitionCheckpointRef_ACU | null,
+): CheckpointVaultFrameEntryArtifactSet_ACU {
+    const vectorFrame = frame?.summaryVectorIndexFrame && typeof frame.summaryVectorIndexFrame === 'object'
+        ? frame.summaryVectorIndexFrame
+        : null;
+    const perSheetContainer = frame && hasEntries_ACU(frame.perSheetCheckpoints) ? frame.perSheetCheckpoints : null;
+    const head: VaultArtifactHead_ACU = {
+        full: frame?.checkpoint?.kind === 'full' ? frame.checkpoint : null,
+        perSheetContainer,
+        perSheetRefs: readPerSheetRefs_ACU(perSheetContainer),
+        vectorFrame,
+        vectorCheckpoint: vectorFrame?.checkpoint?.kind === 'vector_full' ? vectorFrame.checkpoint : null,
+        vectorSourceTableKey: vectorFrame ? String(vectorFrame.sourceTableKey || '') : '',
+        spv79: spv79 ?? null,
+        compat: compat ?? null,
+    };
+    const memo = vaultArtifactMemo_ACU.get(root);
+    if (memo && isSameArtifactHead_ACU(memo.head, head)) return memo.clones;
+
+    const clones: CheckpointVaultFrameEntryArtifactSet_ACU = {
+        fullCheckpoint: head.full ? deepClone_ACU(head.full as TableCheckpointV2_ACU) : null,
+        perSheetCheckpoints: perSheetContainer
+            ? deepClone_ACU(perSheetContainer as Record<string, TableSheetCheckpointV2_ACU>)
+            : null,
+        summaryVectorCheckpoint: head.vectorCheckpoint
+            ? {
+                sourceTableKey: head.vectorSourceTableKey,
+                checkpoint: deepClone_ACU(head.vectorCheckpoint as SummaryVectorIndexMirrorCheckpointV2_ACU),
+            }
+            : null,
+        spv79TransitionCheckpoint: head.spv79 ? deepClone_ACU(head.spv79) : null,
+        compatTransitionCheckpoint: head.compat ? deepClone_ACU(head.compat) : null,
+    };
+    vaultArtifactMemo_ACU.set(root, { head, clones });
+    return clones;
+}
+
+/** 测试用：丢弃记忆化（换新 WeakMap；条目本身不持有引用，无泄漏）。 */
+function resetVaultArtifactMemo_ACU(): void {
+    vaultArtifactMemo_ACU = new WeakMap();
+}
+
+/**
  * 以当前聊天为权威重建保管库。
  * 调用时机：聊天加载完成、插件保存成功后、恢复嫁接成功后。
+ *
+ * 单遍全聊天：每楼同时取表格产物条目与续写基线（旧实现两遍全聊天循环）。
+ * 产物克隆按「根对象引用 + head 标识」记忆化，未变化的楼层不再深克隆整库 checkpoint。
  */
 export function captureCheckpointVaultForCurrentChat_ACU(chatArg?: any[]): void {
     const chat = Array.isArray(chatArg) ? chatArg : getChatArray_ACU();
@@ -111,6 +219,10 @@ export function captureCheckpointVaultForCurrentChat_ACU(chatArg?: any[]): void 
 
     for (const message of chat) {
         if (!message || message.is_user) continue;
+        // 续写基线与表格产物同轮捕获：无容器的楼层同样可能有续写资料字段。
+        const continuation = captureMaterialCheckpointRecovery_ACU(message)?.continuation ?? null;
+        if (continuation) materialEntries.push({ messageRef: message, continuation });
+
         const container = readIsolatedDataContainer_ACU(message);
         if (!container) continue;
         for (const [isolationKey, tagData] of Object.entries(container)) {
@@ -122,34 +234,10 @@ export function captureCheckpointVaultForCurrentChat_ACU(chatArg?: any[]): void 
                 ? (tagData as any).compatTransitionCheckpoint : null;
             if (!frame && !spv79 && !compat) continue;
 
-            const fullCheckpoint = frame?.checkpoint?.kind === 'full' ? deepClone_ACU(frame.checkpoint) : null;
-            const perSheetCheckpoints = frame && hasEntries_ACU(frame.perSheetCheckpoints)
-                ? deepClone_ACU(frame.perSheetCheckpoints!) : null;
-            const vectorCheckpoint = frame?.summaryVectorIndexFrame?.checkpoint?.kind === 'vector_full'
-                ? {
-                    sourceTableKey: String(frame.summaryVectorIndexFrame.sourceTableKey || ''),
-                    checkpoint: deepClone_ACU(frame.summaryVectorIndexFrame.checkpoint),
-                }
-                : null;
             const entries = entriesByIsolationKey.get(isolationKey) || [];
-            entries.push({
-                messageRef: message,
-                fullCheckpoint,
-                perSheetCheckpoints,
-                summaryVectorCheckpoint: vectorCheckpoint,
-                spv79TransitionCheckpoint: spv79 ? deepClone_ACU(spv79) : null,
-                compatTransitionCheckpoint: compat ? deepClone_ACU(compat) : null,
-            });
+            entries.push({ messageRef: message, ...resolveVaultArtifacts_ACU(tagData, frame, spv79, compat) });
             entriesByIsolationKey.set(isolationKey, entries);
         }
-    }
-
-    for (const message of chat) {
-        if (!message || message.is_user) continue;
-        const captured = captureMaterialCheckpointRecovery_ACU(message);
-        const continuation = captured?.continuation ?? null;
-        if (!continuation) continue;
-        materialEntries.push({ messageRef: message, continuation });
     }
 
     vault_ACU = { chatKey, entriesByIsolationKey, materialEntries };
@@ -369,9 +457,13 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
                         };
                     }
                     if (!frame.summaryVectorIndexFrame.checkpoint) {
-                        frame.summaryVectorIndexFrame.sourceTableKey = entry.summaryVectorCheckpoint.sourceTableKey
-                            || frame.summaryVectorIndexFrame.sourceTableKey;
-                        frame.summaryVectorIndexFrame.checkpoint = deepClone_ACU(entry.summaryVectorCheckpoint.checkpoint);
+                        // 整体换新向量帧对象（不原地改字段）：保管库记忆化以对象引用作 head 标识。
+                        frame.summaryVectorIndexFrame = {
+                            ...frame.summaryVectorIndexFrame,
+                            sourceTableKey: entry.summaryVectorCheckpoint.sourceTableKey
+                                || frame.summaryVectorIndexFrame.sourceTableKey,
+                            checkpoint: deepClone_ACU(entry.summaryVectorCheckpoint.checkpoint),
+                        };
                         graftedCount += 1;
                         logWarn_ACU(`[删楼守卫] 被删楼层携带的向量 checkpoint 已前移嫁接到楼层 #${targetIndex}。`);
                     } else {
@@ -389,8 +481,8 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
                         if (cloned.timeline) {
                             cloned.timeline = { ...cloned.timeline, activateAtMessageIndex: targetIndex, afterSeq: 0 };
                         }
-                        if (!frame.perSheetCheckpoints) frame.perSheetCheckpoints = {};
-                        frame.perSheetCheckpoints[sheetKey] = cloned;
+                        // 整体换新锚容器（不原地增删 key）：保管库记忆化以对象引用作 head 标识。
+                        frame.perSheetCheckpoints = { ...(frame.perSheetCheckpoints || {}), [sheetKey]: cloned };
                         graftedCount += 1;
                         logWarn_ACU(`[删楼守卫] 被删楼层携带的 ${sheetKey} per-sheet checkpoint（timeline=${checkpoint.timeline?.kind || 'legacy'}）已前移嫁接到楼层 #${targetIndex}。`);
                     }
@@ -493,4 +585,5 @@ export function __getCheckpointVaultForTests_ACU(): { chatKey: string; isolation
 export function __resetCheckpointDeleteGuardForTests_ACU(): void {
     vault_ACU = null;
     installed_ACU = false;
+    resetVaultArtifactMemo_ACU();
 }

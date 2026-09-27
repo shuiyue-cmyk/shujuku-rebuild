@@ -648,9 +648,15 @@ export function createSqlApi(ctx: ApiGroupContext): Record<string, Function> {
                     await refreshMergedDataAndNotifyWithUI_ACU({ skipNotify: false });
                     logDebug_ACU('executeSqlMutation: refreshed merged data after raw SQL mutation.');
                 }
+                // 公开面只投影 changes/errors：mutationResult 上的内部复用通道（syncedView）
+                // 属 provider 视图对象，不得进入对外响应结构。
+                const publicMutation = {
+                    changes: commitResult.mutationResult.changes,
+                    errors: commitResult.mutationResult.errors,
+                };
                 return args.skipChatSave
-                    ? { ...commitResult.mutationResult }
-                    : { ...commitResult.mutationResult, saved: commitResult.saved, messageIndex: commitResult.messageIndex };
+                    ? publicMutation
+                    : { ...publicMutation, saved: commitResult.saved, messageIndex: commitResult.messageIndex };
             } catch (error: any) {
                 const message = error?.message || String(error);
                 logError_ACU('executeSqlMutation failed:', error);

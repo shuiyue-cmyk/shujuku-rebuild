@@ -64,6 +64,14 @@ async function importComposable() {
     sanitizeFilenameComponent_ACU: (value: string) => String(value || '').trim(),
     deriveTemplatePresetNameForImport_ACU: () => '导入模板',
   }));
+  // 预设库读取入口计数：三种入口都会读+parse 整个预设库，refresh 内只允许命中一次。
+  const libraryReads = { snapshot: 0, names: 0, get: 0 };
+  const buildLibrarySnapshot = () => new Map(
+    (libraryPresetStr == null ? [] : [
+      ['global-A', { templateStr: libraryPresetStr, updatedAt: 1 }],
+      ['chat-A', { templateStr: libraryPresetStr, updatedAt: 1 }],
+    ] as Array<[string, { templateStr: string; updatedAt: number }]>),
+  );
   vi.doMock('../../../src/service/template/template-preset-service', () => ({
     applyTemplateSnapshotToScope_ACU,
     applyTemplatePresetToCurrent_ACU,
@@ -72,8 +80,19 @@ async function importComposable() {
     ensureUniqueTemplatePresetName_ACU: (name: string) => name,
     getDefaultTemplateSnapshot_ACU: () => ({ templateObj: { sheet_1: {} }, templateStr: '{"sheet_1":{}}' }),
     getRuntimeTemplateSnapshot_ACU: () => runtimeSnapshot,
-    getTemplatePreset_ACU: () => (libraryPresetStr != null ? { templateStr: libraryPresetStr } : null),
-    listTemplatePresetNames_ACU: () => ['global-A', 'chat-A'],
+    getTemplatePreset_ACU: vi.fn(() => {
+      libraryReads.get += 1;
+      return libraryPresetStr != null ? { templateStr: libraryPresetStr } : null;
+    }),
+    readTemplatePresetLibrarySnapshot_ACU: vi.fn(() => {
+      libraryReads.snapshot += 1;
+      // names 顺序与 listTemplatePresetNames_ACU 的 mock 保持一致，便于逐项比对展示结果。
+      return { names: ['global-A', 'chat-A'], byName: buildLibrarySnapshot() };
+    }),
+    listTemplatePresetNames_ACU: vi.fn(() => {
+      libraryReads.names += 1;
+      return ['global-A', 'chat-A'];
+    }),
     normalizeTemplateForPresetSave_ACU: () => ({ templateStr: '{"sheet_1":{}}' }),
     parseImportedTemplateData_ACU: () => ({ templateObj: { sheet_1: {} }, templateStr: '{"sheet_1":{}}' }),
     resolveActiveTemplatePresetName_ACU: () => selectedChat,
@@ -109,6 +128,8 @@ async function importComposable() {
     setRuntimeAvailable: (available: boolean) => { runtimeSnapshot = available ? { templateStr: '{"sheet_1":{"name":"运行时"}}', templateObj: { sheet_1: { name: '运行时' } } } : null; },
     setChatSnapshotStr: (value: string) => { chatSnapshotStr = value; },
     setLibraryPresetStr: (value: string | null) => { libraryPresetStr = value; },
+    /** 一次 refresh 内预设库被读取+parse 的次数（三类读取入口之和）。 */
+    libraryReadCount: () => libraryReads.snapshot + libraryReads.names + libraryReads.get,
   };
 }
 
@@ -122,6 +143,40 @@ beforeEach(() => {
 });
 
 describe('useTableTemplatePresets', () => {
+  it('一次 refresh 只读一次预设库：列表/表数/偏离判定复用同一份库快照', async () => {
+    const { useTableTemplatePresets, setSelectedChat, setActiveMode, setChatSnapshotStr, libraryReadCount } = await importComposable();
+    setSelectedChat('global-A');
+    setActiveMode('chat_override');
+    setChatSnapshotStr('{"sheet_1":{"name":"用户改过的结构"}}');
+
+    const presets = useTableTemplatePresets();
+    // 旧行为：listTemplatePresetNames 1 次 + 每个预设名一次 getTemplatePreset + runtime/偏离各一次。
+    expect(libraryReadCount()).toBe(1);
+
+    const items = presets.chatPresetItems.value;
+    // 展示语义不变：默认项 → 运行时项 → 全局预设（按名）→ 当前聊天快照，偏离标记与 meta 拼接保持原样。
+    expect(items.map(item => item.label)).toEqual([
+      '默认预设（全局）',
+      '当前生效模板（内存）',
+      'global-A（全局预设）',
+      'chat-A（全局预设）',
+      'global-A（当前聊天快照）（内容已偏离库预设）',
+    ]);
+    expect(items[0].meta).toBe('1 张表');
+    expect(items[1].meta).toBe('1 张表');
+    expect(items[2].meta).toBe('1 张表');
+    expect(items[4].meta).toBe('1 张表');
+    expect(presets.chatSnapshotDiffersFromLibrary.value).toBe(true);
+    expect(presets.runtimeTemplateItem.value?.meta).toBe('1 张表');
+    expect(presets.runtimeDiffersFromLibrary.value).toBe(true);
+    expect(presets.chatArchiveItems.value).toEqual([]);
+
+    // 反复 refresh 不再叠加库读取。
+    presets.refresh();
+    presets.refresh();
+    expect(libraryReadCount()).toBe(3);
+  });
+
   it('isChatOverridden 按实际聊天作用域判断，同名快照也算覆盖', async () => {
     const { useTableTemplatePresets, setSelectedChat, setSelectedGlobal, setActiveScope } = await importComposable();
     const presets = useTableTemplatePresets();

@@ -470,7 +470,9 @@ export async function runSqliteRuntimeMutationCommit_ACU<T>(
     if (mutationResult.errors?.length) {
       return { success: false, error: mutationResult.errors.join(', '), mutationResult };
     }
-    const tableData = provider.getCurrentData();
+    // executeMutation 内部已把本次写入同步到 canonical 视图并把同一份对象带回；
+    // 中间无 mutation，直接复用，省掉紧接着那次全库二次导出。视图未同步成功才回落导出。
+    const tableData = mutationResult.syncedView ?? provider.getCurrentData();
     if (!tableData) {
       return { success: false, error: 'SQLite runtime data export failed', mutationResult };
     }
