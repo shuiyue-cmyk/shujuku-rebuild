@@ -5,6 +5,7 @@ import {
   buildEmptyAgentModuleSnapshot_ACU,
   commitAgentModuleFieldWrites_ACU,
   readAgentModuleSnapshot_ACU,
+  readAgentModuleFieldSnapshot_ACU,
   readAgentModuleSnapshotDiagnostics_ACU,
   refreshAgentModuleSnapshotChatPrefix_ACU,
   replaceAgentModuleSnapshotByUser_ACU,
@@ -17,7 +18,7 @@ import {
   validateAgentModuleSnapshot_ACU,
   writeAgentModuleSnapshot_ACU,
 } from '../../../../src/service/continuation/agent/agent-module-store';
-import { AGENT_BLOCK_CHAR_LIMIT_ACU, AGENT_HOT_HOOK_LIMIT_ACU, AGENT_MODULE_FIELD_ACU, AGENT_MODULE_SCHEMA_VERSION_ACU, AGENT_MODULE_SCHEMA_VERSION_V2_ACU, type AgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-model';
+import { AGENT_BLOCK_CHAR_LIMIT_ACU, AGENT_HOT_HOOK_LIMIT_ACU, AGENT_MODULE_FIELD_ACU, AGENT_MODULE_FRAME_SCHEMA_VERSION_ACU, AGENT_MODULE_SCHEMA_VERSION_ACU, AGENT_MODULE_SCHEMA_VERSION_V2_ACU, type AgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-model';
 import { ContinuationValidationError_ACU } from '../../../../src/service/continuation/model';
 import { _set_SillyTavern_API_ACU } from '../../../../src/shared/host-api';
 
@@ -606,5 +607,102 @@ describe('逐栏提交的证据楼白名单（与 SQL 事务路径同判据）',
     } as any);
     expect(receipt.rejected.some((item: { reason: string }) => /已结算正文楼层/.test(item.reason))).toBe(true);
     expect(receipt.accepted.some((item: { id: string; field: string }) => item.id === 'HF3' && item.field === 'plantedIndex')).toBe(false);
+  });
+});
+
+/**
+ * 逐栏提交的**落帧楼层**。
+ *
+ * 调用方（agent-main-loop 的三处派工）一律传 `chat.length - 1`，而 TT 2.3.0 的物理尾楼可以合法地是
+ * 一等工具楼 `{role:'tool', is_system:true}`（tool-calling.js:1058-1089）——它可被用户独立删除、
+ * 没有 swipe_id、也不承载剧情正文。逐栏草稿（fieldUpserts）挂在它身上＝用户删掉工具楼就丢草稿。
+ * 落帧楼层必须是「≤ targetIndex 的最近 AI 楼」：折叠按楼层序应用 delta，落更早的楼会让新 delta
+ * 排在既有 delta 之前被应用。
+ */
+describe('逐栏提交的帧落在 AI 楼（工具楼尾）', () => {
+  const minimalInsert = (id: string) =>
+    `INSERT INTO hooks (id, expected_revision, summary) VALUES ('${id}', 0, '草稿')`;
+
+  it('targetIndex 是工具楼时，草稿 delta 落在最近的 AI 楼，工具楼一帧不沾', async () => {
+    const chat: any[] = [
+      { mes: 'a', is_user: false },
+      { mes: 'b', is_user: false },
+      { role: 'tool', name: 'exa_search', is_system: true, is_user: false, mes: '{"result":"x"}', tool_call_id: 'c1' },
+    ];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+
+    const receipt = await commitAgentModuleFieldWrites_ACU({
+      chat, targetIndex: 2, role: 'hook-cognition-maintainer', sql: minimalInsert('HF9'),
+    } as any);
+
+    // 回读门必须按「本次规划改写过的楼层」豁免，而不是按调用方给的 targetIndex：
+    // 帧落在 AI 楼（floor 1）而 targetIndex 是工具楼（floor 2）时，旧豁免会把这次合法写入判成 readback_failed。
+    expect(receipt.status).toBe('committed');
+    expect(receipt.accepted.some((item: { id: string }) => item.id === 'HF9')).toBe(true);
+    expect(chat[2][AGENT_MODULE_FIELD_ACU], '工具楼不得承载逐栏 delta').toBeUndefined();
+    expect(chat[1][AGENT_MODULE_FIELD_ACU]?.deltas?.some((delta: any) => delta.fieldUpserts)).toBe(true);
+    // 草稿仍读得回来（落点变了，内容不能丢）
+    expect(readAgentModuleFieldSnapshot_ACU(chat).records.hooks?.HF9?.fields.summary.value).toBe('草稿');
+  });
+
+  it('整条聊天没有 AI 楼时 fail-closed：任何楼都不写帧', async () => {
+    const chat: any[] = [
+      { mes: '用户输入', is_user: true },
+      { role: 'tool', name: 'exa_search', is_system: true, is_user: false, mes: '{"result":"x"}', tool_call_id: 'c1' },
+    ];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+
+    await commitAgentModuleFieldWrites_ACU({
+      chat, targetIndex: 1, role: 'hook-cognition-maintainer', sql: minimalInsert('HF10'),
+    } as any);
+
+    expect(chat[0][AGENT_MODULE_FIELD_ACU], '用户楼不得承载帧').toBeUndefined();
+    expect(chat[1][AGENT_MODULE_FIELD_ACU], '工具楼不得承载帧').toBeUndefined();
+  });
+
+  /**
+   * 落点改成 AI 楼之后，折叠顺序（楼层正序）会让「更晚楼层上的遗留帧」覆盖新写入。
+   * 逐栏路径不折叠、无处吸收遗留内容，所以必须先拒一次并说清原因——整条快照写入每轮结算都会跑，
+   * 会把遗留帧吸收进全量基线并摘掉，阻塞窗口只有一轮。
+   */
+  it('非 AI 楼上有遗留帧时逐栏提交先拒一次，理由可区分，且不去搅动遗留帧', async () => {
+    const chat: any[] = [
+      { mes: 'AI 正文', is_user: false },
+      {
+        role: 'tool', name: 'exa_search', is_system: true, is_user: false, mes: '{"result":"x"}', tool_call_id: 'c1',
+        [AGENT_MODULE_FIELD_ACU]: {
+          schemaVersion: AGENT_MODULE_FRAME_SCHEMA_VERSION_ACU,
+          deltas: [{ seq: 1, swipeId: '0', writes: {}, revisions: {}, fieldUpserts: { hooks: { OLD1: { summary: { value: '旧草稿' } } } }, updatedAt: 1 }],
+        },
+      },
+    ];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+
+    const receipt = await commitAgentModuleFieldWrites_ACU({
+      chat, targetIndex: 1, role: 'hook-cognition-maintainer', sql: minimalInsert('HF11'),
+    } as any);
+
+    expect(receipt.rejected.some((item: { reason: string }) => /遗留/.test(item.reason)), '理由必须能与「规划不出写入」区分开').toBe(true);
+    expect(chat[0][AGENT_MODULE_FIELD_ACU], '拒绝时不得写任何新帧').toBeUndefined();
+    expect(chat[1][AGENT_MODULE_FIELD_ACU]?.deltas).toHaveLength(1);
+  });
+});
+
+/**
+ * 用户手动保存资料：没有任何 AI 楼可承载时必须报错，不能弹「已保存」——
+ * 那正是本函数自己写下的纪律（「对用户编辑是数据丢失——用户会以为自己保存成功了」）。
+ */
+describe('用户手动保存资料的落点门', () => {
+  it('聊天里没有 AI 楼时直接拒绝，不谎报已保存', async () => {
+    const chat: any[] = [
+      { mes: '用户输入', is_user: true },
+      { role: 'tool', name: 'exa_search', is_system: true, is_user: false, mes: '{"result":"x"}', tool_call_id: 'c1' },
+    ];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+
+    await expect(replaceAgentModuleSnapshotByUser_ACU({ hooks: [] }, chat))
+      .rejects.toThrow(ContinuationValidationError_ACU);
+    expect(chat[0][AGENT_MODULE_FIELD_ACU]).toBeUndefined();
+    expect(chat[1][AGENT_MODULE_FIELD_ACU]).toBeUndefined();
   });
 });

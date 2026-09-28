@@ -606,6 +606,18 @@ const AGENT_MODULE_FRAME_DEPS_ACU: AgentModuleFrameDeps_ACU = Object.freeze({
   salvageSnapshot: salvageAgentModuleSnapshot_ACU,
   emptySnapshot: buildEmptyAgentModuleSnapshot_ACU,
   isSnapshotPrefixCompatible: (snapshot: AgentModuleSnapshot_ACU, chat: readonly unknown[]) => isChatPrefixCompatible_ACU(snapshot, chat as any[]),
+  alignSnapshotToFloor: (snapshot: AgentModuleSnapshot_ACU, chat: readonly unknown[], floor: number) => {
+    if (snapshot.settledThroughIndex <= floor) return snapshot;
+    // 先按**原水位**校验旧指纹：失配说明结算期间聊天真的变了，此时返回 null 让调用方 fail-closed。
+    // 不能直接重算指纹把失配洗白——那等于把 P1 的前缀守卫摘掉（见本文件头部的加固纪律）。
+    if (!isChatPrefixCompatible_ACU(snapshot, chat as any[])) return null;
+    return refreshAgentModuleSnapshotChatPrefix_ACU({ ...snapshot, settledThroughIndex: floor }, chat as any[]);
+  },
+  // 折叠派生的快照（base、relocate 的 folded.snapshot）落盘前按自身水位重盖指纹：折叠只采纳指纹匹配的
+  // 基线，而 applyDelta 会推高水位不改指纹 ⇒ 不重盖就会落一份自相矛盾的基线，下一轮折叠整体拒绝它并
+  // 连带禁用抢救（资料清零）。这里不做「校验旧指纹」，因为出处就是当前聊天本身。
+  restampPrefix: (snapshot: AgentModuleSnapshot_ACU, chat: readonly unknown[]) =>
+    refreshAgentModuleSnapshotChatPrefix_ACU(snapshot, chat as any[]),
 });
 
 export function agentModuleFrameDeps_ACU(): AgentModuleFrameDeps_ACU {
@@ -675,7 +687,7 @@ function warnIfSalvagedRead_ACU(folded: AgentModuleFoldResult_ACU): void {
  * @param targetIndex 承载快照的楼层下标，通常是当前末楼
  * @param snapshot 待写入的全量快照
  */
-export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: number, snapshot: AgentModuleSnapshot_ACU): Promise<void> {
+export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: number, snapshot: AgentModuleSnapshot_ACU): Promise<number | null> {
   const message = Array.isArray(chat) ? chat[targetIndex] : null;
   if (!message || typeof message !== 'object') {
     throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'agent_persist', 'Agent 资料快照的目标楼层不可用', false, { targetIndex }));
@@ -735,7 +747,7 @@ export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: num
     findLatestTableFullCheckpointIndex_ACU(chat),
     floorState,
   );
-  if (!plan.changed) return;
+  if (!plan.changed) return null;
   try {
     for (const assignment of plan.assignments) {
       const container = chat[assignment.index] as Record<string, unknown>;
@@ -751,6 +763,9 @@ export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: num
     }
     throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'agent_persist', 'Agent 资料快照写盘失败，已还原楼层字段', false, { targetIndex, message: error instanceof Error ? error.message : String(error) }));
   }
+  // 回传**实际承载楼**（≤ targetIndex 的最近 AI 楼）：工具楼/隐藏楼尾时它不是 targetIndex，
+  // 而「资料写到哪一楼」必须让用户看得见，否则"资料突然清零"只能靠猜。null = 本次没有写入。
+  return plan.frameFloor ?? null;
 }
 
 /**
@@ -1148,7 +1163,9 @@ export function commitAgentModuleFieldWrites_ACU(input: {
     }));
     const plan = planAgentModuleFieldWrite_ACU(input.chat, input.targetIndex, upserts, agentModuleFrameDeps_ACU());
     if (!plan.changed) {
-      receipt.rejected.push({ path: 'frame', reason: '资料帧未能规划出可回读的写入' });
+      // reason 由规划层给出（没有 AI 楼 / 有遗留帧待自愈 / 承载楼是旧式全量或损坏帧），
+      // 否则模型只会看到一句笼统的「未能规划出写入」，白烧写轮去重试同一份 SQL。
+      receipt.rejected.push({ path: 'frame', reason: plan.reason ?? '资料帧未能规划出可回读的写入' });
       return receipt;
     }
     try {
@@ -1171,9 +1188,14 @@ export function commitAgentModuleFieldWrites_ACU(input: {
       return receipt;
     }
     // 保存后回读门：聊天身份/基线楼层未被顶替，且逐栏记录可读回。
+    // 豁免范围是「本次规划确实改写过的楼层」（plan.assignments），不是调用方给的 targetIndex：
+    // 帧的落点由 agent-module-frame 解析成「≤ targetIndex 的最近 AI 楼」（工具楼/隐藏楼尾时两者不同楼），
+    // 按 targetIndex 豁免会把合法写入判成 readback_failed；反过来，其余楼层一律要求逐字未变，
+    // 比旧写法更严——旧写法会放过「有人动了尾楼帧」这种真竞态。
+    const plannedFloorIndexes = new Set(plan.assignments.map(item => item.index));
     const intact = getChatArray_ACU() === input.chat && getActiveChatStorageIdentity_ACU(input.chat) === baselineIdentity
       && input.chat.length === baselineFloors.length && baselineFloors.every((entry, index) => {
-        if (index === input.targetIndex) return input.chat[index] === entry.message && readMessageSwipeId_ACU(entry.message) === entry.swipeId;
+        if (plannedFloorIndexes.has(index)) return input.chat[index] === entry.message && readMessageSwipeId_ACU(entry.message) === entry.swipeId;
         return input.chat[index] === entry.message && readMessageSwipeId_ACU(entry.message) === entry.swipeId
           && (Object.prototype.hasOwnProperty.call(entry.message as object, AGENT_MODULE_FIELD_ACU) === entry.existed)
           && asJson(((entry.message as Record<string, unknown>)[AGENT_MODULE_FIELD_ACU])) === entry.content;
@@ -1221,6 +1243,10 @@ export async function replaceAgentModuleSnapshotByUser_ACU(raw: unknown, chat?: 
   const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
   const targetIndex = messages.length - 1;
   if (targetIndex < 0) rejectSnapshotEdit_ACU('当前聊天没有可承载资料快照的楼层');
+  // 帧只能落在可见 AI 楼（工具楼可被独立删除、隐藏楼用户看不见）。没有 AI 楼时写入会被规划层
+  // fail-closed 掉，而本函数照样 return validated ⇒ UI 弹「已保存」、重读却是空的，正是本函数
+  // 注释里写的「用户会以为自己保存成功了」。所以在这里就拒绝，并把原因说清楚。
+  if (!messages.some(message => isAiFloor_ACU(message))) rejectSnapshotEdit_ACU('当前聊天没有可承载资料快照的 AI 楼层（用户楼、工具楼、隐藏楼都不能承载）');
   if (!isRecord_ACU(raw)) rejectSnapshotEdit_ACU('资料快照必须是 JSON 对象');
   const current = readAgentModuleSnapshot_ACU(messages);
   const merged = {

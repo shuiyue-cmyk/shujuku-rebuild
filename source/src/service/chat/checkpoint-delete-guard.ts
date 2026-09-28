@@ -34,6 +34,7 @@ import type { CompatTransitionCheckpointRef_ACU, Spv79TransitionCheckpointRef_AC
 import { collectScheduleSummaryFromFramesV2_ACU, loadTableStateFromFramesV2Detailed_ACU, replayWithLegacyTolerances_ACU } from '../table/storage-frame-v2-replay';
 import { getTableDataFingerprint_ACU } from '../table/table-data-upgrade-audit';
 import { isV2TagData_ACU } from '../table/storage-strategy-resolver';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 import { assertSingleActiveFullCheckpointV2_ACU } from '../table/storage-frame-v2-persist';
 import {
   assertMaterialContinuationCheckpoint_ACU,
@@ -303,8 +304,9 @@ function findGraftTargetMessage_ACU(
             return { message: candidate.messageRef, absorbedEarlierFrame: false };
         }
     }
-    // 无后继帧：落到聊天最后一个 AI 楼层。若该楼层携带的是更早的 frame，其 logs
-    // 已被丢失 checkpoint 的 data 吸收（checkpoint 写于其后），由调用方清空并警告。
+    // 无后继帧：落到聊天最后一个**非用户**楼层（表格数据可以挂在被 /hide 的楼上，所以这里不按 AI 楼收窄；
+    // 续写基线一侧另行按 isAiFloor_ACU 过滤，见 materialEntries 的嫁接靶楼选择）。若该楼层携带的是更早的
+    // frame，其 logs 已被丢失 checkpoint 的 data 吸收（checkpoint 写于其后），由调用方清空并警告。
     for (let i = chat.length - 1; i >= 0; i -= 1) {
         const message = chat[i];
         if (!message || message.is_user) continue;
@@ -525,11 +527,13 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
                 if (presentMessagesForMaterial.has(material.messageRef)) continue;
                 if (!material.continuation) continue;
                 const preferred = graftTargetByLostMessage.get(material.messageRef);
-                let targetMessage = preferred;
+                // 续写基线只能落在可见 AI 楼（graftContinuationCheckpoint_ACU 有同款门）：表格侧的靶楼
+                // 兜底只排除用户楼，可能给出工具楼/隐藏楼，直接复用会白嫁接一次并把资料留在会消失的楼上。
+                let targetMessage = preferred && isAiFloor_ACU(preferred) ? preferred : undefined;
                 if (!targetMessage) {
                     for (let index = lostIndex + 1; index < vault_ACU!.materialEntries.length; index += 1) {
                         const candidate = vault_ACU!.materialEntries[index];
-                        if (presentMessagesForMaterial.has(candidate.messageRef)) {
+                        if (presentMessagesForMaterial.has(candidate.messageRef) && isAiFloor_ACU(candidate.messageRef)) {
                             targetMessage = candidate.messageRef;
                             break;
                         }
@@ -537,7 +541,7 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
                 }
                 if (!targetMessage) {
                     for (let index = chat.length - 1; index >= 0; index -= 1) {
-                        if (chat[index] && !chat[index].is_user) {
+                        if (isAiFloor_ACU(chat[index])) {
                             targetMessage = chat[index];
                             break;
                         }

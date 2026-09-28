@@ -237,8 +237,12 @@ describe('P0-5 规划基线自检：折叠来源必须是同一条 chat', () => 
     _set_SillyTavern_API_ACU({ chat: longer, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
     await buildHistory(longer);
     const foreignFold = foldAgentModuleSnapshot_ACU(longer, agentModuleFrameDeps_ACU());
-    // 越界条件正是「折了别的聊天」的可观测特征。
-    expect(foreignFold.checkpointIndex).toBeGreaterThanOrEqual(chat.length);
+    // 可观测特征已经变了：帧落点改成「≤ targetIndex 的最近 AI 楼」之后，外来基线也落在本 chat 的
+    // 下标范围内（逐楼写入的历史恒落在第 0 楼），checkpointIndex 越界这个旧判据不再成立。
+    // 现在的判据是来源身份（楼层数 + 尾楼对象引用）。
+    expect(foreignFold.checkpointIndex, '旧的越界特征已消失，正是本用例要防的静默采纳').toBeLessThan(chat.length);
+    expect(foreignFold.chatLength).toBeGreaterThan(chat.length);
+    expect(foreignFold.tailFloor).not.toBe(chat[chat.length - 1]);
 
     const deps = agentModuleFrameDeps_ACU();
     const next = nextSnapshot(FLOOR_COUNT - 1);
@@ -249,6 +253,38 @@ describe('P0-5 规划基线自检：折叠来源必须是同一条 chat', () => 
     const guarded = planAgentModuleSnapshotWrite_ACU(chat, FLOOR_COUNT - 1, next, deps, null, foreignFold);
     expect(guarded).toEqual(reference);
     // 自检命中 → 恰好重新折叠一次（而不是静默接受外来基线）。
+    expect(diff(before).folds).toBe(1);
+  });
+
+  /**
+   * 长度相同、内容同形的另一条聊天：越界与长度两个判据都失效，只剩尾楼对象身份能认出它是外来的。
+   * 旧的「只看 checkpointIndex 范围」实现在这里会静默采纳外来基线（重折 0 次）。
+   */
+  it('同长度的另一条聊天：靠尾楼对象身份识别外来折叠，仍恰好重折一次', async () => {
+    const chat = freshChat();
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    await buildHistory(chat);
+
+    const twin = freshChat();
+    _set_SillyTavern_API_ACU({ chat: twin, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    await buildHistory(twin);
+    // 多写一轮，让 twin 的 maxDeltaSeq 与本 chat 不同：否则「规划输出逐字相等」成了恒真式，
+    // 判别力会全压在折叠计数那一条上。
+    await writeAgentModuleSnapshot_ACU(twin, FLOOR_COUNT - 1, nextSnapshot(FLOOR_COUNT - 1));
+    const foreignFold = foldAgentModuleSnapshot_ACU(twin, agentModuleFrameDeps_ACU());
+    expect(foreignFold.chatLength).toBe(chat.length);
+    expect(foreignFold.checkpointIndex).toBeLessThan(chat.length);
+    expect(foreignFold.tailFloor).not.toBe(chat[chat.length - 1]);
+    expect(foreignFold.maxDeltaSeq).not.toBe(foldAgentModuleSnapshot_ACU(chat, agentModuleFrameDeps_ACU()).maxDeltaSeq);
+
+    const deps = agentModuleFrameDeps_ACU();
+    const next = nextSnapshot(FLOOR_COUNT - 1);
+    const reference = planAgentModuleSnapshotWrite_ACU(
+      chat, FLOOR_COUNT - 1, next, deps, null, foldAgentModuleSnapshot_ACU(chat, deps),
+    );
+    const before = counters();
+    const guarded = planAgentModuleSnapshotWrite_ACU(chat, FLOOR_COUNT - 1, next, deps, null, foreignFold);
+    expect(guarded).toEqual(reference);
     expect(diff(before).folds).toBe(1);
   });
 });

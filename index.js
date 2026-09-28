@@ -91598,8 +91598,8 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"9.8.8"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20260927-19"`。源码直跑、测试环境或注入失败时读不到，
+ * rollup 打包时把版本写进 `"9.8.9"`（与 manifest.json / source/package.json
+ * 同值），构建时间戳写进 `"20260928-13"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91608,7 +91608,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "9.8.8";
+        const version = "9.8.9";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
@@ -91618,7 +91618,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20260927-19";
+        const stamp = "20260928-13";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -120755,8 +120755,9 @@ function findGraftTargetMessage_ACU(chat, presentMessages, entries, lostIndex, i
             return { message: candidate.messageRef, absorbedEarlierFrame: false };
         }
     }
-    // 无后继帧：落到聊天最后一个 AI 楼层。若该楼层携带的是更早的 frame，其 logs
-    // 已被丢失 checkpoint 的 data 吸收（checkpoint 写于其后），由调用方清空并警告。
+    // 无后继帧：落到聊天最后一个**非用户**楼层（表格数据可以挂在被 /hide 的楼上，所以这里不按 AI 楼收窄；
+    // 续写基线一侧另行按 isAiFloor_ACU 过滤，见 materialEntries 的嫁接靶楼选择）。若该楼层携带的是更早的
+    // frame，其 logs 已被丢失 checkpoint 的 data 吸收（checkpoint 写于其后），由调用方清空并警告。
     for (let i = chat.length - 1; i >= 0; i -= 1) {
         const message = chat[i];
         if (!message || message.is_user)
@@ -120964,11 +120965,13 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
                 if (!material.continuation)
                     continue;
                 const preferred = graftTargetByLostMessage.get(material.messageRef);
-                let targetMessage = preferred;
+                // 续写基线只能落在可见 AI 楼（graftContinuationCheckpoint_ACU 有同款门）：表格侧的靶楼
+                // 兜底只排除用户楼，可能给出工具楼/隐藏楼，直接复用会白嫁接一次并把资料留在会消失的楼上。
+                let targetMessage = preferred && isAiFloor_ACU(preferred) ? preferred : undefined;
                 if (!targetMessage) {
                     for (let index = lostIndex + 1; index < vault_ACU.materialEntries.length; index += 1) {
                         const candidate = vault_ACU.materialEntries[index];
-                        if (presentMessagesForMaterial.has(candidate.messageRef)) {
+                        if (presentMessagesForMaterial.has(candidate.messageRef) && isAiFloor_ACU(candidate.messageRef)) {
                             targetMessage = candidate.messageRef;
                             break;
                         }
@@ -120976,7 +120979,7 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
                 }
                 if (!targetMessage) {
                     for (let index = chat.length - 1; index >= 0; index -= 1) {
-                        if (chat[index] && !chat[index].is_user) {
+                        if (isAiFloor_ACU(chat[index])) {
                             targetMessage = chat[index];
                             break;
                         }
@@ -121440,21 +121443,125 @@ function readMessageSwipeId_ACU(message) {
     return typeof swipeId === 'number' && Number.isInteger(swipeId) && swipeId >= 0 ? String(swipeId) : '0';
 }
 /**
- * 逆序找最近的 AI 楼索引。
+ * 解析「本次写入的帧数据该落在哪一楼」：≤ targetIndex 的最近 AI 楼；没有则 -1（调用方 fail-closed）。
  *
- * 判定走 shared/ai-floor（本库唯一出处），**不能**用「非 user 即 AI」：TT 2.3.0 的工具轮会把一等
- * 工具楼 `{role:'tool', is_system:true}` push 成物理尾楼（src/scripts/tool-calling.js:1058-1089），
- * 而它是「可被用户独立删除、不承载剧情正文、且没有 swipe_id」的真实楼层
- * （docs/CurrentState/ChatPayload.md §4）。把 checkpoint 写进去＝资料挂在随时会消失的楼上，
- * 用户一删就退回「无可用基线」，宽容抢救整条禁用。
- * 退化兜底（整条聊天一个 AI 楼都没有）保持既有行为：退回物理尾楼，此时本就没有剧情楼可挂。
+ * 为什么不能就是 targetIndex：调用方（agent-main-loop 的三处派工、资料补足、逐栏提交）一律传物理尾楼
+ * `chat.length - 1`，而 TT 2.3.0 的物理尾楼可以合法地是一等工具楼 `{role:'tool', is_system:true}`
+ * （src/scripts/tool-calling.js:1058-1089）——它可被用户独立删除、没有 swipe_id、也不承载剧情正文
+ * （docs/CurrentState/ChatPayload.md §4）。帧数据挂上去的后果：用户删掉工具楼即丢整段资料增量；
+ * swipe_id 缺失还会让 delta 的 swipeId 退化成 '0'，切 swipe 后的失效判定失去意义。
+ * 隐藏楼（is_system）同理：用户看不见却承载资料，与楼号口径、删楼守卫都会错位。
+ *
+ * 为什么是「≤ targetIndex 的**最近** AI 楼」而不是更早的某一栋：折叠按**楼层序**应用 delta
+ * （foldAgentModuleSnapshot_ACU 的正序 for 循环），落到更早的楼会让新 delta 排在既有 delta 之前被应用。
+ *
+ * ⚠️ 这条不变量依赖一个**调用方契约**而非天然成立：frameFloor 之后不得再有承载帧的楼层。
+ * 本版本之后新写入的帧只落在 AI 楼，所以 frameFloor（最后一栋 AI 楼）之后不会有新帧；但旧版本
+ * （≤ v9.8.8）把 delta 追加在物理尾楼，存量聊天里可能已有「挂在工具楼上的遗留帧」，删楼守卫的
+ * 基线嫁接也可能落到非 AI 楼。两个 plan 函数因此都显式处理这种情况：整条快照路径吸收遗留内容后
+ * 把遗留帧摘掉（自愈），逐栏路径先拒一次并说明原因（它不折叠、无处吸收）。
  */
-function latestAiIndex_ACU(chat) {
-    for (let index = chat.length - 1; index >= 0; index -= 1) {
+function resolveFrameFloor_ACU(chat, targetIndex) {
+    for (let index = Math.min(targetIndex, chat.length - 1); index >= 0; index -= 1) {
         if (isAiFloor_ACU(chat[index]))
             return index;
     }
-    return Math.max(0, chat.length - 1);
+    return -1;
+}
+/**
+ * 遗留在非 AI 楼上、且**参与当前折叠**的帧楼层（v9.8.8 及更早「delta 追加在物理尾楼」的产物）。
+ *
+ * 判据刻意收窄，否则摘除会误删本模块纪律要求保留的东西（见 stripCurrentSwipeThrough_ACU 的注释与
+ * agent-module-frame.test.ts 的「他 swipe 的旧基线在搬运后仍保留，切回即恢复」）：
+ * - 只看 `kind === 'frame'`：legacy 全量与 broken 帧不是 v9.8.8 的产物，各有自己的迁移/抢救路径；
+ * - 只看携带**本楼当前 swipe** 的 checkpoint 或 delta：只有它们会被折叠应用（FRAME 折叠里的
+ *   `delta.swipeId === swipeId` 判定），因而才是「排在承载楼之后覆盖新值」的倒挂源；他 swipe 的内容
+ *   折叠本来就用不到，删掉等于永久丢失切回时的恢复能力。
+ */
+function collectStrayFrameFloors_ACU(chat, deps) {
+    const stray = [];
+    for (let index = 0; index < chat.length; index += 1) {
+        const message = chat[index];
+        if (isAiFloor_ACU(message))
+            continue;
+        const raw = fieldOf_ACU(message);
+        if (raw === undefined)
+            continue;
+        const parsed = parseField_ACU(raw, deps);
+        if (parsed.kind !== 'frame')
+            continue;
+        const swipeId = readMessageSwipeId_ACU(message);
+        const carriesCurrentSwipe = (parsed.frame.checkpoint && parsed.frame.checkpoint.swipeId === swipeId)
+            || parsed.frame.deltas.some(delta => delta.swipeId === swipeId);
+        if (!carriesCurrentSwipe)
+            continue;
+        stray.push(index);
+    }
+    return stray;
+}
+/**
+ * 摘掉某栋非 AI 楼上**参与当前折叠**的帧内容：只删当前 swipe 的 checkpoint 与 delta，
+ * 他 swipe 内容原样保留；帧空了才连字段一起删。整字段 delete 会把切 swipe 时的恢复能力一并抹掉。
+ */
+function removeCurrentSwipeFrame_ACU(message) {
+    if (!isRecord_ACU$a(message))
+        return;
+    const raw = message[AGENT_MODULE_FIELD_ACU];
+    if (raw === undefined || !isRecord_ACU$a(raw))
+        return;
+    const swipeId = readMessageSwipeId_ACU(message);
+    const next = { ...raw };
+    if (isRecord_ACU$a(next.checkpoint) && next.checkpoint.swipeId === swipeId)
+        delete next.checkpoint;
+    if (Array.isArray(next.deltas)) {
+        next.deltas = next.deltas.filter(delta => delta?.swipeId !== swipeId);
+    }
+    const emptied = next.checkpoint === undefined && Array.isArray(next.deltas) && next.deltas.length === 0;
+    if (emptied)
+        delete message[AGENT_MODULE_FIELD_ACU];
+    else
+        message[AGENT_MODULE_FIELD_ACU] = next;
+}
+/**
+ * 把**折叠派生**的快照落盘前按自身水位重盖前缀指纹（并钳到承载楼）。
+ *
+ * 为什么与 alignSnapshotToFloor_ACU 分开：折叠结果的内容只可能来自「已被指纹门校验通过的基线 + delta」
+ * （applyDelta 会推高 settledThroughIndex 却**从不改指纹**，见本文件 applyDelta_ACU），所以它的指纹天然与
+ * 自身水位不成对。这种快照直接落盘＝写一份自相矛盾的基线 ⇒ 下一次折叠按新水位重算指纹必然失配 ⇒
+ * 基线被整体拒绝、incompatibleSeen 连带禁用宽容抢救、同 swipe 的 delta 又已被 strip 掉 ⇒ **资料全量静默清零**。
+ * 对折叠派生的快照重盖指纹不是「洗白失配」：它本来就是从当前聊天折出来的，指纹记录的正是在此刻的出处。
+ * 「不许重算指纹洗白」那条纪律针对的是**外部传入的在飞快照**（clamped），那里仍走带校验的 alignSnapshotToFloor。
+ */
+function restampFoldedSnapshot_ACU(deps, snapshot, chat, floor) {
+    const clampedWaterline = Math.min(Math.max(snapshot.settledThroughIndex, 0), Math.max(floor, 0));
+    const next = { ...snapshot, settledThroughIndex: clampedWaterline };
+    if (deps.restampPrefix)
+        return deps.restampPrefix(next, chat);
+    // 没有重盖能力时宁可**不声明指纹**（折叠读路径把「无指纹」视为兼容），也不要留一份必然失配的旧指纹：
+    // 后者会让基线被拒绝、抢救被禁用，代价是资料清零。
+    delete next.settledPrefixFingerprint;
+    return next;
+}
+/**
+ * 把快照的结算水位（与前缀指纹）对齐到承载楼；对不齐时返回原快照，由调用方按「水位 > 承载楼」fail-closed。
+ *
+ * 为什么必须对齐：基线声明「结算到 W」而 W 指向承载楼之后的工具楼/隐藏楼时，用户删掉那栋楼就会让
+ * chatPrefixFingerprint 失配 ⇒ 基线被折叠拒绝、宽容抢救一并禁用 ⇒ 资料**整体**清零。
+ * 这也正是 store 里 alignAgentModuleSnapshotToFloor_ACU 与 continuation-orchestrator 写入前对齐的同一条纪律
+ * （「本快照只声明结算到承载楼」）。代价：(承载楼, targetIndex] 这段会在下一轮重新结算一次，
+ * 而那段全是非 AI 楼、不承载剧情正文（renderAgentUnsettledHistory_ACU 按 isAiFloor_ACU 过滤），不会多派维护代理。
+ */
+function alignSnapshotToFloor_ACU(deps, snapshot, chat, floor) {
+    if (snapshot.settledThroughIndex <= floor)
+        return snapshot;
+    if (!deps.alignSnapshotToFloor)
+        return snapshot;
+    try {
+        return deps.alignSnapshotToFloor(snapshot, chat, floor) ?? snapshot;
+    }
+    catch {
+        return snapshot;
+    }
 }
 function clampWaterline_ACU(value, targetIndex) {
     if (!Number.isInteger(value) || value < 0)
@@ -121995,6 +122102,8 @@ function foldAgentModuleSnapshot_ACU(chat, deps, throughIndex = chat.length - 1)
             foldedDeltaCount: 0,
             maxDeltaSeq,
             contributed: true,
+            chatLength: chat.length,
+            tailFloor: chat[chat.length - 1],
         };
     }
     return {
@@ -122007,6 +122116,8 @@ function foldAgentModuleSnapshot_ACU(chat, deps, throughIndex = chat.length - 1)
         foldedDeltaCount,
         maxDeltaSeq,
         contributed,
+        chatLength: chat.length,
+        tailFloor: chat[chat.length - 1],
     };
 }
 function readFrame_ACU(message, deps) {
@@ -122026,6 +122137,11 @@ function writeFrame_ACU(message, frame) {
 }
 function stripCurrentSwipeThrough_ACU(chat, anchorIndex, deps) {
     for (let index = 0; index < chat.length; index += 1) {
+        // 锚点之后的楼层整体不碰：它们的帧既不参与本次折叠归并，也不该被这里的收尾逻辑
+        // 归一化重写或清空（那会丢弃不可解析的 delta、抹掉未知顶层键，并在与本次写入无关的楼层上
+        // 产生额外宿主写）。逐栏与整条写入两条路径共用本函数，relocate 的语义是「搬迁 ≤ 锚点的基线」。
+        if (index > anchorIndex)
+            continue;
         const message = chat[index];
         if (!isRecord_ACU$a(message))
             continue;
@@ -122037,10 +122153,9 @@ function stripCurrentSwipeThrough_ACU(chat, anchorIndex, deps) {
         // 只清本次真正折进去的基线（fold 采纳口径：index <= anchor 且与楼层当前 swipe 一致）。
         // 锚点之后、他 swipe 的基线不在折叠范围内；删基线留 delta 会拼出弗兰肯斯坦快照，
         // 跨 swipe 切回、模板重置（锚点恒为首楼）等场景的旧基线也会永久丢失。
-        if (index <= anchorIndex && frame.checkpoint?.swipeId === swipeId)
+        if (frame.checkpoint?.swipeId === swipeId)
             delete frame.checkpoint;
-        if (index <= anchorIndex)
-            frame.deltas = frame.deltas.filter(delta => delta.swipeId !== swipeId);
+        frame.deltas = frame.deltas.filter(delta => delta.swipeId !== swipeId);
         if (!frame.checkpoint && frame.deltas.length === 0)
             delete message[AGENT_MODULE_FIELD_ACU];
         else
@@ -122065,7 +122180,14 @@ function relocateContinuationCheckpoint_ACU(chat, anchorIndex, deps) {
     const before = JSON.stringify(chat.map(message => fieldOf_ACU(message)));
     stripCurrentSwipeThrough_ACU(chat, anchorIndex, deps);
     const frame = readFrame_ACU(anchor, deps);
-    frame.checkpoint = { swipeId: readMessageSwipeId_ACU(anchor), snapshot: cloneJson_ACU$2(folded.snapshot) };
+    // folded.snapshot 的指纹来自被采纳的旧基线、水位却已被 delta 推高（applyDelta 不改指纹）⇒ 原样落盘就是
+    // 一份自相矛盾的基线：下一次折叠按新水位重算指纹必然失配 → 基线被整体拒绝 + incompatibleSeen 禁用抢救
+    // + 同 swipe 的 delta 刚被上面 strip 掉 → **资料全量静默清零**。表格 checkpoint 每次落层都会走到这里，
+    // 所以必须按自身水位重盖指纹后再落盘。
+    frame.checkpoint = {
+        swipeId: readMessageSwipeId_ACU(anchor),
+        snapshot: cloneJson_ACU$2(restampFoldedSnapshot_ACU(deps, folded.snapshot, chat, anchorIndex)),
+    };
     writeFrame_ACU(anchor, frame);
     const after = JSON.stringify(chat.map(message => fieldOf_ACU(message)));
     return before !== after;
@@ -122089,53 +122211,99 @@ function appendDelta_ACU(chat, targetIndex, delta, deps) {
  */
 /**
  * 规划前的折叠来源自检：折叠结果必须来自同一条 chat。
- * checkpointIndex 越界只可能是"折了另一条/更长的聊天"——那种情况下 maxDeltaSeq 口径会漂移，
- * 宁可重折一次也不能拿错基线规划 seq。
+ *
+ * 判据是**来源身份**（楼层数 + 尾楼对象引用），不再只看 checkpointIndex 是否越界：帧落点改成
+ * 「≤ targetIndex 的最近 AI 楼」之后，更长聊天的基线也会落在本 chat 的下标范围内（逐楼写入的历史
+ * 就恒落在第 0 楼），越界特征随之消失，外来基线会被静默采纳、maxDeltaSeq 口径整体漂移。
+ * 宁可重折一次也不能拿错基线规划 seq；checkpointIndex 的范围检查保留作纵深防御。
  */
-function isFoldResultForChat_ACU(folded, chatLength) {
+function isFoldResultForChat_ACU(folded, chat) {
+    if (folded.chatLength !== chat.length)
+        return false;
+    if (folded.tailFloor !== chat[chat.length - 1])
+        return false;
     return folded.checkpointIndex === null
-        || (folded.checkpointIndex >= 0 && folded.checkpointIndex < chatLength);
+        || (folded.checkpointIndex >= 0 && folded.checkpointIndex < chat.length);
 }
 function planAgentModuleSnapshotWrite_ACU(chat, targetIndex, next, deps, tableAnchorIndex, folded) {
     const scratch = chat.map(message => (isRecord_ACU$a(message) ? { ...message } : message));
-    const before = isFoldResultForChat_ACU(folded, chat.length)
+    // 帧的**落点**与调用方给的 targetIndex 解耦：targetIndex 只表达「这次结算截至哪一楼」，
+    // 落点必须是 AI 楼，否则工具楼尾时资料增量会挂在可被独立删除、无 swipe_id 的楼上（见 resolveFrameFloor_ACU）。
+    const frameFloor = resolveFrameFloor_ACU(scratch, targetIndex);
+    if (frameFloor < 0) {
+        return { changed: false, assignments: [], reason: '当前聊天没有可承载资料帧的 AI 楼层（用户楼、工具楼、隐藏楼都不能承载）' };
+    }
+    // 旧版本（≤ v9.8.8）把 delta 追加在物理尾楼，所以非 AI 楼上可能挂着遗留帧。折叠按楼层正序应用，
+    // 落在 frameFloor 的新增量会先被应用、随后被更晚楼层的遗留帧覆盖回去（用户改一次、提示成功、
+    // 重读还是旧值，且不会自愈）。整条快照路径可以自愈：遗留内容已经在折叠结果里，本次以全量基线落盘，
+    // 并把遗留帧物理摘掉。逐栏路径不折叠、无处吸收，只能先拒一次（见 planAgentModuleFieldWrite_ACU）。
+    const strayFloorIndexes = collectStrayFrameFloors_ACU(scratch, deps);
+    const before = isFoldResultForChat_ACU(folded, chat)
         ? folded
         : foldAgentModuleSnapshot_ACU(scratch, deps);
-    const clamped = {
+    const clamped = alignSnapshotToFloor_ACU(deps, {
         ...cloneJson_ACU$2(next),
         settledThroughIndex: clampWaterline_ACU(next.settledThroughIndex, targetIndex),
         updatedAt: Date.now(),
-    };
-    if (before.contributed && !before.salvaged && sameSemantic_ACU(before.snapshot, clamped)) {
-        return { changed: false, assignments: [] };
+    }, scratch, frameFloor);
+    // 对齐不了（deps 没注入，或旧指纹与当前聊天已经不符）就不写：一份「水位指向非 AI 楼」的基线，
+    // 会在用户删掉那栋楼时因前缀指纹失配被折叠整体拒绝，资料清零——比不写这次严重得多。
+    if (clamped.settledThroughIndex > frameFloor) {
+        return { changed: false, assignments: [], frameFloor, reason: '资料快照的结算水位无法对齐到承载楼（聊天前缀已变化），拒绝写入' };
+    }
+    if (before.contributed && !before.salvaged && sameSemantic_ACU(before.snapshot, clamped) && !strayFloorIndexes.length) {
+        return { changed: false, assignments: [], frameFloor };
     }
     const base = before.contributed ? before.snapshot : deps.emptySnapshot();
     // 序号取折叠结果自带的 maxDeltaSeq：本次折叠已对全聊天逐楼深度解析过，口径与旧的
     // maxSeq 扫描完全相同（只统计 parseDelta 通过的 delta），省掉一整趟全聊天解析。
-    const delta = diffSnapshot_ACU(base, clamped, readMessageSwipeId_ACU(scratch[targetIndex]), before.maxDeltaSeq + 1);
+    const delta = diffSnapshot_ACU(base, clamped, readMessageSwipeId_ACU(scratch[frameFloor]), before.maxDeltaSeq + 1);
     // 失配的旧基线（swipe 切换/指纹失配）视为不可用：走建新 checkpoint 分支自愈，
-    // 而不是在被折叠跳过的基线上继续追 delta。
-    const hadUsableCheckpoint = hasUsableSchema3Checkpoint_ACU(scratch, deps);
+    // 而不是在被折叠跳过的基线上继续追 delta。有遗留帧时同样强制走这条分支：
+    // 只有全量基线才能把遗留内容一并承载，随后才能安全摘掉遗留帧。
+    const hadUsableCheckpoint = !strayFloorIndexes.length && hasUsableSchema3Checkpoint_ACU(scratch, deps);
+    // 本次是否真的落下了一份能承载遗留内容的全量基线：遗留帧的摘除必须以它为前提，
+    // 否则就是「帧已摘、基线未落」——遗留增量既不在新基线里、也没了出处，静默丢数据。
+    let absorbedByCheckpoint = false;
     if (hadUsableCheckpoint) {
         if (delta)
-            appendDelta_ACU(scratch, targetIndex, delta, deps);
+            appendDelta_ACU(scratch, frameFloor, delta, deps);
     }
     else {
         const tableAnchor = tableAnchorIndex !== null && isAiFloor_ACU(scratch[tableAnchorIndex]) ? tableAnchorIndex : null;
-        const anchor = tableAnchor ?? latestAiIndex_ACU(scratch);
+        // 有遗留帧时必须把锚点收在承载楼：只有 anchor === frameFloor 才会以 clamped（已对齐、且折叠已含
+        // 遗留内容）落全量基线；交给 tableAnchor 会走 base 分支，一旦 (W, 指纹) 处理不当就落不下去，
+        // 摘除前提随之落空。表格基线的跟随稍后仍由 relocateContinuationCheckpoint_ACU 补回。
+        const anchor = strayFloorIndexes.length ? frameFloor : (tableAnchor ?? frameFloor);
         const anchorMessage = scratch[anchor];
         if (isRecord_ACU$a(anchorMessage)) {
-            const checkpointSnapshot = targetIndex <= anchor || !delta ? clamped : base;
-            if (deps.validateSnapshot(checkpointSnapshot)) {
+            const useClamped = frameFloor <= anchor || !delta;
+            // caller 在飞快照（clamped）走「校验旧指纹再钳位重算」；折叠派生快照（base）走「按自身水位重盖指纹」，
+            // 两者的理由与失效模式不同，见各自 helper 的注释。
+            const checkpointSnapshot = useClamped
+                ? alignSnapshotToFloor_ACU(deps, clamped, scratch, anchor)
+                : restampFoldedSnapshot_ACU(deps, base, scratch, anchor);
+            if (checkpointSnapshot.settledThroughIndex <= anchor && deps.validateSnapshot(checkpointSnapshot)) {
+                // 写新基线前先清掉 ≤ anchor 各楼上**同当前 swipe**的旧基线与增量：新基线是全量、已吸收它们，
+                // 留着会让同一 swipe 出现多个活跃基线，assertSingleActiveContinuationCheckpoint_ACU 一旦报错，
+                // 删楼恢复会整批回滚（表格回放根与向量 checkpoint 一并嫁不进去）且对用户静默。
+                stripCurrentSwipeThrough_ACU(scratch, anchor, deps);
                 const frame = readFrame_ACU(anchorMessage, deps);
                 frame.checkpoint = { swipeId: readMessageSwipeId_ACU(anchorMessage), snapshot: cloneJson_ACU$2(checkpointSnapshot) };
-                if (anchor === targetIndex)
+                if (anchor === frameFloor)
                     frame.deltas = frame.deltas.filter(item => item.swipeId !== frame.checkpoint?.swipeId);
                 writeFrame_ACU(anchorMessage, frame);
+                absorbedByCheckpoint = true;
             }
         }
-        if (delta && targetIndex > anchor)
-            appendDelta_ACU(scratch, targetIndex, delta, deps);
+        if (delta && frameFloor > anchor)
+            appendDelta_ACU(scratch, frameFloor, delta, deps);
+    }
+    // 摘掉遗留帧（只摘参与当前折叠的那部分，他 swipe 内容切回时必须还能恢复）：
+    // 内容已由本次全量基线承载，留着只会让折叠序倒挂——新值被更晚楼层的旧值覆盖回去。
+    if (absorbedByCheckpoint) {
+        for (const index of strayFloorIndexes)
+            removeCurrentSwipeFrame_ACU(scratch[index]);
     }
     const assignments = [];
     scratch.forEach((message, index) => {
@@ -122150,7 +122318,7 @@ function planAgentModuleSnapshotWrite_ACU(chat, targetIndex, next, deps, tableAn
             value,
         });
     });
-    return { changed: assignments.length > 0, assignments };
+    return { changed: assignments.length > 0, assignments, frameFloor };
 }
 /**
  * 规划一次逐栏写入：只把 fieldUpserts 作为一条 delta 追加到目标楼层，
@@ -122161,13 +122329,30 @@ function planAgentModuleFieldWrite_ACU(chat, targetIndex, fieldUpserts, deps) {
     if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex >= chat.length) {
         return { changed: false, assignments: [] };
     }
-    // 目标种类门（fail-closed）：目标楼已有字段但不是 schema-3 帧（legacy 全量 / broken）
+    // 落帧楼层与 targetIndex 解耦（同 planAgentModuleSnapshotWrite_ACU）：调用方一律传物理尾楼，
+    // 而 TT 2.3.0 的尾楼可以是一等工具楼——逐栏草稿挂上去，用户删掉工具楼就丢草稿。
+    const frameFloor = resolveFrameFloor_ACU(chat, targetIndex);
+    if (frameFloor < 0) {
+        return { changed: false, assignments: [], reason: '当前聊天没有可承载资料帧的 AI 楼层（用户楼、工具楼、隐藏楼都不能承载）' };
+    }
+    // 遗留帧门：非 AI 楼上还挂着旧版本（≤ v9.8.8）写下的帧时，逐栏路径必须先拒一次。它不折叠、
+    // 无处吸收遗留内容，写下去会与遗留帧形成楼层序倒挂（新草稿被更晚楼层的旧增量覆盖回去）。
+    // 整条快照写入每轮结算都会跑，会把遗留帧吸收进全量基线并摘掉，所以阻塞窗口只有一轮。
+    if (collectStrayFrameFloors_ACU(chat, deps).length) {
+        return {
+            changed: false,
+            assignments: [],
+            frameFloor,
+            reason: '检测到旧版本遗留在非 AI 楼层上的资料帧，需先完成一次整条快照写入以自愈（本轮结算会自动完成）',
+        };
+    }
+    // 目标种类门（fail-closed）：承载楼已有字段但不是 schema-3 帧（legacy 全量 / broken）
     // 时拒绝逐栏写入。appendDelta 的读—改—写会把整楼替换为仅一条 field delta 的帧：
     // legacy 全量永久消失（field delta 不投影领域数组），broken 楼丧失抢救机会。
     // legacy 先经整条写入迁移，broken 保留抢救路径；与 T1 迁移纪律一致。
-    const existing = fieldOf_ACU(chat[targetIndex]);
+    const existing = fieldOf_ACU(chat[frameFloor]);
     if (existing !== undefined && parseField_ACU(existing, deps).kind !== 'frame') {
-        return { changed: false, assignments: [] };
+        return { changed: false, assignments: [], frameFloor, reason: '承载楼层携带的是旧式全量资料或已损坏的帧，需先经整条写入迁移' };
     }
     const cleaned = {};
     let hasWrite = false;
@@ -122206,13 +122391,13 @@ function planAgentModuleFieldWrite_ACU(chat, targetIndex, fieldUpserts, deps) {
     const scratch = chat.map(message => (isRecord_ACU$a(message) ? { ...message } : message));
     const delta = {
         seq: maxSeq_ACU(scratch, deps) + 1,
-        swipeId: readMessageSwipeId_ACU(scratch[targetIndex]),
+        swipeId: readMessageSwipeId_ACU(scratch[frameFloor]),
         writes: {},
         fieldUpserts: cleaned,
         revisions: {},
         updatedAt: Date.now(),
     };
-    appendDelta_ACU(scratch, targetIndex, delta, deps);
+    appendDelta_ACU(scratch, frameFloor, delta, deps);
     const assignments = [];
     scratch.forEach((message, index) => {
         const previous = fieldOf_ACU(chat[index]);
@@ -122221,7 +122406,7 @@ function planAgentModuleFieldWrite_ACU(chat, targetIndex, fieldUpserts, deps) {
             return;
         assignments.push({ index, existed: previous !== undefined, previous, value });
     });
-    return { changed: assignments.length > 0, assignments };
+    return { changed: assignments.length > 0, assignments, frameFloor };
 }
 function continuationCheckpointArtifact_ACU(message, deps) {
     const parsed = parseField_ACU(fieldOf_ACU(message), deps);
@@ -122232,6 +122417,10 @@ function continuationCheckpointArtifact_ACU(message, deps) {
 /** 把丢失的基线嫁到目标楼。目标楼同一 swipe 已有基线时不覆盖。 */
 function graftContinuationCheckpoint_ACU(message, artifact, deps) {
     if (!isRecord_ACU$a(message))
+        return false;
+    // 与 relocateContinuationCheckpoint_ACU 同款门：基线只能落在可见 AI 楼。嫁到工具楼/隐藏楼上，
+    // 折叠会在该楼**重置**快照，把更晚楼层上的新增量整体吞掉，而且没有任何报错。
+    if (!isAiFloor_ACU(message))
         return false;
     const frame = readFrame_ACU(message, deps);
     if (frame.checkpoint && frame.checkpoint.swipeId === artifact.swipeId)
@@ -125305,6 +125494,19 @@ const AGENT_MODULE_FRAME_DEPS_ACU = Object.freeze({
     salvageSnapshot: salvageAgentModuleSnapshot_ACU,
     emptySnapshot: buildEmptyAgentModuleSnapshot_ACU,
     isSnapshotPrefixCompatible: (snapshot, chat) => isChatPrefixCompatible_ACU(snapshot, chat),
+    alignSnapshotToFloor: (snapshot, chat, floor) => {
+        if (snapshot.settledThroughIndex <= floor)
+            return snapshot;
+        // 先按**原水位**校验旧指纹：失配说明结算期间聊天真的变了，此时返回 null 让调用方 fail-closed。
+        // 不能直接重算指纹把失配洗白——那等于把 P1 的前缀守卫摘掉（见本文件头部的加固纪律）。
+        if (!isChatPrefixCompatible_ACU(snapshot, chat))
+            return null;
+        return refreshAgentModuleSnapshotChatPrefix_ACU({ ...snapshot, settledThroughIndex: floor }, chat);
+    },
+    // 折叠派生的快照（base、relocate 的 folded.snapshot）落盘前按自身水位重盖指纹：折叠只采纳指纹匹配的
+    // 基线，而 applyDelta 会推高水位不改指纹 ⇒ 不重盖就会落一份自相矛盾的基线，下一轮折叠整体拒绝它并
+    // 连带禁用抢救（资料清零）。这里不做「校验旧指纹」，因为出处就是当前聊天本身。
+    restampPrefix: (snapshot, chat) => refreshAgentModuleSnapshotChatPrefix_ACU(snapshot, chat),
 });
 function agentModuleFrameDeps_ACU() {
     return AGENT_MODULE_FRAME_DEPS_ACU;
@@ -125411,7 +125613,7 @@ async function writeAgentModuleSnapshot_ACU(chat, targetIndex, snapshot) {
     };
     const plan = planAgentModuleSnapshotWrite_ACU(chat, targetIndex, stamped, agentModuleFrameDeps_ACU(), findLatestTableFullCheckpointIndex_ACU(chat), floorState);
     if (!plan.changed)
-        return;
+        return null;
     try {
         for (const assignment of plan.assignments) {
             const container = chat[assignment.index];
@@ -125432,6 +125634,9 @@ async function writeAgentModuleSnapshot_ACU(chat, targetIndex, snapshot) {
         }
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'agent_persist', 'Agent 资料快照写盘失败，已还原楼层字段', false, { targetIndex, message: error instanceof Error ? error.message : String(error) }));
     }
+    // 回传**实际承载楼**（≤ targetIndex 的最近 AI 楼）：工具楼/隐藏楼尾时它不是 targetIndex，
+    // 而「资料写到哪一楼」必须让用户看得见，否则"资料突然清零"只能靠猜。null = 本次没有写入。
+    return plan.frameFloor ?? null;
 }
 /**
  * 把逐栏写集作为一条 fieldUpserts delta 写入目标楼层并真实提交到宿主。
@@ -125860,7 +126065,9 @@ function commitAgentModuleFieldWrites_ACU(input) {
         }));
         const plan = planAgentModuleFieldWrite_ACU(input.chat, input.targetIndex, upserts, agentModuleFrameDeps_ACU());
         if (!plan.changed) {
-            receipt.rejected.push({ path: 'frame', reason: '资料帧未能规划出可回读的写入' });
+            // reason 由规划层给出（没有 AI 楼 / 有遗留帧待自愈 / 承载楼是旧式全量或损坏帧），
+            // 否则模型只会看到一句笼统的「未能规划出写入」，白烧写轮去重试同一份 SQL。
+            receipt.rejected.push({ path: 'frame', reason: plan.reason ?? '资料帧未能规划出可回读的写入' });
             return receipt;
         }
         try {
@@ -125889,9 +126096,14 @@ function commitAgentModuleFieldWrites_ACU(input) {
             return receipt;
         }
         // 保存后回读门：聊天身份/基线楼层未被顶替，且逐栏记录可读回。
+        // 豁免范围是「本次规划确实改写过的楼层」（plan.assignments），不是调用方给的 targetIndex：
+        // 帧的落点由 agent-module-frame 解析成「≤ targetIndex 的最近 AI 楼」（工具楼/隐藏楼尾时两者不同楼），
+        // 按 targetIndex 豁免会把合法写入判成 readback_failed；反过来，其余楼层一律要求逐字未变，
+        // 比旧写法更严——旧写法会放过「有人动了尾楼帧」这种真竞态。
+        const plannedFloorIndexes = new Set(plan.assignments.map(item => item.index));
         const intact = getChatArray_ACU() === input.chat && getActiveChatStorageIdentity_ACU(input.chat) === baselineIdentity
             && input.chat.length === baselineFloors.length && baselineFloors.every((entry, index) => {
-            if (index === input.targetIndex)
+            if (plannedFloorIndexes.has(index))
                 return input.chat[index] === entry.message && readMessageSwipeId_ACU(entry.message) === entry.swipeId;
             return input.chat[index] === entry.message && readMessageSwipeId_ACU(entry.message) === entry.swipeId
                 && (Object.prototype.hasOwnProperty.call(entry.message, AGENT_MODULE_FIELD_ACU) === entry.existed)
@@ -125939,6 +126151,11 @@ async function replaceAgentModuleSnapshotByUser_ACU(raw, chat) {
     const targetIndex = messages.length - 1;
     if (targetIndex < 0)
         rejectSnapshotEdit_ACU('当前聊天没有可承载资料快照的楼层');
+    // 帧只能落在可见 AI 楼（工具楼可被独立删除、隐藏楼用户看不见）。没有 AI 楼时写入会被规划层
+    // fail-closed 掉，而本函数照样 return validated ⇒ UI 弹「已保存」、重读却是空的，正是本函数
+    // 注释里写的「用户会以为自己保存成功了」。所以在这里就拒绝，并把原因说清楚。
+    if (!messages.some(message => isAiFloor_ACU(message)))
+        rejectSnapshotEdit_ACU('当前聊天没有可承载资料快照的 AI 楼层（用户楼、工具楼、隐藏楼都不能承载）');
     if (!isRecord_ACU$7(raw))
         rejectSnapshotEdit_ACU('资料快照必须是 JSON 对象');
     const current = readAgentModuleSnapshot_ACU(messages);
@@ -143898,14 +144115,17 @@ class ContinuationAgentTurnPlanner_ACU {
         if (targetIndex < 0) {
             throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'agent_persist', '当前聊天没有可承载资料快照的楼层', false));
         }
-        await this.dependencies.writeModuleSnapshot(chat, targetIndex, snapshot);
+        const landedFloor = await this.dependencies.writeModuleSnapshot(chat, targetIndex, snapshot);
         // 快照跟着楼层走：该楼被删除、重新生成或 swipe 时资料会随之回退。写到哪一楼必须让用户看得见，
-        // 否则“资料突然清零”只能靠猜。
+        // 否则“资料突然清零”只能靠猜。承载楼是「≤ targetIndex 的最近 AI 楼」——TT 2.3.0 的工具楼/隐藏楼尾
+        // 时它不是末楼，报 targetIndex 会把排障指到一栋根本不承载资料的楼上；null = 本次没有写入
+        // （资料与折叠结果语义相同，或整条聊天没有可承载的 AI 楼层）。
+        const landed = typeof landedFloor === 'number' ? landedFloor : null;
         const active = (list) => list.filter(item => !item.retired).length;
         logAgentSession_ACU({
             kind: 'thought',
-            title: `资料快照已写入楼层 ${targetIndex}`,
-            detail: `伏笔 ${active(snapshot.hooks)} 条 · 信息差 ${active(snapshot.infoGap)} 条 · 总纲 ${active(snapshot.storyArc)} 条 · 年代学 ${active(snapshot.chronology)} 条 · 百科 ${active(snapshot.webRefs)} 条 · 长期约束 ${snapshot.constraints.length} 条 · 结算水位 ${Math.max(snapshot.settledThroughIndex, 0)}。资料按最近基线折叠；该楼增量会随删除或 swipe 一起退出折叠。`,
+            title: landed === null ? '资料快照本次未写入（内容无变化，或没有可承载资料的 AI 楼层）' : `资料快照已写入楼层 ${landed}`,
+            detail: `承载楼层 ${landed ?? '无'} · 结算截至楼层 ${targetIndex} · 伏笔 ${active(snapshot.hooks)} 条 · 信息差 ${active(snapshot.infoGap)} 条 · 总纲 ${active(snapshot.storyArc)} 条 · 年代学 ${active(snapshot.chronology)} 条 · 百科 ${active(snapshot.webRefs)} 条 · 长期约束 ${snapshot.constraints.length} 条 · 结算水位 ${Math.max(snapshot.settledThroughIndex, 0)}。资料按最近基线折叠；承载楼被删除或 swipe 时，该楼增量会随之退出折叠。`,
             ok: true,
         });
     }
@@ -151398,7 +151618,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260927-19";
+        const stamp = "20260928-13";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

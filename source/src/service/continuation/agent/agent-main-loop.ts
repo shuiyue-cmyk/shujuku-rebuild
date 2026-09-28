@@ -137,7 +137,7 @@ export interface ContinuationAgentTurnPlannerDependencies_ACU {
   subagentRuntime: AgentSubagentRuntime_ACU;
   readChat: () => any[];
   readModuleSnapshot: (chat: any[]) => AgentModuleSnapshot_ACU;
-  writeModuleSnapshot: (chat: any[], targetIndex: number, snapshot: AgentModuleSnapshot_ACU) => Promise<void>;
+  writeModuleSnapshot: (chat: any[], targetIndex: number, snapshot: AgentModuleSnapshot_ACU) => Promise<number | null | void>;
   readConversation: (chat: any[]) => AgentConversationSnapshot_ACU;
   /** 读取当前持久化的压缩标记；候选提交必须以该权威回读为准。 */
   readCompactionMark: typeof readActiveAgentConversationCompactionMark_ACU;
@@ -2105,14 +2105,17 @@ export class ContinuationAgentTurnPlanner_ACU {
     if (targetIndex < 0) {
       throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'agent_persist', '当前聊天没有可承载资料快照的楼层', false));
     }
-    await this.dependencies.writeModuleSnapshot(chat, targetIndex, snapshot);
+    const landedFloor = await this.dependencies.writeModuleSnapshot(chat, targetIndex, snapshot);
     // 快照跟着楼层走：该楼被删除、重新生成或 swipe 时资料会随之回退。写到哪一楼必须让用户看得见，
-    // 否则“资料突然清零”只能靠猜。
+    // 否则“资料突然清零”只能靠猜。承载楼是「≤ targetIndex 的最近 AI 楼」——TT 2.3.0 的工具楼/隐藏楼尾
+    // 时它不是末楼，报 targetIndex 会把排障指到一栋根本不承载资料的楼上；null = 本次没有写入
+    // （资料与折叠结果语义相同，或整条聊天没有可承载的 AI 楼层）。
+    const landed = typeof landedFloor === 'number' ? landedFloor : null;
     const active = (list: ReadonlyArray<{ retired: boolean }>) => list.filter(item => !item.retired).length;
     logAgentSession_ACU({
       kind: 'thought',
-      title: `资料快照已写入楼层 ${targetIndex}`,
-      detail: `伏笔 ${active(snapshot.hooks)} 条 · 信息差 ${active(snapshot.infoGap)} 条 · 总纲 ${active(snapshot.storyArc)} 条 · 年代学 ${active(snapshot.chronology)} 条 · 百科 ${active(snapshot.webRefs)} 条 · 长期约束 ${snapshot.constraints.length} 条 · 结算水位 ${Math.max(snapshot.settledThroughIndex, 0)}。资料按最近基线折叠；该楼增量会随删除或 swipe 一起退出折叠。`,
+      title: landed === null ? '资料快照本次未写入（内容无变化，或没有可承载资料的 AI 楼层）' : `资料快照已写入楼层 ${landed}`,
+      detail: `承载楼层 ${landed ?? '无'} · 结算截至楼层 ${targetIndex} · 伏笔 ${active(snapshot.hooks)} 条 · 信息差 ${active(snapshot.infoGap)} 条 · 总纲 ${active(snapshot.storyArc)} 条 · 年代学 ${active(snapshot.chronology)} 条 · 百科 ${active(snapshot.webRefs)} 条 · 长期约束 ${snapshot.constraints.length} 条 · 结算水位 ${Math.max(snapshot.settledThroughIndex, 0)}。资料按最近基线折叠；承载楼被删除或 swipe 时，该楼增量会随之退出折叠。`,
       ok: true,
     });
   }
