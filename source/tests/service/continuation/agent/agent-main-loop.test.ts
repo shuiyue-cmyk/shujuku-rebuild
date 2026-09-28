@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ContinuationAgentTurnPlanner_ACU, evaluateArcArchitectDispatch_ACU, renderAgentBudget_ACU } from '../../../../src/service/continuation/agent/agent-main-loop';
+import { ContinuationAgentTurnPlanner_ACU, evaluateArcArchitectDispatch_ACU, rangeHasAiFloor_ACU, renderAgentBudget_ACU, renderUnsettledRangeText_ACU } from '../../../../src/service/continuation/agent/agent-main-loop';
 import { AgentSubagentRuntime_ACU } from '../../../../src/service/continuation/agent/agent-subagent-runtime';
 import { buildEmptyAgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-module-store';
 import { appendAgentConversation_ACU, buildEmptyAgentConversation_ACU } from '../../../../src/service/continuation/agent/agent-conversation-store';
@@ -1597,5 +1597,60 @@ describe('固定工作流开局（open_round）', () => {
     expect(result.instruction).toBe('最终指导');
     const feedback = h.mainCalls[1][findIndex_ACU(h.mainCalls[1], '结果 1')].content;
     expect(feedback).toContain('固定工作流');
+  });
+});
+
+/**
+ * `$UNSETTLED_RANGE` 的区间判据必须与 `$HISTORY_UNSETTLED`、派工门同口径（都按 isAiFloor_ACU 过滤）。
+ * 水位对齐到承载楼之后，(水位, 尾楼] 常常只剩工具楼/隐藏楼：此时若仍报「未结算楼层区间 N 到 M」
+ * 并承诺自动派工，就会与同一份运行时快照里的「没有尚未结算的真实历史」自相矛盾。
+ */
+describe('未结算区间判据', () => {
+  const chat: any[] = [
+    { mes: 'u', is_user: true },
+    { mes: 'AI 正文', is_user: false },
+    { role: 'tool', name: 'exa_search', is_system: true, is_user: false, mes: '{"result":"x"}', tool_call_id: 'c1' },
+    { mes: '（用户已隐藏）', is_user: false, is_system: true },
+  ];
+
+  it('区间内只剩工具楼与隐藏楼时不算待结算', () => {
+    expect(rangeHasAiFloor_ACU(chat, 2, 3)).toBe(false);
+  });
+
+  it('区间内含 AI 楼时照旧算待结算（正常形态输出不变）', () => {
+    expect(rangeHasAiFloor_ACU(chat, 1, 3)).toBe(true);
+    expect(rangeHasAiFloor_ACU(chat, 0, 3)).toBe(true);
+  });
+
+  it('空区间与越界一律 false，不抛', () => {
+    expect(rangeHasAiFloor_ACU(chat, 4, 3)).toBe(false);
+    expect(rangeHasAiFloor_ACU(chat, 9, 12)).toBe(false);
+    expect(rangeHasAiFloor_ACU([], 0, -1)).toBe(false);
+  });
+});
+
+/**
+ * `$UNSETTLED_RANGE` 的文案本体。修复点在分支判据上，所以两条分支都要钉住：
+ * 一是尾部只剩工具楼/隐藏楼时不得再谎报区间并承诺派工；二是正常形态的输出必须与历史版本
+ * **逐字节相同**（提示词字节形态不变是本项目的硬约束）。
+ */
+describe('未结算区间文案', () => {
+  const chat: any[] = [
+    { mes: 'u', is_user: true },
+    { mes: 'AI 正文', is_user: false },
+    { role: 'tool', name: 'exa_search', is_system: true, is_user: false, mes: '{"result":"x"}', tool_call_id: 'c1' },
+    { mes: '（用户已隐藏）', is_user: false, is_system: true },
+  ];
+
+  it('区间内只剩工具楼与隐藏楼时如实说没有待结算，不再谎报区间', () => {
+    const text = renderUnsettledRangeText_ACU(chat, 1);
+    expect(text).toBe('没有尚未结算的真实历史，无需派工结算维护类代理。');
+    expect(text).not.toContain('未结算楼层区间');
+  });
+
+  it('区间内有 AI 楼时输出与历史版本逐字相同', () => {
+    expect(renderUnsettledRangeText_ACU(chat, 0)).toBe(
+      '未结算楼层区间：1 到 3（共 3 楼）。输出 open_round 后，固定工作流会自动派 hook-cognition-maintainer 结算这些楼层。不要 delegate 结算、策划或审查角色。这些楼层的正文默认没有注入，需要核对时 read $HISTORY_UNSETTLED。',
+    );
   });
 });

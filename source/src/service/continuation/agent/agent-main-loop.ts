@@ -311,6 +311,42 @@ export function buildAgentTurnAnnouncement_ACU(context: AgentResolveContext_ACU)
  * @param tool 可选的 read/search 用量（批次数、累计遥测、单批次上限 M）
  * @returns 自然语言文本；进入最后一轮时明确禁止继续派工
  */
+/**
+ * 未结算区间 `(start, last]` 内是否真有 AI 楼。
+ *
+ * `$UNSETTLED_RANGE` 必须与 `$HISTORY_UNSETTLED`、以及固定工作流的派工门同口径：后两者都按
+ * `isAiFloor_ACU` 过滤（agent-placeholder-resolver 的 renderAgentUnsettledHistory_ACU、
+ * hasUnsettledHistory），只按物理下标算区间会在「水位对齐到承载楼之后尾部只剩工具楼/隐藏楼」时
+ * 声称还有待结算楼层并承诺派工，而同一份运行时快照的另一句却说「没有尚未结算的真实历史」——
+ * 自相矛盾会诱导主 Agent 违规 delegate 结算。
+ */
+export function rangeHasAiFloor_ACU(chat: readonly unknown[], start: number, last: number): boolean {
+  for (let index = Math.max(start, 0); index <= last && index < chat.length; index += 1) {
+    if (isAiFloor_ACU(chat[index])) return true;
+  }
+  return false;
+}
+
+/**
+ * 渲染 `$UNSETTLED_RANGE` 的文案（纯函数，供 renderUnsettledRange_ACU 与测试共用）。
+ *
+ * 区间里没有 AI 楼就等于没有待结算的真实历史：工具楼/隐藏楼不承载剧情正文，
+ * 派工也只会得到 no_change（agent-workflow 的出口）。若仍报「未结算楼层区间 N 到 M」并承诺自动派工，
+ * 就会与同一份运行时快照里的 $HISTORY_UNSETTLED（renderAgentUnsettledHistory_ACU 按 isAiFloor_ACU 过滤）
+ * 自相矛盾，可能诱导主 Agent 违规 delegate 结算。
+ *
+ * 两条模板串是既有提示词的一部分，**逐字不得改动**：对「区间内确有 AI 楼」的聊天
+ * （即水位对齐到承载楼之前的全部形态）输出与历史版本字节相同。
+ */
+export function renderUnsettledRangeText_ACU(chat: readonly unknown[], settledThroughIndex: number): string {
+  const start = settledThroughIndex + 1;
+  const last = chat.length - 1;
+  if (start > last || !rangeHasAiFloor_ACU(chat, start, last)) {
+    return '没有尚未结算的真实历史，无需派工结算维护类代理。';
+  }
+  return `未结算楼层区间：${start} 到 ${last}（共 ${last - start + 1} 楼）。输出 open_round 后，固定工作流会自动派 hook-cognition-maintainer 结算这些楼层。不要 delegate 结算、策划或审查角色。这些楼层的正文默认没有注入，需要核对时 read $HISTORY_UNSETTLED。`;
+}
+
 export function renderAgentBudget_ACU(
   budget: AgentRunBudget_ACU,
   iteration: number,
@@ -1670,10 +1706,7 @@ export class ContinuationAgentTurnPlanner_ACU {
    * 主 Agent 要看必须自己 read $HISTORY_UNSETTLED。
    */
   private renderUnsettledRange_ACU(context: AgentResolveContext_ACU): string {
-    const start = context.settledThroughIndex + 1;
-    const last = context.chat.length - 1;
-    if (start > last) return '没有尚未结算的真实历史，无需派工结算维护类代理。';
-    return `未结算楼层区间：${start} 到 ${last}（共 ${last - start + 1} 楼）。输出 open_round 后，固定工作流会自动派 hook-cognition-maintainer 结算这些楼层。不要 delegate 结算、策划或审查角色。这些楼层的正文默认没有注入，需要核对时 read $HISTORY_UNSETTLED。`;
+    return renderUnsettledRangeText_ACU(context.chat, context.settledThroughIndex);
   }
 
   /**
@@ -2115,7 +2148,7 @@ export class ContinuationAgentTurnPlanner_ACU {
     logAgentSession_ACU({
       kind: 'thought',
       title: landed === null ? '资料快照本次未写入（内容无变化，或没有可承载资料的 AI 楼层）' : `资料快照已写入楼层 ${landed}`,
-      detail: `承载楼层 ${landed ?? '无'} · 结算截至楼层 ${targetIndex} · 伏笔 ${active(snapshot.hooks)} 条 · 信息差 ${active(snapshot.infoGap)} 条 · 总纲 ${active(snapshot.storyArc)} 条 · 年代学 ${active(snapshot.chronology)} 条 · 百科 ${active(snapshot.webRefs)} 条 · 长期约束 ${snapshot.constraints.length} 条 · 结算水位 ${Math.max(snapshot.settledThroughIndex, 0)}。资料按最近基线折叠；承载楼被删除或 swipe 时，该楼增量会随之退出折叠。`,
+      detail: `承载楼层 ${landed ?? '无'} · 结算截至楼层 ${targetIndex} · 伏笔 ${active(snapshot.hooks)} 条 · 信息差 ${active(snapshot.infoGap)} 条 · 总纲 ${active(snapshot.storyArc)} 条 · 年代学 ${active(snapshot.chronology)} 条 · 百科 ${active(snapshot.webRefs)} 条 · 长期约束 ${snapshot.constraints.length} 条 · 入参结算水位 ${Math.max(snapshot.settledThroughIndex, 0)}（落盘水位随承载楼对齐，可能更低）。资料按最近基线折叠；承载楼被删除或 swipe 时，该楼增量会随之退出折叠。`,
       ok: true,
     });
   }

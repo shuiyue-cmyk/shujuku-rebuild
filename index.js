@@ -91598,8 +91598,8 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"9.8.9"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20260928-13"`。源码直跑、测试环境或注入失败时读不到，
+ * rollup 打包时把版本写进 `"9.8.10"`（与 manifest.json / source/package.json
+ * 同值），构建时间戳写进 `"20260928-15"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91608,7 +91608,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "9.8.9";
+        const version = "9.8.10";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
@@ -91618,7 +91618,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20260928-13";
+        const stamp = "20260928-15";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -120958,6 +120958,10 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
                 }
             }
             const presentMessagesForMaterial = new Set(chat);
+            // 「无处嫁接」必须与「目标楼已有产物」区分开：前者是真丢基线（聊天里没有可承载的 AI 楼层），
+            // 后者是正常 no-op。此前这条分支完全静默，而调用方 chat-mutation-scheduler 丢弃返回值
+            // ⇒ 真丢数据时用户与日志都看不到。
+            let skippedNoTargetCount = 0;
             for (let lostIndex = vault_ACU.materialEntries.length - 1; lostIndex >= 0; lostIndex -= 1) {
                 const material = vault_ACU.materialEntries[lostIndex];
                 if (presentMessagesForMaterial.has(material.messageRef))
@@ -120985,13 +120989,20 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
                         }
                     }
                 }
-                if (!targetMessage)
+                if (!targetMessage) {
+                    skippedNoTargetCount += 1;
                     continue;
+                }
                 if (graftMaterialContinuationCheckpoint_ACU(targetMessage, material.continuation))
                     graftedCount += 1;
             }
             if (graftedCount === 0) {
                 // 全部被"目标已有"跳过或无处嫁接：无写入即无需保存。
+                if (skippedNoTargetCount > 0) {
+                    // 措辞必须诚实：本分支不重建保管库，但删楼流程随后任何一次经本插件的保存都会触发
+                    // post-save 重建（按现存楼层采集），被删楼层的 materialEntries 随之消失 ⇒ 通常没有「下次机会」。
+                    logWarn_ACU(`[删楼守卫] ${skippedNoTargetCount} 份续写基线无处嫁接（聊天里没有可承载基线的 AI 楼层），本次已丢弃；若随后发生任何一次聊天保存，保管库会按现存楼层重建，该基线不再可恢复。`);
+                }
                 return { recovered: false, graftedCount: 0 };
             }
             for (const isolationKey of affectedIsolationKeys) {
@@ -121004,7 +121015,7 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
                 throw new Error(continuationViolation);
             await saveChatToHostStrict_ACU();
             captureCheckpointVaultForCurrentChat_ACU(chat);
-            logWarn_ACU(`[删楼守卫] 删楼 checkpoint 前移恢复完成：共嫁接 ${graftedCount} 个产物。`);
+            logWarn_ACU(`[删楼守卫] 删楼 checkpoint 前移恢复完成：共嫁接 ${graftedCount} 个产物${skippedNoTargetCount > 0 ? `；另有 ${skippedNoTargetCount} 份续写基线因聊天里没有可承载的 AI 楼层而被丢弃` : ''}。`);
             return { recovered: true, graftedCount };
         }
         catch (error) {
@@ -121549,7 +121560,10 @@ function restampFoldedSnapshot_ACU(deps, snapshot, chat, floor) {
  * chatPrefixFingerprint 失配 ⇒ 基线被折叠拒绝、宽容抢救一并禁用 ⇒ 资料**整体**清零。
  * 这也正是 store 里 alignAgentModuleSnapshotToFloor_ACU 与 continuation-orchestrator 写入前对齐的同一条纪律
  * （「本快照只声明结算到承载楼」）。代价：(承载楼, targetIndex] 这段会在下一轮重新结算一次，
- * 而那段全是非 AI 楼、不承载剧情正文（renderAgentUnsettledHistory_ACU 按 isAiFloor_ACU 过滤），不会多派维护代理。
+ * 而那段在 `anchor === frameFloor`（生产常态）时全是非 AI 楼、不承载剧情正文
+ * （renderAgentUnsettledHistory_ACU 按 isAiFloor_ACU 过滤），不会多派维护代理；
+ * 当锚点取到更早的表格 checkpoint 楼时，(anchor, targetIndex] 里可能含 AI 楼，但基线本就只声明
+ * 结算到 anchor、其后的内容由 delta 承载（删楼即物理退出折叠），语义仍然自洽。
  */
 function alignSnapshotToFloor_ACU(deps, snapshot, chat, floor) {
     if (snapshot.settledThroughIndex <= floor)
@@ -122014,6 +122028,8 @@ function foldAgentModuleSnapshot_ACU(chat, deps, throughIndex = chat.length - 1)
     let foldedDeltaCount = 0;
     let maxDeltaSeq = 0;
     let adoptedIndex = null;
+    /** 被采纳基线**自身**的水位：用于判断 delta 是否把水位推过了它（推过就意味着指纹与水位不成对）。 */
+    let adoptedWaterline = null;
     const candidates = [];
     let salvage = null;
     // P1：任一基线（legacy / schema3 checkpoint / 抢救快照）前缀指纹失配，
@@ -122041,6 +122057,7 @@ function foldAgentModuleSnapshot_ACU(chat, deps, throughIndex = chat.length - 1)
                 contributed = true;
                 checkpointIndex = index;
                 adoptedIndex = index;
+                adoptedWaterline = snapshot.settledThroughIndex;
                 foldedDeltaCount = 0;
             }
             continue;
@@ -122072,6 +122089,7 @@ function foldAgentModuleSnapshot_ACU(chat, deps, throughIndex = chat.length - 1)
                 sawSchema3Checkpoint = true;
                 checkpointIndex = index;
                 adoptedIndex = index;
+                adoptedWaterline = snapshot.settledThroughIndex;
                 foldedDeltaCount = 0;
             }
         }
@@ -122105,6 +122123,21 @@ function foldAgentModuleSnapshot_ACU(chat, deps, throughIndex = chat.length - 1)
             chatLength: chat.length,
             tailFloor: chat[chat.length - 1],
         };
+    }
+    // 折叠输出必须自洽：delta 会推高 settledThroughIndex 却**从不改** settledPrefixFingerprint
+    // （见 applyDelta_ACU），于是「水位＝末条 delta 的水位、指纹＝被采纳基线的水位」这种不成对的快照，
+    // 一回写就会被写盘门按新水位重算指纹判为失配 ⇒「资料快照引用的聊天前缀已变化」硬报错，
+    // 而聊天其实一个字没变。所有「折叠读出 → 加工 → 回写」的路径都吃这个亏（播种用户要求、
+    // 结算 partial/failed 分支、用户要求维护、总纲维护），所以在折叠出口一次性重盖，
+    // 而不是逐个调用点打补丁。
+    // 只在「确实带了指纹、且水位被 delta 推过了基线水位」时才重算：无指纹的夹具与水位未推进的
+    // 常见路径零额外开销。这**不削弱** P1 前缀守卫——重盖记录的是「此刻这次折叠所依据的聊天前缀」，
+    // 之后聊天真的变了（删楼/替换正文）照样会在下一次校验时失配被拒。
+    if (contributed
+        && typeof snapshot.settledPrefixFingerprint === 'string' && snapshot.settledPrefixFingerprint
+        && adoptedWaterline !== null && snapshot.settledThroughIndex !== adoptedWaterline
+        && deps.restampPrefix) {
+        snapshot = deps.restampPrefix(snapshot, chat);
     }
     return {
         snapshot,
@@ -122180,10 +122213,12 @@ function relocateContinuationCheckpoint_ACU(chat, anchorIndex, deps) {
     const before = JSON.stringify(chat.map(message => fieldOf_ACU(message)));
     stripCurrentSwipeThrough_ACU(chat, anchorIndex, deps);
     const frame = readFrame_ACU(anchor, deps);
-    // folded.snapshot 的指纹来自被采纳的旧基线、水位却已被 delta 推高（applyDelta 不改指纹）⇒ 原样落盘就是
-    // 一份自相矛盾的基线：下一次折叠按新水位重算指纹必然失配 → 基线被整体拒绝 + incompatibleSeen 禁用抢救
-    // + 同 swipe 的 delta 刚被上面 strip 掉 → **资料全量静默清零**。表格 checkpoint 每次落层都会走到这里，
-    // 所以必须按自身水位重盖指纹后再落盘。
+    // 折叠出口已经会重盖指纹（见 foldAgentModuleSnapshot_ACU 末尾），所以 folded.snapshot 到达这里时
+    // (水位, 指纹) 本身是自洽的。此处仍必须再过一遍 restampFoldedSnapshot_ACU，理由是**钳位到折叠范围**：
+    // 出口重盖用的是完整 chat，而本函数只折到 anchorIndex（见上面的 foldAgentModuleSnapshot_ACU 调用），
+    // legacy delta 可能把水位推过 anchorIndex ⇒ 不钳位就会落一份「声明的水位与指纹超出自身折叠范围」的基线，
+    // 下一次全范围折叠按该水位重算指纹必然失配 → 基线被整体拒绝 + incompatibleSeen 禁用抢救
+    // + 同 swipe 的 delta 刚被上面 strip 掉 → **资料全量静默清零**。这不是可删的冗余。
     frame.checkpoint = {
         swipeId: readMessageSwipeId_ACU(anchor),
         snapshot: cloneJson_ACU$2(restampFoldedSnapshot_ACU(deps, folded.snapshot, chat, anchorIndex)),
@@ -122264,6 +122299,9 @@ function planAgentModuleSnapshotWrite_ACU(chat, targetIndex, next, deps, tableAn
     const hadUsableCheckpoint = !strayFloorIndexes.length && hasUsableSchema3Checkpoint_ACU(scratch, deps);
     // 本次是否真的落下了一份能承载遗留内容的全量基线：遗留帧的摘除必须以它为前提，
     // 否则就是「帧已摘、基线未落」——遗留增量既不在新基线里、也没了出处，静默丢数据。
+    // ⚠️ 隐含前置条件：`clamped` 必须由**本聊天的一次折叠**派生（生产四个调用方都满足：
+    // 结算路径的 committed = readAgentModuleSnapshot_ACU(chat)、用户保存的 {...current, ...raw}、
+    // 播种与资料补足同理）。若调用方塞进一份与当前折叠无关的快照，「吸收」就不成立。
     let absorbedByCheckpoint = false;
     if (hadUsableCheckpoint) {
         if (delta)
@@ -122300,7 +122338,10 @@ function planAgentModuleSnapshotWrite_ACU(chat, targetIndex, next, deps, tableAn
             appendDelta_ACU(scratch, frameFloor, delta, deps);
     }
     // 摘掉遗留帧（只摘参与当前折叠的那部分，他 swipe 内容切回时必须还能恢复）：
-    // 内容已由本次全量基线承载，留着只会让折叠序倒挂——新值被更晚楼层的旧值覆盖回去。
+    // **领域数组**内容已由本次全量基线承载，留着只会让折叠序倒挂——新值被更晚楼层的旧值覆盖回去。
+    // 注意口径：遗留帧里的**逐栏 partial 草稿**不参与基线（checkpoint 的类型里没有承载分栏视图的位置，
+    // folded.fields 明确只读、绝不写回持久帧），所以它会随摘除一起退出——这与
+    // relocateContinuationCheckpoint_ACU 每次归并的性质相同，是帧架构的既有取舍，不是本处新引入的丢失。
     if (absorbedByCheckpoint) {
         for (const index of strayFloorIndexes)
             removeCurrentSwipeFrame_ACU(scratch[index]);
@@ -123424,8 +123465,9 @@ function applyAgentUserRequirementsReplace_ACU(snapshot, requirements) {
     };
 }
 /**
- * 创建任务时把 originInstruction 机械写成首条。没有可承载楼层时静默跳过，由渲染回退兜底。
- * 快照里已经有条目则不覆盖。
+ * 创建任务时把 originInstruction 机械写成首条。没有可承载楼层（整条聊天没有 AI 楼）时跳过写入，
+ * 由渲染回退兜底（renderAgentUserRequirements_ACU 空清单时回退 originInstruction）；
+ * 写入层会留一条告警说明原因，不是完全静默。快照里已经有条目则不覆盖。
  */
 async function seedAgentUserRequirementsIfEmpty_ACU(originInstruction, chat) {
     const text = originInstruction.trim();
@@ -125567,7 +125609,8 @@ function warnIfSalvagedRead_ACU(folded) {
  * 结算派工成功后显式设置。P1 两项加固原样保留：前缀指纹失配拒绝写入；修订号乐观锁
  * 复核（任一类楼层比写入新即放弃落盘）。
  * @param chat 聊天数组
- * @param targetIndex 承载快照的楼层下标，通常是当前末楼
+ * @param targetIndex 本次结算**截至**哪一楼（通常是当前末楼）。实际承载楼由帧层解析为
+ *   「≤ targetIndex 的最近 AI 楼」，工具楼/隐藏楼尾时两者不是同一栋；返回值即实际承载楼。
  * @param snapshot 待写入的全量快照
  */
 async function writeAgentModuleSnapshot_ACU(chat, targetIndex, snapshot) {
@@ -125612,8 +125655,13 @@ async function writeAgentModuleSnapshot_ACU(chat, targetIndex, snapshot) {
         settledPrefixFingerprint: snapshot.settledPrefixFingerprint ?? chatPrefixFingerprint_ACU(chat, settledThroughIndex),
     };
     const plan = planAgentModuleSnapshotWrite_ACU(chat, targetIndex, stamped, agentModuleFrameDeps_ACU(), findLatestTableFullCheckpointIndex_ACU(chat), floorState);
-    if (!plan.changed)
+    if (!plan.changed) {
+        // 规划层的 fail-closed 原因此前只有逐栏路径会透传，快照路径直接丢掉 ⇒「整条聊天没有可承载资料的
+        // AI 楼层」这类真异常完全静默（用户只看到资料没更新）。留一条告警便于报障定位。
+        if (plan.reason)
+            console.warn(`[SP·数据库][续写资料] 快照未落盘（目标楼层 ${targetIndex}）：${plan.reason}`);
         return null;
+    }
     try {
         for (const assignment of plan.assignments) {
             const container = chat[assignment.index];
@@ -125835,7 +125883,15 @@ function commitAgentModuleFieldWrites_ACU(input) {
         if (input.isCurrent?.() === false || getChatArray_ACU() !== input.chat
             || !input.chat[input.targetIndex] || input.chat[input.targetIndex].is_user === true
             || input.targetIndex !== input.chat.length - 1) {
-            receipt.rejected.push({ path: 'chat', reason: '当前聊天或目标楼层已变化' });
+            // 尾楼是用户楼时给准确的原因：那不是「楼层已变化」，而是派工在途时用户又发了新消息，
+            // 模型据此重写同一份 SQL 是白烧写轮。
+            const tailIsUserFloor = !!input.chat[input.targetIndex]?.is_user;
+            receipt.rejected.push({
+                path: 'chat',
+                reason: tailIsUserFloor
+                    ? '目标楼层现在是用户楼（派工在途时聊天已追加新消息），本次逐栏写入作废'
+                    : '当前聊天或目标楼层已变化',
+            });
             receipt.partials = null;
             receipt.revisions = null;
             return receipt;
@@ -142472,6 +142528,41 @@ function buildAgentTurnAnnouncement_ACU(context) {
  * @param tool 可选的 read/search 用量（批次数、累计遥测、单批次上限 M）
  * @returns 自然语言文本；进入最后一轮时明确禁止继续派工
  */
+/**
+ * 未结算区间 `(start, last]` 内是否真有 AI 楼。
+ *
+ * `$UNSETTLED_RANGE` 必须与 `$HISTORY_UNSETTLED`、以及固定工作流的派工门同口径：后两者都按
+ * `isAiFloor_ACU` 过滤（agent-placeholder-resolver 的 renderAgentUnsettledHistory_ACU、
+ * hasUnsettledHistory），只按物理下标算区间会在「水位对齐到承载楼之后尾部只剩工具楼/隐藏楼」时
+ * 声称还有待结算楼层并承诺派工，而同一份运行时快照的另一句却说「没有尚未结算的真实历史」——
+ * 自相矛盾会诱导主 Agent 违规 delegate 结算。
+ */
+function rangeHasAiFloor_ACU(chat, start, last) {
+    for (let index = Math.max(start, 0); index <= last && index < chat.length; index += 1) {
+        if (isAiFloor_ACU(chat[index]))
+            return true;
+    }
+    return false;
+}
+/**
+ * 渲染 `$UNSETTLED_RANGE` 的文案（纯函数，供 renderUnsettledRange_ACU 与测试共用）。
+ *
+ * 区间里没有 AI 楼就等于没有待结算的真实历史：工具楼/隐藏楼不承载剧情正文，
+ * 派工也只会得到 no_change（agent-workflow 的出口）。若仍报「未结算楼层区间 N 到 M」并承诺自动派工，
+ * 就会与同一份运行时快照里的 $HISTORY_UNSETTLED（renderAgentUnsettledHistory_ACU 按 isAiFloor_ACU 过滤）
+ * 自相矛盾，可能诱导主 Agent 违规 delegate 结算。
+ *
+ * 两条模板串是既有提示词的一部分，**逐字不得改动**：对「区间内确有 AI 楼」的聊天
+ * （即水位对齐到承载楼之前的全部形态）输出与历史版本字节相同。
+ */
+function renderUnsettledRangeText_ACU(chat, settledThroughIndex) {
+    const start = settledThroughIndex + 1;
+    const last = chat.length - 1;
+    if (start > last || !rangeHasAiFloor_ACU(chat, start, last)) {
+        return '没有尚未结算的真实历史，无需派工结算维护类代理。';
+    }
+    return `未结算楼层区间：${start} 到 ${last}（共 ${last - start + 1} 楼）。输出 open_round 后，固定工作流会自动派 hook-cognition-maintainer 结算这些楼层。不要 delegate 结算、策划或审查角色。这些楼层的正文默认没有注入，需要核对时 read $HISTORY_UNSETTLED。`;
+}
 function renderAgentBudget_ACU(budget, iteration, ledger, waveLimit, tool, lifecycle) {
     const isFinal = iteration >= budget.maxIterations;
     const lines = [
@@ -143698,11 +143789,7 @@ class ContinuationAgentTurnPlanner_ACU {
      * 主 Agent 要看必须自己 read $HISTORY_UNSETTLED。
      */
     renderUnsettledRange_ACU(context) {
-        const start = context.settledThroughIndex + 1;
-        const last = context.chat.length - 1;
-        if (start > last)
-            return '没有尚未结算的真实历史，无需派工结算维护类代理。';
-        return `未结算楼层区间：${start} 到 ${last}（共 ${last - start + 1} 楼）。输出 open_round 后，固定工作流会自动派 hook-cognition-maintainer 结算这些楼层。不要 delegate 结算、策划或审查角色。这些楼层的正文默认没有注入，需要核对时 read $HISTORY_UNSETTLED。`;
+        return renderUnsettledRangeText_ACU(context.chat, context.settledThroughIndex);
     }
     /**
      * 渲染总纲状态证据。只报「有没有、进度登记齐不齐」，总纲正文由 $STORY_ARC 按需调阅——
@@ -144125,7 +144212,7 @@ class ContinuationAgentTurnPlanner_ACU {
         logAgentSession_ACU({
             kind: 'thought',
             title: landed === null ? '资料快照本次未写入（内容无变化，或没有可承载资料的 AI 楼层）' : `资料快照已写入楼层 ${landed}`,
-            detail: `承载楼层 ${landed ?? '无'} · 结算截至楼层 ${targetIndex} · 伏笔 ${active(snapshot.hooks)} 条 · 信息差 ${active(snapshot.infoGap)} 条 · 总纲 ${active(snapshot.storyArc)} 条 · 年代学 ${active(snapshot.chronology)} 条 · 百科 ${active(snapshot.webRefs)} 条 · 长期约束 ${snapshot.constraints.length} 条 · 结算水位 ${Math.max(snapshot.settledThroughIndex, 0)}。资料按最近基线折叠；承载楼被删除或 swipe 时，该楼增量会随之退出折叠。`,
+            detail: `承载楼层 ${landed ?? '无'} · 结算截至楼层 ${targetIndex} · 伏笔 ${active(snapshot.hooks)} 条 · 信息差 ${active(snapshot.infoGap)} 条 · 总纲 ${active(snapshot.storyArc)} 条 · 年代学 ${active(snapshot.chronology)} 条 · 百科 ${active(snapshot.webRefs)} 条 · 长期约束 ${snapshot.constraints.length} 条 · 入参结算水位 ${Math.max(snapshot.settledThroughIndex, 0)}（落盘水位随承载楼对齐，可能更低）。资料按最近基线折叠；承载楼被删除或 swipe 时，该楼增量会随之退出折叠。`,
             ok: true,
         });
     }
@@ -151618,7 +151705,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260928-13";
+        const stamp = "20260928-15";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

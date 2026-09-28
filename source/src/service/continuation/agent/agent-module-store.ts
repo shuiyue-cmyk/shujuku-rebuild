@@ -684,7 +684,8 @@ function warnIfSalvagedRead_ACU(folded: AgentModuleFoldResult_ACU): void {
  * 结算派工成功后显式设置。P1 两项加固原样保留：前缀指纹失配拒绝写入；修订号乐观锁
  * 复核（任一类楼层比写入新即放弃落盘）。
  * @param chat 聊天数组
- * @param targetIndex 承载快照的楼层下标，通常是当前末楼
+ * @param targetIndex 本次结算**截至**哪一楼（通常是当前末楼）。实际承载楼由帧层解析为
+ *   「≤ targetIndex 的最近 AI 楼」，工具楼/隐藏楼尾时两者不是同一栋；返回值即实际承载楼。
  * @param snapshot 待写入的全量快照
  */
 export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: number, snapshot: AgentModuleSnapshot_ACU): Promise<number | null> {
@@ -747,7 +748,12 @@ export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: num
     findLatestTableFullCheckpointIndex_ACU(chat),
     floorState,
   );
-  if (!plan.changed) return null;
+  if (!plan.changed) {
+    // 规划层的 fail-closed 原因此前只有逐栏路径会透传，快照路径直接丢掉 ⇒「整条聊天没有可承载资料的
+    // AI 楼层」这类真异常完全静默（用户只看到资料没更新）。留一条告警便于报障定位。
+    if (plan.reason) console.warn(`[SP·数据库][续写资料] 快照未落盘（目标楼层 ${targetIndex}）：${plan.reason}`);
+    return null;
+  }
   try {
     for (const assignment of plan.assignments) {
       const container = chat[assignment.index] as Record<string, unknown>;
@@ -985,7 +991,15 @@ export function commitAgentModuleFieldWrites_ACU(input: {
     if (input.isCurrent?.() === false || getChatArray_ACU() !== input.chat
       || !input.chat[input.targetIndex] || (input.chat[input.targetIndex] as { is_user?: unknown }).is_user === true
       || input.targetIndex !== input.chat.length - 1) {
-      receipt.rejected.push({ path: 'chat', reason: '当前聊天或目标楼层已变化' });
+      // 尾楼是用户楼时给准确的原因：那不是「楼层已变化」，而是派工在途时用户又发了新消息，
+      // 模型据此重写同一份 SQL 是白烧写轮。
+      const tailIsUserFloor = !!(input.chat[input.targetIndex] as { is_user?: unknown } | undefined)?.is_user;
+      receipt.rejected.push({
+        path: 'chat',
+        reason: tailIsUserFloor
+          ? '目标楼层现在是用户楼（派工在途时聊天已追加新消息），本次逐栏写入作废'
+          : '当前聊天或目标楼层已变化',
+      });
       receipt.partials = null; receipt.revisions = null; return receipt;
     }
     if (folded.salvaged || folded.candidates.some(item => !item.valid)) {

@@ -522,6 +522,10 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
             }
 
             const presentMessagesForMaterial = new Set<any>(chat);
+            // 「无处嫁接」必须与「目标楼已有产物」区分开：前者是真丢基线（聊天里没有可承载的 AI 楼层），
+            // 后者是正常 no-op。此前这条分支完全静默，而调用方 chat-mutation-scheduler 丢弃返回值
+            // ⇒ 真丢数据时用户与日志都看不到。
+            let skippedNoTargetCount = 0;
             for (let lostIndex = vault_ACU!.materialEntries.length - 1; lostIndex >= 0; lostIndex -= 1) {
                 const material = vault_ACU!.materialEntries[lostIndex];
                 if (presentMessagesForMaterial.has(material.messageRef)) continue;
@@ -547,12 +551,20 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
                         }
                     }
                 }
-                if (!targetMessage) continue;
+                if (!targetMessage) {
+                    skippedNoTargetCount += 1;
+                    continue;
+                }
                 if (graftMaterialContinuationCheckpoint_ACU(targetMessage, material.continuation)) graftedCount += 1;
             }
 
             if (graftedCount === 0) {
                 // 全部被"目标已有"跳过或无处嫁接：无写入即无需保存。
+                if (skippedNoTargetCount > 0) {
+                    // 措辞必须诚实：本分支不重建保管库，但删楼流程随后任何一次经本插件的保存都会触发
+                    // post-save 重建（按现存楼层采集），被删楼层的 materialEntries 随之消失 ⇒ 通常没有「下次机会」。
+                    logWarn_ACU(`[删楼守卫] ${skippedNoTargetCount} 份续写基线无处嫁接（聊天里没有可承载基线的 AI 楼层），本次已丢弃；若随后发生任何一次聊天保存，保管库会按现存楼层重建，该基线不再可恢复。`);
+                }
                 return { recovered: false, graftedCount: 0 };
             }
 
@@ -565,7 +577,7 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
 
             await saveChatToHostStrict_ACU();
             captureCheckpointVaultForCurrentChat_ACU(chat);
-            logWarn_ACU(`[删楼守卫] 删楼 checkpoint 前移恢复完成：共嫁接 ${graftedCount} 个产物。`);
+            logWarn_ACU(`[删楼守卫] 删楼 checkpoint 前移恢复完成：共嫁接 ${graftedCount} 个产物${skippedNoTargetCount > 0 ? `；另有 ${skippedNoTargetCount} 份续写基线因聊天里没有可承载的 AI 楼层而被丢弃` : ''}。`);
             return { recovered: true, graftedCount };
         } catch (error: any) {
             restoreSnapshots();

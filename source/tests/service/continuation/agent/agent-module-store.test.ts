@@ -611,6 +611,31 @@ describe('逐栏提交的证据楼白名单（与 SQL 事务路径同判据）',
 });
 
 /**
+ * 用户手动保存与「播种用户要求」同形：读折叠 → 加工 → 直接回写。
+ * 折叠水位被 delta 推高之后，若折叠输出的 (水位, 前缀指纹) 不成对，写盘门会以
+ * 「资料快照引用的聊天前缀已变化」硬拒——而这是**用户可见**的失败面（报错弹窗、编辑丢失），
+ * 聊天其实一个字没变。修在折叠出口后，所有同形路径一起受益，这里锁定用户可见的那一条。
+ */
+describe('用户手动保存资料（折叠水位已被 delta 推高）', () => {
+  it('不得被前缀指纹门误拒，编辑必须真的落盘', async () => {
+    const chat: any[] = [{ mes: 'a', is_user: false }, { mes: 'b', is_user: false }];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(1));
+
+    chat.push({ mes: 'c', is_user: false });
+    const second = snapshotAt_ACU(2, { hooks: [hook_ACU('H1') as any] });
+    second.revisions = { ...second.revisions, hooks: 1 };
+    await writeAgentModuleSnapshot_ACU(chat, 2, second);
+    // 前置：水位确实已被 delta 推过基线水位（否则本用例测不到东西）
+    expect(readAgentModuleSnapshot_ACU(chat).settledThroughIndex).toBe(2);
+
+    const saved = await replaceAgentModuleSnapshotByUser_ACU({ hooks: [hook_ACU('USER') as any] }, chat);
+    expect(saved.hooks.map((item) => item.id)).toEqual(['USER']);
+    expect(readAgentModuleSnapshot_ACU(chat).hooks.map((item) => item.id)).toEqual(['USER']);
+  });
+});
+
+/**
  * 逐栏提交的**落帧楼层**。
  *
  * 调用方（agent-main-loop 的三处派工）一律传 `chat.length - 1`，而 TT 2.3.0 的物理尾楼可以合法地是

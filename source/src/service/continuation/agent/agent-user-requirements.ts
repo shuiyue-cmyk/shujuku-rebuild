@@ -83,8 +83,9 @@ export function applyAgentUserRequirementsReplace_ACU(
 }
 
 /**
- * 创建任务时把 originInstruction 机械写成首条。没有可承载楼层时静默跳过，由渲染回退兜底。
- * 快照里已经有条目则不覆盖。
+ * 创建任务时把 originInstruction 机械写成首条。没有可承载楼层（整条聊天没有 AI 楼）时跳过写入，
+ * 由渲染回退兜底（renderAgentUserRequirements_ACU 空清单时回退 originInstruction）；
+ * 写入层会留一条告警说明原因，不是完全静默。快照里已经有条目则不覆盖。
  */
 export async function seedAgentUserRequirementsIfEmpty_ACU(originInstruction: string, chat?: any[]): Promise<void> {
   const text = originInstruction.trim();

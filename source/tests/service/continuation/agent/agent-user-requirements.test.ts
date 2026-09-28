@@ -8,7 +8,7 @@ import {
   renderAgentUserRequirements_ACU,
   seedAgentUserRequirementsIfEmpty_ACU,
 } from '../../../../src/service/continuation/agent/agent-user-requirements';
-import { buildEmptyAgentModuleSnapshot_ACU, readAgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-module-store';
+import { buildEmptyAgentModuleSnapshot_ACU, readAgentModuleSnapshot_ACU, writeAgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-module-store';
 import { AGENT_MODULE_FIELD_ACU } from '../../../../src/service/continuation/agent/agent-model';
 import { _set_SillyTavern_API_ACU } from '../../../../src/shared/host-api';
 
@@ -19,6 +19,35 @@ function userMessage_ACU(id: number, text: string) {
 describe('续写用户要求资料区', () => {
   beforeEach(() => {
     _set_SillyTavern_API_ACU(null as any);
+  });
+
+  /**
+   * 折叠读出的快照，水位会被 delta 推高，而前缀指纹仍属于被采纳的那份基线
+   * （applyDelta_ACU 推 settledThroughIndex 却从不改 settledPrefixFingerprint）。
+   * 这种「(水位, 指纹) 不成对」的快照一旦直接回写，就会被写盘门以「资料快照引用的聊天前缀已变化」
+   * 硬拒——聊天其实一个字没变。所有「折叠读出 → 加工 → 回写」的路径都吃这个亏
+   * （播种用户要求、结算 partial/failed 分支、用户要求维护、总纲维护），
+   * 所以修在折叠输出处，而不是逐个调用点打补丁。
+   */
+  it('折叠水位被 delta 推高后，播种用户要求不得被前缀指纹门误拒', async () => {
+    const chat: any[] = [{ mes: 'a', is_user: false }, { mes: 'b', is_user: false }];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    await writeAgentModuleSnapshot_ACU(chat, 1, { ...buildEmptyAgentModuleSnapshot_ACU(), settledThroughIndex: 1 });
+
+    chat.push({ mes: 'c', is_user: false });
+    const second: any = {
+      ...buildEmptyAgentModuleSnapshot_ACU(),
+      settledThroughIndex: 2,
+      hooks: [{ id: 'H1', summary: '伏笔 H1', status: 'planted', importance: 'mid', plantedIndex: 1, updatedIndex: 1, plannedPayoff: '', retired: false, retiredReason: '' }],
+    };
+    second.revisions = { ...second.revisions, hooks: 1 };
+    await writeAgentModuleSnapshot_ACU(chat, 2, second);
+
+    // 前置：水位确实已被 delta 推过基线的水位（否则本用例测不到东西）
+    expect(readAgentModuleSnapshot_ACU(chat).settledThroughIndex).toBe(2);
+
+    await expect(seedAgentUserRequirementsIfEmpty_ACU('用户要求：主角不能死')).resolves.toBeUndefined();
+    expect(readAgentModuleSnapshot_ACU(chat).userRequirements).toEqual(['用户要求：主角不能死']);
   });
 
   it('机械继续类关键词整段匹配才过滤，夹带实质要求的句子保留', () => {

@@ -297,7 +297,10 @@ function restampFoldedSnapshot_ACU(
  * chatPrefixFingerprint 失配 ⇒ 基线被折叠拒绝、宽容抢救一并禁用 ⇒ 资料**整体**清零。
  * 这也正是 store 里 alignAgentModuleSnapshotToFloor_ACU 与 continuation-orchestrator 写入前对齐的同一条纪律
  * （「本快照只声明结算到承载楼」）。代价：(承载楼, targetIndex] 这段会在下一轮重新结算一次，
- * 而那段全是非 AI 楼、不承载剧情正文（renderAgentUnsettledHistory_ACU 按 isAiFloor_ACU 过滤），不会多派维护代理。
+ * 而那段在 `anchor === frameFloor`（生产常态）时全是非 AI 楼、不承载剧情正文
+ * （renderAgentUnsettledHistory_ACU 按 isAiFloor_ACU 过滤），不会多派维护代理；
+ * 当锚点取到更早的表格 checkpoint 楼时，(anchor, targetIndex] 里可能含 AI 楼，但基线本就只声明
+ * 结算到 anchor、其后的内容由 delta 承载（删楼即物理退出折叠），语义仍然自洽。
  */
 function alignSnapshotToFloor_ACU(
   deps: AgentModuleFrameDeps_ACU,
@@ -758,6 +761,8 @@ export function foldAgentModuleSnapshot_ACU(
   let foldedDeltaCount = 0;
   let maxDeltaSeq = 0;
   let adoptedIndex: number | null = null;
+  /** 被采纳基线**自身**的水位：用于判断 delta 是否把水位推过了它（推过就意味着指纹与水位不成对）。 */
+  let adoptedWaterline: number | null = null;
   const candidates: AgentModuleFoldCandidate_ACU[] = [];
   let salvage: { index: number; snapshot: AgentModuleSnapshot_ACU; problems: string[] } | null = null;
   // P1：任一基线（legacy / schema3 checkpoint / 抢救快照）前缀指纹失配，
@@ -785,6 +790,7 @@ export function foldAgentModuleSnapshot_ACU(
         contributed = true;
         checkpointIndex = index;
         adoptedIndex = index;
+        adoptedWaterline = snapshot.settledThroughIndex;
         foldedDeltaCount = 0;
       }
       continue;
@@ -813,6 +819,7 @@ export function foldAgentModuleSnapshot_ACU(
         sawSchema3Checkpoint = true;
         checkpointIndex = index;
         adoptedIndex = index;
+        adoptedWaterline = snapshot.settledThroughIndex;
         foldedDeltaCount = 0;
       }
     }
@@ -843,6 +850,23 @@ export function foldAgentModuleSnapshot_ACU(
       chatLength: chat.length,
       tailFloor: chat[chat.length - 1],
     };
+  }
+  // 折叠输出必须自洽：delta 会推高 settledThroughIndex 却**从不改** settledPrefixFingerprint
+  // （见 applyDelta_ACU），于是「水位＝末条 delta 的水位、指纹＝被采纳基线的水位」这种不成对的快照，
+  // 一回写就会被写盘门按新水位重算指纹判为失配 ⇒「资料快照引用的聊天前缀已变化」硬报错，
+  // 而聊天其实一个字没变。所有「折叠读出 → 加工 → 回写」的路径都吃这个亏（播种用户要求、
+  // 结算 partial/failed 分支、用户要求维护、总纲维护），所以在折叠出口一次性重盖，
+  // 而不是逐个调用点打补丁。
+  // 只在「确实带了指纹、且水位被 delta 推过了基线水位」时才重算：无指纹的夹具与水位未推进的
+  // 常见路径零额外开销。这**不削弱** P1 前缀守卫——重盖记录的是「此刻这次折叠所依据的聊天前缀」，
+  // 之后聊天真的变了（删楼/替换正文）照样会在下一次校验时失配被拒。
+  if (
+    contributed
+    && typeof snapshot.settledPrefixFingerprint === 'string' && snapshot.settledPrefixFingerprint
+    && adoptedWaterline !== null && snapshot.settledThroughIndex !== adoptedWaterline
+    && deps.restampPrefix
+  ) {
+    snapshot = deps.restampPrefix(snapshot, chat);
   }
   return {
     snapshot,
@@ -915,10 +939,12 @@ export function relocateContinuationCheckpoint_ACU(
   const before = JSON.stringify(chat.map(message => fieldOf_ACU(message)));
   stripCurrentSwipeThrough_ACU(chat, anchorIndex, deps);
   const frame = readFrame_ACU(anchor, deps);
-  // folded.snapshot 的指纹来自被采纳的旧基线、水位却已被 delta 推高（applyDelta 不改指纹）⇒ 原样落盘就是
-  // 一份自相矛盾的基线：下一次折叠按新水位重算指纹必然失配 → 基线被整体拒绝 + incompatibleSeen 禁用抢救
-  // + 同 swipe 的 delta 刚被上面 strip 掉 → **资料全量静默清零**。表格 checkpoint 每次落层都会走到这里，
-  // 所以必须按自身水位重盖指纹后再落盘。
+  // 折叠出口已经会重盖指纹（见 foldAgentModuleSnapshot_ACU 末尾），所以 folded.snapshot 到达这里时
+  // (水位, 指纹) 本身是自洽的。此处仍必须再过一遍 restampFoldedSnapshot_ACU，理由是**钳位到折叠范围**：
+  // 出口重盖用的是完整 chat，而本函数只折到 anchorIndex（见上面的 foldAgentModuleSnapshot_ACU 调用），
+  // legacy delta 可能把水位推过 anchorIndex ⇒ 不钳位就会落一份「声明的水位与指纹超出自身折叠范围」的基线，
+  // 下一次全范围折叠按该水位重算指纹必然失配 → 基线被整体拒绝 + incompatibleSeen 禁用抢救
+  // + 同 swipe 的 delta 刚被上面 strip 掉 → **资料全量静默清零**。这不是可删的冗余。
   frame.checkpoint = {
     swipeId: readMessageSwipeId_ACU(anchor),
     snapshot: cloneJson_ACU(restampFoldedSnapshot_ACU(deps, folded.snapshot, chat, anchorIndex)),
@@ -1018,6 +1044,9 @@ export function planAgentModuleSnapshotWrite_ACU(
   const hadUsableCheckpoint = !strayFloorIndexes.length && hasUsableSchema3Checkpoint_ACU(scratch, deps);
   // 本次是否真的落下了一份能承载遗留内容的全量基线：遗留帧的摘除必须以它为前提，
   // 否则就是「帧已摘、基线未落」——遗留增量既不在新基线里、也没了出处，静默丢数据。
+  // ⚠️ 隐含前置条件：`clamped` 必须由**本聊天的一次折叠**派生（生产四个调用方都满足：
+  // 结算路径的 committed = readAgentModuleSnapshot_ACU(chat)、用户保存的 {...current, ...raw}、
+  // 播种与资料补足同理）。若调用方塞进一份与当前折叠无关的快照，「吸收」就不成立。
   let absorbedByCheckpoint = false;
   if (hadUsableCheckpoint) {
     if (delta) appendDelta_ACU(scratch, frameFloor, delta, deps);
@@ -1050,7 +1079,10 @@ export function planAgentModuleSnapshotWrite_ACU(
     if (delta && frameFloor > anchor) appendDelta_ACU(scratch, frameFloor, delta, deps);
   }
   // 摘掉遗留帧（只摘参与当前折叠的那部分，他 swipe 内容切回时必须还能恢复）：
-  // 内容已由本次全量基线承载，留着只会让折叠序倒挂——新值被更晚楼层的旧值覆盖回去。
+  // **领域数组**内容已由本次全量基线承载，留着只会让折叠序倒挂——新值被更晚楼层的旧值覆盖回去。
+  // 注意口径：遗留帧里的**逐栏 partial 草稿**不参与基线（checkpoint 的类型里没有承载分栏视图的位置，
+  // folded.fields 明确只读、绝不写回持久帧），所以它会随摘除一起退出——这与
+  // relocateContinuationCheckpoint_ACU 每次归并的性质相同，是帧架构的既有取舍，不是本处新引入的丢失。
   if (absorbedByCheckpoint) {
     for (const index of strayFloorIndexes) removeCurrentSwipeFrame_ACU(scratch[index]);
   }
