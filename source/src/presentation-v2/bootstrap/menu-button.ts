@@ -251,10 +251,3 @@ function isMenuVisible_ACU(menu: Element): boolean {
   }
   return (menu as HTMLElement).style?.display !== 'none';
 }
-
-/** 仅供测试使用：重置模块级一次性状态（生产代码不调用）。 */
-export function __resetAcuV2MenuButtonForTests_ACU(): void {
-  menuButtonInstalled_ACU = false;
-  menuButtonInitStarted_ACU = false;
-  disconnectMenuButtonObserver_ACU();
-}

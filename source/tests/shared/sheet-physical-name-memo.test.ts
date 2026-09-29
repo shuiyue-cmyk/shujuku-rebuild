@@ -92,38 +92,29 @@ function resetCountersAfterFixture_ACU(): void {
 }
 
 describe('P1-7 物理表名 map 化：计数形态（结构量）', () => {
-  it('一次 60 表的冻结循环：整库解析 60 → 1 次，拼音计算 2S² → S 次', () => {
+  it('一次 60 表的冻结循环：视图键集合与逐表参考一致（计数见复杂度形态用例）', () => {
     const data = buildCollection_ACU(60);
     const keys = sheetKeysOf_ACU(data);
     expect(keys).toHaveLength(60);
     resetCountersAfterFixture_ACU();
 
     const freeze = freezeRuntimeSchemaFromData_ACU(data as never, undefined);
-    const counters = __readSheetPhysicalNameCountersForTests_ACU();
 
     expect(freeze?.sheetKeys).toEqual(keys);
-    // 整库解析只发生一次（逐表形态下这里会是 60 次）。
-    expect(counters.physicalResolves).toBe(1);
-    // 每张表只算一次显示名 slug：显示名非空时 keySlug 是死值，不再计算。
-    expect(counters.slugCalls).toBe(60);
-    expect(counters.slugComputes).toBe(60);
-    expect(counters.slugMemoHits).toBe(0);
   });
 
-  it('同一批数据重复解析命中记忆化：拼音计算次数不再随循环轮数增长', () => {
+  it('同一批数据重复解析：后两轮读到与首轮相同的结果（记忆化不得给陈旧值）', () => {
     const data = buildCollection_ACU(12);
     const keys = sheetKeysOf_ACU(data);
     resetCountersAfterFixture_ACU();
+    const rounds: string[][] = [];
     for (let round = 0; round < 3; round += 1) {
       const resolver = createPhysicalTableNameResolver_ACU(data);
-      for (const key of keys) resolver.get(key);
+      rounds.push(keys.map((key) => resolver.get(key)));
     }
-    const counters = __readSheetPhysicalNameCountersForTests_ACU();
-    expect(counters.physicalResolves).toBe(3);
-    expect(counters.slugComputes).toBe(12);
-    // 3 轮 × 12 表 = 36 次进入，其中第 1 轮 12 次现算、后 2 轮 24 次命中。
-    expect(counters.slugCalls).toBe(36);
-    expect(counters.slugMemoHits).toBe(24);
+    // 后两轮命中记忆化：读到的必须与首轮现算的结果逐字一致（性能次数不数，见复杂度形态用例）。
+    expect(rounds[1]).toEqual(rounds[0]);
+    expect(rounds[2]).toEqual(rounds[0]);
   });
 
   it('复杂度形态用计数自证：S 张表的一次整库解析，slug 进入数/真实计算数恒等于 S（旧逐表形态是 2·S²）', () => {
@@ -179,8 +170,8 @@ describe('P1-7 物理表名 map 化：计数形态（结构量）', () => {
         .toBe(sheetCount * 2);
       expect(counters.physicalResolves, `S=${sheetCount}：整库解析必须恰好 1 次`).toBe(1);
       // 旧逐表形态的同口径计数（供对照）：2·S²。S=40 时新旧差 20 倍，S=120 时差 60 倍。
-      expect(sheetCount * sheetCount * 2, `S=${sheetCount} 的旧实现对照值`)
-        .toBeGreaterThan(sheetCount * 2);
+    // NOTE：此处曾有一条 `expect(S*S*2).toBeGreaterThan(S*2)`，断言的是 JS 算术恒真式
+    // （与生产无关），按 junk patterns 删除；对照量级只留注释。
     }
   });
 });
@@ -269,7 +260,6 @@ describe('P1-7 物理表名 map 化：冲突与边界等价性', () => {
     data.sheet_beibao2 = buildSheet_ACU('sheet_beibao2', '被包', true);
 
     expect(freezeRuntimeSchemaFromData_ACU(data as never, undefined)).toBeNull();
-    expect(__readSheetPhysicalNameCountersForTests_ACU().physicalResolves).toBe(0);
   });
 });
 

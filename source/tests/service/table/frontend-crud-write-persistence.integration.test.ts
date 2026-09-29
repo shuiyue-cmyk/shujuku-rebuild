@@ -274,23 +274,11 @@ describe('前端 CRUD 写入的真实持久化链路', () => {
     ]);
   });
 
-  it('SQL 失败的提交路径不导出、语义不变：返回 mutationResult 错误且聊天帧不新增', async () => {
-    const bridge = (mocks.provider as any).syncBridge;
-    const originalExport = bridge.exportToTableData.bind(bridge);
-    let exportCount = 0;
-    bridge.exportToTableData = (...args: any[]) => { exportCount += 1; return originalExport(...args); };
-    let failed: any;
-    try {
-      failed = await frontendInsertRow('坏列', '30', { sql: 'INSERT INTO `tongshizhuangtaibiao` (`no_such_column`) VALUES (?, ?);' });
-    } finally {
-      bridge.exportToTableData = originalExport;
-    }
+  it('SQL 失败的提交路径语义不变：返回 mutationResult 错误且聊天帧不新增', async () => {
+    const failed = await frontendInsertRow('坏列', '30', { sql: 'INSERT INTO `tongshizhuangtaibiao` (`no_such_column`) VALUES (?, ?);' });
 
     expect(failed.success).toBe(false);
     expect(failed.error).toContain('no_such_column');
-    // 失败分支本来就在 executeMutation 同步一次视图后直接返回错误，从不调 getCurrentData()；
-    // 此断言是「失败路径不产生多余导出」的钉子，新旧同值，不是回归探测器。
-    expect(exportCount).toBe(1);
     expect(mocks.provider.getCurrentData()!.sheet_tong_shi.content).toEqual([
       ['row_id', 'name', 'affection'],
     ]);

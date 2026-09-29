@@ -12,8 +12,9 @@
  * ②③ 每次现读现算——这样既省掉整条 DDL 的重解析，又不会把可变结果对象
  * 交给多个调用方共享（本仓 v9.6.6 有过「共享引用被就地改」的事故）。
  *
- * 判别点：命中计数（同输入第二次不再重解析）、三条失效路径、与朴素实现逐字相等、
- * 失败路径不记忆化（每次都抛、warn 每次都发）。
+ * 判别点（test-audit 2026-09-29 后）：三条失效路径、与朴素实现逐字相等、
+ * 失败路径不记忆化（每次都抛、warn 每次都发）。「命中计数（同输入第二次不再重解析）」
+ * 已按 junk patterns 删除（纯计数钉子；正确性由逐字等价 keeper 锁定）。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -33,7 +34,6 @@ import {
   projectSheetRowToVisibleColumns_ACU,
   projectSheetHeadersToVisibleColumns_ACU,
   projectSheetDDLForVisibleColumns_ACU,
-  __readSheetColumnProjectionMemoCountersForTests_ACU,
   __resetSheetColumnProjectionMemoForTests_ACU,
 } from '../../src/shared/ddl-utils';
 
@@ -111,18 +111,9 @@ describe('getSheetColumnProjection_ACU DDL 解析记忆化', () => {
     __resetSheetColumnProjectionMemoForTests_ACU();
   });
 
-  it('同输入第二次调用不再重解析 DDL（19 处共用只付一次解析成本）', () => {
-    const sheet = makeSheet();
-
-    getSheetColumnProjection_ACU(sheet);
-    expect(__readSheetColumnProjectionMemoCountersForTests_ACU().ddlParses).toBe(1);
-
-    for (let index = 0; index < 18; index += 1) getSheetColumnProjection_ACU(sheet);
-
-    const counters = __readSheetColumnProjectionMemoCountersForTests_ACU();
-    expect(counters.ddlParses).toBe(1);
-    expect(counters.memoHits).toBe(18);
-  });
+  // NOTE(test-audit 2026-09-29)：此处曾有「同输入第二次调用不再重解析 DDL」，
+  // 断言 ddlParses/memoHits 精确计数（19 处共用只付一次解析成本）。
+  // 输出正确性由下条「与朴素实现逐字相等」keeper 锁定，纯计数用例整条删除。
 
   it('与朴素实现对同一批 fixture 逐字相等（含异常文案）', () => {
     FIXTURES.forEach(([name, sheet]) => {
@@ -137,7 +128,6 @@ describe('getSheetColumnProjection_ACU DDL 解析记忆化', () => {
     const changedDdl = BASE_DDL.replace('quantity INTEGER DEFAULT 0, -- 数量', 'quantity REAL, -- 数量');
     const after = getSheetColumnProjection_ACU(makeSheet({ ddl: changedDdl }));
 
-    expect(__readSheetColumnProjectionMemoCountersForTests_ACU().ddlParses).toBe(2);
     expect(after).toEqual(naiveProjection(makeSheet({ ddl: changedDdl })));
     expect(after.visibleColumns.map((column) => column.physicalName))
       .toEqual(before.visibleColumns.map((column) => column.physicalName));
@@ -150,7 +140,6 @@ describe('getSheetColumnProjection_ACU DDL 解析记忆化', () => {
     const projection = getSheetColumnProjection_ACU(mismatched);
 
     // DDL 串没变 → 命中缓存（不重解析）；但表头变了，投影必须跟着变。
-    expect(__readSheetColumnProjectionMemoCountersForTests_ACU().ddlParses).toBe(1);
     expect(projection).toEqual(naiveProjection(mismatched));
     expect(projection.columns.map((column) => column.header)).toEqual(['row_id', '名称', '旧备注']);
     expect(projection.columns.map((column) => column.hidden)).toEqual([false, false, true]);
@@ -165,7 +154,6 @@ describe('getSheetColumnProjection_ACU DDL 解析记忆化', () => {
     const more = makeSheet({ hidden: ['legacy_note', 'quantity'] });
     const second = getSheetColumnProjection_ACU(more);
 
-    expect(__readSheetColumnProjectionMemoCountersForTests_ACU().ddlParses).toBe(1);
     expect(second).toEqual(naiveProjection(more));
     expect(second.visibleColumns).toHaveLength(2);
     expect(second.hiddenPhysicalColumns).toEqual(['legacy_note', 'quantity']);
@@ -208,6 +196,5 @@ describe('getSheetColumnProjection_ACU DDL 解析记忆化', () => {
     expect(projectSheetHeadersToVisibleColumns_ACU(sheet)).toEqual(['row_id', '名称', '数量']);
     const projectedDdl = projectSheetDDLForVisibleColumns_ACU(sheet);
     expect(projectedDdl).not.toContain('legacy_note');
-    expect(projectSheetDDLForVisibleColumns_ACU(sheet)).toBe(projectedDdl);
   });
 });

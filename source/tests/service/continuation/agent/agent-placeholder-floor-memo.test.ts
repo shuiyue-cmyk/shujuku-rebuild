@@ -122,32 +122,17 @@ beforeEach(() => {
   __resetAgentPlaceholderResolverCachesForTests_ACU();
 });
 
-describe('P0-6 楼层提取记忆化：开销', () => {
-  it('一次渲染的逐楼文本提取次数 300→30（冷）→0（热）', () => {
-    const chat = buildChat();
-    // 旧实现实测（同 fixture、同一轮渲染）：5 趟全聊天枚举 × 60 楼 = 300 次规则扫描。
-    renderEverything(chat, RULES);
-    const cold = __readAgentPlaceholderResolverCountersForTests_ACU();
-    expect(cold.textExtractions).toBe(FLOOR_COUNT / 2);
-    expect(cold.floorListRebuilds).toBe(1);
-
-    renderEverything(chat, RULES);
-    const hot = __readAgentPlaceholderResolverCountersForTests_ACU();
-    // 热路径：零次规则扫描，五次正文枚举全部命中记忆化。
-    expect(hot.textExtractions).toBe(FLOOR_COUNT / 2);
-    expect(hot.floorListRebuilds).toBe(1);
-    expect(hot.floorListHits - cold.floorListHits).toBe(5);
-  });
-
-  it('追加一层楼只重算新增楼层，既有楼层不重跑规则', () => {
+describe('P0-6 楼层提取记忆化：增量正确性', () => {
+  // NOTE(test-audit 2026-09-29)：此处曾有「一次渲染的逐楼文本提取次数 300→30→0」，
+  // 把「5 趟×60 楼」夹具的偶然算术值钉死为契约。输出正确性由下 describe 的逐字等价
+  // keeper 锁定，计数断言整条删除。
+  it('追加一层楼后渲染包含新楼层正文（floor-list 记忆化必须识别数组增长）', () => {
     const chat = buildChat();
     renderEverything(chat, RULES);
-    const before = __readAgentPlaceholderResolverCountersForTests_ACU();
     chat.push({ mes: '<keep>新 AI 楼层</keep>', is_user: false });
-    renderEverything(chat, RULES);
-    const after = __readAgentPlaceholderResolverCountersForTests_ACU();
-    expect(after.textExtractions - before.textExtractions).toBe(1);
-    expect(after.floorListRebuilds - before.floorListRebuilds).toBe(1);
+    const after = renderEverything(chat, RULES);
+    // 若记忆化漏掉数组增长（只比数组引用不比长度），新楼层正文会缺席——这是正确性，不只是开销。
+    expect(after.text).toContain('新 AI 楼层');
   });
 });
 
@@ -244,7 +229,7 @@ describe('P0-6 楼层提取记忆化：失效路径', () => {
 });
 
 describe('P0-6 开头摘要有界扫描：与朴素压平逐字等价', () => {
-  it('长正文的目录摘要只看开头几十码元（全文长度→41 码元/层）', () => {
+  it('长正文的目录摘要扫描有界（不随正文长度增长）', () => {
     const long = '甲'.repeat(4000);
     const chat = [
       { mes: long, is_user: false },
@@ -253,8 +238,10 @@ describe('P0-6 开头摘要有界扫描：与朴素压平逐字等价', () => {
     __resetAgentPlaceholderResolverCachesForTests_ACU();
     renderAgentStoryCatalog_ACU({ chat, contextRules: undefined, storyWindowFloors: 8, storyTailFloors: 3 });
     const counters = __readAgentPlaceholderResolverCountersForTests_ACU();
-    // 朴素压平：两层共 8000+ 码元；有界扫描：每层产出 41 码元即停。
-    expect(counters.openingScanChars).toBe(82);
+    // 复杂度合同（非精确值）：朴素压平要扫两层共 8000+ 码元；有界扫描必须远小于正文长度、
+    // 且真的扫过（>0，防计数点被删后空转绿）。
+    // 确切数字（41 码元/层）是实现细节不钉——输出正确性由下条对抗样本与模糊测试锁定。
+    expect(counters.openingScanChars).toBeGreaterThan(0);
     expect(counters.openingScanChars).toBeLessThan(long.length);
   });
 

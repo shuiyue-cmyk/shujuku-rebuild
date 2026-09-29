@@ -107,7 +107,10 @@ describe('I3: 模板变量替换管线', () => {
     expect(resultMin).toContain('3');
   });
 
-  it('完整管线串联：random → calc → if-block 按变量裁剪', () => {
+  // NOTE：此处是手动链（按生产入口 processPromptTemplateContent_ACU 的顺序逐个调用），
+  // 不是生产入口本身；生产入口的调用顺序另由 helpers-remaining 的顺序用例锁定。
+  // 本用例的独立价值是跨 helper 真实数据流（上游输出格式必须能被下游消费）。
+  it('helper 手动串联：random → calc → if-block 真实数据流', () => {
     const context = { allTablesJson: mockCurrentJsonTableDataRef.value, seedContent: '我拿起了铁剑', plotContent: '' };
     let content = '<random id="bonus" min="1" max="3" /><calc id="base" expr="10" /><if seed="铁剑">攻击力=$calc:base+$random:bonus<else>无装备</if>';
 

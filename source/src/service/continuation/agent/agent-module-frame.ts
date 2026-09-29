@@ -108,6 +108,8 @@ type ParsedField_ACU = { kind: 'empty' } | ParsedLegacy_ACU | ParsedFrame_ACU | 
  * 原始帧对象引用。写路径一律整体替换该字段对象（writeFrame_ACU 与
  * agent-module-store 的 assignment 提交都是 `message[FIELD] = 新对象`），
  * 因此换对象即天然失效，无需版本号。
+ * test-audit 2026-09-29 移除了配套的调用计数器（folds/fieldParses/fieldMemoHits）：
+ * 计数断言把夹具算术写成契约，正确性由逐字等价 keeper 锁定，性能回退不再由 CI 捕获。
  */
 let fieldParseMemo_ACU: WeakMap<AgentModuleFrameDeps_ACU, WeakMap<object, ParsedField_ACU>> = new WeakMap();
 
@@ -115,32 +117,9 @@ function isRecord_ACU(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-/**
- * 折叠层计数器（仅测试打开）。生产路径只有一次布尔判断，行为与开销不受影响。
- * 口径：folds=foldAgentModuleSnapshot_ACU 调用次数；fieldParses=parseField 真实深度解析
- * 次数（不含记忆化命中）；fieldMemoHits=按楼层原始帧对象引用命中的次数。
- */
-export interface AgentModuleFrameCounters_ACU {
-  folds: number;
-  fieldParses: number;
-  fieldMemoHits: number;
-}
-
-const frameCounters_ACU: AgentModuleFrameCounters_ACU = { folds: 0, fieldParses: 0, fieldMemoHits: 0 };
-let frameCountersEnabled_ACU = false;
-
-/** 仅供测试：打开计数并清零（含记忆化缓存清空，便于构造"冷路径"对照）。 */
+/** 仅供测试：清空记忆化缓存，便于构造"冷路径"对照（测试隔离 hygiene，非计数）。 */
 export function __resetAgentModuleFrameCachesForTests_ACU(): void {
-  frameCounters_ACU.folds = 0;
-  frameCounters_ACU.fieldParses = 0;
-  frameCounters_ACU.fieldMemoHits = 0;
-  frameCountersEnabled_ACU = true;
   fieldParseMemo_ACU = new WeakMap();
-}
-
-/** 仅供测试：读取计数快照。 */
-export function __readAgentModuleFrameCountersForTests_ACU(): AgentModuleFrameCounters_ACU {
-  return { ...frameCounters_ACU };
 }
 
 function cloneJson_ACU<T>(value: T): T {
@@ -459,10 +438,8 @@ function parseField_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): ParsedFie
   const cache = fieldParseCacheFor_ACU(deps);
   const memo = cache.get(raw);
   if (memo) {
-    if (frameCountersEnabled_ACU) frameCounters_ACU.fieldMemoHits += 1;
     return withPrivateProblems_ACU(memo);
   }
-  if (frameCountersEnabled_ACU) frameCounters_ACU.fieldParses += 1;
   const parsed = parseFieldUncached_ACU(raw, deps);
   cache.set(raw, parsed);
   return withPrivateProblems_ACU(parsed);
@@ -753,7 +730,6 @@ export function foldAgentModuleSnapshot_ACU(
   deps: AgentModuleFrameDeps_ACU,
   throughIndex = chat.length - 1,
 ): AgentModuleFoldResult_ACU {
-  if (frameCountersEnabled_ACU) frameCounters_ACU.folds += 1;
   let snapshot = deps.emptySnapshot();
   let contributed = false;
   let sawSchema3Checkpoint = false;

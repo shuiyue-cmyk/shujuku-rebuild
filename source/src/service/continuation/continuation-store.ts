@@ -1247,33 +1247,12 @@ function validateTask_ACU(raw: unknown, settings: ContinuationSettings_ACU): Con
   return { taskId: requireString_ACU(raw.taskId, 'activeTask.taskId'), originInstruction: requireString_ACU(raw.originInstruction, 'activeTask.originInstruction'), status, createdAt: requireInteger_ACU(raw.createdAt, 'activeTask.createdAt', 0), updatedAt: requireInteger_ACU(raw.updatedAt, 'activeTask.updatedAt', 0), runStartedAt: raw.runStartedAt === null ? null : requireInteger_ACU(raw.runStartedAt, 'activeTask.runStartedAt', 0), deadlineAt: raw.deadlineAt === null ? null : requireInteger_ACU(raw.deadlineAt, 'activeTask.deadlineAt', 0), runStageCount, stageBudgetBaseCount, activeStageId, stages, timeline: validateTimeline_ACU(raw.timeline), stopReason, lastError: lastError as any, ...('pendingHostTurn' in raw ? { pendingHostTurn: validatePendingHostTurn_ACU(raw.pendingHostTurn) } : {}) } as ContinuationEnvelope_ACU['activeTask'];
 }
 
-/**
- * 信封深校验计数（仅测试打开）。生产路径只有一次布尔判断，行为与开销不受影响。
- * envelopeValidations=validateContinuationEnvelope_ACU 的真实调用次数（read 漏斗的深校验口径）。
- */
-export interface ContinuationEnvelopeCounters_ACU {
-  envelopeValidations: number;
-  envelopeMemoHits: number;
-}
-
-const envelopeCounters_ACU: ContinuationEnvelopeCounters_ACU = { envelopeValidations: 0, envelopeMemoHits: 0 };
-let envelopeCountersEnabled_ACU = false;
-
-/** 仅供测试：打开计数并清零（含记忆化清空，便于构造「冷路径」对照）。 */
+/** 仅供测试：清空信封深校验记忆化（测试隔离 hygiene，非计数）。 */
 export function __resetContinuationEnvelopeCachesForTests_ACU(): void {
-  envelopeCounters_ACU.envelopeValidations = 0;
-  envelopeCounters_ACU.envelopeMemoHits = 0;
-  envelopeCountersEnabled_ACU = true;
   validatedEnvelopeMemo_ACU = new WeakMap();
 }
 
-/** 仅供测试：读取计数快照。 */
-export function __readContinuationEnvelopeCountersForTests_ACU(): ContinuationEnvelopeCounters_ACU {
-  return { ...envelopeCounters_ACU };
-}
-
 export function validateContinuationEnvelope_ACU(raw: unknown, phase: ContinuationErrorPhase_ACU = 'load'): ContinuationEnvelope_ACU {
-  if (envelopeCountersEnabled_ACU) envelopeCounters_ACU.envelopeValidations += 1;
   try {
     if (!isRecord_ACU(raw)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', '智能续写状态必须是对象');
     requireKeys_ACU(raw, ['schemaVersion', 'settings', 'activeTask'], 'envelope');
@@ -1348,7 +1327,6 @@ function readRawEnvelope_ACU(firstMessage: Record<string, unknown>): Continuatio
   if (!isRecord_ACU(raw)) return validateContinuationEnvelope_ACU(raw);
   const memo = validatedEnvelopeMemo_ACU.get(raw);
   if (memo) {
-    if (envelopeCountersEnabled_ACU) envelopeCounters_ACU.envelopeMemoHits += 1;
     return cloneValidatedEnvelope_ACU(memo);
   }
   const validated = validateContinuationEnvelope_ACU(raw);

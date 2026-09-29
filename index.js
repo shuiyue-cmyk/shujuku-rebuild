@@ -7211,21 +7211,6 @@ function shouldUseWorkerForWorldbook(entryCount, baseScanLen, chatLen) {
 function shouldUseWorkerForTables(tableCount, totalRows, totalCells) {
     return tableCount > 30 || totalRows > 3000 || totalCells > 80000 || (tableCount > 20 && totalRows > 1500);
 }
-function resetWorkerForTests_ACU() {
-    workerTimeoutCount = 0;
-    workerFailed = false;
-    workerReady = false;
-    if (workerInstance) {
-        try {
-            workerInstance.terminate();
-        }
-        catch { }
-    }
-    workerInstance = null;
-    for (const [, entry] of pending)
-        clearTimeout(entry.timer);
-    pending.clear();
-}
 
 /**
  * service/agent/agent-worldbook-runtime-read.ts
@@ -34640,18 +34625,9 @@ function getRuntimeEffectiveSchema_ACU(sheet) {
  */
 const DDL_COLUMN_MEMO_LIMIT_ACU = 128;
 const ddlColumnMemo_ACU = new Map();
-const projectionMemoCounters_ACU = { ddlParses: 0, memoHits: 0 };
-let projectionMemoCountersEnabled_ACU = false;
-/** 仅供测试：打开计数并清空记忆化。 */
+/** 仅供测试：清空 DDL 列解析记忆化（测试隔离 hygiene，非计数）。 */
 function __resetSheetColumnProjectionMemoForTests_ACU() {
-    projectionMemoCounters_ACU.ddlParses = 0;
-    projectionMemoCounters_ACU.memoHits = 0;
-    projectionMemoCountersEnabled_ACU = true;
     ddlColumnMemo_ACU.clear();
-}
-/** 仅供测试：读取计数快照。 */
-function __readSheetColumnProjectionMemoCountersForTests_ACU() {
-    return { ...projectionMemoCounters_ACU };
 }
 /** DDL 串 → 列解析产物。空 DDL 不入缓存（解析本身已是空结果，不值得占位）。 */
 function resolveDdlColumnsMemoized_ACU(ddl) {
@@ -34659,13 +34635,9 @@ function resolveDdlColumnsMemoized_ACU(ddl) {
         return [];
     const hit = ddlColumnMemo_ACU.get(ddl);
     if (hit) {
-        if (projectionMemoCountersEnabled_ACU)
-            projectionMemoCounters_ACU.memoHits += 1;
         return hit;
     }
     const parsed = parseDDLColumnInfos_ACU(ddl);
-    if (projectionMemoCountersEnabled_ACU)
-        projectionMemoCounters_ACU.ddlParses += 1;
     if (ddlColumnMemo_ACU.size >= DDL_COLUMN_MEMO_LIMIT_ACU)
         ddlColumnMemo_ACU.clear();
     ddlColumnMemo_ACU.set(ddl, parsed);
@@ -91598,8 +91570,8 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"9.8.10"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20260928-15"`。源码直跑、测试环境或注入失败时读不到，
+ * rollup 打包时把版本写进 `"9.8.11"`（与 manifest.json / source/package.json
+ * 同值），构建时间戳写进 `"20260929-10"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91608,7 +91580,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "9.8.10";
+        const version = "9.8.11";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
@@ -91618,7 +91590,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20260928-15";
+        const stamp = "20260929-10";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -121380,24 +121352,16 @@ function cloneAgentPromptSegments_ACU(segments) {
  * 原始帧对象引用。写路径一律整体替换该字段对象（writeFrame_ACU 与
  * agent-module-store 的 assignment 提交都是 `message[FIELD] = 新对象`），
  * 因此换对象即天然失效，无需版本号。
+ * test-audit 2026-09-29 移除了配套的调用计数器（folds/fieldParses/fieldMemoHits）：
+ * 计数断言把夹具算术写成契约，正确性由逐字等价 keeper 锁定，性能回退不再由 CI 捕获。
  */
 let fieldParseMemo_ACU = new WeakMap();
 function isRecord_ACU$a(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
-const frameCounters_ACU = { folds: 0, fieldParses: 0, fieldMemoHits: 0 };
-let frameCountersEnabled_ACU = false;
-/** 仅供测试：打开计数并清零（含记忆化缓存清空，便于构造"冷路径"对照）。 */
+/** 仅供测试：清空记忆化缓存，便于构造"冷路径"对照（测试隔离 hygiene，非计数）。 */
 function __resetAgentModuleFrameCachesForTests_ACU() {
-    frameCounters_ACU.folds = 0;
-    frameCounters_ACU.fieldParses = 0;
-    frameCounters_ACU.fieldMemoHits = 0;
-    frameCountersEnabled_ACU = true;
     fieldParseMemo_ACU = new WeakMap();
-}
-/** 仅供测试：读取计数快照。 */
-function __readAgentModuleFrameCountersForTests_ACU() {
-    return { ...frameCounters_ACU };
 }
 function cloneJson_ACU$2(value) {
     return JSON.parse(JSON.stringify(value));
@@ -121727,12 +121691,8 @@ function parseField_ACU(raw, deps) {
     const cache = fieldParseCacheFor_ACU(deps);
     const memo = cache.get(raw);
     if (memo) {
-        if (frameCountersEnabled_ACU)
-            frameCounters_ACU.fieldMemoHits += 1;
         return withPrivateProblems_ACU(memo);
     }
-    if (frameCountersEnabled_ACU)
-        frameCounters_ACU.fieldParses += 1;
     const parsed = parseFieldUncached_ACU(raw, deps);
     cache.set(raw, parsed);
     return withPrivateProblems_ACU(parsed);
@@ -122019,8 +121979,6 @@ function hasUsableSchema3Checkpoint_ACU(chat, deps) {
  * legacy 与 checkpoint 基线需通过 P1 指纹兼容检查（deps 注入），否则跳过该基线。
  */
 function foldAgentModuleSnapshot_ACU(chat, deps, throughIndex = chat.length - 1) {
-    if (frameCountersEnabled_ACU)
-        frameCounters_ACU.folds += 1;
     let snapshot = deps.emptySnapshot();
     let contributed = false;
     let sawSchema3Checkpoint = false;
@@ -130613,19 +130571,6 @@ function normalizeContinuationMaxAutomaticStages_ACU(value, fallback = 6) {
     return normalizeOptionalInteger_ACU(value, fallback, 1, 'maxAutomaticStages');
 }
 
-const cursorCounters_ACU = { fingerprints: 0, floorIdentities: 0, reconciles: 0 };
-let cursorCountersEnabled_ACU = false;
-/** 仅供测试：打开计数并清零。 */
-function __resetStageCursorCountersForTests_ACU() {
-    cursorCounters_ACU.fingerprints = 0;
-    cursorCounters_ACU.floorIdentities = 0;
-    cursorCounters_ACU.reconciles = 0;
-    cursorCountersEnabled_ACU = true;
-}
-/** 仅供测试：读取计数快照。 */
-function __readStageCursorCountersForTests_ACU() {
-    return { ...cursorCounters_ACU };
-}
 function isRecordMessage_ACU(message) {
     return !!message && typeof message === 'object' && !Array.isArray(message);
 }
@@ -130652,15 +130597,11 @@ function messageFingerprintText_ACU(message) {
 function getStableMessageIdentity_ACU(message) {
     const record = isRecordMessage_ACU(message) ? message : null;
     const messageId = messageIdOf_ACU(record);
-    if (cursorCountersEnabled_ACU)
-        cursorCounters_ACU.fingerprints += 1;
     return { ...(messageId === undefined ? {} : { messageId }), messageFingerprint: messageFingerprintText_ACU(message) };
 }
 function floorIdentityOf_ACU(identity) {
     if (identity.fingerprint === null) {
         identity.fingerprint = messageFingerprintText_ACU(identity.message);
-        if (cursorCountersEnabled_ACU)
-            cursorCounters_ACU.fingerprints += 1;
     }
     return identity.fingerprint;
 }
@@ -130676,8 +130617,6 @@ function buildFloorIdentities_ACU(chat) {
             fingerprint: null,
         };
     }
-    if (cursorCountersEnabled_ACU)
-        cursorCounters_ACU.floorIdentities += size;
     return identities;
 }
 function completionSurvives_ACU(entry, chat, chatLength, identities, used) {
@@ -130704,8 +130643,6 @@ function completionSurvives_ACU(entry, chat, chatLength, identities, used) {
  * 新写入的完成记录带稳定 message identity；旧记录没有 identity 时才回退到旧下标兼容。
  */
 function reconcileTaskCursorFromChat_ACU(task, chatLength, chat) {
-    if (cursorCountersEnabled_ACU)
-        cursorCounters_ACU.reconciles += 1;
     const effectiveLength = Array.isArray(chat) ? chat.length : chatLength;
     if (!Number.isInteger(effectiveLength) || effectiveLength < 0)
         return task;
@@ -132755,22 +132692,11 @@ function validateTask_ACU(raw, settings) {
     })();
     return { taskId: requireString_ACU(raw.taskId, 'activeTask.taskId'), originInstruction: requireString_ACU(raw.originInstruction, 'activeTask.originInstruction'), status, createdAt: requireInteger_ACU(raw.createdAt, 'activeTask.createdAt', 0), updatedAt: requireInteger_ACU(raw.updatedAt, 'activeTask.updatedAt', 0), runStartedAt: raw.runStartedAt === null ? null : requireInteger_ACU(raw.runStartedAt, 'activeTask.runStartedAt', 0), deadlineAt: raw.deadlineAt === null ? null : requireInteger_ACU(raw.deadlineAt, 'activeTask.deadlineAt', 0), runStageCount, stageBudgetBaseCount, activeStageId, stages, timeline: validateTimeline_ACU(raw.timeline), stopReason, lastError: lastError, ...('pendingHostTurn' in raw ? { pendingHostTurn: validatePendingHostTurn_ACU(raw.pendingHostTurn) } : {}) };
 }
-const envelopeCounters_ACU = { envelopeValidations: 0, envelopeMemoHits: 0 };
-let envelopeCountersEnabled_ACU = false;
-/** 仅供测试：打开计数并清零（含记忆化清空，便于构造「冷路径」对照）。 */
+/** 仅供测试：清空信封深校验记忆化（测试隔离 hygiene，非计数）。 */
 function __resetContinuationEnvelopeCachesForTests_ACU() {
-    envelopeCounters_ACU.envelopeValidations = 0;
-    envelopeCounters_ACU.envelopeMemoHits = 0;
-    envelopeCountersEnabled_ACU = true;
     validatedEnvelopeMemo_ACU = new WeakMap();
 }
-/** 仅供测试：读取计数快照。 */
-function __readContinuationEnvelopeCountersForTests_ACU() {
-    return { ...envelopeCounters_ACU };
-}
 function validateContinuationEnvelope_ACU(raw, phase = 'load') {
-    if (envelopeCountersEnabled_ACU)
-        envelopeCounters_ACU.envelopeValidations += 1;
     try {
         if (!isRecord_ACU$4(raw))
             fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', '智能续写状态必须是对象');
@@ -132850,8 +132776,6 @@ function readRawEnvelope_ACU(firstMessage) {
         return validateContinuationEnvelope_ACU(raw);
     const memo = validatedEnvelopeMemo_ACU.get(raw);
     if (memo) {
-        if (envelopeCountersEnabled_ACU)
-            envelopeCounters_ACU.envelopeMemoHits += 1;
         return cloneValidatedEnvelope_ACU(memo);
     }
     const validated = validateContinuationEnvelope_ACU(raw);
@@ -139451,14 +139375,10 @@ function contextRulesSignature_ACU(rules) {
         return '';
     return JSON.stringify([rules.extractRules, rules.excludeRules]);
 }
-const resolverCounters_ACU = { textExtractions: 0, textMemoHits: 0, floorListRebuilds: 0, floorListHits: 0, openingScanChars: 0 };
+const resolverCounters_ACU = { openingScanChars: 0 };
 let resolverCountersEnabled_ACU = false;
 /** 仅供测试：打开计数并清空全部记忆化（含构造「冷路径」对照）。 */
 function __resetAgentPlaceholderResolverCachesForTests_ACU() {
-    resolverCounters_ACU.textExtractions = 0;
-    resolverCounters_ACU.textMemoHits = 0;
-    resolverCounters_ACU.floorListRebuilds = 0;
-    resolverCounters_ACU.floorListHits = 0;
     resolverCounters_ACU.openingScanChars = 0;
     resolverCountersEnabled_ACU = true;
     messageTextMemo_ACU = new WeakMap();
@@ -139475,12 +139395,8 @@ function messageTextByRulesKey_ACU(message, rules, rulesKey) {
         return applyAgentContextRules_ACU(raw.trim(), rules);
     const memo = messageTextMemo_ACU.get(message);
     if (memo && memo.mes === raw && memo.rulesKey === rulesKey) {
-        if (resolverCountersEnabled_ACU)
-            resolverCounters_ACU.textMemoHits += 1;
         return memo.text;
     }
-    if (resolverCountersEnabled_ACU)
-        resolverCounters_ACU.textExtractions += 1;
     const text = applyAgentContextRules_ACU(raw.trim(), rules);
     messageTextMemo_ACU.set(message, { mes: raw, rulesKey, text });
     return text;
@@ -139507,12 +139423,8 @@ function listAgentStoryFloors_ACU(source) {
     const rulesKey = contextRulesSignature_ACU(source.contextRules);
     const memo = storyFloorsMemo_ACU.get(chat);
     if (memo && isStoryFloorsMemoFresh_ACU(chat, memo, rulesKey)) {
-        if (resolverCountersEnabled_ACU)
-            resolverCounters_ACU.floorListHits += 1;
         return memo.floors;
     }
-    if (resolverCountersEnabled_ACU)
-        resolverCounters_ACU.floorListRebuilds += 1;
     const floors = [];
     const refs = [];
     const mesRefs = [];
@@ -151705,7 +151617,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260928-15";
+        const stamp = "20260929-10";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -209990,12 +209902,6 @@ function isMenuVisible_ACU(menu) {
         return true;
     }
     return menu.style?.display !== 'none';
-}
-/** 仅供测试使用：重置模块级一次性状态（生产代码不调用）。 */
-function __resetAcuV2MenuButtonForTests_ACU() {
-    menuButtonInstalled_ACU = false;
-    menuButtonInitStarted_ACU = false;
-    disconnectMenuButtonObserver_ACU();
 }
 
 /**

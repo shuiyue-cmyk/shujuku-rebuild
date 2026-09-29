@@ -115,29 +115,25 @@ function contextRulesSignature_ACU(rules?: AgentContextRules_ACU): string {
 }
 
 /**
- * 楼层文本提取计数（仅测试打开）。生产路径只有一次布尔判断，行为与开销不受影响。
- * textExtractions=真正跑过提取/排除规则的次数（记忆化未命中的楼层数）；
- * textMemoHits=命中逐楼记忆化；floorListRebuilds=重建正文楼层数组的次数；
- * floorListHits=直接复用记忆化楼层数组的次数；openingScanChars=开头摘要有界扫描
- * 实际查看过的输入码元数（朴素压平恒等于全文长度）。
+ * 目录摘要有界扫描计数（仅测试打开）。生产路径只有一次布尔判断，行为与开销不受影响。
+ * openingScanChars=开头摘要有界扫描实际查看过的输入码元数（朴素压平恒等于全文长度）。
+ */
+/**
+ * 目录摘要有界扫描计数（仅测试打开）。生产路径只有一次布尔判断，行为与开销不受影响。
+ * test-audit 2026-09-29 移除了其余调用计数器（textExtractions/textMemoHits/
+ * floorListRebuilds/floorListHits）：它们把夹具算术写成契约，正确性由逐字等价 keeper 锁定。
+ * openingScanChars 保留——它是「目录摘要扫描有界（O(1)/层，不随正文长度增长）」这一
+ * 复杂度合同的最便宜独立守卫（输出等价测不出工作量）。
  */
 export interface AgentPlaceholderResolverCounters_ACU {
-  textExtractions: number;
-  textMemoHits: number;
-  floorListRebuilds: number;
-  floorListHits: number;
   openingScanChars: number;
 }
 
-const resolverCounters_ACU: AgentPlaceholderResolverCounters_ACU = { textExtractions: 0, textMemoHits: 0, floorListRebuilds: 0, floorListHits: 0, openingScanChars: 0 };
+const resolverCounters_ACU: AgentPlaceholderResolverCounters_ACU = { openingScanChars: 0 };
 let resolverCountersEnabled_ACU = false;
 
 /** 仅供测试：打开计数并清空全部记忆化（含构造「冷路径」对照）。 */
 export function __resetAgentPlaceholderResolverCachesForTests_ACU(): void {
-  resolverCounters_ACU.textExtractions = 0;
-  resolverCounters_ACU.textMemoHits = 0;
-  resolverCounters_ACU.floorListRebuilds = 0;
-  resolverCounters_ACU.floorListHits = 0;
   resolverCounters_ACU.openingScanChars = 0;
   resolverCountersEnabled_ACU = true;
   messageTextMemo_ACU = new WeakMap();
@@ -165,10 +161,8 @@ function messageTextByRulesKey_ACU(message: any, rules: AgentContextRules_ACU | 
   if (!message || typeof message !== 'object') return applyAgentContextRules_ACU(raw.trim(), rules);
   const memo = messageTextMemo_ACU.get(message);
   if (memo && memo.mes === raw && memo.rulesKey === rulesKey) {
-    if (resolverCountersEnabled_ACU) resolverCounters_ACU.textMemoHits += 1;
     return memo.text;
   }
-  if (resolverCountersEnabled_ACU) resolverCounters_ACU.textExtractions += 1;
   const text = applyAgentContextRules_ACU(raw.trim(), rules);
   messageTextMemo_ACU.set(message, { mes: raw, rulesKey, text });
   return text;
@@ -220,10 +214,8 @@ function listAgentStoryFloors_ACU(source: AgentStoryFloorSource_ACU): AgentStory
   const rulesKey = contextRulesSignature_ACU(source.contextRules);
   const memo = storyFloorsMemo_ACU.get(chat);
   if (memo && isStoryFloorsMemoFresh_ACU(chat, memo, rulesKey)) {
-    if (resolverCountersEnabled_ACU) resolverCounters_ACU.floorListHits += 1;
     return memo.floors;
   }
-  if (resolverCountersEnabled_ACU) resolverCounters_ACU.floorListRebuilds += 1;
   const floors: AgentStoryFloor_ACU[] = [];
   const refs: unknown[] = [];
   const mesRefs: unknown[] = [];

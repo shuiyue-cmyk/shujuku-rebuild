@@ -102,8 +102,8 @@ describe('content-replace-store 提示词身份派生', () => {
       promptTemplateMode: 'custom',
     });
 
-    // 同帧内再次读取：computed 命中，零新增序列化。
-    expect(readAllIdentityGetters(store, mod).builds).toBe(0);
+    // 同帧内再次读取：computed 命中（值正确即证明，新增序列化次数是机制，不数）。
+    expect(readAllIdentityGetters(store, mod).values).toEqual(first.values);
   });
 
   it('命中已有预设时四个 getter 给出同一套读数', async () => {

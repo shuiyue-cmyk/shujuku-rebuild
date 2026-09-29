@@ -18,6 +18,7 @@ const {
   mockReplaceCalcVariables,
   mockReplaceMaxVariables,
   mockReplaceMinVariables,
+  mockReplaceDbSqlVariables,
   mockParseIfBlockRecursive,
   mockGetLatestAIMessageContent,
   mockGetPlotFromHistory,
@@ -43,6 +44,7 @@ const {
     mockReplaceCalcVariables: vi.fn((s: string) => s),
     mockReplaceMaxVariables: vi.fn((s: string) => s),
     mockReplaceMinVariables: vi.fn((s: string) => s),
+    mockReplaceDbSqlVariables: vi.fn((s: string) => s),
     mockParseIfBlockRecursive: vi.fn((s: string) => s),
     mockGetLatestAIMessageContent: vi.fn(() => ''),
     mockGetPlotFromHistory: vi.fn(() => null),
@@ -78,7 +80,7 @@ vi.mock('../../../src/service/runtime/template-vars', () => ({
   getLatestAIMessageContent_ACU: mockGetLatestAIMessageContent,
   getLatestUserMessageContent_ACU: vi.fn(() => ''),
   composeSeedMatchContent_ACU: (userContent: string, aiContent: string) => [userContent, aiContent].filter(Boolean).join('\n'),
-  replaceDbSqlVariables: vi.fn((s: string) => s),
+  replaceDbSqlVariables: mockReplaceDbSqlVariables,
 }));
 
 vi.mock('../../../src/service/runtime/plot-runtime', () => ({
@@ -487,6 +489,10 @@ describe('handleChatCompletionReady_ACU', () => {
     mockReplaceCalcVariables.mockImplementation((s: string) => { callOrder.push('replaceCalc'); return s; });
     mockReplaceMaxVariables.mockImplementation((s: string) => { callOrder.push('replaceMax'); return s; });
     mockReplaceMinVariables.mockImplementation((s: string) => { callOrder.push('replaceMin'); return s; });
+    // 生产 processPromptTemplateContent_ACU 在 replaceMin 之后、parseIf 之前调
+    // replaceDbSqlVariables（SQLite 模式的 {[db]/[sql]} 值替换）；顺序用例必须覆盖它，
+    // 否则该步骤被删/错位也绿（preservation review M3）。
+    mockReplaceDbSqlVariables.mockImplementation((s: string) => { callOrder.push('replaceDbSql'); return s; });
     mockParseIfBlockRecursive.mockImplementation((s: string) => { callOrder.push('parseIf'); return s; });
 
     const data = { messages: [{ content: '测试内容' }] };
@@ -496,6 +502,7 @@ describe('handleChatCompletionReady_ACU', () => {
       'parseRandom', 'replaceRandom',
       'parseCalc', 'parseMax', 'parseMin',
       'replaceCalc', 'replaceMax', 'replaceMin',
+      'replaceDbSql',
       'parseIf',
     ]);
   });

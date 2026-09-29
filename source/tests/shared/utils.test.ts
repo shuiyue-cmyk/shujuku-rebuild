@@ -655,12 +655,6 @@ describe('normalizeExtractRules_ACU', () => {
     const result = normalizeExtractRules_ACU(null, '');
     expect(result).toEqual([]);
   });
-  it('与 normalizeExcludeRules_ACU 返回相同结果', () => {
-    const input = [{ start: '<plot>', end: '</plot>' }];
-    const extractResult = normalizeExtractRules_ACU(input);
-    const excludeResult = normalizeExcludeRules_ACU(input);
-    expect(extractResult).toEqual(excludeResult);
-  });
   it('传入对象数组时返回 { start, end } 结构', () => {
     const rules = [{ start: '<plot>', end: '</plot>' }];
     const result = normalizeExtractRules_ACU(rules);

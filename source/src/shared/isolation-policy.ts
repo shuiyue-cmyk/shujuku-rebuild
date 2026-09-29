@@ -8,8 +8,6 @@
  * 只拒绝 null / undefined；空字符串必须放行。
  * 存量 IsolatedData[''] 与历史隔离码槽位仍按原键读写，本文件不删除旧数据路径。
  */
-export const TAG_ISOLATION_FEATURE_RETIRED_ACU = true;
-
 export function isUsableIsolationSlotKey_ACU(key: unknown): key is string {
     return typeof key === 'string';
 }

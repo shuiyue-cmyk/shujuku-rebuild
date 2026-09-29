@@ -248,28 +248,9 @@ export function getRuntimeEffectiveSchema_ACU(sheet: unknown): unknown {
 const DDL_COLUMN_MEMO_LIMIT_ACU = 128;
 const ddlColumnMemo_ACU = new Map<string, DDLColumnInfo_ACU[]>();
 
-/** 解析次数与命中次数（仅测试打开）。生产路径只有一次 Map 查找。 */
-interface SheetProjectionMemoCounters_ACU {
-  /** 真正跑过 DDL 重解析的次数（记忆化未命中的 DDL 串数）。 */
-  ddlParses: number;
-  /** 命中记忆化的次数。 */
-  memoHits: number;
-}
-
-const projectionMemoCounters_ACU: SheetProjectionMemoCounters_ACU = { ddlParses: 0, memoHits: 0 };
-let projectionMemoCountersEnabled_ACU = false;
-
-/** 仅供测试：打开计数并清空记忆化。 */
+/** 仅供测试：清空 DDL 列解析记忆化（测试隔离 hygiene，非计数）。 */
 export function __resetSheetColumnProjectionMemoForTests_ACU(): void {
-  projectionMemoCounters_ACU.ddlParses = 0;
-  projectionMemoCounters_ACU.memoHits = 0;
-  projectionMemoCountersEnabled_ACU = true;
   ddlColumnMemo_ACU.clear();
-}
-
-/** 仅供测试：读取计数快照。 */
-export function __readSheetColumnProjectionMemoCountersForTests_ACU(): SheetProjectionMemoCounters_ACU {
-  return { ...projectionMemoCounters_ACU };
 }
 
 /** DDL 串 → 列解析产物。空 DDL 不入缓存（解析本身已是空结果，不值得占位）。 */
@@ -277,11 +258,9 @@ function resolveDdlColumnsMemoized_ACU(ddl: string): DDLColumnInfo_ACU[] {
   if (!ddl) return [];
   const hit = ddlColumnMemo_ACU.get(ddl);
   if (hit) {
-    if (projectionMemoCountersEnabled_ACU) projectionMemoCounters_ACU.memoHits += 1;
     return hit;
   }
   const parsed = parseDDLColumnInfos_ACU(ddl);
-  if (projectionMemoCountersEnabled_ACU) projectionMemoCounters_ACU.ddlParses += 1;
   if (ddlColumnMemo_ACU.size >= DDL_COLUMN_MEMO_LIMIT_ACU) ddlColumnMemo_ACU.clear();
   ddlColumnMemo_ACU.set(ddl, parsed);
   return parsed;

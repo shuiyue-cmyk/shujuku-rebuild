@@ -174,19 +174,9 @@ describe('findParagraphMatch_ACU', () => {
     // 精确匹配会成功
     expect(result.start).not.toBe(-1);
   });
-
-  it('标点不同但内容相同时模糊匹配', () => {
-    // 模糊匹配需要：去标点后长度>=10，前缀/后缀匹配，关键词匹配>=40%
-    const original = '这是一段比较长的测试文本用于验证模糊匹配功能是否正常工作的段落内容';
-    const content = '前缀文字。这是一段比较长的测试文本——用于验证模糊匹配功能是否正常工作的段落内容。后缀文字';
-    const result = findParagraphMatch_ACU(original, content);
-    // 精确匹配失败（标点不同），但模糊匹配应该成功
-    if (result.start !== -1) {
-      expect(result.method).not.toBe('精确匹配');
-    }
-    // 如果模糊匹配算法对此用例不匹配，也是合理的（算法有阈值限制）
-    expect(typeof result.start).toBe('number');
-  });
+  // NOTE(test-audit 2026-09-29)：此处曾有一条「标点不同但内容相同时模糊匹配」，
+  // 仅含条件断言（可能不执行）与恒真断言（typeof 必为 number），任何阈值调整都绿，
+  // 按 junk patterns 整条删除；模糊阈值的真实交付由精确/不匹配用例与写回保护覆盖。
 });
 
 // ═══════════════════════════════════════════════════════════════

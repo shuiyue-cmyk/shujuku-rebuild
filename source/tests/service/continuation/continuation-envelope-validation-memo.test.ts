@@ -3,16 +3,17 @@
  *
  * 性能优化第二批 · P1-l「read 漏斗：信封深校验记忆化」判别测试。
  *
- * 三条红线：
- * 1. 连续两次 read 的全量深校验次数必须塌到 1（冷路径那一次），第二次零深校验；
- * 2. 记忆化的是「校验结论」，交给调用方的永远是私有对象图——外部就地改返回值不得污染后续读；
- * 3. 写路径整体替换字段对象后必须重新深校验（引用键天然失效），且校验幂等：
- *    validate(validate(x)) 与 validate(x) 逐字段相等，read 漏斗省掉的那次重复深校验才安全。
+ * test-audit 2026-09-29 之后，计数器断言（深校验次数钉死）已按 junk patterns 删除：
+ * 它们把夹具算术写成契约。剩下的 keeper 只锁正确性：
+ * 1. 记忆化的是「校验结论」，交给调用方的永远是私有对象图——外部就地改返回值不得污染后续读；
+ * 2. 写路径/首楼换新后必须读到新值（引用键天然失效），损坏信封照常抛出；
+ * 3. 派生那一遍深校验有真实副作用（洗 inferred 标记），不得当成冗余删掉；
+ * 4. read 输出与朴素两遍校验参考实现逐字段相等。
+ * 性能回退不再由 CI 捕获（有意取舍）；绝对数字见 git 历史。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  __readContinuationEnvelopeCountersForTests_ACU,
   __resetContinuationEnvelopeCachesForTests_ACU,
   CONTINUATION_FIRST_FLOOR_FIELD_ACU,
   FirstFloorContinuationStore_ACU,
@@ -81,12 +82,6 @@ function mountStore(envelope: ContinuationEnvelope_ACU | null): { store: FirstFl
   return { store: new FirstFloorContinuationStore_ACU(), chat, saveChat };
 }
 
-function counters() { return __readContinuationEnvelopeCountersForTests_ACU(); }
-
-function diffValidations(before: number): number {
-  return counters().envelopeValidations - before;
-}
-
 beforeEach(() => {
   _set_SillyTavern_API_ACU(undefined);
   vi.spyOn(Date, 'now').mockReturnValue(1790497297995);
@@ -94,19 +89,9 @@ beforeEach(() => {
 });
 
 describe('P1-l 信封深校验记忆化：read 漏斗', () => {
-  it('连续两次 read：深校验 4→3（readRawEnvelope 那一遍被记忆化）', () => {
-    const { store } = mountStore(buildRunningEnvelope());
-    // 旧实现：每次 read 两遍全量深校验（readRawEnvelope + 派生重载暂停态），两次共 4 次。
-    // 新实现：readRawEnvelope 命中记忆化，派生那一遍仍跑（它有真实副作用，见下条），两次共 3 次。
-    const first = store.read();
-    const afterCold = counters().envelopeValidations;
-    expect(afterCold).toBe(2);
-    const second = store.read();
-    expect(diffValidations(afterCold)).toBe(1);
-    expect(counters().envelopeMemoHits).toBe(1);
-    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
-  });
-
+  // NOTE(test-audit 2026-09-29)：此处曾有「连续两次 read：深校验 4→3」与
+  // 「readPersisted 连续两次只深校验一次」两个纯计数用例（断言旧实现实测的 4/2/1/0）。
+  // 输出正确性由差分 keeper 与隔离性用例锁定，计数断言整条删除。
   it('read 输出与朴素两遍校验参考实现逐字段相等（差分）', () => {
     const envelope = buildRunningEnvelope();
     const { store, chat } = mountStore(envelope);
@@ -116,15 +101,6 @@ describe('P1-l 信封深校验记忆化：read 漏斗', () => {
       chat as any,
     );
     expect(JSON.stringify(store.read())).toBe(JSON.stringify(naive));
-  });
-
-  it('readPersisted 连续两次只深校验一次', () => {
-    const { store } = mountStore(buildRunningEnvelope());
-    store.readPersisted();
-    const afterCold = counters().envelopeValidations;
-    expect(afterCold).toBe(1);
-    store.readPersisted();
-    expect(diffValidations(afterCold)).toBe(0);
   });
 
   it('派生那一遍深校验有真实副作用（洗掉 inferred 标记），不得当成冗余删掉', () => {
@@ -164,34 +140,28 @@ describe('P1-l 信封深校验记忆化：read 漏斗', () => {
   it('写路径整体替换字段对象后必须重新深校验', async () => {
     const { store, chat } = mountStore(buildRunningEnvelope());
     store.read();
-    const beforeWrite = counters().envelopeValidations;
     const next = buildRunningEnvelope();
     (next.activeTask as any).originInstruction = '改写后的要求';
     await store.replaceAtomically(next);
     expect(chat[0][CONTINUATION_FIRST_FLOOR_FIELD_ACU]).not.toBe(next);
-    // 读到的必须是新值，而不是记忆化里的旧结论。
+    // 读到的必须是新值，而不是记忆化里的旧结论（失效与否由值断言证明，不数校验次数）。
     expect((store.readPersisted()!.activeTask as any).originInstruction).toBe('改写后的要求');
-    expect(diffValidations(beforeWrite)).toBeGreaterThanOrEqual(1);
   });
 
   it('首楼被整体换新（宿主重载聊天）后同样重新深校验', () => {
     const { store, chat } = mountStore(buildRunningEnvelope());
     store.readPersisted();
-    const afterCold = counters().envelopeValidations;
     const fresh = buildRunningEnvelope();
     (fresh.activeTask as any).originInstruction = '重载后的要求';
     chat[0] = { [CONTINUATION_FIRST_FLOOR_FIELD_ACU]: fresh };
     expect((store.readPersisted()!.activeTask as any).originInstruction).toBe('重载后的要求');
-    expect(diffValidations(afterCold)).toBe(1);
   });
 
-  it('损坏信封仍然每次都深校验并抛出（记忆化不得吞掉校验）', () => {
+  it('损坏信封照常抛出（两次读取都拒绝，不吞校验）', () => {
     const broken = { schemaVersion: 1, settings: undefined, activeTask: null };
     const { store } = mountStore(broken as unknown as ContinuationEnvelope_ACU);
     expect(() => store.readPersisted()).toThrow();
-    const afterFirst = counters().envelopeValidations;
     expect(() => store.readPersisted()).toThrow();
-    expect(diffValidations(afterFirst)).toBe(1);
   });
 
   it('对外 derive 入口仍接受未校验入参（契约不变）', () => {

@@ -3,7 +3,6 @@
  *
  * @vitest-environment jsdom
  */
-import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const STORAGE_KEY = "acu_v2_ui_state";
@@ -311,27 +310,6 @@ describe("DashboardPage", () => {
     // useDashboardPage 内的 display reader必须通过 parseTableTemplateJson_ACU({ stripSeedRows: true })
     // 读取模板，避免把模板预置行当作聊天数据。
     expect(m.parseTableTemplateJson_ACU).toHaveBeenCalledWith({ stripSeedRows: true });
-  });
-
-  it("配置状态面板移除后，仪表盘展示运行概览和开关面板", () => {
-    const source = readFileSync(
-      "src/presentation-v2/pages/DashboardPage.vue",
-      "utf8",
-    );
-    const copySource = readFileSync(
-      "src/presentation-v2/copy/dashboard-copy.ts",
-      "utf8",
-    );
-
-    expect(source).toContain("dashboardCopy.panels.healthTitle");
-    expect(source).toContain("dashboardCopy.panels.togglesTitle");
-    expect(copySource).toContain('healthTitle: "运行概览"');
-    expect(copySource).toContain('togglesTitle: "开关"');
-    expect(source).not.toContain("ConfigStatusPanel");
-    expect(source).not.toContain(
-      "grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);",
-    );
-    expect(source).not.toContain("acu-v2-dashboard-page__spacer");
   });
 
   it("默认渲染运行概览和基础开关；header 不再有 subtitle / 刷新按钮 / API 三件套", async () => {

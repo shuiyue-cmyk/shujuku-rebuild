@@ -3,19 +3,16 @@
  *
  * 性能优化第二批 · P0-7「任务光标调和：预计算逐楼身份」判别测试。
  *
- * 三条红线：
- * 1. 每楼指纹计算次数从 O(完成数×楼层) 降到 O(楼层)；完成记录带 messageId 时降到 0；
- * 2. `used` 消耗顺序与全部匹配语义一字不变——与「旧实现逐条重算指纹」的朴素参考实现逐字段相等；
- * 3. 命中 / 未命中 / 重复完成 / 换 swipe 四类 fixture 都要走到。
+ * test-audit 2026-09-29 之后，计数器断言（指纹计算 650→0 / 840→8 等夹具算术）已删除；
+ * 正确性由「与朴素参考实现逐字段相等」keeper 与 stage-cursor.test.ts 的行为测试锁定。
+ * 性能回退不再由 CI 捕获（有意取舍）；绝对数字见 git 历史。
  *
  * 计数钩子只统计「真正算过整段 mes 指纹」的次数；身份表是单次调和的局部量，
  * 不跨调用复用，所以不存在陈旧值路径（无需版本键）。
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
-  __readStageCursorCountersForTests_ACU,
-  __resetStageCursorCountersForTests_ACU,
   cursorFromCompletedTurns_ACU,
   getStableMessageIdentity_ACU,
   reconcileTaskCursorFromChat_ACU,
@@ -153,34 +150,19 @@ function naiveReconcile_ACU(task: ContinuationTask_ACU, chatLength: number, chat
   return { ...task, activeStageId, stages };
 }
 
-beforeEach(() => {
-  __resetStageCursorCountersForTests_ACU();
-});
-
 describe('P0-7 光标调和：预计算逐楼身份', () => {
-  it('完成记录带 messageId：指纹计算 650→0，身份表 40 条', () => {
+  it('完成记录带 messageId：全部命中 id，completedTurns 不变', () => {
     const live = buildChat();
     const task = taskOf([stageOf('stage-1', 1, COMPLETIONS, COMPLETIONS)], idEntries(COMPLETIONS, Array.from({ length: COMPLETIONS }, (_, i) => 2 * i + 1)), 'stage-1');
-    // 旧实现实测（同 fixture）：fingerprints=650（完成数×楼层量级）
     const next = reconcileTaskCursorFromChat_ACU(task, live.length, live);
-    const counters = __readStageCursorCountersForTests_ACU();
-    expect(counters.fingerprints).toBe(0);
-    expect(counters.floorIdentities).toBe(FLOORS);
-    expect(counters.reconciles).toBe(1);
     expect(next.stages[0].completedTurns).toBe(COMPLETIONS);
   });
 
-  it('完成记录只带指纹：指纹计算 840→8（O(楼层)，且不超楼层数）', () => {
+  it('完成记录只带指纹：命中第 7 楼，completedTurns 为 1', () => {
     const live = buildChat();
     const fingerprint = getStableMessageIdentity_ACU(live[7]).messageFingerprint;
-    __resetStageCursorCountersForTests_ACU();
     const task = taskOf([stageOf('stage-1', 1, COMPLETIONS, COMPLETIONS)], [fingerprintEntry(7, { messageFingerprint: fingerprint })], 'stage-1');
     const next = reconcileTaskCursorFromChat_ACU(task, live.length, live);
-    const counters = __readStageCursorCountersForTests_ACU();
-    // 旧实现实测（同 fixture）：fingerprints=840（第一条完成记录扫到第 7 楼，阶段复核再扫一遍，
-    // 后续每条完成记录又从 0 楼重来）。新实现：身份表内每楼最多算一次，走到命中为止＝8。
-    expect(counters.fingerprints).toBe(8);
-    expect(counters.fingerprints).toBeLessThanOrEqual(FLOORS);
     expect(next.stages[0].completedTurns).toBe(1);
   });
 
@@ -196,7 +178,6 @@ describe('P0-7 光标调和：预计算逐楼身份', () => {
       'stage-1',
     );
     const next = reconcileTaskCursorFromChat_ACU(task, live.length, live);
-    expect(__readStageCursorCountersForTests_ACU().fingerprints).toBe(0);
     expect(next.stages[0].completedTurns).toBe(3);
   });
 });
@@ -281,11 +262,8 @@ describe('P0-7 光标调和：与朴素参考实现逐字段相等', () => {
       fingerprintEntry(7, { messageFingerprint: fingerprint }),
     ], 'stage-1');
     const first = reconcileTaskCursorFromChat_ACU(task, live.length, live);
-    const warm = __readStageCursorCountersForTests_ACU();
     const second = reconcileTaskCursorFromChat_ACU(task, live.length, live);
-    const hot = __readStageCursorCountersForTests_ACU();
-    // 身份表是单次调和的局部量：第二次调和重新建表，但仍然每楼最多算一次指纹。
-    expect(hot.fingerprints - warm.fingerprints).toBeLessThanOrEqual(FLOORS);
+    // 连续调和确定性：第二次结果与第一次逐字一致（算几次指纹是机制，不数）。
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
   });
 });

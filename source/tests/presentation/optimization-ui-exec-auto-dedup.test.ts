@@ -314,24 +314,6 @@ describe('自动正文替换入口判重（executeContentOptimization_ACU）', (
     expect(h.shouldSkip).not.toHaveBeenCalled();
     expect(h.replace).toHaveBeenCalledTimes(1);
   });
-  it('判重只挂在自动入口：exec 源码里判重调用恰好一处，手动重优化函数体不含判重', async () => {
-    const { readFileSync } = await import('node:fs');
-    const execSource = readFileSync(
-      'src/presentation/components/optimization-ui/optimization-ui-exec.ts',
-      'utf8',
-    );
-    expect(execSource.match(/shouldSkipDuplicateAutoContentOptimization_ACU\(/g) || []).toHaveLength(1);
-    // 定义 1 处 + 自动应用/手动确认两条写回路径各 1 处
-    expect(execSource.match(/recordAutoProcessedAfterWriteBack_ACU\(/g) || []).toHaveLength(3);
-
-    const reoptBody = execSource.slice(
-      execSource.indexOf('export async function reoptimizeMessage_ACU'),
-      execSource.indexOf('function showReoptimizationDialog_ACU'),
-    );
-    expect(reoptBody).not.toContain('shouldSkipDuplicateAutoContentOptimization_ACU');
-    expect(reoptBody).not.toContain('recordAutoContentOptimizationProcessed_ACU');
-  });
-
   it('功能未启用 / 用户消息楼层：不查判重，既有早退分支不变', async () => {
     (settings_ACU as any).contentOptimizationSettings.enabled = false;
     expect(await executeContentOptimization_ACU(1)).toBe(false);

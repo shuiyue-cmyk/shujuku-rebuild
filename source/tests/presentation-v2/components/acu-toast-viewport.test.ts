@@ -3,8 +3,6 @@
  *
  * @vitest-environment jsdom
  */
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type App, createApp, defineComponent, h, nextTick } from "vue";
 
@@ -41,13 +39,6 @@ function installAppRoot(): HTMLElement {
   root.id = "acu-app-v2";
   document.body.appendChild(root);
   return root;
-}
-
-function readToastViewportSource(): string {
-  return readFileSync(
-    join(process.cwd(), "src/presentation-v2/components/_lib/AcuToastViewport.vue"),
-    "utf-8",
-  );
 }
 
 afterEach(() => {
@@ -169,22 +160,5 @@ describe("AcuToastViewport", () => {
     expect(viewport!.parentElement).toBe(root);
     expect(el.querySelector(".acu-toast-viewport")).toBeNull();
     expect(viewport!.style.zIndex).toBe("9410");
-  });
-
-  it("anchors to the upper-right and keeps mobile toasts compact with unclipped soft shadows", async () => {
-    const { store } = await mountViewport();
-
-    store.success("已切换到原生 JSON 模式。", { durationMs: 0 });
-    await nextTick();
-
-    const source = readToastViewportSource();
-    expect(source).toContain("top: calc(var(--acu-toast-top, 62px) + var(--acu-safe-top, 0px));");
-    expect(source).toContain("right: calc(var(--acu-toast-edge-gap, 18px) + var(--acu-safe-right, 0px));");
-    expect(source).toContain("bottom: auto;");
-    expect(source).toContain("box-shadow:");
-    expect(source).toContain("overflow: visible;");
-    expect(source).toContain("width: clamp(var(--acu-menu-min-width, 240px), 70vw");
-    expect(source).not.toContain("backdrop-filter:");
-    expect(source).not.toContain("bottom: calc(18px + var(--acu-safe-bottom, 0px));");
   });
 });

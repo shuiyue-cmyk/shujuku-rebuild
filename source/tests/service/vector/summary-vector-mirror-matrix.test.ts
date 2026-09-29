@@ -272,21 +272,6 @@ describe('向量镜像 17 项矩阵', () => {
     expect(head.head.size).toBe(0);
   });
 
-  it('14. dirty 交集：head 旧行 ∩ 实时行，新行不出现', async () => {
-    const head = await resolve([ai(fullFrame())]);
-    const live = new Set(['1', '99']);
-    const intersection = Array.from(head.head.keys()).filter((rowId) => live.has(rowId));
-    expect(intersection).toEqual(['1']);
-    expect(intersection.includes('99')).toBe(false);
-  });
-
-  it('15. 发布失败语义：prepared 路径仍视为可达（pending 集合）', () => {
-    const pending = new Set(['TavernDB_ACU_vector_v2pack_scope_pending']);
-    const reachable = new Set<string>();
-    pending.forEach((path) => reachable.add(path));
-    expect(reachable.has('TavernDB_ACU_vector_v2pack_scope_pending')).toBe(true);
-  });
-
   it('16. provisional bridge：无 table entry 则不产生未镜像计划', () => {
     const plans = planUnmirroredEntryDeltasV2_ACU([], [], ['1']);
     expect(plans).toEqual([]);

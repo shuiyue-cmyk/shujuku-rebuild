@@ -2,33 +2,6 @@ import type { ContinuationEnvelope_ACU, ContinuationStage_ACU, ContinuationTask_
 
 type CompletionEntry_ACU = ContinuationTask_ACU['timeline'][number];
 
-/**
- * 调和层计数（仅测试打开）。生产路径只有一次布尔判断，行为与开销不受影响。
- * fingerprints=真正算过整段 mes 指纹的次数（messageId 判定放行且完成记录带指纹时才算）；
- * floorIdentities=本次调和建立的逐楼身份条目数； reconciles=调和调用次数。
- */
-export interface StageCursorCounters_ACU {
-  fingerprints: number;
-  floorIdentities: number;
-  reconciles: number;
-}
-
-const cursorCounters_ACU: StageCursorCounters_ACU = { fingerprints: 0, floorIdentities: 0, reconciles: 0 };
-let cursorCountersEnabled_ACU = false;
-
-/** 仅供测试：打开计数并清零。 */
-export function __resetStageCursorCountersForTests_ACU(): void {
-  cursorCounters_ACU.fingerprints = 0;
-  cursorCounters_ACU.floorIdentities = 0;
-  cursorCounters_ACU.reconciles = 0;
-  cursorCountersEnabled_ACU = true;
-}
-
-/** 仅供测试：读取计数快照。 */
-export function __readStageCursorCountersForTests_ACU(): StageCursorCounters_ACU {
-  return { ...cursorCounters_ACU };
-}
-
 function isRecordMessage_ACU(message: unknown): message is Record<string, unknown> {
   return !!message && typeof message === 'object' && !Array.isArray(message);
 }
@@ -58,7 +31,6 @@ function messageFingerprintText_ACU(message: unknown): string {
 export function getStableMessageIdentity_ACU(message: unknown): { messageId?: string | number; messageFingerprint: string } {
   const record = isRecordMessage_ACU(message) ? message : null;
   const messageId = messageIdOf_ACU(record);
-  if (cursorCountersEnabled_ACU) cursorCounters_ACU.fingerprints += 1;
   return { ...(messageId === undefined ? {} : { messageId }), messageFingerprint: messageFingerprintText_ACU(message) };
 }
 
@@ -76,7 +48,6 @@ interface FloorIdentity_ACU {
 function floorIdentityOf_ACU(identity: FloorIdentity_ACU): string {
   if (identity.fingerprint === null) {
     identity.fingerprint = messageFingerprintText_ACU(identity.message);
-    if (cursorCountersEnabled_ACU) cursorCounters_ACU.fingerprints += 1;
   }
   return identity.fingerprint;
 }
@@ -93,7 +64,6 @@ function buildFloorIdentities_ACU(chat: unknown): FloorIdentity_ACU[] {
       fingerprint: null,
     };
   }
-  if (cursorCountersEnabled_ACU) cursorCounters_ACU.floorIdentities += size;
   return identities;
 }
 
@@ -123,7 +93,6 @@ function completionSurvives_ACU(
  * 新写入的完成记录带稳定 message identity；旧记录没有 identity 时才回退到旧下标兼容。
  */
 export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chatLength: number, chat?: readonly unknown[]): ContinuationTask_ACU {
-  if (cursorCountersEnabled_ACU) cursorCounters_ACU.reconciles += 1;
   const effectiveLength = Array.isArray(chat) ? chat.length : chatLength;
   if (!Number.isInteger(effectiveLength) || effectiveLength < 0) return task;
   const completions = task.timeline.filter(entry => entry.kind === 'turn_completed' && entry.stageId);

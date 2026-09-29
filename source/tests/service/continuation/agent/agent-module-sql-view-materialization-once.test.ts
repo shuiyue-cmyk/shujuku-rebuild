@@ -1,5 +1,5 @@
 /**
- * tests/service/continuation/agent/agent-module-sql-view-reuse.test.ts
+ * tests/service/continuation/agent/agent-module-sql-view-materialization-once.test.ts
  * P1-m：同一次提交只物化一次视图 + 损坏必须仍然被拒。
  *
  * 背景（2026-09-27 实测）：8 表×400 行时单次物化 89ms（其中引擎 init 仅 0.14ms），
@@ -201,11 +201,14 @@ describe('P1-m 同一次提交只物化一次视图（结构不变量）', () =>
   it('物化失败（引擎装载报错）也照旧释放：释放次数与物化次数仍然相等', async () => {
     const broken = { ...snapshot_ACU(), hooks: [{ noId: true }] } as unknown as AgentModuleSnapshot_ACU;
     await expect(applyAgentModuleDeltaViaSql_ACU(snapshot_ACU(), hookDelta_ACU('H1') as never, ['hooks'], 4, [])).resolves.toBeTruthy();
+    const beforeFailure = __readAgentModuleSqlViewCountersForTests_ACU();
     // 直接物化坏快照：入口抛错且必须已释放。
     const view = await import('../../../../src/service/continuation/agent/agent-module-sql-view');
     await expect(view.materializeAgentModuleSqlView_ACU(broken)).rejects.toThrow(/无法物化/);
     const counters = __readAgentModuleSqlViewCountersForTests_ACU();
-    expect(counters.materializations).toBe(2);
+    // 失败路径确实走过一次物化（不是空转），且释放次数与物化次数相等（不泄漏 wasm 引擎）。
+    // 不钉绝对值：warm-up 的成功物化次数是夹具算术，未来复用引擎/合并物化时数字会变。
+    expect(counters.materializations).toBe(beforeFailure.materializations + 1);
     expect(counters.disposed).toBe(counters.materializations);
   });
 });

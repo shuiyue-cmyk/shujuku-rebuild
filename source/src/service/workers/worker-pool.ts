@@ -247,13 +247,3 @@ export function shouldUseWorkerForWorldbook(entryCount: number, baseScanLen: num
 export function shouldUseWorkerForTables(tableCount: number, totalRows: number, totalCells: number): boolean {
   return tableCount > 30 || totalRows > 3000 || totalCells > 80000 || (tableCount > 20 && totalRows > 1500);
 }
-
-export function resetWorkerForTests_ACU(): void {
-  workerTimeoutCount = 0;
-  workerFailed = false;
-  workerReady = false;
-  if (workerInstance) { try { workerInstance.terminate(); } catch {} }
-  workerInstance = null;
-  for (const [, entry] of pending) clearTimeout(entry.timer);
-  pending.clear();
-}
