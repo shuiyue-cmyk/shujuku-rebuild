@@ -57,6 +57,16 @@ describe('buildAcuTauriVersionWarningHtml_ACU', () => {
     expect(html).toContain('&lt;img');
     expect(html).not.toContain('<img src=x');
   });
+
+  it('三段式打标：宿主版本 / 扩展版本 / 要求基线各自显式前缀', async () => {
+    const { buildAcuTauriVersionWarningHtml_ACU } = await loadGate();
+    const html = buildAcuTauriVersionWarningHtml_ACU('2.2.0', '2.3.0', '9.9.1');
+    expect(html).toContain('宿主版本');
+    expect(html).toContain('扩展版本');
+    expect(html).toContain('2.2.0');
+    expect(html).toContain('9.9.1');
+    expect(html).toContain('2.3.0');
+  });
 });
 
 describe('notifyAcuTauriVersionIfOutdated_ACU', () => {

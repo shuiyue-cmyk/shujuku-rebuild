@@ -20,7 +20,7 @@ import { logDebug_ACU, logError_ACU } from '../../shared/utils';
 import { SillyTavern_API_ACU } from '../../shared/host-api';
 import { getAcuHostDocument, getAcuHostWindow, getAcuHostSource } from './host-document';
 import { openAcuV2App } from './mount';
-import { isAcuTauriRuntime, getAcuTauriReady } from '../../shared/host-bridge';
+import { isAcuTauriRuntime, awaitAcuTauriReady_ACU, readPanelRuntimeSnapshot_ACU } from '../../shared/host-bridge';
 
 const MENU_CONTAINER_ID = 'acu-v2-menu-container';
 const MENU_ITEM_ID = 'acu-v2-menu-item';
@@ -37,18 +37,17 @@ let menuButtonInstalled_ACU = false;
 let menuButtonInitStarted_ACU = false;
 let menuButtonObserver_ACU: MutationObserver | null = null;
 
+/** TT 下菜单按钮就绪等待上限：旧内联等待无上限（promise 永不解决则永不注册）。 */
+const MENU_BUTTON_TAURI_WAIT_MS_ACU = 15000;
+
 /** 注册 UI v2 菜单按钮；TT 下先等 TT 内部 ABI 就绪再进事件驱动流程。 */
 export function registerAcuV2MenuButton(): void {
-  // TT 适配：TauriTavern 下先等 TT 内部 ABI 就绪（宿主异步引导，避免扩展先于 store/菜单就绪注册失败）
+  // TT 适配：TauriTavern 下先等 TT 内部 ABI 就绪（宿主异步引导，避免扩展先于 store/菜单就绪注册失败）。
+  // 与 waitForAcuHostReady 共用同一等待器（语义：解决才进；拒绝/超时也进，
+  // 靠 APP_READY/Observer/短轮询兜底——旧内联 `.then(start).catch(start)` 同理，
+  // 只是旧逻辑永不解决时永不注册，新逻辑 15s 后照常进兜底，不白屏）。
   if (isAcuTauriRuntime()) {
-    const { ready, promise } = getAcuTauriReady();
-    if (!ready && promise) {
-      promise.then(() => startMenuButtonInit_ACU()).catch(() => startMenuButtonInit_ACU());
-    } else if (!ready) {
-      startMenuButtonInit_ACU(); // 布尔未就绪：交给事件 + 短轮询兜底
-    } else {
-      startMenuButtonInit_ACU();
-    }
+    void awaitAcuTauriReady_ACU(MENU_BUTTON_TAURI_WAIT_MS_ACU).then(() => startMenuButtonInit_ACU());
     return;
   }
   startMenuButtonInit_ACU();
@@ -189,6 +188,12 @@ function markMenuButtonInstalled_ACU(where: string): void {
   menuButtonInstalled_ACU = true;
   disconnectMenuButtonObserver_ACU();
   logDebug_ACU(`[ACU-V2] menu button registered into ${where}`);
+  // T2 感知日志：只读快照，不分支行为。抽屉关闭时宿主 Panel Runtime 会把面板 DOM park 走，
+  // 用户报“菜单找不到”时，这条日志能区分“没注入”与“被 park 了”。
+  try {
+    const snapshot = readPanelRuntimeSnapshot_ACU();
+    logDebug_ACU(`[ACU-V2] 面板运行时快照：profile=${snapshot.profile}，manager=${snapshot.manager}。`);
+  } catch { /* 快照函数本身不抛，这里是双保险 */ }
 }
 
 function buildMenuButton_ACU(doc: Document): HTMLElement {

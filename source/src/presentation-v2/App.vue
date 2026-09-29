@@ -449,8 +449,8 @@ function clearMobileNavCloseTimer(): void {
   width: 100vw;
   width: 100dvw;
   height: 100%;
-  height: 100vh;
-  height: 100dvh;
+  height: var(--tt-base-viewport-height, 100vh);
+  height: var(--tt-base-viewport-height, 100dvh);
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -560,10 +560,10 @@ function clearMobileNavCloseTimer(): void {
   width: 100vw;
   width: 100dvw;
   height: 100%;
-  height: 100vh;
-  height: 100dvh;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: var(--tt-base-viewport-height, 100vh);
+  height: var(--tt-base-viewport-height, 100dvh);
+  min-height: var(--tt-base-viewport-height, 100vh);
+  min-height: var(--tt-base-viewport-height, 100dvh);
   z-index: 9300;
   display: none;
   align-items: stretch;

@@ -47,7 +47,7 @@ export const dashboardCopy = {
     title: "表格更新",
     noChatBadge: "未加载聊天",
     noChatSummary:
-      "当前没有加载 SillyTavern 聊天，暂时无法读取对应数据库表格或计算自动更新楼层。",
+      "当前没有加载 TauriTavern 聊天，暂时无法读取对应数据库表格或计算自动更新楼层。",
     notLoadedBadge: "待准备",
     notLoadedSummary(totalAi: number): string {
       return `当前聊天还没有加载数据库表格。第一次填表或初始化后，这里会自动显示更新状态；当前已有 ${totalAi} 条 AI 回复。`;
@@ -90,7 +90,7 @@ export const dashboardCopy = {
     },
     noChatBadge: "未加载聊天",
     noChatSummary(): string {
-      return "当前没有加载 SillyTavern 聊天，暂时无法检查当前聊天的表格模板是否适配。";
+      return "当前没有加载 TauriTavern 聊天，暂时无法检查当前聊天的表格模板是否适配。";
     },
     pendingBadge: "待检查",
     noTemplatesSummary(): string {

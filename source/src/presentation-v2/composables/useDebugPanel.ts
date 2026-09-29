@@ -29,7 +29,7 @@ import {
 } from '../../shared/log-buffer';
 import { getAcuHostDocument } from '../bootstrap/host-document';
 import { useToastStore } from '../stores/toast-store';
-import { getAcuHostKind } from '../../shared/host-bridge';
+import { getAcuHostKind, readCachedAcuTauriVersion_ACU } from '../../shared/host-bridge';
 import { readAcuBuildStamp_ACU, readAcuBuildVersion_ACU } from '../../shared/build-info';
 import { settings_ACU, currentJsonTableData_ACU, currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
 
@@ -164,6 +164,7 @@ export function buildDebugExportPayload_ACU(logs: LogEntry[]) {
   const presetCfg = activePreset?.apiConfig || null;
   const env = {
     host: getAcuHostKind(),
+    hostVersion: readCachedAcuTauriVersion_ACU(),
     buildStamp: getBuildStamp(),
     version: getPluginVersion(),
     exportedAt: new Date().toISOString(),
@@ -209,6 +210,8 @@ export function buildDebugExportPayload_ACU(logs: LogEntry[]) {
     meta: {
       plugin: 'TTonly·数据库',
       version: env.version,
+      extensionVersion: env.version,
+      hostVersion: env.hostVersion,
       buildStamp: env.buildStamp,
       host: env.host,
       exportedAt: env.exportedAt,

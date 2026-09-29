@@ -158,8 +158,8 @@ watch(
   justify-content: center;
   width: 100vw;
   width: 100dvw;
-  height: 100vh;
-  height: 100dvh;
+  height: var(--tt-base-viewport-height, 100vh);
+  height: var(--tt-base-viewport-height, 100dvh);
   /* TT Android IME 键盘避让（必须在本层就地重算，不能靠继承）：
      本层标 backdrop，宿主 resolveImeSurfaceRoot 的兜底分支会把「最近的打标祖先」——本层——选成
      IME root（mobile-ime-surface-controller.js:123-144），原生侧把 --tt-ime-bottom inline 写到本元素
@@ -187,8 +187,8 @@ watch(
 
 .acu-dialog {
   width: min(var(--acu-dialog-width, 440px), 100%);
-  max-height: min(var(--acu-dialog-max-height, 560px), calc(100vh - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));
-  max-height: min(var(--acu-dialog-max-height, 560px), calc(100dvh - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));
+  max-height: min(var(--acu-dialog-max-height, 560px), calc(var(--tt-base-viewport-height, 100vh) - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));
+  max-height: min(var(--acu-dialog-max-height, 560px), calc(var(--tt-base-viewport-height, 100dvh) - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));
   display: flex;
   flex-direction: column;
   gap: var(--acu-page-gap, 14px);
@@ -340,8 +340,8 @@ watch(
 
   .acu-dialog {
     width: 100%;
-    max-height: calc(100vh - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));
-    max-height: calc(100dvh - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));
+    max-height: calc(var(--tt-base-viewport-height, 100vh) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));
+    max-height: calc(var(--tt-base-viewport-height, 100dvh) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));
   }
 
   .acu-dialog__actions,

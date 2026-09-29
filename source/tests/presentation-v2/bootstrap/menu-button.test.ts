@@ -109,6 +109,32 @@ describe('menu-button 事件驱动注入', () => {
     expect(container).not.toBeNull();
     expect(menu.contains(container)).toBe(true);
     expect(mockLogDebug).toHaveBeenCalledWith(expect.stringContaining('menu button registered'));
+    // T2：注册成功时顺带打一条面板运行时只读快照（解释 park 导致的菜单缺失报障），不分支行为。
+    expect(mockLogDebug).toHaveBeenCalledWith(expect.stringContaining('面板运行时'));
+  });
+
+  it('TT 下 ready 未解决时不抢跑，解决后才注入（T3 helper 替换内联等待的语义锁）', async () => {
+    const { menuButton, hostApi } = await freshImport();
+    document.body.innerHTML = '';
+    hostApi._set_SillyTavern_API_ACU(undefined);
+    let resolveReady!: () => void;
+    (window as any).__TAURITAVERN__ = { ready: new Promise<void>((r) => { resolveReady = r; }) };
+    try {
+      const menu = document.createElement('div');
+      menu.id = 'extensionsMenu';
+      document.body.appendChild(menu);
+
+      menuButton.registerAcuV2MenuButton();
+      await new Promise(resolve => setTimeout(resolve, 20));
+      // promise 还没解决：不能注入（抢跑会撞上 TT 异步引导）。
+      expect(document.getElementById('acu-v2-menu-container')).toBeNull();
+
+      resolveReady();
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(document.getElementById('acu-v2-menu-container')).not.toBeNull();
+    } finally {
+      delete (window as any).__TAURITAVERN__;
+    }
   });
 
   it('主容器长期缺失时走备用入口（挂 #leftSendForm 旁，wandButton 同宿主）', async () => {

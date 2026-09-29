@@ -477,3 +477,23 @@ describe('语义⑤：两份导出共用同一个 payload builder（P1 脱敏不
     expect(count('downloadJson(debugExportFilename_ACU()')).toBe(2);
   });
 });
+
+/**
+ * T4 版本显式打标：meta 必须同时给出扩展版本与宿主版本（报障时不再混淆“该升宿主还是升插件”）。
+ * 宿主版本来自启动时 readAcuTauriVersion 的运行时缓存（globalThis），读不到写 'unavailable'；
+ * `version` 旧键保留兼容，`extensionVersion` 为显式新键。
+ */
+describe('meta 版本打标', () => {
+  it('meta 显式区分扩展版本与宿主版本', () => {
+    (globalThis as any).__ACU_TAURI_VERSION__ = '2.3.0';
+    try {
+      const payload = buildDebugExportPayload_ACU(getAllLogs());
+      expect(payload.meta.extensionVersion).toBe(payload.meta.version);
+      expect(payload.meta.hostVersion).toBe('2.3.0');
+    } finally {
+      delete (globalThis as any).__ACU_TAURI_VERSION__;
+    }
+    const fallback = buildDebugExportPayload_ACU(getAllLogs());
+    expect(fallback.meta.hostVersion).toBe('unavailable');
+  });
+});

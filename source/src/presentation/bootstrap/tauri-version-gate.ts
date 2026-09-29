@@ -16,6 +16,7 @@ import {
   isAcuTauriRuntime,
   readAcuTauriVersion,
 } from '../../shared/host-bridge';
+import { readAcuBuildVersion_ACU } from '../../shared/build-info';
 import { escapeHtml_ACU } from '../../shared/html-helpers';
 import { logDebug_ACU } from '../../shared/utils';
 import { SillyTavern_API_ACU } from '../../shared/host-api';
@@ -24,18 +25,20 @@ import { showToastr_ACU } from '../theme/toast';
 /** 同一次页面加载内只提醒一次（init 可能被重入，避免叠窗）。 */
 let tauriVersionNotified_ACU = false;
 
-/** 组装提醒正文（纯函数，便于测试）。 */
+/** 组装提醒正文（纯函数，便于测试）。三段式打标：用户必须一眼分清“该升宿主还是升插件”。 */
 export function buildAcuTauriVersionWarningHtml_ACU(
   currentVersion: string,
   requiredVersion: string = ACU_REQUIRED_TAURITAVERN_VERSION,
+  extensionVersion: string = readAcuBuildVersion_ACU(),
 ): string {
   const current = escapeHtml_ACU(String(currentVersion || '未知'));
   const required = escapeHtml_ACU(String(requiredVersion || ''));
+  const extension = escapeHtml_ACU(String(extensionVersion || '未知'));
   return [
     '<h3>建议升级 TauriTavern</h3>',
-    `<p>检测到当前 TauriTavern 版本为 <b>${current}</b>，低于本插件适配与验证所需的 <b>${required}</b>。</p>`,
-    `<p>本插件的楼层识别与自动填表是按 ${required} 的宿主行为适配并验证的（工具调用结果作为独立楼层、生成事件与结构写入契约的变更）。低于该版本时行为未经验证，可能出现楼层识别偏差、填表或追平异常。</p>`,
-    `<p>请升级到 <b>${required}</b> 或更高版本后重新加载页面。可在 TauriTavern 内检查更新，或从官方 Releases 下载：<br>github.com/Darkatse/TauriTavern/releases</p>`,
+    `<p>宿主版本（TauriTavern）：<b>${current}</b>；扩展版本（TTonly·数据库）：<b>${extension}</b>；本插件适配与验证的要求基线：<b>${required}</b>。</p>`,
+    `<p>检测到宿主版本低于要求基线。本插件的楼层识别与自动填表是按 ${required} 的宿主行为适配并验证的（工具调用结果作为独立楼层、生成事件与结构写入契约的变更）。低于该版本时行为未经验证，可能出现楼层识别偏差、填表或追平异常。</p>`,
+    `<p>请把宿主升级到 <b>${required}</b> 或更高版本后重新加载页面（扩展不用动）。可在 TauriTavern 内检查更新，或从官方 Releases 下载：<br>github.com/Darkatse/TauriTavern/releases</p>`,
   ].join('');
 }
 
@@ -77,7 +80,7 @@ export async function notifyAcuTauriVersionIfOutdated_ACU(): Promise<boolean> {
   const popup = resolveAcuPopupApi_ACU();
   if (!popup) {
     // 弹窗 API 不可用（极旧宿主/被裁剪的前端）时退化为 toast，不静默丢弃提醒。
-    showToastr_ACU('warning', `当前 TauriTavern 版本 ${escapeHtml_ACU(String(version))} 低于本插件所需的 ${ACU_REQUIRED_TAURITAVERN_VERSION}，建议升级后重新加载。`, '版本提醒');
+    showToastr_ACU('warning', `宿主 TauriTavern ${escapeHtml_ACU(String(version))} 低于要求 ${ACU_REQUIRED_TAURITAVERN_VERSION}（扩展 ${readAcuBuildVersion_ACU()} 不变，请升级宿主后重新加载）。`, '版本提醒');
     return true;
   }
   // 不 await：模态窗由用户自行关闭，不得阻塞插件初始化。

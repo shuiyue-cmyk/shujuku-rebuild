@@ -125,7 +125,7 @@ function clearCloseTimer(): void {
 .acu-v2-drawer-layer {
   position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 9200;
   width: 100%; width: 100vw; width: 100dvw;
-  height: 100%; height: 100vh; height: 100dvh;
+  height: 100%; height: var(--tt-base-viewport-height, 100vh); height: var(--tt-base-viewport-height, 100dvh);
   display: flex; justify-content: flex-end;
   /* TT Android IME 键盘避让（必须在本层就地重算，不能靠继承）：
      本层标 data-tt-mobile-surface="backdrop"。宿主 resolveImeSurfaceRoot 只有在打标值 ===

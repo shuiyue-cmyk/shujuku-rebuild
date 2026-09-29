@@ -114,4 +114,78 @@ describe('readAcuTauriVersion', () => {
     installFakeWindow({ __TAURITAVERN__: { invoke: { safeInvoke: vi.fn().mockRejectedValue(new Error('boom')) } } });
     await expect(readAcuTauriVersion()).resolves.toBeNull();
   });
+
+  it('成功读取后缓存宿主版本供同步读取（Debug meta 用）', async () => {
+    const safeInvoke = vi.fn().mockResolvedValue({ tauriVersion: '2.3.0' });
+    installFakeWindow({ __TAURITAVERN__: { invoke: { safeInvoke } } });
+    delete (globalThis as any).__ACU_TAURI_VERSION__;
+    await expect(readAcuTauriVersion()).resolves.toBe('2.3.0');
+    const mod = await import('../../src/shared/host-bridge') as any;
+    expect(typeof mod.readCachedAcuTauriVersion_ACU).toBe('function');
+    expect(mod.readCachedAcuTauriVersion_ACU()).toBe('2.3.0');
+  });
+});
+
+describe('readAcuTauriVersion 经 GET /version（T3 首选，invoke 只当回退）', () => {
+  it('无 invoke 时走同源 fetch，只取 tauriVersion（pkgVersion 是 ST 兼容号，误用则闸门错乱）', async () => {
+    installFakeWindow({ __TAURITAVERN__: {} });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ tauriVersion: '2.2.0', pkgVersion: '2.3.0', agent: 'x' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(readAcuTauriVersion()).resolves.toBe('2.2.0');
+      expect(fetchMock).toHaveBeenCalledWith('/version');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('fetch 成功同样写入运行时缓存（T4 stash 不因换通道丢失）', async () => {
+    installFakeWindow({ __TAURITAVERN__: {} });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ tauriVersion: '2.3.0' }) }));
+    try {
+      delete (globalThis as any).__ACU_TAURI_VERSION__;
+      await expect(readAcuTauriVersion()).resolves.toBe('2.3.0');
+      expect((globalThis as any).__ACU_TAURI_VERSION__).toBe('2.3.0');
+    } finally {
+      vi.unstubAllGlobals();
+      delete (globalThis as any).__ACU_TAURI_VERSION__;
+    }
+  });
+
+  it('fetch 失败时回退 safeInvoke（旧链路不断）', async () => {
+    const safeInvoke = vi.fn().mockResolvedValue({ tauriVersion: '2.1.0' });
+    installFakeWindow({ __TAURITAVERN__: { invoke: { safeInvoke } } });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('net down')));
+    try {
+      await expect(readAcuTauriVersion()).resolves.toBe('2.1.0');
+      expect(safeInvoke).toHaveBeenCalledWith('get_client_version');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('fetch 与 invoke 双失败时返回 null（fail-open 不变）', async () => {
+    installFakeWindow({ __TAURITAVERN__: { invoke: { safeInvoke: vi.fn().mockRejectedValue(new Error('boom')) } } });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('net down')));
+    try {
+      await expect(readAcuTauriVersion()).resolves.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('非 TT 不 fetch（ST/Luker 零影响）', async () => {
+    installFakeWindow({ SillyTavern: { getContext: () => ({}) } });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(readAcuTauriVersion()).resolves.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

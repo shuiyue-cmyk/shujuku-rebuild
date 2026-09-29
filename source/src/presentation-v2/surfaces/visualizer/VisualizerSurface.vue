@@ -1922,10 +1922,10 @@ watch(rowCount, () => {
   width: 100vw;
   width: 100dvw;
   height: 100%;
-  height: 100vh;
-  height: 100dvh;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: var(--tt-base-viewport-height, 100vh);
+  height: var(--tt-base-viewport-height, 100dvh);
+  min-height: var(--tt-base-viewport-height, 100vh);
+  min-height: var(--tt-base-viewport-height, 100dvh);
   z-index: 9350;
   display: none;
   align-items: stretch;
