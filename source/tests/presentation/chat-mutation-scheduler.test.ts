@@ -10,7 +10,7 @@ const h = vi.hoisted(() => ({
   markDirty: vi.fn(),
   enqueueFlush: vi.fn(),
   recoverDeleted: vi.fn(),
-  latestState: null as any,
+  hasMirror: false,
   timer: { value: null as any },
 }));
 
@@ -42,11 +42,12 @@ vi.mock('../../src/service/vector/summary-vector-index-realign-state', () => ({
 vi.mock('../../src/service/vector/summary-vector-index-flush-queue', () => ({
   enqueueSummaryVectorIndexFlush_ACU: (...args: any[]) => h.enqueueFlush(...args),
 }));
-vi.mock('../../src/service/vector/summary-vector-index-state-service', () => ({
-  getLatestSummaryVectorIndexSnapshotState_ACU: () => h.latestState,
-}));
 vi.mock('../../src/service/vector/summary-vector-mirror-rebuild', () => ({
-  chatHasSummaryVectorMirror_ACU: () => !!h.latestState?.summaryVectorIndexState,
+  // 布尔桩，不复刻生产判据（checkpoint.kind==='vector_full' && rowCount>0，见
+  // summary-vector-mirror-rebuild.ts:400）。谓词自身由两处 owner 边界用例直验：
+  // summary-vector-mirror-rebuild.test.ts 与 summary-vector-mirror-matrix.test.ts。
+  // 本文件只负责一条调度器层契约：入队与否取决于该谓词的布尔结果。
+  chatHasSummaryVectorMirror_ACU: () => h.hasMirror,
 }));
 vi.mock('../../src/data/gateways/chat-gateway', () => ({
   getChatArray_ACU: () => [],
@@ -78,7 +79,7 @@ beforeEach(() => {
   h.markDirty.mockResolvedValue(undefined);
   h.enqueueFlush.mockResolvedValue({ queued: true, scopeKey: 'scope-1' });
   h.recoverDeleted.mockResolvedValue({ recovered: false, graftedCount: 0 });
-  h.latestState = null;
+  h.hasMirror = false;
 });
 
 afterEach(() => {
@@ -142,8 +143,8 @@ describe('chat mutation scheduler', () => {
     expect(h.markDirty).toHaveBeenCalledWith('scope-1', 'chat_modified_deleted');
   });
 
-  it('P2：已有索引时 mark dirty 后立即入队重新归档', async () => {
-    h.latestState = { summaryVectorIndexState: { manifest: { indexId: 'idx' } } };
+  it('P2：已有镜像索引时 mark dirty 后立即入队重新归档', async () => {
+    h.hasMirror = true;
     scheduleChatMutationRefresh_ACU('chat_modified_deleted');
     await vi.advanceTimersByTimeAsync(1200);
     await vi.runAllTicks();
@@ -152,7 +153,7 @@ describe('chat mutation scheduler', () => {
   });
 
   it('P2：尚无索引的聊天只标记 dirty，不入队（避免凭空首次建索引扣费）', async () => {
-    h.latestState = null;
+    h.hasMirror = false;
     scheduleChatMutationRefresh_ACU('chat_modified_swiped');
     await vi.advanceTimersByTimeAsync(1200);
     await vi.runAllTicks();

@@ -15,7 +15,12 @@ const h = vi.hoisted(() => ({
   invalidate: vi.fn(),
   remove: vi.fn(),
   removeStrict: vi.fn(),
-  archive: vi.fn(),
+  // V1 归档与 V2 镜像 flush 必须分开记账。生产 flush 队列根本不 import V1 归档
+  // （summary-vector-index-flush-queue.ts:17-22 只取 scopeKey / findSummaryTable /
+  // runScopeMutation，:523 只调 flushSummaryVectorMirrorNow_ACU）。两者曾共用一个 spy，
+  // 于是「flush 走的是哪条链」在断言里完全不可见。
+  archiveV1: vi.fn(),
+  archiveV2: vi.fn(),
   rebuild: vi.fn(),
   logIdentityEvent: vi.fn(),
   runScopeMutation: vi.fn(),
@@ -47,11 +52,11 @@ vi.mock('../../../src/data/storage/vector-index-hot-cache', () => ({
 vi.mock('../../../src/service/vector/summary-vector-index-archive-service', () => ({
   buildSummaryVectorIndexArchiveScopeKey_ACU: (parts: any) => JSON.stringify([parts.chatKey || 'current-chat', parts.isolationKey || 'default', parts.sourceTableKey || 'summary']),
   findSummaryTable_ACU: () => h.summaryKey ? { summaryKey: h.summaryKey, table: {} } : null,
-  archiveSummaryVectorIndexNow_ACU: (...args: any[]) => h.archive(...args),
+  archiveSummaryVectorIndexNow_ACU: (...args: any[]) => h.archiveV1(...args),
   runSummaryVectorIndexArchiveScopeMutationExclusive_ACU: (...args: any[]) => h.runScopeMutation(...args),
 }));
 vi.mock('../../../src/service/vector/summary-vector-mirror-writer', () => ({
-  flushSummaryVectorMirrorNow_ACU: (...args: any[]) => h.archive(...args),
+  flushSummaryVectorMirrorNow_ACU: (...args: any[]) => h.archiveV2(...args),
   findTouchedSummarySheetKey_ACU: () => h.summaryKey || null,
 }));
 vi.mock('../../../src/service/vector/summary-vector-mirror-rebuild', () => ({
@@ -111,7 +116,7 @@ describe('summary-vector-index flush queue scope', () => {
     h.list.mockResolvedValue([]); h.remove.mockResolvedValue(undefined); h.markReadyIfGenerationMatches.mockResolvedValue(true); h.removeStrict.mockResolvedValue(undefined);
     h.reconcileLegacy.mockResolvedValue({ outcome: 'migrated', task: null });
     h.invalidate.mockImplementation(async (input: any) => ({ ...task(input.scopeKey), ...input, status: 'invalidated', generation: 1 }));
-    h.archive.mockResolvedValue({ success: true, skipped: false, errors: [] });
+    h.archiveV2.mockResolvedValue({ success: true, skipped: false, errors: [] });
     h.rebuild.mockResolvedValue({
       success: true,
       skipped: false,
@@ -137,20 +142,29 @@ describe('summary-vector-index flush queue scope', () => {
     h.task = task(scopeA);
 
     await expect(flushSummaryVectorIndexTaskNow_ACU(scopeA)).resolves.toMatchObject({ success: true });
-    expect(h.archive).toHaveBeenCalledWith(expect.objectContaining({ isolationKey: 'iso-a', sourceTableKey: 'summary-a' }));
+    expect(h.archiveV2).toHaveBeenCalledWith(expect.objectContaining({ isolationKey: 'iso-a', sourceTableKey: 'summary-a' }));
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
     expect(isSummaryVectorIndexDirtyForRealign_ACU(scopeA)).toBe(false);
     expect(isSummaryVectorIndexDirtyForRealign_ACU(scopeB)).toBe(true);
     clearSummaryVectorIndexDirtyForRealign_ACU(scopeB);
   });
 
-  it('scope key 对分隔符输入无碰撞，防止任务与 dirty state 串扰', () => {
-    const scopeA = buildSummaryVectorIndexFlushScopeKey_ACU('a::b', 'c', 'd');
-    const scopeB = buildSummaryVectorIndexFlushScopeKey_ACU('a', 'b::c', 'd');
+  // 「分隔符输入无碰撞」这条性质由 scope key 的真实实现决定，而本文件把
+  // buildSummaryVectorIndexArchiveScopeKey_ACU mock 成了 JSON.stringify([...])。旧用例放在
+  // 这里断言，等于断言 mock 自己；且旧输入 ('a::b','c','d') 与 ('a','b::c','d') 在任何
+  // 朴素分隔符方案下都不会碰撞，是恒真的同义反复。该性质的权威证明在
+  // tests/shared/summary-vector-index-scope.test.ts（未 mock，直接跑真实序列化）。
+  // 本条只保留本文件独有的部分：dirty state 注册表按 scope 隔离，清 A 不影响 B。
+  it('dirty state 按 scope 隔离：清除一个 scope 不影响另一个', () => {
+    const scopeA = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
+    const scopeB = buildSummaryVectorIndexFlushScopeKey_ACU('chat-b', 'iso-b', 'summary-b');
     expect(scopeA).not.toBe(scopeB);
     markSummaryVectorIndexDirtyForRealign_ACU(scopeA, 'runtime_stale_rows');
     markSummaryVectorIndexDirtyForRealign_ACU(scopeB, 'runtime_stale_rows');
     clearSummaryVectorIndexDirtyForRealign_ACU(scopeA);
     expect(isSummaryVectorIndexDirtyForRealign_ACU(scopeB)).toBe(true);
+    expect(isSummaryVectorIndexDirtyForRealign_ACU(scopeA)).toBe(false);
     clearSummaryVectorIndexDirtyForRealign_ACU(scopeB);
   });
 
@@ -172,7 +186,9 @@ describe('summary-vector-index flush queue scope', () => {
       canonicalScopeKey: canonicalScope,
       isolationKey: 'default',
     }));
-    expect(h.archive).toHaveBeenCalledWith(expect.objectContaining({ isolationKey: 'default' }));
+    expect(h.archiveV2).toHaveBeenCalledWith(expect.objectContaining({ isolationKey: 'default' }));
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
     expect(h.logIdentityEvent).toHaveBeenCalledWith(
       'debug',
       'flush',
@@ -206,20 +222,24 @@ describe('summary-vector-index flush queue scope', () => {
       isolationKey: 'default',
     }));
     expect(h.remove).not.toHaveBeenCalled();
-    expect(h.archive).toHaveBeenCalledWith(expect.objectContaining({ isolationKey: 'default', expectedFlushGeneration: 8 }));
+    expect(h.archiveV2).toHaveBeenCalledWith(expect.objectContaining({ isolationKey: 'default', expectedFlushGeneration: 8 }));
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
   });
 
   it('执行时 active isolation 漂移会拒绝任务，不执行 archive', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-b', 'summary-a');
     h.task = task(scope, { isolationKey: 'iso-b' });
     await expect(flushSummaryVectorIndexTaskNow_ACU(scope)).resolves.toMatchObject({ reason: 'flush_scope_mismatch' });
-    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.archiveV2).not.toHaveBeenCalled();
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
   });
 
   it('不可恢复的 flush 失败记录 terminal identity event', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope);
-    h.archive.mockResolvedValueOnce({ success: false, reason: 'target_message_invalid', errors: ['target invalid'] });
+    h.archiveV2.mockResolvedValueOnce({ success: false, reason: 'target_message_invalid', errors: ['target invalid'] });
 
     await expect(flushSummaryVectorIndexTaskNow_ACU(scope)).resolves.toMatchObject({
       success: false,
@@ -251,10 +271,12 @@ describe('summary-vector-index flush queue scope', () => {
   it('archive 返回 generation 取消结果时不标记 retryable failure', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope);
-    h.archive.mockResolvedValueOnce({ success: false, skipped: true, reason: 'flush_scope_invalidated', errors: [] });
+    h.archiveV2.mockResolvedValueOnce({ success: false, skipped: true, reason: 'flush_scope_invalidated', errors: [] });
 
     await expect(flushSummaryVectorIndexTaskNow_ACU(scope)).resolves.toMatchObject({ success: true, skipped: true, reason: 'flush_scope_invalidated' });
-    expect(h.archive).toHaveBeenCalledWith(expect.objectContaining({ expectedFlushScopeKey: scope, expectedFlushGeneration: 0 }));
+    expect(h.archiveV2).toHaveBeenCalledWith(expect.objectContaining({ expectedFlushScopeKey: scope, expectedFlushGeneration: 0 }));
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
     expect(h.upsert).toHaveBeenCalledTimes(1);
   });
 
@@ -285,7 +307,9 @@ describe('summary-vector-index flush queue scope', () => {
     expect(h.reconcileLegacy).toHaveBeenCalledWith(expect.objectContaining({
       legacyScopeKey: 'flush::chat-a', canonicalScopeKey: canonicalScope,
     }));
-    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.archiveV2).not.toHaveBeenCalled();
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
   });
 
   it("默认槽（isolationKey=''）restore：legacy 空槽 task 迁移后照常调度，绝不被清除", async () => {
@@ -337,7 +361,9 @@ describe('summary-vector-index flush queue scope', () => {
     h.reconcileLegacy.mockResolvedValueOnce({ outcome: 'quarantined', task: task(canonicalScope, { isolationKey: 'default', status: 'failed_terminal' }) });
 
     await expect(flushSummaryVectorIndexTaskNow_ACU('flush::chat-a')).resolves.toMatchObject({ reason: 'flush_legacy_scope_quarantined' });
-    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.archiveV2).not.toHaveBeenCalled();
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
   });
 
   it('新 enqueue 仅以更高 generation 替换墓碑，不能复活旧 runner', async () => {
@@ -374,10 +400,12 @@ describe('summary-vector-index flush queue scope', () => {
     await enqueueSummaryVectorIndexFlush_ACU({ debounceMs: 100, isolationKey: 'iso-a', sourceTableKey: 'summary-a' });
     await vi.advanceTimersByTimeAsync(100);
 
-    expect(h.archive).toHaveBeenCalledWith(expect.objectContaining({
+    expect(h.archiveV2).toHaveBeenCalledWith(expect.objectContaining({
       expectedFlushScopeKey: scope,
       expectedFlushGeneration: 0,
     }));
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
     expect(h.markReadyIfGenerationMatches).toHaveBeenCalledWith(scope, 0);
     expect(h.remove).not.toHaveBeenCalled();
   });
@@ -390,14 +418,16 @@ describe('summary-vector-index flush queue scope', () => {
     h.chatKey = 'chat-b';
     await vi.advanceTimersByTimeAsync(100);
 
-    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.archiveV2).not.toHaveBeenCalled();
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
     expect(h.remove).not.toHaveBeenCalled();
   });
 
   it('旧 runner 成功收尾不会覆盖新 generation 的任务或墓碑', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope, { generation: 0 });
-    h.archive.mockResolvedValueOnce({ success: true, skipped: false, errors: [] });
+    h.archiveV2.mockResolvedValueOnce({ success: true, skipped: false, errors: [] });
     h.markReadyIfGenerationMatches.mockResolvedValueOnce(false);
 
     await expect(flushSummaryVectorIndexTaskNow_ACU(scope)).resolves.toMatchObject({ success: true });
@@ -411,7 +441,7 @@ describe('summary-vector-index flush queue scope', () => {
     const nextTask = task(scope, { generation: 1, status: 'queued', debounceUntil: Date.now() });
     h.task = oldTask;
     let releaseOldArchive!: () => void;
-    h.archive
+    h.archiveV2
       .mockImplementationOnce(() => new Promise<void>((resolve) => { releaseOldArchive = resolve; }))
       .mockResolvedValueOnce({ success: true, skipped: false, errors: [] });
     h.getStrict.mockImplementation(async () => h.task);
@@ -430,14 +460,14 @@ describe('summary-vector-index flush queue scope', () => {
 
     await enqueueSummaryVectorIndexFlush_ACU({ debounceMs: 0, isolationKey: 'iso-a', sourceTableKey: 'summary-a' });
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.archive).toHaveBeenCalledTimes(1);
+    expect(h.archiveV2).toHaveBeenCalledTimes(1);
 
     releaseOldArchive();
     await oldRunner;
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(h.archive).toHaveBeenCalledTimes(2);
-    expect(h.archive.mock.calls[1][0]).toMatchObject({ expectedFlushScopeKey: scope, expectedFlushGeneration: 1 });
+    expect(h.archiveV2).toHaveBeenCalledTimes(2);
+    expect(h.archiveV2.mock.calls[1][0]).toMatchObject({ expectedFlushScopeKey: scope, expectedFlushGeneration: 1 });
     expect(isSummaryVectorIndexDirtyForRealign_ACU(scope)).toBe(false);
   });
 
@@ -448,13 +478,15 @@ describe('summary-vector-index flush queue scope', () => {
     await enqueueSummaryVectorIndexFlush_ACU({ debounceMs: 100, isolationKey: 'iso-a', sourceTableKey: 'summary-a' });
     await vi.advanceTimersByTimeAsync(100);
     await clearSummaryVectorIndexFlushQueueForCurrentScope_ACU({ isolationKey: 'iso-a', sourceTableKey: 'summary-a' });
-    expect(h.archive).toHaveBeenCalledWith(expect.objectContaining({ expectedFlushScopeKey: scope, expectedFlushGeneration: 0 }));
+    expect(h.archiveV2).toHaveBeenCalledWith(expect.objectContaining({ expectedFlushScopeKey: scope, expectedFlushGeneration: 0 }));
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
   });
 
   it('T0c：路径超长（retryability=terminal）时 flush task 置 failed_terminal，restore 不重挂定时器', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope);
-    h.archive.mockResolvedValueOnce({
+    h.archiveV2.mockResolvedValueOnce({
       success: false,
       skipped: false,
       indexedRowCount: 0,
@@ -491,7 +523,7 @@ describe('summary-vector-index flush queue scope', () => {
     const scopeA = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scopeA);
     const fingerprint = hashUserInput_ACU('https://embedding.test|test-model|test-key');
-    h.archive.mockResolvedValueOnce({
+    h.archiveV2.mockResolvedValueOnce({
       success: false,
       skipped: false,
       indexedRowCount: 0,
@@ -523,7 +555,7 @@ describe('summary-vector-index flush queue scope', () => {
     h.chatKey = 'chat-b';
     const scopeB = buildSummaryVectorIndexFlushScopeKey_ACU('chat-b', 'iso-a', 'summary-a');
     h.task = task(scopeB, { chatKey: 'chat-b' });
-    h.archive.mockClear();
+    h.archiveV2.mockClear();
     const cooldownUpserts: any[] = [];
     h.upsert.mockImplementation(async (input: any) => {
       cooldownUpserts.push(input);
@@ -533,7 +565,9 @@ describe('summary-vector-index flush queue scope', () => {
       success: false,
       reason: 'credential_cooldown',
     });
-    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.archiveV2).not.toHaveBeenCalled();
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
     expect(cooldownUpserts.at(-1)).toMatchObject({ scopeKey: scopeB, status: 'failed_terminal' });
   });
 
@@ -555,7 +589,7 @@ describe('summary-vector-index flush queue scope', () => {
       h.task = next;
       return next;
     });
-    h.archive
+    h.archiveV2
       .mockResolvedValueOnce({ success: false, skipped: false, reason: 'embedding_request_failed', retryability: 'retryable', errors: ['HTTP 500'] })
       .mockResolvedValueOnce({ success: true, skipped: false, errors: [] });
 
@@ -566,9 +600,9 @@ describe('summary-vector-index flush queue scope', () => {
     const failureRecord = capturedUpserts.find((record) => record.status === 'failed_retryable');
     expect(failureRecord).toBeTruthy();
     // attemptCount=1 → 退避 2.5s；定时器到期后自动重试并成功。
-    expect(h.archive).toHaveBeenCalledTimes(1);
+    expect(h.archiveV2).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(2500);
-    expect(h.archive).toHaveBeenCalledTimes(2);
+    expect(h.archiveV2).toHaveBeenCalledTimes(2);
     expect(h.markReadyIfGenerationMatches).toHaveBeenCalled();
   });
 
@@ -588,16 +622,16 @@ describe('summary-vector-index flush queue scope', () => {
       h.task = next;
       return next;
     });
-    h.archive.mockResolvedValue({ success: false, skipped: false, reason: 'embedding_request_failed', retryability: 'retryable', errors: ['HTTP 500'] });
+    h.archiveV2.mockResolvedValue({ success: false, skipped: false, reason: 'embedding_request_failed', retryability: 'retryable', errors: ['HTTP 500'] });
 
     await expect(flushSummaryVectorIndexTaskNow_ACU(scope)).resolves.toMatchObject({ success: false });
     const finalRecord = capturedUpserts.at(-1);
     expect(finalRecord).toMatchObject({ status: 'failed_terminal' });
     expect(String(finalRecord.lastError || '')).toContain('自动重试上限');
     // failed_terminal 不重排：推进任意时间不再触发 archive。
-    expect(h.archive).toHaveBeenCalledTimes(1);
+    expect(h.archiveV2).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(h.archive).toHaveBeenCalledTimes(1);
+    expect(h.archiveV2).toHaveBeenCalledTimes(1);
   });
 
   it('P1：claim 前失败（上下文不匹配）不自动重排，避免无 attemptCount 上限的循环', async () => {
@@ -606,16 +640,20 @@ describe('summary-vector-index flush queue scope', () => {
     h.task = task(scope);
 
     await expect(flushSummaryVectorIndexTaskNow_ACU(scope)).resolves.toMatchObject({ reason: 'flush_scope_mismatch' });
-    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.archiveV2).not.toHaveBeenCalled();
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(10 * 60_000);
-    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.archiveV2).not.toHaveBeenCalled();
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
   });
 
   it('no_mirror 时自动 initial 重建，填表后首轮归档不再 blocked', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope);
     markSummaryVectorIndexDirtyForRealign_ACU(scope, 'runtime_stale_rows');
-    h.archive.mockResolvedValueOnce({
+    h.archiveV2.mockResolvedValueOnce({
       success: false,
       skipped: false,
       needsRebuild: true,
@@ -641,7 +679,7 @@ describe('summary-vector-index flush queue scope', () => {
   it('chain_conflict 时自动 rebuild_repair，不弹确认', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope);
-    h.archive.mockResolvedValueOnce({
+    h.archiveV2.mockResolvedValueOnce({
       success: false,
       skipped: false,
       needsRebuild: true,
@@ -660,7 +698,7 @@ describe('summary-vector-index flush queue scope', () => {
   it('embedding_identity_changed 仍 blocked，不自动重建', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope);
-    h.archive.mockResolvedValueOnce({
+    h.archiveV2.mockResolvedValueOnce({
       success: false,
       skipped: false,
       needsRebuild: true,
@@ -683,7 +721,7 @@ describe('summary-vector-index flush queue scope', () => {
   it('source_table_changed 仍 blocked，不自动重建', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope);
-    h.archive.mockResolvedValueOnce({
+    h.archiveV2.mockResolvedValueOnce({
       success: false,
       skipped: false,
       needsRebuild: true,
@@ -704,7 +742,7 @@ describe('summary-vector-index flush queue scope', () => {
   it('checkpoint_mismatch 与 manifest_unavailable 走 rebuild_repair', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope);
-    h.archive.mockResolvedValueOnce({
+    h.archiveV2.mockResolvedValueOnce({
       success: false,
       skipped: false,
       needsRebuild: true,
@@ -719,7 +757,7 @@ describe('summary-vector-index flush queue scope', () => {
 
     h.rebuild.mockClear();
     h.task = task(scope);
-    h.archive.mockResolvedValueOnce({
+    h.archiveV2.mockResolvedValueOnce({
       success: false,
       skipped: false,
       needsRebuild: true,
@@ -736,7 +774,7 @@ describe('summary-vector-index flush queue scope', () => {
   it('自动重建失败按配置类原因记 terminal，不标 ready', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope);
-    h.archive.mockResolvedValueOnce({
+    h.archiveV2.mockResolvedValueOnce({
       success: false,
       skipped: false,
       needsRebuild: true,
@@ -781,7 +819,7 @@ describe('summary-vector-index flush queue scope', () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope);
     const fingerprint = hashUserInput_ACU('https://embedding.test|test-model|test-key');
-    h.archive.mockResolvedValueOnce({
+    h.archiveV2.mockResolvedValueOnce({
       success: false,
       skipped: false,
       indexedRowCount: 0,
@@ -799,11 +837,11 @@ describe('summary-vector-index flush queue scope', () => {
     clearSummaryVectorIndexCredentialCooldowns_ACU();
 
     // 同凭据重新 flush：cooldown 已清除，archive 正常执行。
-    h.archive.mockClear();
-    h.archive.mockResolvedValueOnce({ success: true, skipped: false, errors: [] });
+    h.archiveV2.mockClear();
+    h.archiveV2.mockResolvedValueOnce({ success: true, skipped: false, errors: [] });
     h.task = task(scope);
     await expect(flushSummaryVectorIndexTaskNow_ACU(scope)).resolves.toMatchObject({ success: true });
-    expect(h.archive).toHaveBeenCalledTimes(1);
+    expect(h.archiveV2).toHaveBeenCalledTimes(1);
   });
 
   it('在飞 flushing（running 集命中）即使超过 60s 也不判 stale：不标记失败、不双重 archive', async () => {
@@ -817,7 +855,7 @@ describe('summary-vector-index flush queue scope', () => {
     });
     h.list.mockResolvedValue([h.task]);
     let release!: (value: any) => void;
-    h.archive.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    h.archiveV2.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
 
     const runner = flushSummaryVectorIndexTaskNow_ACU(scope);
     for (let attempt = 0; attempt < 50 && !release; attempt += 1) await Promise.resolve();
@@ -827,15 +865,15 @@ describe('summary-vector-index flush queue scope', () => {
     await expect(restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU()).resolves.toBe(1);
     // 未标记 failed_retryable、未重复 archive（archive 仍是挂起那一次）。
     expect(h.upsert.mock.calls.filter((call: any[]) => call[0]?.status === 'failed_retryable')).toHaveLength(0);
-    expect(h.archive).toHaveBeenCalledTimes(1);
+    expect(h.archiveV2).toHaveBeenCalledTimes(1);
 
     // restore 重挂的定时器到期时，runner 仍在飞 → 直接让位，不发起第二次 archive。
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.archive).toHaveBeenCalledTimes(1);
+    expect(h.archiveV2).toHaveBeenCalledTimes(1);
 
     release({ success: true, skipped: false, errors: [] });
     await runner;
-    expect(h.archive).toHaveBeenCalledTimes(1);
+    expect(h.archiveV2).toHaveBeenCalledTimes(1);
   });
 
   it('真超时（running 集不含）的 flushing task 仍按原语义标记 failed_retryable', async () => {
@@ -852,7 +890,9 @@ describe('summary-vector-index flush queue scope', () => {
     }));
     // 重排后的定时器到期时重走 flush 入口（旧状态 claim 失败让位），不会直接 archive。
     await vi.advanceTimersByTimeAsync(2500);
-    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.archiveV2).not.toHaveBeenCalled();
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
   });
 
   it('未超过 60s 的 flushing task 不判失败，仅重挂定时器', async () => {
@@ -862,8 +902,12 @@ describe('summary-vector-index flush queue scope', () => {
 
     await expect(restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU()).resolves.toBe(1);
     expect(h.upsert).not.toHaveBeenCalled();
-    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.archiveV2).not.toHaveBeenCalled();
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(0);
-    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.archiveV2).not.toHaveBeenCalled();
+    // V2 镜像 flush 是本模块唯一可达的 flush 路径：V1 归档必须零调用
+    expect(h.archiveV1).not.toHaveBeenCalled();
   });
 });
