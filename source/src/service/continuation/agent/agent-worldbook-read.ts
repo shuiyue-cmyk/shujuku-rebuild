@@ -67,15 +67,40 @@ function isEntrySelected_ACU(bookName: string, uid: string, enabledEntriesMap: u
  * 条目 token 数的跨运行缓存。键是「书名 + uid」，值里带正文用于判等：
  * 只有正文逐字相同才复用。原先键里带 `content.length`，等长改写（『原文内容』→『改写内容』）
  * 会命中旧值，让目录里的「约 N token」停留在旧正文上。
+ *
+ * 判等就必须留住正文字符串，而世界书正文可能很大、且切角色/切世界书会不断攒下旧副本，
+ * 所以这里给缓存加驻留预算：越界即整表清空（与 shared/sheet-identity、shared/ddl-utils
+ * 的 memo 同一约定）。清空只让下次多算一遍分词，不影响正确性。
  */
 const entryTokenCache_ACU = new Map<string, { content: string; tokens: number }>();
+const ENTRY_TOKEN_CACHE_BUDGET_CHARS_ACU = 512 * 1024;
+let entryTokenCacheChars_ACU = 0;
+
+/** 缓存驻留观测面（只读，供测试与排查用；不参与任何业务判定）。 */
+export function readEntryTokenCacheStats_ACU(): { entries: number; retainedChars: number; maxRetainedChars: number } {
+  return {
+    entries: entryTokenCache_ACU.size,
+    retainedChars: entryTokenCacheChars_ACU,
+    maxRetainedChars: ENTRY_TOKEN_CACHE_BUDGET_CHARS_ACU,
+  };
+}
 
 async function countEntryTokens_ACU(bookName: string, uid: string, content: string): Promise<number> {
   const key = JSON.stringify([bookName, uid]);
   const cached = entryTokenCache_ACU.get(key);
   if (cached?.content === content) return cached.tokens;
   const counted = await countAgentTokens_ACU(content);
+  // 先按预算决定留不留：本条正文自己就超预算时直接不缓存（否则清完又被同一条撑爆）。
+  if (content.length > ENTRY_TOKEN_CACHE_BUDGET_CHARS_ACU) return counted;
+  if (entryTokenCacheChars_ACU + content.length > ENTRY_TOKEN_CACHE_BUDGET_CHARS_ACU) {
+    entryTokenCache_ACU.clear();
+    entryTokenCacheChars_ACU = 0;
+  }
+  // 同键覆盖时要先把旧正文的驻留量扣掉，否则计数会单调爬升、预算形同虚设。
+  const stale = entryTokenCache_ACU.get(key);
+  if (stale) entryTokenCacheChars_ACU -= stale.content.length;
   entryTokenCache_ACU.set(key, { content, tokens: counted });
+  entryTokenCacheChars_ACU += content.length;
   return counted;
 }
 

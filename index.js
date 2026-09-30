@@ -91578,8 +91578,8 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"9.10.1"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20260930-13"`。源码直跑、测试环境或注入失败时读不到，
+ * rollup 打包时把版本写进 `"9.10.2"`（与 manifest.json / source/package.json
+ * 同值），构建时间戳写进 `"20260930-14"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91588,7 +91588,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "9.10.1";
+        const version = "9.10.2";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
@@ -91598,7 +91598,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20260930-13";
+        const stamp = "20260930-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -139222,15 +139222,41 @@ function isEntrySelected_ACU(bookName, uid, enabledEntriesMap) {
  * 条目 token 数的跨运行缓存。键是「书名 + uid」，值里带正文用于判等：
  * 只有正文逐字相同才复用。原先键里带 `content.length`，等长改写（『原文内容』→『改写内容』）
  * 会命中旧值，让目录里的「约 N token」停留在旧正文上。
+ *
+ * 判等就必须留住正文字符串，而世界书正文可能很大、且切角色/切世界书会不断攒下旧副本，
+ * 所以这里给缓存加驻留预算：越界即整表清空（与 shared/sheet-identity、shared/ddl-utils
+ * 的 memo 同一约定）。清空只让下次多算一遍分词，不影响正确性。
  */
 const entryTokenCache_ACU = new Map();
+const ENTRY_TOKEN_CACHE_BUDGET_CHARS_ACU = 512 * 1024;
+let entryTokenCacheChars_ACU = 0;
+/** 缓存驻留观测面（只读，供测试与排查用；不参与任何业务判定）。 */
+function readEntryTokenCacheStats_ACU() {
+    return {
+        entries: entryTokenCache_ACU.size,
+        retainedChars: entryTokenCacheChars_ACU,
+        maxRetainedChars: ENTRY_TOKEN_CACHE_BUDGET_CHARS_ACU,
+    };
+}
 async function countEntryTokens_ACU(bookName, uid, content) {
     const key = JSON.stringify([bookName, uid]);
     const cached = entryTokenCache_ACU.get(key);
     if (cached?.content === content)
         return cached.tokens;
     const counted = await countAgentTokens_ACU(content);
+    // 先按预算决定留不留：本条正文自己就超预算时直接不缓存（否则清完又被同一条撑爆）。
+    if (content.length > ENTRY_TOKEN_CACHE_BUDGET_CHARS_ACU)
+        return counted;
+    if (entryTokenCacheChars_ACU + content.length > ENTRY_TOKEN_CACHE_BUDGET_CHARS_ACU) {
+        entryTokenCache_ACU.clear();
+        entryTokenCacheChars_ACU = 0;
+    }
+    // 同键覆盖时要先把旧正文的驻留量扣掉，否则计数会单调爬升、预算形同虚设。
+    const stale = entryTokenCache_ACU.get(key);
+    if (stale)
+        entryTokenCacheChars_ACU -= stale.content.length;
     entryTokenCache_ACU.set(key, { content, tokens: counted });
+    entryTokenCacheChars_ACU += content.length;
     return counted;
 }
 /**
@@ -151713,7 +151739,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260930-13";
+        const stamp = "20260930-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
