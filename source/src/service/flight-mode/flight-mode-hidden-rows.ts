@@ -18,7 +18,9 @@ function findChronicleSheet_ACU(tableData: Record<string, any> | null | undefine
 }
 
 /**
- * 大总结新增行会消耗当时全部可见纪要。返回 null 表示本次无需改 flightMode；
+ * 大总结新增行会消耗写入前已可见的纪要。同一轮新写入的纪要没有被本次大总结归纳，保持可见
+ * （否则它既没被归纳、又从可见集合消失，等于被吞掉）。
+ * 返回 null 表示本次无需改 flightMode；
  * 返回数组则是应与本次表格快照一并持久化的完整 hiddenRowIds。
  */
 export function getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU(
@@ -39,11 +41,17 @@ export function getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU(
   const hasInsertedSummaryRow = [...afterIds].some(id => !beforeIds.has(id));
   if (!hasInsertedSummaryRow) return null;
 
-  const chronicle = findChronicleSheet_ACU(afterData);
-  if (!chronicle) return null;
+  const afterChronicle = findChronicleSheet_ACU(afterData);
+  if (!afterChronicle) return null;
+  const afterChronicleIds = collectRowIds_ACU(afterChronicle);
 
+  // 只隐藏「写入前已可见、且写入后仍在」的纪要行：
+  // - 同批新写入的纪要没有被本次大总结归纳，隐藏即丢数据；
+  // - 写入后已不存在的行隐藏它没有意义（它本来就不在可见集合里）。
   const hidden = new Set(state.hiddenRowIds.map(id => String(id).trim()).filter(Boolean));
-  for (const id of collectRowIds_ACU(chronicle)) hidden.add(id);
+  for (const id of collectRowIds_ACU(findChronicleSheet_ACU(beforeData))) {
+    if (afterChronicleIds.has(id)) hidden.add(id);
+  }
   return [...hidden].sort();
 }
 

@@ -35,6 +35,40 @@ describe('读取预算解析', () => {
     const capped = resolveAgentReadBudget_ACU(config_ACU({ readTokenBudget: 100, fallbackTokens: 500 }));
     expect(capped.effectiveFallbackTokens).toBe(100);
   });
+
+  /**
+   * 百分比必须整串匹配 `数字%`，不许从损坏串里「猜一个前缀数字」当预算。
+   *
+   * 背景：原先用 `endsWith('%')` + `parseFloat`，`parseFloat` 只吃合法前缀就停，
+   * 于是 `'60garbage%'` 被当成 60%、`'1e2%'`（科学计数）被当成 100%——后者等于
+   * 「单批次读取上限 = 整个会话阈值」，把读取预算放大到名存实亡。误解析方向只会
+   * 抬高上限（20%·S → 100%·S），不会压低，因此对临近阈值的越界防线是净削弱。
+   *
+   * 这里锁定的是「非法输入一律回退 20%·S」，合法输入（正整数 / `'30%'` / `'.5%'` 边界）
+   * 的行为由上面两条用例保证不变。
+   */
+  it.each([
+    ['百分号前夹垃圾', '60garbage%'],
+    ['重复百分号', '60%%'],
+    ['百分号前有空格', '60 %'],
+    ['小数点用逗号', '60,5%'],
+    ['科学计数法', '1e2%'],
+    ['十六进制', '0x64%'],
+    ['带正号', '+50%'],
+  ])('百分比串%s时回退 20% 而不是猜前缀（historyTokenBudget=1000 → 200）', (_label, raw) => {
+    const resolved = resolveAgentReadBudget_ACU(config_ACU({ readTokenBudget: raw, historyTokenBudget: 1000 }));
+    expect(resolved.effectiveMaxReadTokens).toBe(200);
+    expect(resolved.basis).toBe('history-budget-percent');
+  });
+
+  it('合法百分比仍按阈值折算，不因收紧整串匹配而误回退（含 1% 下界与小数百分比）', () => {
+    expect(resolveAgentReadBudget_ACU(config_ACU({ readTokenBudget: '30%', historyTokenBudget: 2000 })).effectiveMaxReadTokens).toBe(600);
+    expect(resolveAgentReadBudget_ACU(config_ACU({ readTokenBudget: '1%', historyTokenBudget: 2000 })).effectiveMaxReadTokens).toBe(20);
+    expect(resolveAgentReadBudget_ACU(config_ACU({ readTokenBudget: '12.5%', historyTokenBudget: 2000 })).effectiveMaxReadTokens).toBe(250);
+    // 无整数部分的写法也是合法百分比形态（正则的 `\.\d+` 分支），但 0.5 < 1% 下界仍回退 20%。
+    expect(resolveAgentReadBudget_ACU(config_ACU({ readTokenBudget: '.5%', historyTokenBudget: 2000 })).effectiveMaxReadTokens).toBe(400);
+    expect(resolveAgentReadBudget_ACU(config_ACU({ readTokenBudget: '2.5%', historyTokenBudget: 2000 })).effectiveMaxReadTokens).toBe(50);
+  });
 });
 
 describe('读取门禁状态机', () => {

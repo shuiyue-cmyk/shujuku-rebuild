@@ -163,7 +163,7 @@ describe.each(['native', 'sqlite'] as const)('flight mode lifecycle (%s)', (mode
     afterWrite.sheet_chronicle.content.push(['3', '同批新增纪要']);
     afterWrite[summaryKey].content.push(['1', '阶段总结']);
     const hiddenRowIds = getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU(beforeWrite, afterWrite, enabled);
-    expect(hiddenRowIds).toEqual(['1', '2', '3']);
+    expect(hiddenRowIds).toEqual(['1', '2']);
     const rollback = stageFlightModeHiddenRowIds_ACU(hiddenRowIds!);
 
     const persisted = await persistTableMutationLogV2_ACU({
@@ -185,7 +185,9 @@ describe.each(['native', 'sqlite'] as const)('flight mode lifecycle (%s)', (mode
 
     const replayed = await loadTableStateFromFramesV2_ACU(h.chat, '');
     expect(replayed?.sheet_chronicle.content).toEqual(afterWrite.sheet_chronicle.content);
-    expect(projectFlightModeHiddenChronicleRows_ACU(replayed!, getCurrentFlightModeState_ACU()).sheet_chronicle.content).toEqual([['row_id', '事件']]);
+    // 投影只摘掉被本次大总结归纳的写入前纪要（'1'、'2'），同批新增的 '3' 仍在可见集合里。
+    expect(projectFlightModeHiddenChronicleRows_ACU(replayed!, getCurrentFlightModeState_ACU()).sheet_chronicle.content)
+      .toEqual([['row_id', '事件'], ['3', '同批新增纪要']]);
 
     h.chat.push({ is_user: false, mes: '后续 AI 楼层', TavernDB_ACU_IsolatedData: { '': clone(h.chat[0].TavernDB_ACU_IsolatedData['']) } });
     await expect(disableFlightMode_ACU()).resolves.toEqual({ ok: true });
@@ -265,12 +267,13 @@ describe.each(['native', 'sqlite'] as const)('flight mode lifecycle (%s)', (mode
       expect(h.data.sheet_quan_ju.content).toEqual([['row_id', '总结'], ['1', '御苑']]);
 
       // 写入大总结并执行隐藏纪要逻辑，确认无回归。
+      // 隐藏范围只含写入前可见的 '1'、'2'；同批新增的 '3' 没被本次大总结归纳，保持可见。
       const beforeWrite = clone(h.data);
       const afterWrite = clone(h.data);
       afterWrite.sheet_chronicle.content.push(['3', '同批新增纪要']);
       afterWrite[summaryKey].content.push(['1', '阶段总结']);
       const hiddenRowIds = getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU(beforeWrite, afterWrite, enabled);
-      expect(hiddenRowIds).toEqual(['1', '2', '3']);
+      expect(hiddenRowIds).toEqual(['1', '2']);
       const roll = stageFlightModeHiddenRowIds_ACU(hiddenRowIds!);
 
       const persisted = await persistTableMutationLogV2_ACU({

@@ -64,17 +64,18 @@ function isEntrySelected_ACU(bookName: string, uid: string, enabledEntriesMap: u
 }
 
 /**
- * 条目 token 数的跨运行缓存。键含内容长度：同一条目被编辑后长度几乎必变，
- * 变了即重算；极小概率的等长改写只影响预算估算精度，不影响正确性。
+ * 条目 token 数的跨运行缓存。键是「书名 + uid」，值里带正文用于判等：
+ * 只有正文逐字相同才复用。原先键里带 `content.length`，等长改写（『原文内容』→『改写内容』）
+ * 会命中旧值，让目录里的「约 N token」停留在旧正文上。
  */
-const entryTokenCache_ACU = new Map<string, number>();
+const entryTokenCache_ACU = new Map<string, { content: string; tokens: number }>();
 
 async function countEntryTokens_ACU(bookName: string, uid: string, content: string): Promise<number> {
-  const key = `${bookName}#${uid}#${content.length}`;
+  const key = JSON.stringify([bookName, uid]);
   const cached = entryTokenCache_ACU.get(key);
-  if (cached !== undefined) return cached;
+  if (cached?.content === content) return cached.tokens;
   const counted = await countAgentTokens_ACU(content);
-  entryTokenCache_ACU.set(key, counted);
+  entryTokenCache_ACU.set(key, { content, tokens: counted });
   return counted;
 }
 
@@ -104,10 +105,14 @@ export async function loadAgentWorldbookSnapshot_ACU(): Promise<AgentWorldbookSn
         if (raw.enabled !== true) continue;
         const uid = String(raw.uid ?? '').trim();
         const title = normalizeGeneratedComment_ACU(raw, isolationPrefix);
-        const content = String(raw.content ?? '').trim();
+        // 正文逐字保留宿主原文（含首尾空白）：它会被精读回灌和终审证据原样引用，
+        // 裁掉就等于让模型读到的设定与用户写的不是同一份。判空才用 trim 后的结果。
+        // 类型口径与主注入管线一致（pipeline 的 entry.content || ''）：非字符串照常强转，
+        // 不在本次「不 trim」范围内顺手改成丢弃整条。
+        const content = String(raw.content ?? '');
         // 纪要另由事件概览/快照呈现，不在世界书资料域重复暴露。
         if (isSummaryEntryComment_ACU(title)) continue;
-        if (!uid || !content) continue;
+        if (!uid || !content.trim()) continue;
         if (!isEntrySelected_ACU(bookName, uid, enabledEntriesMap)) continue;
         if (isEntryBlocked_ACU(raw)) continue;
         // 纪要索引及其数字分片由快照单独呈现；其余已启用条目交由正常世界书读取方案处理，

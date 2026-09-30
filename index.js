@@ -72231,7 +72231,9 @@ function findChronicleSheet_ACU(tableData) {
     return Object.values(tableData).find((sheet) => sheet?.name === '纪要表') || null;
 }
 /**
- * 大总结新增行会消耗当时全部可见纪要。返回 null 表示本次无需改 flightMode；
+ * 大总结新增行会消耗写入前已可见的纪要。同一轮新写入的纪要没有被本次大总结归纳，保持可见
+ * （否则它既没被归纳、又从可见集合消失，等于被吞掉）。
+ * 返回 null 表示本次无需改 flightMode；
  * 返回数组则是应与本次表格快照一并持久化的完整 hiddenRowIds。
  */
 function getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU(beforeData, afterData, state) {
@@ -72249,12 +72251,18 @@ function getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU(beforeData, afterData
     const hasInsertedSummaryRow = [...afterIds].some(id => !beforeIds.has(id));
     if (!hasInsertedSummaryRow)
         return null;
-    const chronicle = findChronicleSheet_ACU(afterData);
-    if (!chronicle)
+    const afterChronicle = findChronicleSheet_ACU(afterData);
+    if (!afterChronicle)
         return null;
+    const afterChronicleIds = collectRowIds_ACU(afterChronicle);
+    // 只隐藏「写入前已可见、且写入后仍在」的纪要行：
+    // - 同批新写入的纪要没有被本次大总结归纳，隐藏即丢数据；
+    // - 写入后已不存在的行隐藏它没有意义（它本来就不在可见集合里）。
     const hidden = new Set(state.hiddenRowIds.map(id => String(id).trim()).filter(Boolean));
-    for (const id of collectRowIds_ACU(chronicle))
-        hidden.add(id);
+    for (const id of collectRowIds_ACU(findChronicleSheet_ACU(beforeData))) {
+        if (afterChronicleIds.has(id))
+            hidden.add(id);
+    }
     return [...hidden].sort();
 }
 /**
@@ -91570,8 +91578,8 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"9.9.1"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20260929-11"`。源码直跑、测试环境或注入失败时读不到，
+ * rollup 打包时把版本写进 `"9.10.1"`（与 manifest.json / source/package.json
+ * 同值），构建时间戳写进 `"20260930-13"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91580,7 +91588,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "9.9.1";
+        const version = "9.10.1";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
@@ -91590,7 +91598,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20260929-11";
+        const stamp = "20260930-13";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -139211,17 +139219,18 @@ function isEntrySelected_ACU(bookName, uid, enabledEntriesMap) {
     return list.some(item => String(item) === uid);
 }
 /**
- * 条目 token 数的跨运行缓存。键含内容长度：同一条目被编辑后长度几乎必变，
- * 变了即重算；极小概率的等长改写只影响预算估算精度，不影响正确性。
+ * 条目 token 数的跨运行缓存。键是「书名 + uid」，值里带正文用于判等：
+ * 只有正文逐字相同才复用。原先键里带 `content.length`，等长改写（『原文内容』→『改写内容』）
+ * 会命中旧值，让目录里的「约 N token」停留在旧正文上。
  */
 const entryTokenCache_ACU = new Map();
 async function countEntryTokens_ACU(bookName, uid, content) {
-    const key = `${bookName}#${uid}#${content.length}`;
+    const key = JSON.stringify([bookName, uid]);
     const cached = entryTokenCache_ACU.get(key);
-    if (cached !== undefined)
-        return cached;
+    if (cached?.content === content)
+        return cached.tokens;
     const counted = await countAgentTokens_ACU(content);
-    entryTokenCache_ACU.set(key, counted);
+    entryTokenCache_ACU.set(key, { content, tokens: counted });
     return counted;
 }
 /**
@@ -139252,11 +139261,15 @@ async function loadAgentWorldbookSnapshot_ACU() {
                     continue;
                 const uid = String(raw.uid ?? '').trim();
                 const title = normalizeGeneratedComment_ACU(raw, isolationPrefix);
-                const content = String(raw.content ?? '').trim();
+                // 正文逐字保留宿主原文（含首尾空白）：它会被精读回灌和终审证据原样引用，
+                // 裁掉就等于让模型读到的设定与用户写的不是同一份。判空才用 trim 后的结果。
+                // 类型口径与主注入管线一致（pipeline 的 entry.content || ''）：非字符串照常强转，
+                // 不在本次「不 trim」范围内顺手改成丢弃整条。
+                const content = String(raw.content ?? '');
                 // 纪要另由事件概览/快照呈现，不在世界书资料域重复暴露。
                 if (isSummaryEntryComment_ACU(title))
                     continue;
-                if (!uid || !content)
+                if (!uid || !content.trim())
                     continue;
                 if (!isEntrySelected_ACU(bookName, uid, enabledEntriesMap))
                     continue;
@@ -140506,8 +140519,10 @@ function resolveAgentReadBudget_ACU(config) {
         effectiveMaxReadTokens = Math.floor(raw);
         basis = 'fixed';
     }
-    else if (typeof raw === 'string' && raw.trim().endsWith('%')) {
-        const percent = parseFloat(raw.trim());
+    else if (typeof raw === 'string' && /^(?:\d+(?:\.\d+)?|\.\d+)%$/.test(raw.trim())) {
+        // 整串必须是「数字%」，不从损坏串里猜前缀数字。原先 endsWith('%')+parseFloat 会把
+        // '60garbage%' 当 60%、'1e2%' 当 100%（等于取消单批次上限），只朝抬高方向误解析。
+        const percent = Number(raw.trim().slice(0, -1));
         if (Number.isFinite(percent) && percent >= 1 && percent <= 100) {
             effectiveMaxReadTokens = Math.floor(percentBase * (percent / 100));
         }
@@ -151698,7 +151713,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260929-11";
+        const stamp = "20260930-13";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
