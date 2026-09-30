@@ -279,8 +279,10 @@ export class ContinuationOutlinePlanner_ACU {
     const injected: string[] = [];
     const storyArc = resolvers.$STORY_ARC ? String(await resolvers.$STORY_ARC() ?? '').trim() : '';
     const enabledOutline = resolvers.$OUTLINE_WINDOW ? String(await resolvers.$OUTLINE_WINDOW() ?? '').trim() : '';
-    if (storyArc && !renderedBlob.includes(storyArc.slice(0, Math.min(80, storyArc.length)))) injected.push(`【当前故事总纲】\n${storyArc}`);
-    if (enabledOutline && !renderedBlob.includes(enabledOutline.slice(0, Math.min(80, enabledOutline.length)))) injected.push(`【当前启用的阶段大纲】\n${enabledOutline}`);
+    // 比对整串而不是前 80 字：提示词里只出现总纲/大纲的开头片段（预览、摘要、节选）时，
+    // 前缀命中会让判定误认为「已注入过」，导致整份资料永不补注入、大纲在缺资料语境下跑。
+    if (storyArc && !renderedBlob.includes(storyArc)) injected.push(`【当前故事总纲】\n${storyArc}`);
+    if (enabledOutline && !renderedBlob.includes(enabledOutline)) injected.push(`【当前启用的阶段大纲】\n${enabledOutline}`);
     if (injected.length) rendered.messages.push({ role: 'user', content: injected.join('\n\n') });
     const transcript: Array<{ role: string; content: string }> = [];
     let lastRaw = '';

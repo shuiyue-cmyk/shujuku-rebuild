@@ -89,6 +89,45 @@ describe('ContinuationOutlinePlanner_ACU', () => {
     expect(appended).toContain('启用大纲全文标记OUTLINE');
   });
 
+  /**
+   * 补注入的判定必须比对整串，不能只比对前 80 字。
+   *
+   * 旧判据用 `renderedBlob.includes(arc.slice(0, 80))`：当提示词里出现的只是总纲的
+   * **开头片段**（预览、摘要、或被截断的引用）时，判定会误认为「已注入过」而整份不再补，
+   * 于是大纲规划在缺总纲的语境下运行。整串比对后，只要完整总纲没原样出现过就必须补。
+   *
+   * 同时锁「完整总纲已原样在场时不重复追加」——收紧判据不许把已有注入变成双份。
+   */
+  it('提示词只含总纲前 80 字预览时仍必须补注入整份总纲', async () => {
+    const longArc = `总纲开头标记ARC_HEAD-${('补.'.repeat(200))}`;
+    const previewOnly = `已知背景：${longArc.slice(0, 80)}……（节选）`;
+    const { planner, callInternalAi } = createPlanner_ACU([tagOutline_ACU(6)]);
+    const settings = { ...settings_ACU(), outlinePrompt: [{ role: 'user', content: `${previewOnly}|$VALIDATION_ERRORS` }] };
+
+    await planner.plan(request_ACU(settings, {
+      resolvers: { $ORIGIN_INSTRUCTION: () => '推进剧情', $STORY_ARC: () => longArc, $OUTLINE_WINDOW: () => '' },
+    }));
+
+    const messages = callInternalAi.mock.calls[0][0] as Array<{ role: string; content: string }>;
+    const appended = messages[messages.length - 1].content;
+    expect(appended, '前 80 字命中不等于整份在场，必须补注入').toContain('【当前故事总纲】');
+    expect(appended).toContain(longArc);
+  });
+
+  it('完整总纲已原样在场时不重复追加', async () => {
+    const arc = `总纲全文标记ARC-${('实.'.repeat(300))}`;
+    const { planner, callInternalAi } = createPlanner_ACU([tagOutline_ACU(6)]);
+    const settings = { ...settings_ACU(), outlinePrompt: [{ role: 'user', content: `【当前故事总纲】\n${arc}|$VALIDATION_ERRORS` }] };
+
+    await planner.plan(request_ACU(settings, {
+      resolvers: { $ORIGIN_INSTRUCTION: () => '推进剧情', $STORY_ARC: () => arc, $OUTLINE_WINDOW: () => '' },
+    }));
+
+    const messages = callInternalAi.mock.calls[0][0] as Array<{ role: string; content: string }>;
+    const all = messages.map(message => message.content).join('\n');
+    expect(all.match(/【当前故事总纲】/g) ?? []).toHaveLength(1);
+  });
+
   it('提示词已经引用占位符时不重复追加注入；空总纲不注入', async () => {
     const { planner, callInternalAi } = createPlanner_ACU([tagOutline_ACU(6)]);
     const settings = { ...settings_ACU(), outlinePrompt: [{ role: 'user', content: '$STORY_ARC|$OUTLINE_WINDOW|$VALIDATION_ERRORS' }] };

@@ -48563,7 +48563,8 @@ async function commitVectorMetadataPatchesBatch_ACU(entries, options) {
             });
             if (result.changed)
                 changed = true;
-            options?.additionalMutate?.(entry.message);
+            if (options?.additionalMutate?.(entry.message) === true)
+                changed = true;
         }
         if (!changed)
             return false;
@@ -91578,8 +91579,8 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"9.10.2"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20260930-14"`。源码直跑、测试环境或注入失败时读不到，
+ * rollup 打包时把版本写进 `"9.10.3"`（与 manifest.json / source/package.json
+ * 同值），构建时间戳写进 `"20260930-16"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91588,7 +91589,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "9.10.2";
+        const version = "9.10.3";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
@@ -91598,7 +91599,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20260930-14";
+        const stamp = "20260930-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -128872,8 +128873,22 @@ async function clearSummaryVectorIndexLayerFromChat_ACU(params) {
 async function deleteCurrentSummaryVectorIndexFromChat_ACU() {
     const snapshot = getAggregatedSummaryVectorIndexSnapshot_ACU();
     const chat = getChatArray_ACU();
+    const isolationKey = getCurrentIsolationKey_ACU();
     const scopeHints = new Map();
     const entries = [];
+    // 同一楼层会同时出现在 V1 索引层和 V2 镜像帧引用里；按消息去重，避免重复 patch 与重复落盘。
+    const seenMessages = new Set();
+    const pushEntry_ACU = (message, slotKey, expectedIndexId) => {
+        if (!message || seenMessages.has(message))
+            return;
+        seenMessages.add(message);
+        entries.push({
+            message,
+            isolationKey: slotKey,
+            patch: { summaryVectorIndexState: null, summaryVectorIndexManifest: null },
+            expectedIndexId,
+        });
+    };
     if (snapshot?.layers?.length) {
         for (const layer of snapshot.layers) {
             const message = chat[layer.messageIndex];
@@ -128891,15 +128906,41 @@ async function deleteCurrentSummaryVectorIndexFromChat_ACU() {
                 };
                 scopeHints.set(`${hint.chatKey || ''}\n${hint.isolationKey}\n${hint.sourceTableKey}`, hint);
             }
-            entries.push({
-                message,
-                isolationKey: layer.isolationKey,
-                patch: { summaryVectorIndexState: null, summaryVectorIndexManifest: null },
-                expectedIndexId: manifest?.indexId,
-            });
+            pushEntry_ACU(message, layer.isolationKey, manifest?.indexId);
         }
     }
-    const changed = await commitVectorMetadataPatchesBatch_ACU(entries);
+    // V2 形态：索引只活在 storageFrame.summaryVectorIndexFrame 里，必须一并剥掉，
+    // 否则删除后召回仍直读镜像 head、delta 仍继续增长，且重建门因检出既有向量数据而永不首建。
+    for (const ref of collectSummaryVectorMirrorFrameRefs_ACU(chat, isolationKey)) {
+        const frame = ref.frame.summaryVectorIndexFrame;
+        if (!frame)
+            continue;
+        const message = chat[ref.messageIndex];
+        if (!message || message.is_user)
+            continue;
+        const sourceTableKey = String(frame.sourceTableKey || frame.checkpoint?.sourceTableKey || getCurrentSummaryVectorIndexSourceTableKey_ACU()).trim() || getCurrentSummaryVectorIndexSourceTableKey_ACU();
+        const hint = {
+            chatKey: currentChatFileIdentifier_ACU,
+            isolationKey,
+            sourceTableKey,
+        };
+        scopeHints.set(`${hint.chatKey || ''}\n${hint.isolationKey}\n${hint.sourceTableKey}`, hint);
+        pushEntry_ACU(message, isolationKey);
+    }
+    const changed = await commitVectorMetadataPatchesBatch_ACU(entries, {
+        additionalMutate: (message) => {
+            const container = readIsolatedDataContainer_ACU(message);
+            const tagData = container?.[isolationKey];
+            if (!tagData?.storageFrame?.summaryVectorIndexFrame)
+                return false;
+            delete tagData.storageFrame.summaryVectorIndexFrame;
+            // 容器以字符串形态存在于楼层上时必须写回，否则剥掉的只是内存副本。
+            if (typeof message.TavernDB_ACU_IsolatedData === 'string') {
+                message.TavernDB_ACU_IsolatedData = JSON.stringify(container);
+            }
+            return true;
+        },
+    });
     const scopeHintList = Array.from(scopeHints.values());
     for (const hint of scopeHintList) {
         // 两个 helper 以返回值报失败（不抛错）；此处为尽力清理，失败仅记录，不改变本函数返回值语义。
@@ -133997,9 +134038,11 @@ class ContinuationOutlinePlanner_ACU {
         const injected = [];
         const storyArc = resolvers.$STORY_ARC ? String(await resolvers.$STORY_ARC() ?? '').trim() : '';
         const enabledOutline = resolvers.$OUTLINE_WINDOW ? String(await resolvers.$OUTLINE_WINDOW() ?? '').trim() : '';
-        if (storyArc && !renderedBlob.includes(storyArc.slice(0, Math.min(80, storyArc.length))))
+        // 比对整串而不是前 80 字：提示词里只出现总纲/大纲的开头片段（预览、摘要、节选）时，
+        // 前缀命中会让判定误认为「已注入过」，导致整份资料永不补注入、大纲在缺资料语境下跑。
+        if (storyArc && !renderedBlob.includes(storyArc))
             injected.push(`【当前故事总纲】\n${storyArc}`);
-        if (enabledOutline && !renderedBlob.includes(enabledOutline.slice(0, Math.min(80, enabledOutline.length))))
+        if (enabledOutline && !renderedBlob.includes(enabledOutline))
             injected.push(`【当前启用的阶段大纲】\n${enabledOutline}`);
         if (injected.length)
             rendered.messages.push({ role: 'user', content: injected.join('\n\n') });
@@ -151739,7 +151782,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260930-14";
+        const stamp = "20260930-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

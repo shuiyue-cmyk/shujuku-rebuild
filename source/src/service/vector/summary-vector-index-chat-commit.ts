@@ -104,7 +104,12 @@ export async function commitVectorMetadataPatchesBatch_ACU(
         expectedIndexId?: string;
     }>,
     options?: {
-        additionalMutate?: (message: any) => void;
+        /**
+         * 每条目在 patch 之后执行的额外 mutation，返回 true 表示「本次确实改动了消息」。
+         * V2 形态的索引数据只存在于 storageFrame 里（V1 patch 因而可能零变化），
+         * 若剥帧不回报变更，整批会被判「无事可做」而不落盘。
+         */
+        additionalMutate?: (message: any) => void | boolean;
     },
 ): Promise<boolean> {
     if (!Array.isArray(entries) || entries.length === 0) return false;
@@ -135,7 +140,7 @@ export async function commitVectorMetadataPatchesBatch_ACU(
                 expectedIndexId: entry.expectedIndexId,
             });
             if (result.changed) changed = true;
-            options?.additionalMutate?.(entry.message);
+            if (options?.additionalMutate?.(entry.message) === true) changed = true;
         }
         if (!changed) return false;
         await saveChatToHostStrict_ACU();

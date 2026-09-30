@@ -481,4 +481,73 @@ describe('P4 批量删除：真实 repository 写屏障', () => {
     expect(msg1).toEqual(before1);
     expect(h.saveStrict).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * V2 形态下「删除当前索引」必须剥掉楼层里的镜像帧。
+   *
+   * 交火索引在 V2 形态只存 `storageFrame.summaryVectorIndexFrame`（不再有 V1 的
+   * summaryVectorIndexState/Manifest）。若删除只清 V1 字段：镜像帧原样留在楼层，
+   * 召回仍直读镜像 head 照旧注入、delta 照旧增长，且 `ensureSummaryVectorMirrorAfterTableFill`
+   * 因检出「已有向量数据」而永不重建 —— 删除功能对 V2 实质失效。
+   *
+   * 同时锁「只剥帧也算一次有效变更」：否则 chat-commit 会因 V1 patch 无变化而不落盘。
+   * 剥帧不许连带损伤 storageFrame 的其它字段（表格存档本体与日志）。
+   */
+  it('4.3 V2 形态删除必须剥掉镜像帧，且只剥帧也算有效变更', async () => {
+    const msg0 = h.chat[0];
+    msg0.TavernDB_ACU_IsolatedData = {
+      'iso-a': {
+        storageFrame: {
+          version: 2,
+          logEntries: [{ seq: 1, kind: 'data_replace' }],
+          checkpoint: { kind: 'full', data: { sheet_summary: { name: '纪要表' } } },
+          summaryVectorIndexFrame: { sourceTableKey: 'sheet_summary', delta: { rowIds: ['r1'] } },
+        },
+      },
+    };
+    // V2 楼层没有 V1 索引层：聚合快照只有空 layers，删除不能因此认为「无事可做」
+    h.aggregatedSnapshot = { layers: [], summaryVectorIndexState: null };
+    h.saveStrict.mockResolvedValue(undefined);
+
+    const changed = await deleteCurrentSummaryVectorIndexFromChat_ACU();
+
+    const tagData = msg0.TavernDB_ACU_IsolatedData['iso-a'];
+    expect(tagData.storageFrame.summaryVectorIndexFrame, '镜像帧必须被剥掉').toBeUndefined();
+    expect(changed, '只剥帧也必须判为有效变更并落盘').toBe(true);
+    expect(h.saveStrict).toHaveBeenCalledTimes(1);
+    // 表格存档本体不受连带损伤
+    expect(tagData.storageFrame.version).toBe(2);
+    expect(tagData.storageFrame.logEntries).toEqual([{ seq: 1, kind: 'data_replace' }]);
+    expect(tagData.storageFrame.checkpoint.kind).toBe('full');
+  });
+
+  /**
+   * 上条只走对象容器。宿主也可能把 IsolatedData 存成 JSON 字符串——此时剥帧必须
+   * 把容器序列化写回，否则改的是内存副本、落盘后镜像帧仍在（删除依旧无效）。
+   */
+  it('4.4 IsolatedData 为字符串容器时，剥帧要序列化写回而不是只改内存副本', async () => {
+    const msg0 = h.chat[0];
+    msg0.TavernDB_ACU_IsolatedData = JSON.stringify({
+      'iso-a': {
+        storageFrame: {
+          version: 2,
+          logEntries: [{ seq: 1, kind: 'data_replace' }],
+          checkpoint: { kind: 'full', data: { sheet_summary: { name: '纪要表' } } },
+          summaryVectorIndexFrame: { sourceTableKey: 'sheet_summary', delta: { rowIds: ['r1'] } },
+        },
+      },
+    });
+    h.aggregatedSnapshot = { layers: [], summaryVectorIndexState: null };
+    h.saveStrict.mockResolvedValue(undefined);
+
+    const changed = await deleteCurrentSummaryVectorIndexFromChat_ACU();
+
+    expect(changed, '字符串容器的剥帧也必须判为有效变更').toBe(true);
+    const serialized = typeof msg0.TavernDB_ACU_IsolatedData === 'string'
+      ? msg0.TavernDB_ACU_IsolatedData
+      : JSON.stringify(msg0.TavernDB_ACU_IsolatedData);
+    expect(serialized, '落盘文本里不得残留镜像帧').not.toContain('summaryVectorIndexFrame');
+    // 表格存档本体仍在
+    expect(serialized).toContain('data_replace');
+  });
 });

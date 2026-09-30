@@ -1,5 +1,6 @@
-import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
+import { readIsolatedDataContainer_ACU, readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { commitVectorMetadataPatch_ACU, commitVectorMetadataPatchesBatch_ACU } from './summary-vector-index-chat-commit';
+import { collectSummaryVectorMirrorFrameRefs_ACU } from './summary-vector-mirror-resolver';
 import type { ChatSummaryVectorIndexState_ACU } from './summary-vector-index-types';
 import {
     clearSummaryVectorFlushTasksByScope_ACU,
@@ -210,6 +211,7 @@ export async function clearSummaryVectorIndexLayerFromChat_ACU(params: {
 export async function deleteCurrentSummaryVectorIndexFromChat_ACU(): Promise<boolean> {
     const snapshot = getAggregatedSummaryVectorIndexSnapshot_ACU();
     const chat = getChatArray_ACU();
+    const isolationKey = getCurrentIsolationKey_ACU();
     const scopeHints = new Map<string, { chatKey?: string; isolationKey: string; sourceTableKey: string }>();
     const entries: Array<{
         message: any;
@@ -217,6 +219,18 @@ export async function deleteCurrentSummaryVectorIndexFromChat_ACU(): Promise<boo
         patch: { summaryVectorIndexState: null; summaryVectorIndexManifest: null };
         expectedIndexId?: string;
     }> = [];
+    // 同一楼层会同时出现在 V1 索引层和 V2 镜像帧引用里；按消息去重，避免重复 patch 与重复落盘。
+    const seenMessages = new Set<any>();
+    const pushEntry_ACU = (message: any, slotKey: string, expectedIndexId?: string): void => {
+        if (!message || seenMessages.has(message)) return;
+        seenMessages.add(message);
+        entries.push({
+            message,
+            isolationKey: slotKey,
+            patch: { summaryVectorIndexState: null, summaryVectorIndexManifest: null },
+            expectedIndexId,
+        });
+    };
 
     if (snapshot?.layers?.length) {
         for (const layer of snapshot.layers) {
@@ -233,16 +247,42 @@ export async function deleteCurrentSummaryVectorIndexFromChat_ACU(): Promise<boo
                 };
                 scopeHints.set(`${hint.chatKey || ''}\n${hint.isolationKey}\n${hint.sourceTableKey}`, hint);
             }
-            entries.push({
-                message,
-                isolationKey: layer.isolationKey,
-                patch: { summaryVectorIndexState: null, summaryVectorIndexManifest: null },
-                expectedIndexId: manifest?.indexId,
-            });
+            pushEntry_ACU(message, layer.isolationKey, manifest?.indexId);
         }
     }
 
-    const changed = await commitVectorMetadataPatchesBatch_ACU(entries);
+    // V2 形态：索引只活在 storageFrame.summaryVectorIndexFrame 里，必须一并剥掉，
+    // 否则删除后召回仍直读镜像 head、delta 仍继续增长，且重建门因检出既有向量数据而永不首建。
+    for (const ref of collectSummaryVectorMirrorFrameRefs_ACU(chat, isolationKey)) {
+        const frame = ref.frame.summaryVectorIndexFrame;
+        if (!frame) continue;
+        const message = chat[ref.messageIndex];
+        if (!message || message.is_user) continue;
+        const sourceTableKey = String(
+            frame.sourceTableKey || frame.checkpoint?.sourceTableKey || getCurrentSummaryVectorIndexSourceTableKey_ACU(),
+        ).trim() || getCurrentSummaryVectorIndexSourceTableKey_ACU();
+        const hint = {
+            chatKey: currentChatFileIdentifier_ACU,
+            isolationKey,
+            sourceTableKey,
+        };
+        scopeHints.set(`${hint.chatKey || ''}\n${hint.isolationKey}\n${hint.sourceTableKey}`, hint);
+        pushEntry_ACU(message, isolationKey);
+    }
+
+    const changed = await commitVectorMetadataPatchesBatch_ACU(entries, {
+        additionalMutate: (message) => {
+            const container = readIsolatedDataContainer_ACU(message);
+            const tagData = container?.[isolationKey];
+            if (!tagData?.storageFrame?.summaryVectorIndexFrame) return false;
+            delete tagData.storageFrame.summaryVectorIndexFrame;
+            // 容器以字符串形态存在于楼层上时必须写回，否则剥掉的只是内存副本。
+            if (typeof message.TavernDB_ACU_IsolatedData === 'string') {
+                message.TavernDB_ACU_IsolatedData = JSON.stringify(container);
+            }
+            return true;
+        },
+    });
 
     const scopeHintList = Array.from(scopeHints.values());
     for (const hint of scopeHintList) {

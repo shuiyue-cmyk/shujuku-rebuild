@@ -1,6 +1,6 @@
 {
   "name": "shujuku-rebuild",
-  "version": "9.10.2",
+  "version": "9.10.3",
   "private": true,
   "type": "module",
   "description": "TTonly·数据库（酒馆数据库）重构版 — TauriTavern 扩展：SQL 表格 / 剧情推进 / skill 化 / 可视化前端兼容。零依赖酒馆助手。",
@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:parallel": "vitest run --fileParallelism --maxWorkers=4",
-    "smoke": "node scripts/smoke-hosted.mjs"
+    "smoke": "node scripts/smoke-hosted.mjs",
+    "drift": "node scripts/upstream-drift.mjs"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^29.0.2",
