@@ -10,7 +10,6 @@ const {
   mockCreateEmbeddings,
   mockPersistSummaryVectorIndexSnapshot,
   mockReadIsolatedTagData,
-  mockWriteIsolatedTagData,
   mockSaveChatToHost,
   mockSaveChatToHostStrict,
   mockAbortSummaryVectorIndexSnapshotPublication,
@@ -35,7 +34,6 @@ const {
     mockCreateEmbeddings: vi.fn(),
     mockPersistSummaryVectorIndexSnapshot: vi.fn(),
     mockReadIsolatedTagData: vi.fn((message: any, isolationKey: string) => message?.TavernDB_ACU_IsolatedData?.[isolationKey || ''] || null),
-    mockWriteIsolatedTagData: vi.fn(),
     mockSaveChatToHost: vi.fn().mockResolvedValue(undefined),
     mockSaveChatToHostStrict: vi.fn().mockResolvedValue(undefined),
     mockAbortSummaryVectorIndexSnapshotPublication: vi.fn(),
@@ -148,7 +146,6 @@ vi.mock('../../../src/data/repositories/chat-message-data-repo', () => ({
     message.TavernDB_ACU_IsolatedData = { ...container, [isolationKey]: next };
     return { changed: true, tagData: next };
   }),
-  writeIsolatedTagData_ACU: (...args: any[]) => mockWriteIsolatedTagData(...args),
   writeMessageIdentity_ACU: vi.fn((message: any, isolationConfig: any) => {
     if (!message) return;
     if (isolationConfig?.enabled) message.TavernDB_ACU_Identity = isolationConfig.code;

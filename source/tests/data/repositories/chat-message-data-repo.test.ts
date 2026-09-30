@@ -19,8 +19,6 @@ import {
   readModifiedKeys_ACU,
   readUpdateGroupKeys_ACU,
   isLegacyMatchForIsolation_ACU,
-  writeIsolatedTagData_ACU,
-  LEGACY_V1_TABLE_WRITE_FORBIDDEN_ACU,
   writeMessageIdentity_ACU,
   purgeManualRefillIncrementalSheetKeysFromStorageFrameV2_ACU,
   purgeManualRefillIncrementalSheetKeysFromMessage_ACU,
@@ -216,64 +214,6 @@ describe('isLegacyMatchForIsolation_ACU', () => {
 
 // ═══ 写入类 ═══
 
-describe('writeIsolatedTagData_ACU', () => {
-  it('null msg 不抛错', () => {
-    expect(() => writeIsolatedTagData_ACU(null, 'tag1', { independentData: {} } as any)).not.toThrow();
-  });
-
-  it('合法 V2 候选（storageFrame.version=2）无 IsolatedData 时自动创建容器', () => {
-    const msg: any = {};
-    writeIsolatedTagData_ACU(msg, 'tag1', {
-      storageFrame: { version: 2, logEntries: [] },
-      _acu_storage_version: 2,
-    } as any);
-    expect(msg.TavernDB_ACU_IsolatedData).toBeDefined();
-    expect(msg.TavernDB_ACU_IsolatedData.tag1.storageFrame.version).toBe(2);
-  });
-
-  it('纯向量 metadata 候选（无表 payload）放行', () => {
-    const msg: any = {};
-    writeIsolatedTagData_ACU(msg, 'tag1', {
-      summaryVectorIndexState: { version: 1, indexId: 'idx-1' },
-    } as any);
-    expect(msg.TavernDB_ACU_IsolatedData.tag1.summaryVectorIndexState.indexId).toBe('idx-1');
-  });
-
-  it('已有 IsolatedData 时追加合法 V2 标签', () => {
-    const msg: any = { TavernDB_ACU_IsolatedData: { existing: { storageFrame: { version: 2, logEntries: [] } } } };
-    writeIsolatedTagData_ACU(msg, 'tag1', { storageFrame: { version: 2, logEntries: [] } } as any);
-    expect(msg.TavernDB_ACU_IsolatedData.existing).toBeDefined();
-    expect(msg.TavernDB_ACU_IsolatedData.tag1).toBeDefined();
-  });
-
-  it('拒绝 Legacy-V1 表 payload（independentData 含 sheet_ 键）并保持 message 不变', () => {
-    const msg: any = {};
-    expect(() => writeIsolatedTagData_ACU(msg, 'tag1', { independentData: { sheet_0: { name: '表' } } } as any))
-      .toThrowError(LEGACY_V1_TABLE_WRITE_FORBIDDEN_ACU);
-    expect(msg.TavernDB_ACU_IsolatedData).toBeUndefined();
-  });
-
-  it('拒绝 V1 checkpoint 形态（_acu_storage_version=1 + independentData）', () => {
-    const msg: any = {};
-    expect(() => writeIsolatedTagData_ACU(msg, 'tag1', {
-      independentData: { sheet_0: { name: '表' } },
-      modifiedKeys: ['sheet_0'],
-      _acu_storage_mode: 'checkpoint',
-      _acu_storage_version: 1,
-    } as any)).toThrowError(LEGACY_V1_TABLE_WRITE_FORBIDDEN_ACU);
-    expect(msg.TavernDB_ACU_IsolatedData).toBeUndefined();
-  });
-
-  it('拒绝 V2 frame + V1 payload 混合候选', () => {
-    const msg: any = {};
-    expect(() => writeIsolatedTagData_ACU(msg, 'tag1', {
-      storageFrame: { version: 2, logEntries: [] },
-      independentData: { sheet_0: { name: '表' } },
-      _acu_storage_version: 2,
-    } as any)).toThrowError(LEGACY_V1_TABLE_WRITE_FORBIDDEN_ACU);
-    expect(msg.TavernDB_ACU_IsolatedData).toBeUndefined();
-  });
-});
 
 
 describe('writeMessageIdentity_ACU', () => {

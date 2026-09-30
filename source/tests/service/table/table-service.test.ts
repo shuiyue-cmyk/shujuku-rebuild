@@ -24,7 +24,6 @@ const {
   mockDeleteAllGeneratedEntries,
   mockMergeAllIndependentTables,
   mockCloneIsolatedData,
-  mockWriteIsolatedTagData,
   mockWriteMessageIdentity,
   mockReadIsolatedTagData,
   mockReadLegacyIndependentData,
@@ -62,7 +61,6 @@ const {
     mockDeleteAllGeneratedEntries: vi.fn().mockResolvedValue(undefined),
     mockMergeAllIndependentTables: vi.fn(),
     mockCloneIsolatedData: vi.fn(() => ({})),
-    mockWriteIsolatedTagData: vi.fn(),
     mockWriteMessageIdentity: vi.fn(),
     mockReadIsolatedTagData: vi.fn(() => null),
     mockReadLegacyIndependentData: vi.fn(() => null),
@@ -138,7 +136,6 @@ vi.mock('../../../src/service/runtime/helpers-remaining', () => ({
 
 vi.mock('../../../src/data/repositories/chat-message-data-repo', () => ({
   cloneIsolatedData_ACU: mockCloneIsolatedData,
-  writeIsolatedTagData_ACU: mockWriteIsolatedTagData,
   writeMessageIdentity_ACU: mockWriteMessageIdentity,
   readIsolatedTagData_ACU: mockReadIsolatedTagData,
   readLegacyIndependentData_ACU: mockReadLegacyIndependentData,
