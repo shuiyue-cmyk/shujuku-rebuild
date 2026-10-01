@@ -36,7 +36,7 @@ export function buildAcuTauriVersionWarningHtml_ACU(
   const extension = escapeHtml_ACU(String(extensionVersion || '未知'));
   return [
     '<h3>建议升级 TauriTavern</h3>',
-    `<p>宿主版本（TauriTavern）：<b>${current}</b>；扩展版本（TTonly·数据库）：<b>${extension}</b>；本插件适配与验证的要求基线：<b>${required}</b>。</p>`,
+    `<p>宿主版本（TauriTavern）：<b>${current}</b>；扩展版本（UnbirthDB）：<b>${extension}</b>；本插件适配与验证的要求基线：<b>${required}</b>。</p>`,
     `<p>检测到宿主版本低于要求基线。本插件的楼层识别与自动填表是按 ${required} 的宿主行为适配并验证的（工具调用结果作为独立楼层、生成事件与结构写入契约的变更）。低于该版本时行为未经验证，可能出现楼层识别偏差、填表或追平异常。</p>`,
     `<p>请把宿主升级到 <b>${required}</b> 或更高版本后重新加载页面（扩展不用动）。可在 TauriTavern 内检查更新，或从官方 Releases 下载：<br>github.com/Darkatse/TauriTavern/releases</p>`,
   ].join('');

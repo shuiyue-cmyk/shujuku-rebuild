@@ -208,7 +208,7 @@ export function buildDebugExportPayload_ACU(logs: LogEntry[]) {
 
   return {
     meta: {
-      plugin: 'TTonly·数据库',
+      plugin: 'UnbirthDB',
       version: env.version,
       extensionVersion: env.version,
       hostVersion: env.hostVersion,

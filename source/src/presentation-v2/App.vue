@@ -194,7 +194,7 @@ let themeMenuCloseTimer: AcuTimerHandle | undefined;
 let mobileNavCloseTimer: AcuTimerHandle | undefined;
 
 const shellTitle = computed(() =>
-  visualizer.isActive ? "数据库编辑器" : router.activePage?.title || "TTonly·数据库",
+  visualizer.isActive ? "数据库编辑器" : router.activePage?.title || "UnbirthDB",
 );
 
 const uiScaleOptions = computed(() =>

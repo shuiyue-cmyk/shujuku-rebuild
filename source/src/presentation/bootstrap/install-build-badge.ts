@@ -22,7 +22,7 @@ export function installGlobalBuildBadge_ACU(): boolean {
         if (doc.getElementById(BUILD_BADGE_ELEMENT_ID_ACU)) return true;
         const badge = doc.createElement('div');
         badge.id = BUILD_BADGE_ELEMENT_ID_ACU;
-        badge.textContent = `TTonly·${readBuildStamp_ACU()}`;
+        badge.textContent = `UnbirthDB·${readBuildStamp_ACU()}`;
         badge.style.cssText = 'position:fixed;bottom:2px;right:6px;z-index:2147483600;font-size:10px;line-height:1;opacity:0.55;pointer-events:none;color:#9a9a9a;mix-blend-mode:difference;user-select:none;font-family:monospace;';
         (doc.body || doc.documentElement).appendChild(badge);
         return true;

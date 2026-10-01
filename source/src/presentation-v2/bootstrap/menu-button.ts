@@ -1,7 +1,7 @@
 /**
  * menu-button — 在 host document 的 #extensionsMenu 中挂 UI v2 按钮（D15）
  *
- * 与旧菜单按钮（startup.ts 中的 TTonly·数据库 旧UI）共存，互不影响。
+ * 与旧菜单按钮（startup.ts 中的 UnbirthDB 旧UI）共存，互不影响。
  * 依赖 host document 解析（D15.1），因此也只在 host document 上注册按钮。
  *
  * 注入时序（TT dev 实态，见 TT src/scripts/extensions.js）：
@@ -204,10 +204,10 @@ function buildMenuButton_ACU(doc: Document): HTMLElement {
   const item = doc.createElement('div');
   item.className = 'list-group-item flex-container flexGap5 interactable';
   item.id = MENU_ITEM_ID;
-  item.title = '打开 TTonly·数据库';
+  item.title = '打开 UnbirthDB';
   item.innerHTML =
     '<div class="fa-fw fa-solid fa-database extensionsMenuExtensionButton"></div>' +
-    '<span>TTonly·数据库</span>';
+    '<span>UnbirthDB</span>';
   ensureClickBound_ACU(item);
   container.appendChild(item);
   return container;

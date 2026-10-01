@@ -471,7 +471,7 @@ describe('语义⑤：两份导出共用同一个 payload builder（P1 脱敏不
     expect(count('buildDebugExportPayload_ACU(')).toBe(3);
     // 复制代码的标志物：这些构造片段各自只允许出现在 builder 里
     expect(count('settingsSnapshot = maskSensitiveFields(')).toBe(1);
-    expect(count("plugin: 'TTonly·数据库'")).toBe(1);
+    expect(count("plugin: 'UnbirthDB'")).toBe(1);
     expect(count('clearHistory: getClearHistory_ACU()')).toBe(1);
     expect(count('function debugExportFilename_ACU(')).toBe(1);
     expect(count('downloadJson(debugExportFilename_ACU()')).toBe(2);

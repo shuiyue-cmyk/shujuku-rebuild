@@ -29,7 +29,7 @@ describe('installGlobalBuildBadge_ACU', () => {
         (globalThis as any).__ACU_BUILD_STAMP__ = '20260903-01';
         expect(installGlobalBuildBadge_ACU()).toBe(true);
         const badge = document.getElementById(BUILD_BADGE_ELEMENT_ID_ACU);
-        expect(badge?.textContent).toBe('TTonly·20260903-01');
+        expect(badge?.textContent).toBe('UnbirthDB·20260903-01');
         expect(badge?.style.position).toBe('fixed');
         expect(badge?.style.pointerEvents).toBe('none');
     });
@@ -44,7 +44,7 @@ describe('installGlobalBuildBadge_ACU', () => {
         delete (globalThis as any).__ACU_BUILD_STAMP__;
         expect(readBuildStamp_ACU()).toBe('dev');
         expect(installGlobalBuildBadge_ACU()).toBe(true);
-        expect(document.getElementById(BUILD_BADGE_ELEMENT_ID_ACU)?.textContent).toBe('TTonly·dev');
+        expect(document.getElementById(BUILD_BADGE_ELEMENT_ID_ACU)?.textContent).toBe('UnbirthDB·dev');
     });
 
     it('document 不可用时返回 false 不抛错', () => {
