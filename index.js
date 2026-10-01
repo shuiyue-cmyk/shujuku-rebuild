@@ -91586,7 +91586,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"Unbirth A.D. 184972"`（与 manifest.json / source/package.json
+ * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
  * 同值），构建时间戳写进 `"20261001-17"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
@@ -91596,7 +91596,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "Unbirth A.D. 184972";
+        const version = "Unbirth A.D. 4624";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
