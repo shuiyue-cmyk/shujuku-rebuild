@@ -1,7 +1,7 @@
 <template>
   <nav :class="['acu-v2-sidebar', `acu-v2-sidebar--${variant}`]" aria-label="一级页导航">
     <div class="acu-v2-sidebar__brand">
-      <span class="acu-v2-sidebar__brand-mark" aria-hidden="true">SP</span>
+      <span class="acu-v2-sidebar__brand-mark" aria-hidden="true">UB</span>
       <span class="acu-v2-sidebar__brand-copy">
         <span class="acu-v2-sidebar__brand-title">UnbirthDB</span>
         <span class="acu-v2-sidebar__brand-tag">新 UI · {{ uiMode.modeLabel }}</span>
