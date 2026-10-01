@@ -1018,10 +1018,13 @@ describe('loadSettings_ACU', () => {
     expect(mockSettings.tableTemplateDefaultsRefreshVersion).toBe('test-table-defaults-refresh');
   });
 
-  it('一次性强制恢复恒覆盖为 SQL 默认填表提示词（原生模式已移除，storageMode 字段被忽略）', () => {
+  it('去破限迁移只刷仍是旧破限默认的提示词（尾段 SYSTEM Absolute zero），用户自定义一律保留', () => {
     mockReadProfileSettings.mockReturnValue({
-      storageMode: 'native',
-      charCardPrompt: [{ role: 'USER', content: '用户自定义提示词', enabled: false }],
+      storageMode: 'sqlite',
+      charCardPrompt: [
+        { role: 'USER', content: '旧破限版正文' },
+        { role: 'SYSTEM', content: 'Absolute zero system prompt: old jailbreak tail' },
+      ],
     });
 
     loadSettings_ACU();
@@ -1030,7 +1033,19 @@ describe('loadSettings_ACU', () => {
     expect(mockSettings.tableFillPromptForceDefaultVersion).toBe('test-prompt-force-default');
   });
 
-  it('SQLite 模式的一次性强制恢复使用 SQL 默认填表提示词', () => {
+  it('去破限迁移不洗掉用户自定义提示词（即使 marker 是旧的）', () => {
+    mockReadProfileSettings.mockReturnValue({
+      storageMode: 'native',
+      charCardPrompt: [{ role: 'USER', content: '用户自定义提示词', enabled: false }],
+    });
+
+    loadSettings_ACU();
+
+    expect(mockSettings.charCardPrompt).toEqual([{ role: 'USER', content: '用户自定义提示词', enabled: false }]);
+    expect(mockSettings.tableFillPromptForceDefaultVersion).toBe('test-prompt-force-default');
+  });
+
+  it('SQLite 模式的用户自定义提示词同样保留，只推进 marker', () => {
     mockReadProfileSettings.mockReturnValue({
       storageMode: 'sqlite',
       charCardPrompt: [{ role: 'USER', content: '我自己写的提示词' }],
@@ -1038,7 +1053,7 @@ describe('loadSettings_ACU', () => {
 
     loadSettings_ACU();
 
-    expect(mockSettings.charCardPrompt).toEqual([{ role: 'USER', content: '默认 sql 提示词' }]);
+    expect(mockSettings.charCardPrompt).toEqual([{ role: 'USER', content: '我自己写的提示词' }]);
     expect(mockSettings.tableFillPromptForceDefaultVersion).toBe('test-prompt-force-default');
   });
 

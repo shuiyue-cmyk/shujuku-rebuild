@@ -197,7 +197,7 @@ export const TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU = 'spv2.1.3-table-templ
 // 迁移执行一次后写入 marker，之后用户仍可再次手动关闭并被永久保留。
 export const SUMMARY_INDEX_V2_WRITER_FORCE_ENABLE_VERSION_ACU = 'spv3.6.10-v2-writer-force-enable';
 // 一次性强制恢复填表默认提示词；执行后用户仍可继续自定义。
-export const TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU = 'spv8.9.2-force-default-table-fill-prompt';
+export const TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU = 'spv9.4-force-default-table-fill-prompt-dejailbreak';
 // 一次性强制恢复 AI 改表助手提示词；执行后用户仍可继续自定义。
 // 空 segments 是既有契约：运行时回退到内置伪 role 默认提示词。
 export const TEMPLATE_ASSISTANT_PROMPT_FORCE_DEFAULT_VERSION_ACU = 'spv8.9.4-force-default-template-assistant-prompt';

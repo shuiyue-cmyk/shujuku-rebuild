@@ -1007,15 +1007,25 @@ function refreshDefaultTableTemplateOnce_ACU(activeCode: string) {
   }
 
 /**
- * [spv8.9.2] 一次性强制恢复全部填表提示词为当前版本默认值。
+ * [spv9.4] 去破限定向迁移：只有仍是旧破限默认（尾段 SYSTEM Absolute zero）的才刷成新默认；
+ * 用户已自定义的一律保留（spv8.9.2 曾无条件强刷，本次不再重复其行为）。
  * marker 写入后不再执行，用户后续仍可正常自定义。
  */
+function isPristineLegacyJailbreakFillPrompt_ACU(value: unknown): boolean {
+      if (!Array.isArray(value) || value.length === 0) return false;
+      const tail = value[value.length - 1] as any;
+      return !!tail && tail.role === 'SYSTEM' && String(tail.content || '').startsWith('Absolute zero system prompt');
+}
+
 function forceDefaultTableFillPromptsOnce_ACU() {
       try {
           if (!settings_ACU || typeof settings_ACU !== 'object') return;
           if (settings_ACU.tableFillPromptForceDefaultVersion === TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU) return;
 
-          settings_ACU.charCardPrompt = cloneDefaultValue_ACU(DEFAULT_CHAR_CARD_PROMPT_SQL_ACU);
+          const current = (settings_ACU as Record<string, any>).charCardPrompt;
+          if (!Array.isArray(current) || current.length === 0 || isPristineLegacyJailbreakFillPrompt_ACU(current)) {
+              settings_ACU.charCardPrompt = cloneDefaultValue_ACU(DEFAULT_CHAR_CARD_PROMPT_SQL_ACU);
+          }
           settings_ACU.tableFillPromptForceDefaultVersion = TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU;
           saveSettings_ACU();
           logDebug_ACU(`[填表提示词] 已一次性强制恢复默认提示词并记录版本: ${TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU}`);
@@ -1027,9 +1037,10 @@ function forceDefaultTableFillPromptsOnce_ACU() {
 /**
  * [spv9.3] user-prefill 切换批的 profile 侧一次性覆盖（TT 移植上游 ce867f86）：
  * 剧情推进默认组尾段已由 assistant 预填充换成 user 预填充，一次性把 plotSettings.promptGroup
- * 刷回新默认。上游同批还刷角色卡组——本地卡组尾段本就是 SYSTEM（Absolute zero），默认未变，
- * 强刷只会丢掉用户定制，因此本地覆盖集合只含剧情组。marker 持久化失败必须回滚内存态并下次
- * 加载重试，绝不谎报已迁移；marker 写入后用户再改的提示词永久保留。
+ * 刷回新默认。填表组尾段在 spv9.4 去破限后同样变为 user 预填充，由填表专属迁移
+ * （forceDefaultTableFillPromptsOnce_ACU）负责，本函数覆盖集合仍只含剧情组，避免
+ * 双重迁移丢掉用户定制。marker 持久化失败必须回滚内存态并下次加载重试，绝不谎报已迁移；
+ * marker 写入后用户再改的提示词永久保留。
  */
 function forceUserPrefillProfilePromptsOnce_ACU() {
       try {

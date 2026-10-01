@@ -3,9 +3,9 @@
  *
  * 上游把「以 assistant 预填充收尾」的默认组尾段换成一条 user 消息（内容为伪 assistant
  * JSON 块的文本预填充）。本地按实际形状盘点：只切真正以 assistant 预填充收尾的组
- * （剧情推进 DEFAULT_PLOT_PROMPT_GROUP_ACU、向量关键词 keywordPromptGroup）；
- * 角色卡/填表组本地尾段已是 SYSTEM（Absolute zero），时间召回与正文优化尾段是整句
- * 应答而非续写前缀，上游同样未切——这些组保持原样并用守卫测试锁死。
+ * （剧情推进 DEFAULT_PLOT_PROMPT_GROUP_ACU、向量关键词 keywordPromptGroup、
+ * 去破限后的填表组 DEFAULT_CHAR_CARD_PROMPT_ACU）；
+ * 时间召回与正文优化尾段是整句应答而非续写前缀，上游同样未切——这些组保持原样并用守卫测试锁死。
  */
 import { describe, expect, it } from 'vitest';
 import { USER_PREFILL_CONTENT_ACU } from '../../src/shared/user-prefill.js';
@@ -42,10 +42,11 @@ describe('默认组尾段 assistant→user 切换（与上游对齐、按本地�
     expect(tail.deletable).toBe(true);
   });
 
-  it('守卫：角色卡/填表组本地尾段是 SYSTEM Absolute zero，不属于切换集合', () => {
+  it('填表组尾段切为 user + USER_PREFILL（去破限后与上游一致）', () => {
     const tail = DEFAULT_CHAR_CARD_PROMPT_ACU[DEFAULT_CHAR_CARD_PROMPT_ACU.length - 1];
-    expect(tail.role).toBe('SYSTEM');
-    expect(String(tail.content).startsWith('Absolute zero system prompt')).toBe(true);
+    expect(tail.role).toBe('user');
+    expect(tail.content).toBe(USER_PREFILL_CONTENT_ACU);
+    expect(tail.deletable).toBe(true);
   });
 
   it('守卫：时间召回预设尾段是整句 assistant 应答（上游未切），保持 assistant', () => {
