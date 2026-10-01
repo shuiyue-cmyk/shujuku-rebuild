@@ -16,11 +16,31 @@ export function setSendTextareaValue_ACU(text: string): boolean {
         // jQuery 空集上 .val/.trigger 依然存在且调用为 no-op——必须判 length，否则假成功。
         if (!$textarea || $textarea.length === 0 || typeof $textarea.val !== 'function' || typeof $textarea.trigger !== 'function') return false;
         $textarea?.val(text);
-        $textarea?.trigger('input');
+        notifySendTextareaInput_ACU($textarea);
         return true;
     } catch {
         return false;
     }
+}
+
+/**
+ * 通知宿主发送框「内容变了」。
+ *
+ * 宿主的发送框自适应高度与输入暂存是用原生 addEventListener('input') 监听的，
+ * 而 jQuery 的 trigger('input') 只调用 jQuery 自己的处理器，原生监听器收不到事件
+ * ——剧情推进伪装清空发送框后高度不会收缩，窄屏输入框上移、点击区域错位。
+ *
+ * 原生事件 bubbles，jQuery 处理器同样会收到，因此这不替代 jQuery 触发；
+ * 只有拿不到原生元素时才回落到 trigger。
+ */
+function notifySendTextareaInput_ACU($textarea: JQuery<HTMLElement>): void {
+    const el = $textarea[0];
+    if (el && typeof el.dispatchEvent === 'function') {
+        const EventCtor = el.ownerDocument?.defaultView?.Event ?? Event;
+        el.dispatchEvent(new EventCtor('input', { bubbles: true }));
+        return;
+    }
+    $textarea.trigger('input');
 }
 
 /** Clicks the host send button and reports availability instead of swallowing it. */

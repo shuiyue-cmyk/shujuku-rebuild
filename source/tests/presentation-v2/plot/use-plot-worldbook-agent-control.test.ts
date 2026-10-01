@@ -471,15 +471,103 @@ describe('usePlotWorldbookAgentControl', () => {
     expect(toast.success).toHaveBeenCalledWith('已清理并初始化 Agent 世界书状态；Agent 模式已关闭，下次使用时会重新初始化。', { muteable: false });
   });
 
+  /**
+   * 部分失败但**确实改动了条目**时，restore 仍必须报告「有变更」。
+   *
+   * 调用方 WorldbookAgentControlBar.runRestore 用返回值决定要不要 emit
+   * current-worldbook-changed，AgentPage 靠它跑 refreshAll 刷新世界书编辑区的
+   * 条目与三个计数（关闭 Skill 数 / 蓝灯数 / 二合一数）。一旦这里返回 false，
+   * 用户点「清理并初始化」后编辑器就滞后：世界书已被改过，界面还显示旧状态。
+   *
+   * 对照组：同族的 clearSkillMeta 在部分失败时返回 `result.cleared > 0`
+   * （改了刷、没改不刷），setMode 在 warning 分支也返回 true。restore 曾是
+   * 唯一按「有无失败」而非「有无改动」返回的，导致部分成功时不刷新。
+   */
+  it('restore 部分失败但已恢复部分条目时仍报告有变更，使世界书编辑区刷新', async () => {
+    const c = await getComposable();
+    mockRestore.mockResolvedValue({
+      updated: true,
+      reason: 'native_worldbook_trigger_restore_failed',
+      restored: 3,
+      skipped: 0,
+      failed: 2,
+    });
+
+    await expect(c.restore()).resolves.toBe(true);
+
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('部分世界书条目恢复失败'), { muteable: false });
+  });
+
+  /**
+   * 「写入已成功、回读校验失败」这一形态：restored=0，但世界书已被改写。
+   * 服务层把它计入 changed（agent-worldbook-takeover.ts:1539 的
+   * changed = restored + failed + stateWriteFailed + cleaned），所以 updated=true。
+   * 若调用层按 restored>0 判断，编辑区就会漏这次刷新 —— 即用户报告的滞后。
+   */
+  it('restore 写入成功但回读校验失败（restored=0）时同样报告已改动', async () => {
+    const c = await getComposable();
+    mockRestore.mockResolvedValue({
+      updated: true,
+      reason: 'native_worldbook_trigger_restore_failed',
+      restored: 0,
+      skipped: 0,
+      failed: 4,
+    });
+
+    await expect(c.restore()).resolves.toBe(true);
+  });
+
+  /**
+   * 「只清理了快照/内部条目」也是改动：cleaned>0 同样计入 changed。
+   * 此时 restored=0、failed=0，走全成功分支但 updated 为 true。
+   */
+  it('restore 仅清理旧快照/内部条目（restored=0）时报告已改动', async () => {
+    const c = await getComposable();
+    mockRestore.mockResolvedValue({
+      updated: true,
+      reason: 'legacy_artifacts_cleaned',
+      restored: 0,
+      skipped: 0,
+      failed: 0,
+    });
+
+    await expect(c.restore()).resolves.toBe(true);
+  });
+
+  /**
+   * 全成功但没有任何条目改动时：仍返回 true（既有行为）。
+   *
+   * 即使世界书内容没变，restore 也已经把 mode 置为 disabled 并关掉了 Agent 接管，
+   * 编辑区可用性与三个计数都要跟着重算，故这里必须刷新。锁住这条是为了防止
+   * 后续把「部分失败分支改成按 updated 判断」时误伤全成功路径。
+   */
+  it('restore 无条目改动但已关闭 Agent 模式时仍刷新编辑区', async () => {
+    const c = await getComposable();
+    mockRestore.mockResolvedValue({
+      updated: false,
+      reason: 'no_active_snapshot',
+      restored: 0,
+      skipped: 0,
+      failed: 0,
+    });
+
+    await expect(c.restore()).resolves.toBe(true);
+
+    expect(toast.info).toHaveBeenCalledWith(expect.stringContaining('没有可恢复的 Agent 快照'), { muteable: false });
+  });
+
   it('restore 恢复失败时保留 legacy snapshot，避免丢失恢复依据', async () => {
     const c = await getComposable();
     const settings = (c as any).__settings;
     mockRestore.mockImplementation(async () => {
       expect(settings.plotSettings.agentWorldbookControlSnapshot).toBeDefined();
-      return { updated: true, reason: 'native_worldbook_trigger_restore_failed', skipped: 0, failed: 1 };
+      return { updated: true, reason: 'native_worldbook_trigger_restore_failed', restored: 0, skipped: 0, failed: 1 };
     });
 
-    await expect(c.restore()).resolves.toBe(false);
+    // updated=true 表示世界书已被改写（服务层 changed = restored + failed + … > 0，
+    // 见 agent-worldbook-takeover.ts:1539），故必须返回 true 触发编辑区刷新；
+    // 本用例真正要守的是下面的 snapshot 保留。
+    await expect(c.restore()).resolves.toBe(true);
 
     expect(mockWriteControl).toHaveBeenCalledWith({ mode: 'disabled', enabled: false });
     expect(mockRestore).toHaveBeenCalledWith({ cleanupMode: 'full' });

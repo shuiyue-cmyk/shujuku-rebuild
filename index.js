@@ -45323,8 +45323,20 @@ async function ensureSqlReplayRuntime_ACU(runtime, state, options = {}) {
     await runtime.engine.init();
     if (options.legacyDuplicateRowIds)
         runtime.syncBridge.loadSpv79LegacyDuplicateRowIdHistory(state);
+    // 回放必须复现写入时的 runtime schema 加载口径：写入端（sql-table-service.ts）一律带
+    // allowRuntimeDdlFallback。回放若拒绝同一回退，写入基底与回放基底必然分叉，
+    // 触发写入守卫（CREATE TABLE near )）并让该聊天的写入探针恒失败。
+    //
+    // 该 flag 在 sync-bridge 里有**两处**放宽边界，不是只有「首条 CREATE TABLE 失败」：
+    // ① resolve 期（sync-bridge.ts:307）：显式 DDL 缺少可用的 row_id INTEGER PRIMARY KEY
+    //    结构时 resolveEffectiveDDL 直接产出 fallback_invalid（见 schema-mapper.ts:128），
+    //    此时不要求 source==='explicit'、也不要求是第 1 条语句失败；
+    // ② 执行期（sync-bridge.ts:353）：source==='explicit' 且首条语句失败才再回退一次。
+    // 两处都只影响建表 schema：行标识与行宽校验在 DDL 之前跑（sync-bridge.ts:139-157）、
+    // 映射计划与 INSERT 串在 runBatch 之前生成、fallback 的 columnMap 覆盖全部表头，
+    // 故行数据 / 约束 / 映射错误照旧 fail-closed，sourceData.ddl 也不改写。
     else
-        runtime.syncBridge.loadFromTableData(state, { strict: true });
+        runtime.syncBridge.loadFromTableData(state, { strict: true, allowRuntimeDdlFallback: true });
     if (options.metrics) {
         options.metrics.sqliteHydrateCount += 1;
     }
@@ -91488,8 +91500,8 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"9.10.5"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20260930-20"`。源码直跑、测试环境或注入失败时读不到，
+ * rollup 打包时把版本写进 `"9.10.6"`（与 manifest.json / source/package.json
+ * 同值），构建时间戳写进 `"20261001-14"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91498,7 +91510,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "9.10.5";
+        const version = "9.10.6";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
@@ -91508,7 +91520,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20260930-20";
+        const stamp = "20261001-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -127279,12 +127291,31 @@ function setSendTextareaValue_ACU(text) {
         if (!$textarea || $textarea.length === 0 || typeof $textarea.val !== 'function' || typeof $textarea.trigger !== 'function')
             return false;
         $textarea?.val(text);
-        $textarea?.trigger('input');
+        notifySendTextareaInput_ACU($textarea);
         return true;
     }
     catch {
         return false;
     }
+}
+/**
+ * 通知宿主发送框「内容变了」。
+ *
+ * 宿主的发送框自适应高度与输入暂存是用原生 addEventListener('input') 监听的，
+ * 而 jQuery 的 trigger('input') 只调用 jQuery 自己的处理器，原生监听器收不到事件
+ * ——剧情推进伪装清空发送框后高度不会收缩，窄屏输入框上移、点击区域错位。
+ *
+ * 原生事件 bubbles，jQuery 处理器同样会收到，因此这不替代 jQuery 触发；
+ * 只有拿不到原生元素时才回落到 trigger。
+ */
+function notifySendTextareaInput_ACU($textarea) {
+    const el = $textarea[0];
+    if (el && typeof el.dispatchEvent === 'function') {
+        const EventCtor = el.ownerDocument?.defaultView?.Event ?? Event;
+        el.dispatchEvent(new EventCtor('input', { bubbles: true }));
+        return;
+    }
+    $textarea.trigger('input');
 }
 /** Clicks the host send button and reports availability instead of swallowing it. */
 function clickSendButton_ACU() {
@@ -151691,7 +151722,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260930-20";
+        const stamp = "20261001-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -184486,9 +184517,18 @@ function usePlotWorldbookAgentControl() {
             disableLegacyAgentWorldbookControl_ACU({ clearSnapshot: result.updated && result.skipped === 0 && result.failed === 0 });
             await refresh();
             const message = plotCopy.agentControl.restore.reasons[result.reason || ''] || plotCopy.agentControl.restore.noop;
+            // 返回值语义 = 「世界书是否被改动过」，不是「有没有失败」。调用方
+            // WorldbookAgentControlBar.runRestore 据此 emit current-worldbook-changed，
+            // AgentPage 靠它刷新世界书编辑区的条目与三个计数。
+            //
+            // 判据直接用服务层的 result.updated：它在 agent-worldbook-takeover.ts:1539
+            // 定义为 `changed = restored + failed + stateWriteFailed + cleaned` 是否 > 0，
+            // 即「写入成功但回读校验失败」（restored=0、failed>0，世界书已被改写）与
+            // 「清理掉快照/内部条目」（cleaned>0）都算已改动。自立判据会漏掉这两种形态，
+            // 那正是编辑器滞后的根因。
             if (result.skipped > 0 || result.failed > 0) {
                 toast.warning(message, { muteable: false });
-                return false;
+                return result.updated === true;
             }
             if (result.updated) {
                 toast.success(plotCopy.agentControl.restore.success(), { muteable: false });

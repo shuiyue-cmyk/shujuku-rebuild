@@ -476,9 +476,18 @@ export function usePlotWorldbookAgentControl() {
       disableLegacyAgentWorldbookControl_ACU({ clearSnapshot: result.updated && result.skipped === 0 && result.failed === 0 });
       await refresh();
       const message = plotCopy.agentControl.restore.reasons[result.reason || ''] || plotCopy.agentControl.restore.noop;
+      // 返回值语义 = 「世界书是否被改动过」，不是「有没有失败」。调用方
+      // WorldbookAgentControlBar.runRestore 据此 emit current-worldbook-changed，
+      // AgentPage 靠它刷新世界书编辑区的条目与三个计数。
+      //
+      // 判据直接用服务层的 result.updated：它在 agent-worldbook-takeover.ts:1539
+      // 定义为 `changed = restored + failed + stateWriteFailed + cleaned` 是否 > 0，
+      // 即「写入成功但回读校验失败」（restored=0、failed>0，世界书已被改写）与
+      // 「清理掉快照/内部条目」（cleaned>0）都算已改动。自立判据会漏掉这两种形态，
+      // 那正是编辑器滞后的根因。
       if (result.skipped > 0 || result.failed > 0) {
         toast.warning(message, { muteable: false });
-        return false;
+        return result.updated === true;
       }
       if (result.updated) {
         toast.success(plotCopy.agentControl.restore.success(), { muteable: false });

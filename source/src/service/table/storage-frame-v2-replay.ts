@@ -1418,7 +1418,19 @@ async function ensureSqlReplayRuntime_ACU(
   if (!options.legacyDuplicateRowIds) normalizeHistoricalReplayState_ACU(state, 'snapshot');
   await runtime.engine.init();
   if (options.legacyDuplicateRowIds) runtime.syncBridge.loadSpv79LegacyDuplicateRowIdHistory(state);
-  else runtime.syncBridge.loadFromTableData(state, { strict: true });
+  // 回放必须复现写入时的 runtime schema 加载口径：写入端（sql-table-service.ts）一律带
+  // allowRuntimeDdlFallback。回放若拒绝同一回退，写入基底与回放基底必然分叉，
+  // 触发写入守卫（CREATE TABLE near )）并让该聊天的写入探针恒失败。
+  //
+  // 该 flag 在 sync-bridge 里有**两处**放宽边界，不是只有「首条 CREATE TABLE 失败」：
+  // ① resolve 期（sync-bridge.ts:307）：显式 DDL 缺少可用的 row_id INTEGER PRIMARY KEY
+  //    结构时 resolveEffectiveDDL 直接产出 fallback_invalid（见 schema-mapper.ts:128），
+  //    此时不要求 source==='explicit'、也不要求是第 1 条语句失败；
+  // ② 执行期（sync-bridge.ts:353）：source==='explicit' 且首条语句失败才再回退一次。
+  // 两处都只影响建表 schema：行标识与行宽校验在 DDL 之前跑（sync-bridge.ts:139-157）、
+  // 映射计划与 INSERT 串在 runBatch 之前生成、fallback 的 columnMap 覆盖全部表头，
+  // 故行数据 / 约束 / 映射错误照旧 fail-closed，sourceData.ddl 也不改写。
+  else runtime.syncBridge.loadFromTableData(state, { strict: true, allowRuntimeDdlFallback: true });
   if (options.metrics) {
     options.metrics.sqliteHydrateCount += 1;
   }

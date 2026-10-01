@@ -25,7 +25,9 @@ describe('host input helpers', () => {
     h.jquery.mockImplementation((selector: string) => selector === '#send_textarea' ? textarea : sendButton);
   });
 
-  it('读取、写入宿主发送框并触发 input', () => {
+  // 注意本用例的 textarea 没有 [0] 元素，走的是「拿不到原生元素 → 回落 jQuery trigger」
+  // 分支；原生派发路径由下面那条用例单独覆盖。
+  it('读取、写入宿主发送框；无可用原生元素时回落到 jQuery trigger', () => {
     textarea.val.mockReturnValue('原始输入');
 
     expect(getSendTextareaValue_ACU()).toBe('原始输入');
@@ -33,6 +35,54 @@ describe('host input helpers', () => {
 
     expect(textarea.val).toHaveBeenCalledWith('下一条消息');
     expect(textarea.trigger).toHaveBeenCalledWith('input');
+  });
+
+  /**
+   * 写入后必须派发**原生** input 事件，不能只靠 jQuery 的 trigger。
+   *
+   * 宿主（SillyTavern / TT）的发送框自适应高度与输入暂存是用
+   * `addEventListener('input')` 监听的；而 jQuery 的 `trigger('input')` 只会调用
+   * jQuery 自己的处理器，原生监听器收不到事件。后果：剧情推进伪装清空发送框后，
+   * 宿主认为高度未变 → 窄屏输入框上移、点击区域错位。
+   *
+   * 原生事件 bubbles，jQuery 处理器同样会收到，因此这不替代 jQuery 触发；
+   * 只有拿不到原生元素时才回落到 trigger。
+   */
+  it('写入发送框后派发原生 input 事件，宿主原生监听器必须收到', () => {
+    const listeners = new Map<string, Array<(e: Event) => void>>();
+    const element = {
+      dispatchEvent: vi.fn((event: Event) => {
+        (listeners.get(event.type) || []).forEach(fn => fn(event));
+        return true;
+      }),
+      addEventListener: vi.fn((type: string, fn: (e: Event) => void) => {
+        listeners.set(type, [...(listeners.get(type) || []), fn]);
+      }),
+      ownerDocument: { defaultView: { Event: class extends Event {} } },
+    };
+    const jqueryLike = { val: vi.fn(), trigger: vi.fn(), length: 1, 0: element };
+    h.jquery.mockImplementation((selector: string) => (selector === '#send_textarea' ? jqueryLike : sendButton));
+
+    const nativeCalls: Event[] = [];
+    listeners.set('input', [event => nativeCalls.push(event)]);
+
+    expect(setSendTextareaValue_ACU('清空伪装')).toBe(true);
+
+    expect(element.dispatchEvent, '必须派发原生事件，不能只 jQuery trigger').toHaveBeenCalledTimes(1);
+    expect(jqueryLike.trigger, '原生事件 bubbles 已覆盖 jQuery 处理器，再 trigger 会双触发').not.toHaveBeenCalled();
+    expect(nativeCalls, '宿主原生 addEventListener("input") 监听器必须被唤起').toHaveLength(1);
+    expect(nativeCalls[0].type).toBe('input');
+    expect(nativeCalls[0].bubbles, '原生事件须冒泡，jQuery 委托才能收到').toBe(true);
+  });
+
+  it('拿不到原生元素时回落到 jQuery trigger，不静默失败', () => {
+    const jqueryOnly = { val: vi.fn(), trigger: vi.fn(), length: 1 };
+    h.jquery.mockImplementation((selector: string) => (selector === '#send_textarea' ? jqueryOnly : sendButton));
+
+    expect(setSendTextareaValue_ACU('回落路径')).toBe(true);
+
+    expect(jqueryOnly.val).toHaveBeenCalledWith('回落路径');
+    expect(jqueryOnly.trigger).toHaveBeenCalledWith('input');
   });
 
   it('点击宿主发送按钮', () => {

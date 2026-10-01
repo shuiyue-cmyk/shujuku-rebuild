@@ -6018,4 +6018,81 @@ describe('onEntryApplied', () => {
     expect(result?.data.sheet_0.content.map((row: any[]) => row[1])).toEqual(['name', '铁剑', '木盾']);
     expect(observed).toEqual([{ entryId: 'add-row', names: ['铁剑', '木盾'] }]);
   });
+
+  /**
+   * 回放必须复现写入时的 runtime schema 加载口径，否则写入基底与回放基底分叉。
+   *
+   * 写入端（sql-table-service.ts 的 loadFromTableData）一律带 allowRuntimeDdlFallback：
+   * 显式 DDL 无法在 SQLite 执行时（典型是尾逗号 `..., )`）首条 CREATE TABLE 回退为
+   * runtime fallback schema 并继续写入。而回放 hydrate 曾只传 { strict: true }，
+   * 于是同一个聊天：写入成功、回放抛 `CREATE TABLE near )` → 基底分叉 → 写入守卫拒绝，
+   * 该聊天永久无法填表（不可自愈）。
+   *
+   * 回退边界不放宽：行数据 / 约束 / 映射错误仍必须 fail-closed，见本用例末尾的反向断言。
+   */
+  it('显式 DDL 无法执行时严格回放沿用 runtime fallback 基底，不与写入端分叉', async () => {
+    const brokenDdl = 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT,)';
+    const chatWithBrokenDdl_ACU = (statement: string) => [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full',
+              createdAt: 1,
+              reason: 'init',
+              data: {
+                ...makeCheckpointData(),
+                sheet_0: {
+                  ...makeCheckpointData().sheet_0,
+                  sourceData: { ddl: brokenDdl },
+                },
+              },
+              event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
+            },
+            logEntries: [{
+              seq: 1,
+              entryId: 'v2_sql_broken_ddl',
+              createdAt: 2,
+              source: 'auto_fill',
+              targetMessageIndex: 0,
+              aiFloor: 1,
+              filledSheetKeys: ['sheet_0'],
+              changedSheetKeys: ['sheet_0'],
+              groupKeys: [],
+              operations: [{ kind: 'sql_batch', statements: [statement] }],
+            }],
+          },
+        },
+      },
+    }];
+
+    // 判别点用 compatibilityMode:'disabled' —— 这正是写入路径校验探针的口径
+    // （storage-frame-v2-persist.ts:645 的候选校验、追平锚点预检等）。
+    // 读路径有 Tier-1 兼容回放兜底（见 :2742「读永远宽容，写才严格」），所以只断言
+    // 读路径无法暴露此缺陷；写门闸依赖「严格回放成功」作为可写信号。
+    //
+    // 写入端（sql-table-service.ts:1681/1708/2489）一律带 allowRuntimeDdlFallback：
+    // 首条 CREATE TABLE 失败时回退 runtime fallback schema 并继续写入。回放若拒绝同一
+    // 回退 → 写入基底与回放基底分叉 → 该聊天的写入探针恒失败 → 永久无法继续填表。
+    const strictResult = await loadTableStateFromFramesV2_ACU(
+      chatWithBrokenDdl_ACU("UPDATE inventory SET name = '钢剑' WHERE row_id = 1"),
+      '',
+      { compatibilityMode: 'disabled' },
+    );
+    // 不仅要不抛，还要断言 fallback 基底上 SQL 真正生效（否则只是绕过了建表失败）。
+    expect(strictResult?.sheet_0.content, '坏 DDL 的聊天必须能通过写入路径的严格回放探针，否则永久无法继续填表').toEqual([
+      ['row_id', 'name'],
+      ['1', '钢剑'],
+    ]);
+
+    // 回退只覆盖建表失败：同一份坏 DDL 下，列级错误仍必须 fail-closed 抛出。
+    await expect(loadTableStateFromFramesV2_ACU(
+      chatWithBrokenDdl_ACU("UPDATE inventory SET no_such_column = 'x' WHERE row_id = 1"),
+      '',
+      { compatibilityMode: 'disabled' },
+    )).rejects.toThrow(/no such column: no_such_column/);
+  });
 });
