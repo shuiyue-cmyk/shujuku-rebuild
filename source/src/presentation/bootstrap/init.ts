@@ -33,6 +33,7 @@ import {
   recordGenerationContext_ACU,
   type AiFloorSignatureEx_ACU,
   recordLastUserSend_ACU,
+  settings_ACU,
   shouldProcessAutoTableUpdateForGenerationEnded_ACU,
   shouldProcessPlotForGeneration_ACU,
   shouldProcessSummaryVectorIndexForGeneration_ACU,
@@ -109,6 +110,13 @@ import {
 import {
   runOptimizationLogicWithUI_ACU
 } from '../components/plot-planning-ui';
+import {
+  beginPlotPendingDisguise_ACU,
+  shouldBeginPlotPendingDisguise_ACU,
+  PLOT_PENDING_NOTICE_ACU,
+  SUMMARY_RECALL_PENDING_NOTICE_ACU,
+  type PlotPendingDisguiseHandle_ACU,
+} from '../components/plot-pending-disguise';
 import {
   processSummaryVectorIndexBeforeGenerationWithUI_ACU,
   rebuildCurrentSummaryVectorIndexWithUI_ACU,
@@ -875,12 +883,29 @@ export   function mainInitialize_ACU() {
               await ensureInitialSeedCheckpointBeforeGeneration_ACU('generation_after_commands_before_ai', { allowPendingFirstUserMessage: true });
             }
             if (!shouldProcessSummaryVectorIndex && !shouldProcessPlot) return;
+            // [伪装发送·可选项] 默认关闭，用户在剧情页显式开启才生效。召回与剧情推进共用
+            // 同一个伪装实例：召回开始即渲染伪装楼层并清空发送框，进入剧情推进只切换拦截提示；
+            // 本 try 的任何 return/throw 都经 finally 把文本交还发送框，宿主随后按原生流程入楼并生成。
+            const chatAtStart = SillyTavern_API_ACU.chat;
+            const lastAtStart = chatAtStart?.length ? (chatAtStart as any)[chatAtStart.length - 1] : null;
+            const pendingTextInBox = String(getSendTextareaValue_ACU() || '');
+            const pendingDisguiseEnabled = settings_ACU?.plotSettings?.pendingDisguiseEnabled === true;
+            let disguise: PlotPendingDisguiseHandle_ACU | null = null;
+            let textForHost = pendingTextInBox;
+            try {
             if (shouldProcessSummaryVectorIndex) {
               try {
-                const chatForSummaryIndex = SillyTavern_API_ACU.chat;
-                const lastUserText = (chatForSummaryIndex?.length && (chatForSummaryIndex as any)[chatForSummaryIndex.length - 1]?.is_user)
-                  ? String((chatForSummaryIndex as any)[chatForSummaryIndex.length - 1].mes || '')
-                  : String(getSendTextareaValue_ACU() || params?.prompt || '');
+                const lastUserText = lastAtStart?.is_user
+                  ? String(lastAtStart.mes || '')
+                  : String(pendingTextInBox || params?.prompt || '');
+                if (shouldBeginPlotPendingDisguise_ACU({
+                  disguiseEnabled: pendingDisguiseEnabled,
+                  generationType: type,
+                  lastIsUserFloor: lastAtStart?.is_user === true,
+                  text: pendingTextInBox,
+                })) {
+                  disguise = beginPlotPendingDisguise_ACU(pendingTextInBox, { notice: SUMMARY_RECALL_PENDING_NOTICE_ACU });
+                }
                 const summaryVectorResult = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: lastUserText, source: 'generation_after_commands' });
                 logDebug_ACU(`[交火模式纪要索引] GENERATION_AFTER_COMMANDS 发送前处理完成：success=${summaryVectorResult.success}, skipped=${summaryVectorResult.skipped === true}, reason=${summaryVectorResult.reason || 'none'}, keywords=${summaryVectorResult.keywordCount ?? 0}, injected=${summaryVectorResult.injectedCount ?? 0}`);
               } catch (error) {
@@ -934,8 +959,9 @@ export   function mainInitialize_ACU() {
                         else if ((window as any).SillyTavern?.deleteLastMessage) await (window as any).SillyTavern.deleteLastMessage();
                       }
                     } catch (e) {}
-                    // 恢复输入框
-                    try { setSendTextareaValue_ACU(s1.restoreText || ''); } catch (e) {}
+                    // 恢复输入框（伪装激活时经 finally 的 release 统一交还，直接写框会被覆盖导致 restoreText 丢失）
+                    if (disguise) textForHost = s1.restoreText || '';
+                    else try { setSendTextareaValue_ACU(s1.restoreText || ''); } catch (e) {}
                   }
                   break;
 
@@ -945,7 +971,10 @@ export   function mainInitialize_ACU() {
                   lastMessage.mes = s1.finalMessage;
                   // [L6] 裸 emit 改走 chat-gateway 的统一出口（含 eventTypes 缺失降级与空值防御）
                   emitMessageUpdated_ACU(lastMessageIndex);
-                  if (getSendTextareaValue_ACU() === s1.originalMessage) setSendTextareaValue_ACU('');
+                  // 伪装激活时发送框已清空且由 release 交还：仅当原文仍是交还文本时才清（与无伪装语义一致）。
+                  if (disguise) {
+                    if (disguise.originalText === s1.originalMessage) textForHost = '';
+                  } else if (getSendTextareaValue_ACU() === s1.originalMessage) setSendTextareaValue_ACU('');
                   break;
 
                 // 'skipped' — 不做额外操作
@@ -958,7 +987,18 @@ export   function mainInitialize_ACU() {
             // 交火召回可能耗时超过 USER_SEND_TRIGGER_TTL_MS_ACU；这里不能再用 TTL 二次否决，
             // 否则会出现“交火已覆盖纪要索引，但剧情推进被跳过并直接正文生成”的断链。
             if (!shouldProcessPlot && !isRecentUserSendIntent_ACU()) return;
-            const textInBox = getSendTextareaValue_ACU();
+            // 召回未伪装时策略2入口再给一次机会；召回已伪装则只切换拦截提示，共用同一实例。
+            const textInBox = disguise ? disguise.originalText : getSendTextareaValue_ACU();
+            if (!disguise && shouldBeginPlotPendingDisguise_ACU({
+              disguiseEnabled: pendingDisguiseEnabled,
+              generationType: type,
+              lastIsUserFloor: lastAtStart?.is_user === true,
+              text: textInBox,
+            })) {
+              disguise = beginPlotPendingDisguise_ACU(String(textInBox || ''));
+            } else if (disguise) {
+              disguise.setNotice(PLOT_PENDING_NOTICE_ACU);
+            }
 
             // [重构] 调用 service 层策略2编排
             if (!plotScopeStillCurrent_ACU()) {
@@ -987,13 +1027,21 @@ export   function mainInitialize_ACU() {
                 break;
 
               case 'planned':
-                setSendTextareaValue_ACU(s2.finalMessage!);
+                // 伪装接管时发送框写入由 finally 的 release 统一交还，避免双写；
+                // 未伪装保持原行为（直接写框 + params.prompt）。
+                textForHost = s2.finalMessage!;
+                if (!disguise) setSendTextareaValue_ACU(s2.finalMessage!);
                 try { params.prompt = s2.finalMessage; } catch (e) {}
                 break;
             }
 
             // 消费掉本次发送意图
             generationGate_ACU.lastUserSendIntentAt = 0;
+            } finally {
+              // 任何路径（成功/跳过/失败/中止/作用域变化提前 return）都把文本交还发送框，
+              // 未伪装时 release 为 no-op（disguise 为 null）。
+              disguise?.release(textForHost);
+            }
             } catch (afterCommandsOuterError_ACU) {
               logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 处理失败，继续原始生成:', afterCommandsOuterError_ACU);
             }

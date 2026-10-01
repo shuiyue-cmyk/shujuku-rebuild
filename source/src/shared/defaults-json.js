@@ -229,6 +229,8 @@ import { USER_PREFILL_CONTENT_ACU } from './user-prefill.js';
   export const DEFAULT_PLOT_SETTINGS_ACU = {
   ...DEFAULT_TIME_RECALL_PLOT_PRESET_ACU,
   "enabled": true,
+  /** 伪装发送楼层可选项：默认关闭，用户在剧情页显式开启才在发送等待期间渲染伪装楼层。 */
+  "pendingDisguiseEnabled": false,
   "rateMain": 1,
   "ratePersonal": 1,
   "rateErotic": 0,

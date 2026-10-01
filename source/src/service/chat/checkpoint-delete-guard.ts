@@ -29,7 +29,7 @@ import {
 } from '../../data/gateways/chat-gateway';
 import { readIsolatedDataContainer_ACU, readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
-import { reindexSpv79TransitionState_ACU } from '../table/compat-transition-checkpoint';
+import { dedupeCompatTransitionRowIdentities_ACU } from '../table/compat-transition-checkpoint';
 import type { CompatTransitionCheckpointRef_ACU, Spv79TransitionCheckpointRef_ACU } from '../table/compat-transition-checkpoint';
 import { collectScheduleSummaryFromFramesV2_ACU, loadTableStateFromFramesV2Detailed_ACU, replayWithLegacyTolerances_ACU } from '../table/storage-frame-v2-replay';
 import { getTableDataFingerprint_ACU } from '../table/table-data-upgrade-audit';
@@ -338,7 +338,9 @@ async function rebuildDeletedTransition_ACU(
         throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的幸存历史含身份归并，无法安全重建过渡根。`);
     }
 
-    const data = reindexSpv79TransitionState_ACU(tolerant.data);
+    // 重建的是 compat 过渡根：必须保留既有 row_id（去重只修空/冲突），否则根之后
+    // 仍按原 id 引用的严格增量会落空——与回放返回/固化路径用同一去重纯函数。
+    const data = dedupeCompatTransitionRowIdentities_ACU(tolerant.data).data;
     const normalization = normalizeCanonicalTableRows_ACU(data);
     if (normalization.errors.length > 0 || normalization.removedRows.length > 0) {
         throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的幸存历史无法通过 canonical 行校验，拒绝重建过渡根。`);

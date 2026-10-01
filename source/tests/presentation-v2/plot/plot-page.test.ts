@@ -127,6 +127,28 @@ describe('PlotPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('发送体验面板暴露伪装发送楼层开关：默认关闭，点击可开启并落盘', async () => {
+    // 老设置无该键：store 必须归一为 false（可选项默认关闭），不能因 undefined 而开启。
+    const { mount, settings } = await mountPlotPage();
+    expect(settings.plotSettings.pendingDisguiseEnabled).not.toBe(true);
+
+    const page = document.querySelector('.acu-v2-plot-page');
+    const text = page?.textContent || '';
+    expect(text, '必须向用户暴露伪装发送楼层开关').toContain('伪装发送楼层');
+
+    const toggle = Array.from(page?.querySelectorAll('[role="switch"]') || [])
+      .find(node => (node.textContent || '').includes('伪装'));
+    expect(toggle, '伪装开关必须渲染为 role=switch 控件').toBeTruthy();
+    expect(toggle?.getAttribute('aria-checked'), '默认应关闭').toBe('false');
+
+    toggle!.dispatchEvent(new Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(settings.plotSettings.pendingDisguiseEnabled, '开启后必须写进 plotSettings').toBe(true);
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('开发者选项关闭时，编辑抽屉不渲染"匹配替换"字段', async () => {
     const { mount } = await mountPlotPage();
 

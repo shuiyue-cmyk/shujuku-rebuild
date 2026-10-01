@@ -3,6 +3,23 @@
     <AcuPanelGrid class="acu-v2-plot-page__grid">
       <PlotPresetPanel />
 
+      <!-- 发送体验 -->
+      <AcuPanel
+        title="发送体验"
+        description="控制剧情推进等待期间聊天区的占位反馈，纯展示开关，不改任何发送逻辑。"
+      >
+        <AcuFormRow
+          label="伪装发送楼层"
+          hint="开启后，剧情推进与纪要召回等待期间在聊天区显示伪装的用户楼层与“思考中”楼层，并拦截重复发送；关闭则保持原有行为（消息停在输入框直到规划完成）。"
+        >
+          <AcuToggle
+            :model-value="plotPresetStore.pendingDisguiseEnabled"
+            label="等待期间显示伪装发送楼层"
+            @update:model-value="plotPresetStore.setPendingDisguiseEnabled($event)"
+          />
+        </AcuFormRow>
+      </AcuPanel>
+
       <!-- 世界书选择 -->
       <AcuPanel
         :title="plotCopy.panels.worldbook.title"
@@ -39,6 +56,9 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import AcuPanel from '../components/_lib/AcuPanel.vue';
 import AcuPanelGrid from '../components/_lib/AcuPanelGrid.vue';
+import AcuFormRow from '../components/_lib/AcuFormRow.vue';
+import AcuToggle from '../components/_lib/AcuToggle.vue';
+import { usePlotPresetStore } from '../stores/plot-preset-store';
 import PlotPresetPanel from '../components/PlotPresetPanel.vue';
 import WorldbookEntryPickerBody from '../components/WorldbookEntryPickerBody.vue';
 import { useWorldbookSelector } from '../composables/useWorldbookSelector';
@@ -48,6 +68,7 @@ import { watchChatChanged_ACU } from '../composables/useChatChangedListener';
 import { plotCopy } from '../copy/plot-copy';
 
 type WorldbookSource = 'character' | 'manual';
+const plotPresetStore = usePlotPresetStore();
 const worldbook = useWorldbookSelector();
 const plotWorldbook = usePlotWorldbookConfig();
 const wbEntries = usePlotWorldbookEntries();
@@ -98,6 +119,7 @@ const currentWorldbookLabel = computed<string>(() => {
 });
 
 async function refreshAll(): Promise<void> {
+  plotPresetStore.refreshFromSettings();
   plotWorldbook.refreshFromSettings();
   await worldbook.refresh();
   await refreshWorldbookEntries();

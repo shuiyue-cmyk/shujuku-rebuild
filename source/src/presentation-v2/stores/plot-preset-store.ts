@@ -35,6 +35,8 @@ export interface AcuV2PlotPreset {
 interface PlotPresetState {
   /** 启用开关（绑定 settings_ACU.plotSettings.enabled）。 */
   enabled: boolean;
+  /** 伪装发送楼层可选项（绑定 settings_ACU.plotSettings.pendingDisguiseEnabled，默认关闭）。 */
+  pendingDisguiseEnabled: boolean;
   /** 已注册全局预设。 */
   presets: AcuV2PlotPreset[];
   /** 全局默认预设名（用于"新聊天默认继承"）。 */
@@ -60,6 +62,8 @@ function ensureSettingsShape(): void {
   if (!Array.isArray(plot.promptPresets)) plot.promptPresets = [];
   if (typeof plot.lastUsedPresetName !== 'string') plot.lastUsedPresetName = '';
   plot.enabled = plot.enabled === true;
+  // 伪装发送楼层可选项：只认显式 true，老设置缺键即关闭，不做迁移。
+  plot.pendingDisguiseEnabled = plot.pendingDisguiseEnabled === true;
   ensurePlotTasksCompat_ACU(plot, { syncLegacy: true });
 
   if (typeof settings_ACU.plotApiPreset !== 'string') settings_ACU.plotApiPreset = '';
@@ -141,6 +145,7 @@ export function getDefaultPlotPresetRawForV2(): Record<string, any> {
 export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
   state: (): PlotPresetState => ({
     enabled: false,
+    pendingDisguiseEnabled: false,
     presets: [],
     defaultPresetName: '',
     activePresetName: '',
@@ -173,6 +178,7 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
       ensureSettingsShape();
       const plot = settings_ACU.plotSettings as Record<string, any>;
       this.enabled = plot.enabled === true;
+      this.pendingDisguiseEnabled = plot.pendingDisguiseEnabled === true;
       this.presets = readPresetList();
       const defaultName = normalizePlotPresetSelectionValue_ACU(plot.lastUsedPresetName || '');
       this.defaultPresetName = findPresetIndex(this.presets, defaultName) >= 0 ? defaultName : '';
@@ -186,6 +192,18 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
       this.taskApiOverrides = cleaned;
     },
 
+    /** 设置伪装发送楼层可选项（默认关闭，需用户显式开启）。 */
+    setPendingDisguiseEnabled(enabled: boolean): void {
+      const next = enabled === true;
+      this.pendingDisguiseEnabled = next;
+      try {
+        ensureSettingsShape();
+        (settings_ACU.plotSettings as Record<string, any>).pendingDisguiseEnabled = next;
+      } catch {
+        if (settings_ACU.plotSettings) (settings_ACU.plotSettings as Record<string, any>).pendingDisguiseEnabled = next;
+      }
+      saveSettings_ACU();
+    },
     /** 设置剧情推进总开关。 */
     setEnabled(enabled: boolean): void {
       const next = !!enabled;

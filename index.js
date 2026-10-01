@@ -1591,6 +1591,8 @@ const DEFAULT_BUILTIN_PLOT_PRESETS_ACU = [DEFAULT_TIME_RECALL_PLOT_PRESET_ACU];
 const DEFAULT_PLOT_SETTINGS_ACU = {
     ...DEFAULT_TIME_RECALL_PLOT_PRESET_ACU,
     "enabled": true,
+    /** 伪装发送楼层可选项：默认关闭，用户在剧情页显式开启才在发送等待期间渲染伪装楼层。 */
+    "pendingDisguiseEnabled": false,
     "rateMain": 1,
     "ratePersonal": 1,
     "rateErotic": 0,
@@ -43517,6 +43519,75 @@ function reindexSpv79TransitionState_ACU(source) {
     });
     return data;
 }
+/**
+ * 把兼容宽容回放的可见状态归一为 canonical 行身份契约，但**保留每一个已有 row_id**。
+ *
+ * 与 reindexSpv79TransitionState_ACU 的全表重编号不同：兼容过渡根可能落在聊天中段，
+ * 其后仍有严格回放的增量按 row_id 引用行（`UPDATE ... WHERE row_id = 5`）。如果固化时把
+ * 5 改成 3，后续增量会静默更新到另一行。因此这里只处理会让 canonical 校验失败的行：
+ * - 同表内第二次及之后出现的重复 row_id → 分配该表当前最大 id + 1（首次出现保留原 id）；
+ * - 空 row_id（restoreLegacyRowIdentity_ACU 之后仍为空的行）→ 同样分配新 id。
+ * 所有 id 按 trim 后的字符串比较与写回；表头身份列统一为 'row_id'。
+ */
+function dedupeCompatTransitionRowIdentities_ACU(source) {
+    const data = JSON.parse(JSON.stringify(source));
+    restoreLegacyRowIdentity_ACU(data);
+    const repairs = [];
+    Object.entries(data).forEach(([sheetKey, value]) => {
+        if (!sheetKey.startsWith('sheet_') || !value || typeof value !== 'object')
+            return;
+        const sheet = value;
+        if (!Array.isArray(sheet.content) || !Array.isArray(sheet.content[0]))
+            return;
+        sheet.content[0][0] = 'row_id';
+        const contentRows = [];
+        for (let index = 1; index < sheet.content.length; index += 1) {
+            if (Array.isArray(sheet.content[index]))
+                contentRows.push(sheet.content[index]);
+        }
+        const seedRows = Array.isArray(sheet.seedRows)
+            ? sheet.seedRows.filter((row) => Array.isArray(row))
+            : [];
+        // 先登记全部合法 id，再给冲突行分配，保证新 id 不会撞到后面尚未遍历的行。
+        const reserved = new Set();
+        const seen = new Set();
+        for (const row of [...contentRows, ...seedRows]) {
+            if (isEmptyCanonicalRowId_ACU(row[0]))
+                continue;
+            reserved.add(String(row[0]).trim());
+        }
+        const repairRow = (row, rowIndex) => {
+            if (isEmptyCanonicalRowId_ACU(row[0])) {
+                const nextRowId = allocateStableRowId_ACU(reserved);
+                reserved.add(nextRowId);
+                seen.add(nextRowId);
+                repairs.push({ sheetKey, rowIndex, previousRowId: '', nextRowId, reason: 'empty_row_id' });
+                row[0] = nextRowId;
+                return;
+            }
+            const rowId = String(row[0]).trim();
+            if (!seen.has(rowId)) {
+                seen.add(rowId);
+                row[0] = rowId;
+                return;
+            }
+            const nextRowId = allocateStableRowId_ACU(reserved);
+            reserved.add(nextRowId);
+            seen.add(nextRowId);
+            repairs.push({ sheetKey, rowIndex, previousRowId: rowId, nextRowId, reason: 'duplicate_row_id' });
+            row[0] = nextRowId;
+        };
+        let contentRowIndex = 0;
+        for (let index = 1; index < sheet.content.length; index += 1) {
+            if (!Array.isArray(sheet.content[index]))
+                continue;
+            repairRow(contentRows[contentRowIndex], index);
+            contentRowIndex += 1;
+        }
+        seedRows.forEach((row, index) => repairRow(row, -(index + 1)));
+    });
+    return { data, repairs };
+}
 
 function normalizeHeaderCell_ACU(value) {
     return String(value ?? '').trim();
@@ -46585,20 +46656,20 @@ async function recoverWithLegacyTolerantReplay_ACU(chat, isolationKey, options, 
     if (chat === getChatArray_ACU() && options.backgroundFixation !== 'skip') {
         scheduleCompatTransitionFixation_ACU(chat, isolationKey);
     }
-    // 返回前尽力把行身份归一为新版契约（与固化根使用同一 reindex 纯函数）：
+    // 返回前尽力把行身份归一为新版契约（与固化根使用同一去重纯函数，保留既有 row_id）：
     // 成功则首次加载与固化后的后续加载看到完全一致的 row_id；失败则原样返回
     // 兼容结果（仍可用，只是该历史无法固化）。
     let resultData = tolerant.data;
     try {
-        const reindexed = reindexSpv79TransitionState_ACU(tolerant.data);
-        const normalization = normalizeCanonicalTableRows_ACU(reindexed);
+        const deduped = dedupeCompatTransitionRowIdentities_ACU(tolerant.data).data;
+        const normalization = normalizeCanonicalTableRows_ACU(deduped);
         if (normalization.errors.length === 0 && normalization.removedRows.length === 0) {
-            resultData = reindexed;
+            resultData = deduped;
         }
     }
-    catch (reindexError) {
-        logWarn_ACU(`[V2 Compat Replay] 兼容结果行身份重编号失败，按原始兼容结果返回：`
-            + `${reindexError instanceof Error ? reindexError.message : String(reindexError)}`);
+    catch (dedupeError) {
+        logWarn_ACU(`[V2 Compat Replay] 兼容结果行身份去重失败，按原始兼容结果返回：`
+            + `${dedupeError instanceof Error ? dedupeError.message : String(dedupeError)}`);
     }
     return {
         data: resultData,
@@ -47094,13 +47165,13 @@ async function createCompatTransitionCheckpointFromTolerantReplay_ACU(chat, isol
         // 已有过渡根覆盖了同样或更新的历史，无需重复固化。
         return false;
     }
-    const data = reindexSpv79TransitionState_ACU(tolerant.data);
+    const data = dedupeCompatTransitionRowIdentities_ACU(tolerant.data).data;
     const normalization = normalizeCanonicalTableRows_ACU(data);
     const issues = [...normalization.errors, ...normalization.removedRows];
     if (issues.length > 0) {
-        logWarn_ACU(`[V2 Compat Replay] 放弃固化兼容过渡根：重编号结果不满足 canonical 行身份契约：`
+        logWarn_ACU(`[V2 Compat Replay] 放弃固化兼容过渡根：去重结果不满足 canonical 行身份契约：`
             + `${formatCanonicalRowIssues_ACU(issues)}。数据仍按兼容读取结果可用，下次加载将继续走兼容回放。`);
-        notifyCompatFixationAbandoned_ACU(isolationKey, 'canonical_failed', '兼容过渡根未固化：重编号结果不满足行身份契约，自动固化已跳过，数据仍可读，下次加载将继续走兼容回放。');
+        notifyCompatFixationAbandoned_ACU(isolationKey, 'canonical_failed', '兼容过渡根未固化：去重结果不满足行身份契约，自动固化已跳过，数据仍可读，下次加载将继续走兼容回放。');
         return false;
     }
     let scheduleSummary;
@@ -91515,8 +91586,8 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"9.10.7"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261001-15"`。源码直跑、测试环境或注入失败时读不到，
+ * rollup 打包时把版本写进 `"9.10.8"`（与 manifest.json / source/package.json
+ * 同值），构建时间戳写进 `"20261001-16"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91525,7 +91596,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "9.10.7";
+        const version = "9.10.8";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
@@ -91535,7 +91606,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261001-15";
+        const stamp = "20261001-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -120696,7 +120767,9 @@ async function rebuildDeletedTransition_ACU(survivingChat, isolationKey, targetM
     if (tolerant.toleranceReport.identityRemaps.length > 0) {
         throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的幸存历史含身份归并，无法安全重建过渡根。`);
     }
-    const data = reindexSpv79TransitionState_ACU(tolerant.data);
+    // 重建的是 compat 过渡根：必须保留既有 row_id（去重只修空/冲突），否则根之后
+    // 仍按原 id 引用的严格增量会落空——与回放返回/固化路径用同一去重纯函数。
+    const data = dedupeCompatTransitionRowIdentities_ACU(tolerant.data).data;
     const normalization = normalizeCanonicalTableRows_ACU(data);
     if (normalization.errors.length > 0 || normalization.removedRows.length > 0) {
         throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的幸存历史无法通过 canonical 行校验，拒绝重建过渡根。`);
@@ -127491,6 +127564,309 @@ async function runOptimizationLogicWithUI_ACU(userMessage, options = {}) {
     return result.finalMessage;
 }
 
+/**
+ * presentation/components/plot-pending-disguise.ts — 剧情推进/纪要召回期间的伪装发送楼层（可选项）
+ *
+ * 宿主 Generate() 要等 GENERATION_AFTER_COMMANDS 的监听全部结束，才读取 #send_textarea 并让用户楼层入楼；
+ * 剧情推进在该事件里等待规划，用户消息因此一直停在输入框。开启后本模块在规划期间：
+ *   - 在 #chat 末尾渲染伪装的用户楼层与“思考中”的 AI 楼层（纯 DOM，不写 chat 数组、不触发保存）；
+ *   - 清空发送框并拦截重复发送（宿主此时尚未置 is_send_press，空发送框会被当作空输入直接生成）；
+ *   - 规划结束后移除伪装楼层，把文本写回发送框，交给宿主原生入楼与生成；
+ *     规划期间用户新输入的草稿，在宿主读走发送框后还原。
+ *
+ * 可选项语义：默认关闭（settings plotSettings.pendingDisguiseEnabled !== true 即不启用），
+ * 用户在剧情页显式开启才生效；任何前置条件不满足都返回 null，调用方保持原有行为。
+ */
+const PENDING_CLASS_ACU = 'acu-plot-pending-mes';
+const STYLE_ID_ACU = 'acu-plot-pending-disguise-style';
+const DRAFT_RESTORE_TIMEOUT_MS_ACU = 60000;
+const BLOCK_TOAST_INTERVAL_MS_ACU = 2000;
+// 伪装楼层只用于展示：隐藏操作按钮与编号，禁用指针事件，避免宿主按空 mesid 误操作真实楼层。
+const PENDING_STYLE_ACU = `
+.mes.${PENDING_CLASS_ACU} { pointer-events: none; }
+.mes.${PENDING_CLASS_ACU} .mes_buttons,
+.mes.${PENDING_CLASS_ACU} .mes_edit_buttons,
+.mes.${PENDING_CLASS_ACU} .for_checkbox,
+.mes.${PENDING_CLASS_ACU} .del_checkbox,
+.mes.${PENDING_CLASS_ACU} .swipe_left,
+.mes.${PENDING_CLASS_ACU} .swipe_right,
+.mes.${PENDING_CLASS_ACU} .swipeRightBlock,
+.mes.${PENDING_CLASS_ACU} .mesIDDisplay,
+.mes.${PENDING_CLASS_ACU} .mes_timer,
+.mes.${PENDING_CLASS_ACU} .tokenCounterDisplay,
+.mes.${PENDING_CLASS_ACU} .mes_ghost,
+.mes.${PENDING_CLASS_ACU} .mes_reasoning_details,
+.mes.${PENDING_CLASS_ACU} .mes_bias { display: none !important; }
+.acu-plot-pending-thinking { animation: acu-plot-pending-pulse 1.4s ease-in-out infinite; }
+@keyframes acu-plot-pending-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.9; } }
+@media (prefers-reduced-motion: reduce) { .acu-plot-pending-thinking { animation: none; opacity: 0.7; } }
+`;
+const PLOT_PENDING_NOTICE_ACU = {
+    message: '剧情推进中，完成后会自动发送当前消息。',
+    title: '剧情推进',
+};
+const SUMMARY_RECALL_PENDING_NOTICE_ACU = {
+    message: '正在召回相关纪要，完成后会自动发送当前消息。',
+    title: '纪要召回',
+};
+/**
+ * 宿主会在监听结束后读取发送框入楼的生成类型才允许伪装。
+ * regenerate / swipe / impersonate / quiet 不把发送框作为用户楼层发送，伪装会凭空多出用户楼层。
+ */
+const NON_SENDING_GENERATION_TYPES_ACU = new Set(['regenerate', 'swipe', 'impersonate', 'quiet']);
+function isPendingDisguiseGenerationType_ACU(type) {
+    return !NON_SENDING_GENERATION_TYPES_ACU.has(String(type ?? ''));
+}
+/**
+ * 伪装准入纯判定（可单测）：开关开 + 可发送类型 + 末楼非用户楼 + 有文本，四者缺一即不伪装。
+ */
+function shouldBeginPlotPendingDisguise_ACU(gate) {
+    if (!gate || gate.disguiseEnabled !== true)
+        return false;
+    if (!isPendingDisguiseGenerationType_ACU(gate.generationType))
+        return false;
+    if (gate.lastIsUserFloor)
+        return false;
+    return String(gate.text || '').trim().length > 0;
+}
+let activeDisguise_ACU = null;
+/** 插件模式下 SillyTavern_API_ACU 是 getContext() 快照的 Proxy；否则尝试调用 getContext()。 */
+function getHostContext_ACU() {
+    const api = SillyTavern_API_ACU;
+    try {
+        return typeof api?.getContext === 'function' ? api.getContext() : api;
+    }
+    catch {
+        return api;
+    }
+}
+function ensureStyle_ACU(doc) {
+    if (doc.getElementById(STYLE_ID_ACU))
+        return;
+    const style = doc.createElement('style');
+    style.id = STYLE_ID_ACU;
+    style.textContent = PENDING_STYLE_ACU;
+    (doc.head || doc.documentElement).appendChild(style);
+}
+function formatMessageHtml_ACU(ctx, text, name) {
+    try {
+        if (typeof ctx?.messageFormatting === 'function') {
+            // 与宿主 addOneMessage 相同的格式化与净化链路；messageId=-1 表示不关联任何真实楼层。
+            return String(ctx.messageFormatting(text, name, false, true, -1));
+        }
+    }
+    catch (error) {
+        logWarn_ACU('[剧情推进] 伪装楼层格式化失败，改用纯文本显示:', error);
+    }
+    return null;
+}
+function findLastAvatarSrc_ACU($chat, isUser) {
+    const selector = isUser ? '.mes[is_user="true"]' : '.mes[is_user="false"][is_system="false"]';
+    return String($chat.children(selector).not(`.${PENDING_CLASS_ACU}`).last().find('.avatar img').attr('src') || '');
+}
+function buildPendingMessage_ACU(jq, $template, opts) {
+    const $mes = $template.clone();
+    $mes.addClass(PENDING_CLASS_ACU);
+    // 非数字 mesid：宿主按 mesid 选择真实楼层时不会命中，按 Number(mesid) 取 chat 的代码得到 NaN 而非 0 号楼。
+    $mes.attr({ mesid: 'acu-plot-pending', ch_name: opts.name, is_user: String(opts.isUser), is_system: 'false' });
+    $mes.find('.name_text').text(opts.name);
+    const $img = $mes.find('.avatar img');
+    if (opts.avatarSrc)
+        $img.attr('src', opts.avatarSrc);
+    else
+        $img.css('visibility', 'hidden');
+    const $text = $mes.find('.mes_text').empty();
+    if (opts.isUser) {
+        if (opts.html != null)
+            $text.html(opts.html);
+        else
+            $text.text(opts.text || '');
+    }
+    else {
+        $text.append(jq('<span>', {
+            class: 'acu-plot-pending-thinking',
+            role: 'status',
+            'aria-live': 'polite',
+            text: '思考中…',
+        }));
+    }
+    return $mes;
+}
+/** 规划完成、宿主读走发送框后，还原用户在伪装期间新输入的草稿。 */
+function scheduleDraftRestore_ACU(jq, draft) {
+    const ns = '.acuPlotPendingDraft';
+    const $textarea = jq('#send_textarea');
+    let done = false;
+    let timer;
+    const finish = (restore) => {
+        if (done)
+            return;
+        done = true;
+        $textarea.off(ns);
+        if (timer)
+            clearTimeout(timer);
+        if (!restore) {
+            logWarn_ACU('[剧情推进] 宿主未读取发送框，伪装期间输入的草稿未还原。');
+            return;
+        }
+        // 宿主清空发送框后同步继续使用局部变量里的文本，下一轮任务再写回草稿。
+        setTimeout(() => {
+            if (!getSendTextareaValue_ACU())
+                setSendTextareaValue_ACU(draft);
+        }, 0);
+    };
+    $textarea.on(`input${ns}`, () => {
+        if (getSendTextareaValue_ACU() === '')
+            finish(true);
+    });
+    timer = setTimeout(() => finish(getSendTextareaValue_ACU() === ''), DRAFT_RESTORE_TIMEOUT_MS_ACU);
+}
+function resolveCharacterAvatarSrc_ACU(ctx, $chat) {
+    const fromChat = findLastAvatarSrc_ACU($chat, false);
+    if (fromChat)
+        return fromChat;
+    try {
+        const character = ctx?.characters?.[ctx?.characterId];
+        if (character?.avatar && character.avatar !== 'none' && typeof ctx?.getThumbnailUrl === 'function') {
+            return String(ctx.getThumbnailUrl('avatar', character.avatar));
+        }
+    }
+    catch { /* 头像缺失时隐藏头像，不影响伪装楼层 */ }
+    return '';
+}
+/**
+ * 伪装期间拦截发送按钮与回车发送。文档捕获阶段先于宿主绑定在元素上的监听执行，
+ * stopImmediatePropagation 后宿主 sendTextareaMessage 不会被调用。
+ */
+function installSendBlock_ACU(doc, getNotice) {
+    let lastToastAt = 0;
+    const notify = () => {
+        const now = Date.now();
+        if (now - lastToastAt < BLOCK_TOAST_INTERVAL_MS_ACU)
+            return;
+        lastToastAt = now;
+        const notice = getNotice();
+        showToastr_ACU('info', notice.message, notice.title);
+    };
+    const onClick = (e) => {
+        const target = e.target;
+        if (!target || typeof target.closest !== 'function' || !target.closest('#send_but'))
+            return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        notify();
+    };
+    const onKeydown = (e) => {
+        const target = e.target;
+        if (!target || target.id !== 'send_textarea')
+            return;
+        if ((e.key !== 'Enter' && e.key !== 'NumpadEnter') || e.shiftKey || e.isComposing)
+            return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        notify();
+    };
+    doc.addEventListener('click', onClick, true);
+    doc.addEventListener('keydown', onKeydown, true);
+    return () => {
+        doc.removeEventListener('click', onClick, true);
+        doc.removeEventListener('keydown', onKeydown, true);
+    };
+}
+/**
+ * 开始伪装：渲染伪装楼层、清空发送框、拦截重复发送。
+ * 条件不满足（已有伪装、找不到聊天区或消息模板、发送框不可写）时返回 null，调用方保持原有行为。
+ */
+function beginPlotPendingDisguise_ACU(originalText, options = {}) {
+    const jq = jQuery_API_ACU;
+    if (activeDisguise_ACU || !jq || !String(originalText || '').trim())
+        return null;
+    let currentNotice = options.notice || PLOT_PENDING_NOTICE_ACU;
+    let $nodes = null;
+    let removeBlock = null;
+    let textareaCleared = false;
+    try {
+        const $chat = jq('#chat');
+        const $template = jq('#message_template .mes').first();
+        if (!$chat.length || !$template.length) {
+            logDebug_ACU('[剧情推进] 未找到 #chat 或消息模板，跳过伪装楼层。');
+            return null;
+        }
+        const doc = $chat[0].ownerDocument || document;
+        ensureStyle_ACU(doc);
+        const ctx = getHostContext_ACU();
+        const userName = String(ctx?.name1 || '');
+        const charName = String(ctx?.name2 || '');
+        const $user = buildPendingMessage_ACU(jq, $template, {
+            isUser: true,
+            name: userName,
+            avatarSrc: findLastAvatarSrc_ACU($chat, true),
+            html: formatMessageHtml_ACU(ctx, originalText, userName),
+            text: originalText,
+        });
+        const $ai = buildPendingMessage_ACU(jq, $template, {
+            isUser: false,
+            name: charName,
+            avatarSrc: resolveCharacterAvatarSrc_ACU(ctx, $chat),
+        });
+        $nodes = $user.add($ai);
+        $chat.append($nodes);
+        $chat.scrollTop($chat[0].scrollHeight);
+        if (!setSendTextareaValue_ACU('')) {
+            $nodes.remove();
+            return null;
+        }
+        textareaCleared = true;
+        removeBlock = installSendBlock_ACU(doc, () => currentNotice);
+        const nodes = $nodes;
+        const unblock = removeBlock;
+        let released = false;
+        let writeOk = true;
+        const handle = {
+            originalText,
+            setNotice(notice) {
+                if (notice && typeof notice.message === 'string' && typeof notice.title === 'string') {
+                    currentNotice = notice;
+                }
+            },
+            release(textForHost) {
+                if (released)
+                    return writeOk;
+                released = true;
+                if (activeDisguise_ACU === handle)
+                    activeDisguise_ACU = null;
+                unblock();
+                nodes.remove();
+                const draft = getSendTextareaValue_ACU();
+                writeOk = setSendTextareaValue_ACU(textForHost);
+                if (!writeOk) {
+                    logWarn_ACU('[剧情推进] 伪装结束时写回发送框失败，宿主将读取到当前发送框内容。');
+                }
+                else if (draft && draft !== textForHost) {
+                    scheduleDraftRestore_ACU(jq, draft);
+                }
+                return writeOk;
+            },
+        };
+        activeDisguise_ACU = handle;
+        return handle;
+    }
+    catch (error) {
+        logWarn_ACU('[剧情推进] 伪装楼层创建失败，恢复原有发送流程:', error);
+        try {
+            removeBlock?.();
+        }
+        catch { /* ignore */ }
+        try {
+            $nodes?.remove();
+        }
+        catch { /* ignore */ }
+        if (textareaCleared)
+            setSendTextareaValue_ACU(originalText);
+        return null;
+    }
+}
+
 const BM25_K1_ACU = 1.5;
 const BM25_B_ACU = 0.75;
 function pushCjkTokens_ACU(tokens, segment) {
@@ -130113,9 +130489,9 @@ const CONTINUATION_SQL_ARC_RULES_ACU = [
     '只更新变化的字段；漏写不等于删除。DELETE 必须有理由，并由事务检查是否破坏唯一 active 卷、卷序及已发生正文。',
 ].join('\n');
 const CONTINUATION_SQL_OUTPUT_CONTRACTS_ACU = {
-    arcArchitect: '我的最终交付是一个 JSON 对象：{"summary":"本次总纲变更","sql":"INSERT INTO story_arc (id, scope, title, direction, escalation, status, expected_revision) VALUES (\'VOL-01\', \'volume\', \'标题\', \'方向\', \'台阶\', \'active\', 0);"}。只在 sql 字段用受限原生 SQL INSERT/UPDATE/DELETE 表达资料写集；不输出 delta。UPDATE story_arc SET stage_numbers = \'[1,2]\' WHERE id = \'VOL-01\' AND expected_revision = 0；DELETE FROM story_arc WHERE id = \'VOL-01\' AND reason = \'废依据\' AND expected_revision = 0。新增卷仍须具备卷级容量、兑现目标等完整字段。',
+    arcArchitect: '我的最终交付是一个 JSON 对象：{"summary":"本次总纲变更","sql":"INSERT INTO story_arc (id, scope, title, direction, escalation, status, expected_revision) VALUES (\'VOL-01\', \'volume\', \'标题\', \'方向\', \'台阶\', \'active\', 0);"}。只在 sql 字段用受限原生 SQL INSERT/UPDATE/DELETE 表达资料写集；不输出 delta。UPDATE story_arc SET stage_numbers = \'[1,2]\' WHERE id = \'VOL-01\' AND expected_revision = 当前条目修订号；DELETE FROM story_arc WHERE id = \'VOL-01\' AND reason = \'废依据\' AND expected_revision = 当前条目修订号。新增卷仍须具备卷级容量、兑现目标等完整字段。',
     maintainer: '我的最终交付是一个 JSON 对象：{"summary":"本次结算与轮目标达成度","sql":"INSERT INTO hooks (id, summary, status, importance, planted_index, expected_revision) VALUES (\'H1\', \'伏笔\', \'planted\', \'mid\', 1, 0);"}。资料写集只能放 sql，不输出 delta。允许表 hooks、info_gap、chronology、story_arc、constraint_proposals；UPDATE 仅改已有条目实际变化字段，WHERE 必须有 id 与 expected_revision；DELETE 必须有 id、非空 reason 与 expected_revision，服务端按 retire 校验。chronology 的 UPDATE 必须提交完整 anchor、elapsed、precision、transition、evidence_indexes。info_gap 分清 objective_fact、reader_known、character_knowledge 与逐角色真实知识渠道。',
-    webResearcher: '我的最终交付是一个 JSON 对象：{"summary":"本次检索结果","sql":"INSERT INTO web_refs (page_ref, name, brief, detail, expected_revision) VALUES (\'P1\', \'实体名\', \'一句简介\', \'页面证据摘要\', 0);"}。资料写集只能放 sql，不输出 delta；只允许 web_refs 表。UPDATE 已有条目时需在 SET 提交完整 page_ref、name、brief，WHERE 指定 id 与 expected_revision；DELETE FROM web_refs WHERE id = \'WR-001\' AND reason = \'过时依据\' AND expected_revision = 0。page_ref 必须来自本轮工具结果；原文不入库。',
+    webResearcher: '我的最终交付是一个 JSON 对象：{"summary":"本次检索结果","sql":"INSERT INTO web_refs (page_ref, name, brief, detail, expected_revision) VALUES (\'P1\', \'实体名\', \'一句简介\', \'页面证据摘要\', 0);"}。资料写集只能放 sql，不输出 delta；只允许 web_refs 表。UPDATE 已有条目时需在 SET 提交完整 page_ref、name、brief，WHERE 指定 id 与 expected_revision；DELETE FROM web_refs WHERE id = \'WR-001\' AND reason = \'过时依据\' AND expected_revision = 当前条目修订号。page_ref 必须来自本轮工具结果；原文不入库。',
 };
 function withContinuationSqlContract_ACU(role, segments) {
     return segments.map(segment => findAgentPromptSlot_ACU([segment], 'outputContract')
@@ -145841,45 +146217,141 @@ function mainInitialize_ACU() {
                         }
                         if (!shouldProcessSummaryVectorIndex && !shouldProcessPlot)
                             return;
-                        if (shouldProcessSummaryVectorIndex) {
-                            try {
-                                const chatForSummaryIndex = SillyTavern_API_ACU.chat;
-                                const lastUserText = (chatForSummaryIndex?.length && chatForSummaryIndex[chatForSummaryIndex.length - 1]?.is_user)
-                                    ? String(chatForSummaryIndex[chatForSummaryIndex.length - 1].mes || '')
-                                    : String(getSendTextareaValue_ACU() || params?.prompt || '');
-                                const summaryVectorResult = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: lastUserText, source: 'generation_after_commands' });
-                                logDebug_ACU(`[交火模式纪要索引] GENERATION_AFTER_COMMANDS 发送前处理完成：success=${summaryVectorResult.success}, skipped=${summaryVectorResult.skipped === true}, reason=${summaryVectorResult.reason || 'none'}, keywords=${summaryVectorResult.keywordCount ?? 0}, injected=${summaryVectorResult.injectedCount ?? 0}`);
+                        // [伪装发送·可选项] 默认关闭，用户在剧情页显式开启才生效。召回与剧情推进共用
+                        // 同一个伪装实例：召回开始即渲染伪装楼层并清空发送框，进入剧情推进只切换拦截提示；
+                        // 本 try 的任何 return/throw 都经 finally 把文本交还发送框，宿主随后按原生流程入楼并生成。
+                        const chatAtStart = SillyTavern_API_ACU.chat;
+                        const lastAtStart = chatAtStart?.length ? chatAtStart[chatAtStart.length - 1] : null;
+                        const pendingTextInBox = String(getSendTextareaValue_ACU() || '');
+                        const pendingDisguiseEnabled = settings_ACU?.plotSettings?.pendingDisguiseEnabled === true;
+                        let disguise = null;
+                        let textForHost = pendingTextInBox;
+                        try {
+                            if (shouldProcessSummaryVectorIndex) {
+                                try {
+                                    const lastUserText = lastAtStart?.is_user
+                                        ? String(lastAtStart.mes || '')
+                                        : String(pendingTextInBox || params?.prompt || '');
+                                    if (shouldBeginPlotPendingDisguise_ACU({
+                                        disguiseEnabled: pendingDisguiseEnabled,
+                                        generationType: type,
+                                        lastIsUserFloor: lastAtStart?.is_user === true,
+                                        text: pendingTextInBox,
+                                    })) {
+                                        disguise = beginPlotPendingDisguise_ACU(pendingTextInBox, { notice: SUMMARY_RECALL_PENDING_NOTICE_ACU });
+                                    }
+                                    const summaryVectorResult = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: lastUserText, source: 'generation_after_commands' });
+                                    logDebug_ACU(`[交火模式纪要索引] GENERATION_AFTER_COMMANDS 发送前处理完成：success=${summaryVectorResult.success}, skipped=${summaryVectorResult.skipped === true}, reason=${summaryVectorResult.reason || 'none'}, keywords=${summaryVectorResult.keywordCount ?? 0}, injected=${summaryVectorResult.injectedCount ?? 0}`);
+                                }
+                                catch (error) {
+                                    logWarn_ACU('[交火模式纪要索引] 发送前注入失败，继续原始生成:', error);
+                                }
                             }
-                            catch (error) {
-                                logWarn_ACU('[交火模式纪要索引] 发送前注入失败，继续原始生成:', error);
+                            if (!shouldProcessPlot)
+                                return;
+                            if (type === 'regenerate' || isProcessing_Plot_ACU)
+                                return;
+                            const chat = SillyTavern_API_ACU.chat;
+                            if (!chat || chat.length === 0)
+                                return;
+                            // ── 策略1：已有用户消息 ──
+                            const lastMessageIndex = chat.length - 1;
+                            const lastMessage = chat[lastMessageIndex];
+                            // [重构] 调用 service 层策略1编排
+                            if (!plotScopeStillCurrent_ACU()) {
+                                logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略1结果写回');
+                                return;
                             }
-                        }
-                        if (!shouldProcessPlot)
-                            return;
-                        if (type === 'regenerate' || isProcessing_Plot_ACU)
-                            return;
-                        const chat = SillyTavern_API_ACU.chat;
-                        if (!chat || chat.length === 0)
-                            return;
-                        // ── 策略1：已有用户消息 ──
-                        const lastMessageIndex = chat.length - 1;
-                        const lastMessage = chat[lastMessageIndex];
-                        // [重构] 调用 service 层策略1编排
-                        if (!plotScopeStillCurrent_ACU()) {
-                            logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略1结果写回');
-                            return;
-                        }
-                        const s1 = await orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageIndex, runOptimizationLogicWithUI_ACU, plotScope_ACU ? { runtimeScope: plotScope_ACU } : undefined);
-                        if (!plotScopeStillCurrent_ACU()) {
-                            logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略1结果写回');
-                            return;
-                        }
-                        if (s1.action !== 'no_match') {
-                            // 策略1匹配，根据结果做 UI 操作
-                            switch (s1.action) {
+                            const s1 = await orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageIndex, runOptimizationLogicWithUI_ACU, plotScope_ACU ? { runtimeScope: plotScope_ACU } : undefined);
+                            if (!plotScopeStillCurrent_ACU()) {
+                                logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略1结果写回');
+                                return;
+                            }
+                            if (s1.action !== 'no_match') {
+                                // 策略1匹配，根据结果做 UI 操作
+                                switch (s1.action) {
+                                    case 'aborted':
+                                        if (s1.manual) {
+                                            // 停止生成
+                                            try {
+                                                if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function')
+                                                    SillyTavern_API_ACU.stopGeneration();
+                                                else if (window.SillyTavern?.stopGeneration)
+                                                    window.SillyTavern.stopGeneration();
+                                            }
+                                            catch (e) { }
+                                            // 删除刚创建的用户消息
+                                            try {
+                                                const chatNow = SillyTavern_API_ACU.chat;
+                                                const lastNow = chatNow?.length ? chatNow[chatNow.length - 1] : null;
+                                                if (lastNow && lastNow.is_user && String(lastNow.mes || '') === String(s1.originalMessage || '')) {
+                                                    if (typeof SillyTavern_API_ACU.deleteLastMessage === 'function')
+                                                        await SillyTavern_API_ACU.deleteLastMessage();
+                                                    else if (window.SillyTavern?.deleteLastMessage)
+                                                        await window.SillyTavern.deleteLastMessage();
+                                                }
+                                            }
+                                            catch (e) { }
+                                            // 恢复输入框（伪装激活时经 finally 的 release 统一交还，直接写框会被覆盖导致 restoreText 丢失）
+                                            if (disguise)
+                                                textForHost = s1.restoreText || '';
+                                            else
+                                                try {
+                                                    setSendTextareaValue_ACU(s1.restoreText || '');
+                                                }
+                                                catch (e) { }
+                                        }
+                                        break;
+                                    case 'planned':
+                                        // 写回 params 和消息对象
+                                        params.prompt = s1.finalMessage;
+                                        lastMessage.mes = s1.finalMessage;
+                                        // [L6] 裸 emit 改走 chat-gateway 的统一出口（含 eventTypes 缺失降级与空值防御）
+                                        emitMessageUpdated_ACU(lastMessageIndex);
+                                        // 伪装激活时发送框已清空且由 release 交还：仅当原文仍是交还文本时才清（与无伪装语义一致）。
+                                        if (disguise) {
+                                            if (disguise.originalText === s1.originalMessage)
+                                                textForHost = '';
+                                        }
+                                        else if (getSendTextareaValue_ACU() === s1.originalMessage)
+                                            setSendTextareaValue_ACU('');
+                                        break;
+                                    // 'skipped' — 不做额外操作
+                                }
+                                return; // 策略1匹配，不再执行策略2
+                            }
+                            // ── 策略2：输入框文本 ──
+                            // shouldProcessPlot 是本次 GENERATION_AFTER_COMMANDS 事件开始时捕获的授权。
+                            // 交火召回可能耗时超过 USER_SEND_TRIGGER_TTL_MS_ACU；这里不能再用 TTL 二次否决，
+                            // 否则会出现“交火已覆盖纪要索引，但剧情推进被跳过并直接正文生成”的断链。
+                            if (!shouldProcessPlot && !isRecentUserSendIntent_ACU())
+                                return;
+                            // 召回未伪装时策略2入口再给一次机会；召回已伪装则只切换拦截提示，共用同一实例。
+                            const textInBox = disguise ? disguise.originalText : getSendTextareaValue_ACU();
+                            if (!disguise && shouldBeginPlotPendingDisguise_ACU({
+                                disguiseEnabled: pendingDisguiseEnabled,
+                                generationType: type,
+                                lastIsUserFloor: lastAtStart?.is_user === true,
+                                text: textInBox,
+                            })) {
+                                disguise = beginPlotPendingDisguise_ACU(String(textInBox || ''));
+                            }
+                            else if (disguise) {
+                                disguise.setNotice(PLOT_PENDING_NOTICE_ACU);
+                            }
+                            // [重构] 调用 service 层策略2编排
+                            if (!plotScopeStillCurrent_ACU()) {
+                                logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略2结果写回');
+                                return;
+                            }
+                            const s2 = await orchestrateAfterCommandsStrategy2_ACU(String(textInBox || ''), runOptimizationLogicWithUI_ACU, plotScope_ACU ? { runtimeScope: plotScope_ACU } : undefined);
+                            if (!plotScopeStillCurrent_ACU()) {
+                                logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略2结果写回');
+                                return;
+                            }
+                            switch (s2.action) {
                                 case 'aborted':
-                                    if (s1.manual) {
-                                        // 停止生成
+                                    if (s2.manual) {
                                         try {
                                             if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function')
                                                 SillyTavern_API_ACU.stopGeneration();
@@ -145887,77 +146359,28 @@ function mainInitialize_ACU() {
                                                 window.SillyTavern.stopGeneration();
                                         }
                                         catch (e) { }
-                                        // 删除刚创建的用户消息
-                                        try {
-                                            const chatNow = SillyTavern_API_ACU.chat;
-                                            const lastNow = chatNow?.length ? chatNow[chatNow.length - 1] : null;
-                                            if (lastNow && lastNow.is_user && String(lastNow.mes || '') === String(s1.originalMessage || '')) {
-                                                if (typeof SillyTavern_API_ACU.deleteLastMessage === 'function')
-                                                    await SillyTavern_API_ACU.deleteLastMessage();
-                                                else if (window.SillyTavern?.deleteLastMessage)
-                                                    await window.SillyTavern.deleteLastMessage();
-                                            }
-                                        }
-                                        catch (e) { }
-                                        // 恢复输入框
-                                        try {
-                                            setSendTextareaValue_ACU(s1.restoreText || '');
-                                        }
-                                        catch (e) { }
                                     }
                                     break;
                                 case 'planned':
-                                    // 写回 params 和消息对象
-                                    params.prompt = s1.finalMessage;
-                                    lastMessage.mes = s1.finalMessage;
-                                    // [L6] 裸 emit 改走 chat-gateway 的统一出口（含 eventTypes 缺失降级与空值防御）
-                                    emitMessageUpdated_ACU(lastMessageIndex);
-                                    if (getSendTextareaValue_ACU() === s1.originalMessage)
-                                        setSendTextareaValue_ACU('');
-                                    break;
-                                // 'skipped' — 不做额外操作
-                            }
-                            return; // 策略1匹配，不再执行策略2
-                        }
-                        // ── 策略2：输入框文本 ──
-                        // shouldProcessPlot 是本次 GENERATION_AFTER_COMMANDS 事件开始时捕获的授权。
-                        // 交火召回可能耗时超过 USER_SEND_TRIGGER_TTL_MS_ACU；这里不能再用 TTL 二次否决，
-                        // 否则会出现“交火已覆盖纪要索引，但剧情推进被跳过并直接正文生成”的断链。
-                        if (!shouldProcessPlot && !isRecentUserSendIntent_ACU())
-                            return;
-                        const textInBox = getSendTextareaValue_ACU();
-                        // [重构] 调用 service 层策略2编排
-                        if (!plotScopeStillCurrent_ACU()) {
-                            logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略2结果写回');
-                            return;
-                        }
-                        const s2 = await orchestrateAfterCommandsStrategy2_ACU(String(textInBox || ''), runOptimizationLogicWithUI_ACU, plotScope_ACU ? { runtimeScope: plotScope_ACU } : undefined);
-                        if (!plotScopeStillCurrent_ACU()) {
-                            logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略2结果写回');
-                            return;
-                        }
-                        switch (s2.action) {
-                            case 'aborted':
-                                if (s2.manual) {
+                                    // 伪装接管时发送框写入由 finally 的 release 统一交还，避免双写；
+                                    // 未伪装保持原行为（直接写框 + params.prompt）。
+                                    textForHost = s2.finalMessage;
+                                    if (!disguise)
+                                        setSendTextareaValue_ACU(s2.finalMessage);
                                     try {
-                                        if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function')
-                                            SillyTavern_API_ACU.stopGeneration();
-                                        else if (window.SillyTavern?.stopGeneration)
-                                            window.SillyTavern.stopGeneration();
+                                        params.prompt = s2.finalMessage;
                                     }
                                     catch (e) { }
-                                }
-                                break;
-                            case 'planned':
-                                setSendTextareaValue_ACU(s2.finalMessage);
-                                try {
-                                    params.prompt = s2.finalMessage;
-                                }
-                                catch (e) { }
-                                break;
+                                    break;
+                            }
+                            // 消费掉本次发送意图
+                            generationGate_ACU.lastUserSendIntentAt = 0;
                         }
-                        // 消费掉本次发送意图
-                        generationGate_ACU.lastUserSendIntentAt = 0;
+                        finally {
+                            // 任何路径（成功/跳过/失败/中止/作用域变化提前 return）都把文本交还发送框，
+                            // 未伪装时 release 为 no-op（disguise 为 null）。
+                            disguise?.release(textForHost);
+                        }
                     }
                     catch (afterCommandsOuterError_ACU) {
                         logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 处理失败，继续原始生成:', afterCommandsOuterError_ACU);
@@ -151737,7 +152160,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261001-15";
+        const stamp = "20261001-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -171218,6 +171641,8 @@ function ensureSettingsShape$1() {
     if (typeof plot.lastUsedPresetName !== 'string')
         plot.lastUsedPresetName = '';
     plot.enabled = plot.enabled === true;
+    // 伪装发送楼层可选项：只认显式 true，老设置缺键即关闭，不做迁移。
+    plot.pendingDisguiseEnabled = plot.pendingDisguiseEnabled === true;
     ensurePlotTasksCompat_ACU(plot, { syncLegacy: true });
     if (typeof settings_ACU.plotApiPreset !== 'string')
         settings_ACU.plotApiPreset = '';
@@ -171296,6 +171721,7 @@ function getDefaultPlotPresetRawForV2() {
 const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
     state: () => ({
         enabled: false,
+        pendingDisguiseEnabled: false,
         presets: [],
         defaultPresetName: '',
         activePresetName: '',
@@ -171328,6 +171754,7 @@ const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
             ensureSettingsShape$1();
             const plot = settings_ACU.plotSettings;
             this.enabled = plot.enabled === true;
+            this.pendingDisguiseEnabled = plot.pendingDisguiseEnabled === true;
             this.presets = readPresetList();
             const defaultName = normalizePlotPresetSelectionValue_ACU(plot.lastUsedPresetName || '');
             this.defaultPresetName = findPresetIndex(this.presets, defaultName) >= 0 ? defaultName : '';
@@ -171340,6 +171767,20 @@ const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
                     cleaned[k] = v.trim();
             }
             this.taskApiOverrides = cleaned;
+        },
+        /** 设置伪装发送楼层可选项（默认关闭，需用户显式开启）。 */
+        setPendingDisguiseEnabled(enabled) {
+            const next = enabled === true;
+            this.pendingDisguiseEnabled = next;
+            try {
+                ensureSettingsShape$1();
+                settings_ACU.plotSettings.pendingDisguiseEnabled = next;
+            }
+            catch {
+                if (settings_ACU.plotSettings)
+                    settings_ACU.plotSettings.pendingDisguiseEnabled = next;
+            }
+            saveSettings_ACU();
         },
         /** 设置剧情推进总开关。 */
         setEnabled(enabled) {
@@ -182911,6 +183352,7 @@ var _sfc_main$t = /*@__PURE__*/ defineComponent({
     __name: 'PlotPage',
     setup(__props, { expose: __expose }) {
         __expose();
+        const plotPresetStore = usePlotPresetStore();
         const worldbook = useWorldbookSelector();
         const plotWorldbook = usePlotWorldbookConfig();
         const wbEntries = usePlotWorldbookEntries();
@@ -182955,26 +183397,45 @@ var _sfc_main$t = /*@__PURE__*/ defineComponent({
             return names.length ? names.join('、') : '（未选择）';
         });
         async function refreshAll() {
+            plotPresetStore.refreshFromSettings();
             plotWorldbook.refreshFromSettings();
             await worldbook.refresh();
             await refreshWorldbookEntries();
         }
         onMounted(() => { void refreshAll(); });
         watchChatChanged_ACU(() => { void refreshAll(); });
-        const __returned__ = { worldbook, plotWorldbook, wbEntries, entryFilter, entryEmptyText, refreshWorldbookEntries, resolveEntryEmptyText, onWorldbookSourceChange, onManualWorldbookToggle, currentWorldbookLabel, refreshAll, AcuPanel, AcuPanelGrid, PlotPresetPanel, WorldbookEntryPickerBody, get plotCopy() { return plotCopy; } };
+        const __returned__ = { plotPresetStore, worldbook, plotWorldbook, wbEntries, entryFilter, entryEmptyText, refreshWorldbookEntries, resolveEntryEmptyText, onWorldbookSourceChange, onManualWorldbookToggle, currentWorldbookLabel, refreshAll, AcuPanel, AcuPanelGrid, AcuFormRow, AcuToggle, PlotPresetPanel, WorldbookEntryPickerBody, get plotCopy() { return plotCopy; } };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-plot-page[data-v-572160f5] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n@media (max-width: 860px) {\n.acu-v2-plot-page[data-v-572160f5] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/PlotPage.vue#style-0-572160f5");
-var PlotPage_vue_vue_type_style_index_0_scoped_572160f5_lang = null;
+injectSfcStyle("\n.acu-v2-plot-page[data-v-04f9a601] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n@media (max-width: 860px) {\n.acu-v2-plot-page[data-v-04f9a601] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/PlotPage.vue#style-0-04f9a601");
+var PlotPage_vue_vue_type_style_index_0_scoped_04f9a601_lang = null;
 
 const _hoisted_1$t = { class: "acu-v2-plot-page" };
 function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", _hoisted_1$t, [createVNode($setup["AcuPanelGrid"], { class: "acu-v2-plot-page__grid" }, {
 		default: withCtx(() => [
 			createVNode($setup["PlotPresetPanel"]),
+			createCommentVNode(" 发送体验 "),
+			createVNode($setup["AcuPanel"], {
+				title: "发送体验",
+				description: "控制剧情推进等待期间聊天区的占位反馈，纯展示开关，不改任何发送逻辑。"
+			}, {
+				default: withCtx(() => [createVNode($setup["AcuFormRow"], {
+					label: "伪装发送楼层",
+					hint: "开启后，剧情推进与纪要召回等待期间在聊天区显示伪装的用户楼层与“思考中”楼层，并拦截重复发送；关闭则保持原有行为（消息停在输入框直到规划完成）。"
+				}, {
+					default: withCtx(() => [createVNode($setup["AcuToggle"], {
+						"model-value": $setup.plotPresetStore.pendingDisguiseEnabled,
+						label: "等待期间显示伪装发送楼层",
+						"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.plotPresetStore.setPendingDisguiseEnabled($event))
+					}, null, 8, ["model-value"])]),
+					_: 1
+				})]),
+				_: 1
+			}),
 			createCommentVNode(" 世界书选择 "),
 			createVNode($setup["AcuPanel"], {
 				title: $setup.plotCopy.panels.worldbook.title,
@@ -182988,18 +183449,18 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 					"selector-error": $setup.worldbook.error.value,
 					"current-label": $setup.currentWorldbookLabel,
 					filter: $setup.entryFilter,
-					"onUpdate:filter": _cache[0] || (_cache[0] = ($event) => $setup.entryFilter = $event),
+					"onUpdate:filter": _cache[1] || (_cache[1] = ($event) => $setup.entryFilter = $event),
 					groups: $setup.wbEntries.groups.value,
 					loading: $setup.wbEntries.status.value === "loading",
 					"entry-status": $setup.wbEntries.status.value,
 					"entry-error": $setup.wbEntries.error.value,
 					"empty-text": $setup.entryEmptyText,
-					"onUpdate:source": _cache[1] || (_cache[1] = ($event) => $setup.onWorldbookSourceChange($event)),
+					"onUpdate:source": _cache[2] || (_cache[2] = ($event) => $setup.onWorldbookSourceChange($event)),
 					onToggleBook: $setup.onManualWorldbookToggle,
-					onSelectAll: _cache[2] || (_cache[2] = ($event) => $setup.wbEntries.selectAll()),
-					onDeselectAll: _cache[3] || (_cache[3] = ($event) => $setup.wbEntries.deselectAll()),
-					onToggle: _cache[4] || (_cache[4] = (bookName, uid, checked) => $setup.wbEntries.toggleEntry(bookName, uid, checked)),
-					onToggleGroup: _cache[5] || (_cache[5] = ($event) => $setup.wbEntries.toggleGroupExpanded($event))
+					onSelectAll: _cache[3] || (_cache[3] = ($event) => $setup.wbEntries.selectAll()),
+					onDeselectAll: _cache[4] || (_cache[4] = ($event) => $setup.wbEntries.deselectAll()),
+					onToggle: _cache[5] || (_cache[5] = (bookName, uid, checked) => $setup.wbEntries.toggleEntry(bookName, uid, checked)),
+					onToggleGroup: _cache[6] || (_cache[6] = ($event) => $setup.wbEntries.toggleGroupExpanded($event))
 				}, null, 8, [
 					"source",
 					"selected-names",
@@ -183020,7 +183481,7 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$t, [["render", _sfc_render$t], ["__scopeId", "data-v-572160f5"]]);
+var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$t, [["render", _sfc_render$t], ["__scopeId", "data-v-04f9a601"]]);
 
 var _sfc_main$s = /*@__PURE__*/ defineComponent({
     __name: 'WorldbookAgentAdvancedPanel',

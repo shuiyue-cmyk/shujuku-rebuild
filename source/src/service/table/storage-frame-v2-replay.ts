@@ -21,7 +21,7 @@ import { decodeSqlIdentifier_ACU, rebindSqlMutationColumnReferences_ACU, rebindS
 import { buildSheetColumnAliasMap_ACU, buildSheetTableAliasMap_ACU, type SheetAliasMapResult_ACU, type SheetColumnAliasMapResult_ACU, type SheetColumnAliasEvidence_ACU } from '../../shared/sql-read-resolver';
 import { auditTableDataForUpgrade_ACU, getTableDataFingerprint_ACU } from './table-data-upgrade-audit';
 import { repairTableDataFromAudit_ACU } from './table-data-repair';
-import { cloneSpv79TransitionData_ACU, compareTransitionCutoffs_ACU, findLatestTransitionCheckpoint_ACU, isAfterSpv79TransitionCutoff_ACU, isEntryAfterSpv79TransitionCutoff_ACU, isFrameArtifactAfterSpv79TransitionCutoff_ACU, reindexSpv79TransitionState_ACU } from './compat-transition-checkpoint';
+import { cloneSpv79TransitionData_ACU, compareTransitionCutoffs_ACU, dedupeCompatTransitionRowIdentities_ACU, findLatestTransitionCheckpoint_ACU, isAfterSpv79TransitionCutoff_ACU, isEntryAfterSpv79TransitionCutoff_ACU, isFrameArtifactAfterSpv79TransitionCutoff_ACU } from './compat-transition-checkpoint';
 import { collectSheetIdentityCanonicals_ACU, mergeLegacySheetIdentities_ACU, type SheetIdentityRemap_ACU } from '../../shared/sheet-identity-merge';
 import { runTableWriteTransaction_ACU } from './table-write-transaction';
 import { getUiSurface_ACU, showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
@@ -2772,20 +2772,20 @@ async function recoverWithLegacyTolerantReplay_ACU(
   if (chat === getChatArray_ACU() && options.backgroundFixation !== 'skip') {
     scheduleCompatTransitionFixation_ACU(chat, isolationKey);
   }
-  // 返回前尽力把行身份归一为新版契约（与固化根使用同一 reindex 纯函数）：
+  // 返回前尽力把行身份归一为新版契约（与固化根使用同一去重纯函数，保留既有 row_id）：
   // 成功则首次加载与固化后的后续加载看到完全一致的 row_id；失败则原样返回
   // 兼容结果（仍可用，只是该历史无法固化）。
   let resultData = tolerant.data;
   try {
-    const reindexed = reindexSpv79TransitionState_ACU(tolerant.data);
-    const normalization = normalizeCanonicalTableRows_ACU(reindexed);
+    const deduped = dedupeCompatTransitionRowIdentities_ACU(tolerant.data).data;
+    const normalization = normalizeCanonicalTableRows_ACU(deduped);
     if (normalization.errors.length === 0 && normalization.removedRows.length === 0) {
-      resultData = reindexed;
+      resultData = deduped;
     }
-  } catch (reindexError) {
+  } catch (dedupeError) {
     logWarn_ACU(
-      `[V2 Compat Replay] 兼容结果行身份重编号失败，按原始兼容结果返回：`
-      + `${reindexError instanceof Error ? reindexError.message : String(reindexError)}`,
+      `[V2 Compat Replay] 兼容结果行身份去重失败，按原始兼容结果返回：`
+      + `${dedupeError instanceof Error ? dedupeError.message : String(dedupeError)}`,
     );
   }
   return {
@@ -3319,15 +3319,15 @@ export async function createCompatTransitionCheckpointFromTolerantReplay_ACU(
     // 已有过渡根覆盖了同样或更新的历史，无需重复固化。
     return false;
   }
-  const data = reindexSpv79TransitionState_ACU(tolerant.data);
+  const data = dedupeCompatTransitionRowIdentities_ACU(tolerant.data).data;
   const normalization = normalizeCanonicalTableRows_ACU(data);
   const issues = [...normalization.errors, ...normalization.removedRows];
   if (issues.length > 0) {
     logWarn_ACU(
-      `[V2 Compat Replay] 放弃固化兼容过渡根：重编号结果不满足 canonical 行身份契约：`
+      `[V2 Compat Replay] 放弃固化兼容过渡根：去重结果不满足 canonical 行身份契约：`
       + `${formatCanonicalRowIssues_ACU(issues)}。数据仍按兼容读取结果可用，下次加载将继续走兼容回放。`,
     );
-    notifyCompatFixationAbandoned_ACU(isolationKey, 'canonical_failed', '兼容过渡根未固化：重编号结果不满足行身份契约，自动固化已跳过，数据仍可读，下次加载将继续走兼容回放。');
+    notifyCompatFixationAbandoned_ACU(isolationKey, 'canonical_failed', '兼容过渡根未固化：去重结果不满足行身份契约，自动固化已跳过，数据仍可读，下次加载将继续走兼容回放。');
     return false;
   }
   let scheduleSummary: TableScheduleSummaryV2_ACU | undefined;

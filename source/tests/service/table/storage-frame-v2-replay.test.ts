@@ -4960,9 +4960,11 @@ describe('SPv7.9 duplicate row_id transition checkpoint', () => {
       const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, '', { updateRuntimeState: false });
 
       expect(replay?.baseKind).toBe('compat_tolerant_replay');
+      // 两个 1 在 DELETE WHERE row_id = 1 里被删，幸存者是 INSERT 的 2；
+      // 去重保留既有 id（上游同断言），重编号会把它错写成 1。
       expect(replay?.data.sheet_0.content).toEqual([
         ['row_id', 'name'],
-        ['1', '非 SQL 后缀'],
+        ['2', '非 SQL 后缀'],
       ]);
 
       await flushPendingCompatTransitionFixations_ACU();
@@ -4970,6 +4972,93 @@ describe('SPv7.9 duplicate row_id transition checkpoint', () => {
       expect(chat[0].TavernDB_ACU_IsolatedData[''].compatTransitionCheckpoint?.cutoff).toEqual({
         messageIndex: 0, seq: 1, operationIndex: 4,
       });
+    } finally {
+      _set_SillyTavern_API_ACU(previousHostApi);
+    }
+  });
+});
+
+describe('compat 过渡根行身份保持（判别复现，只写测试、不改生产）', () => {
+  /**
+   * 判别目标：`reindexSpv79TransitionState_ACU` 无条件全表重编号（1..N），
+   * 而兼容过渡根可能落在聊天中段、其后仍有严格增量按原 row_id 引用行
+   * （`UPDATE ... WHERE row_id = 7`）。上游终态 `dedupeCompatTransitionRowIdentities_ACU`
+   * 只修空/冲突 id、保留既有 row_id；我方两处复用（回放返回 :2780、固化 :3322）
+   * 若把 5/7 改成 1/2，后续增量会落空或落到别的行。
+   *
+   * 构造：full 基底稀疏 id [5,7] + 一条严格必抛、宽容跳过的未知 kind，
+   * 强制走 Tier-1 兼容路径。本用例按需求断言（修好才绿），当前应取红。
+   */
+  it('稀疏 row_id 经兼容固化后必须保留，根之后的增量按原 id 落到同一行', async () => {
+    const checkpointData = makeCheckpointData();
+    checkpointData.sheet_0.content = [
+      ['row_id', 'name'],
+      ['5', '旧剑'],
+      ['7', '旧盾'],
+    ];
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: checkpointData },
+            logEntries: [{
+              seq: 1, entryId: 'legacy-unknown-op', createdAt: 2, source: 'system', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: [], changedSheetKeys: [], groupKeys: [],
+              operations: [{ kind: 'legacy_unknown_op_for_repro', reason: 'system' }],
+            }],
+          },
+        },
+      },
+    }];
+    const previousHostApi = SillyTavern_API_ACU;
+    try {
+      _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn(async () => undefined) } as any);
+
+      const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, '', { updateRuntimeState: false });
+      // 先确认确实走了兼容路径，否则判别前提不成立。
+      expect(replay?.baseKind).toBe('compat_tolerant_replay');
+
+      await flushPendingCompatTransitionFixations_ACU();
+      const root = (chat[0] as any).TavernDB_ACU_IsolatedData[''].compatTransitionCheckpoint;
+      expect(root, '兼容过渡根应已固化').toBeDefined();
+      // 判别点：无冲突的稀疏 id 必须原样保留；当前 reindex 会写成 1/2。
+      expect(root.data.sheet_0.content).toEqual([
+        ['row_id', 'name'],
+        ['5', '旧剑'],
+        ['7', '旧盾'],
+      ]);
+
+      // 影响面：根之后的新增量按原 row_id 引用，必须落到同一行。
+      (chat as any[]).push({
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              logEntries: [{
+                seq: 1, entryId: 'strict-update-after-root', createdAt: 3, source: 'user', targetMessageIndex: 1, aiFloor: 2,
+                filledSheetKeys: [], changedSheetKeys: ['sheet_0'], groupKeys: [],
+                operations: [{
+                  kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'inventory', reason: 'system',
+                  statements: ['UPDATE inventory SET name = \'精制盾\' WHERE row_id = 7'],
+                }],
+              }],
+            },
+          },
+        },
+      });
+      const second = await loadTableStateFromFramesV2Detailed_ACU(chat, '', { updateRuntimeState: false });
+      // 根之后的新增量走根起算的严格快路径（非宽容），否则「落到同一行」无从谈起。
+      expect(second?.baseKind).toBe('compat_transition_checkpoint');
+      expect(second?.data.sheet_0.content).toEqual([
+        ['row_id', 'name'],
+        ['5', '旧剑'],
+        ['7', '精制盾'],
+      ]);
     } finally {
       _set_SillyTavern_API_ACU(previousHostApi);
     }
