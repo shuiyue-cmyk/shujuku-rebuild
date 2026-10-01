@@ -91586,8 +91586,8 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"9.10.8"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261001-16"`。源码直跑、测试环境或注入失败时读不到，
+ * rollup 打包时把版本写进 `"Unbirth A.D. 184972"`（与 manifest.json / source/package.json
+ * 同值），构建时间戳写进 `"20261001-17"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91596,7 +91596,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "9.10.8";
+        const version = "Unbirth A.D. 184972";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
@@ -91606,7 +91606,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261001-16";
+        const stamp = "20261001-17";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -152160,7 +152160,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261001-16";
+        const stamp = "20261001-17";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
