@@ -91587,7 +91587,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261001-17"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261001-18"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91606,7 +91606,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261001-17";
+        const stamp = "20261001-18";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -125575,7 +125575,7 @@ function readAgentModuleFieldSnapshot_ACU(chat) {
 function warnIfSalvagedRead_ACU(folded) {
     if (!folded.salvaged)
         return;
-    console.warn(`[SP·数据库][续写资料] 楼层 ${folded.adoptedIndex} 的资料快照未通过严格校验，已按宽容模式读取：${folded.candidates.find(item => item.index === folded.adoptedIndex)?.problems.join('；') ?? ''}`);
+    console.warn(`[UB·数据库][续写资料] 楼层 ${folded.adoptedIndex} 的资料快照未通过严格校验，已按宽容模式读取：${folded.candidates.find(item => item.index === folded.adoptedIndex)?.problems.join('；') ?? ''}`);
 }
 /**
  * 把快照写入指定楼层并真实提交到宿主（帧增量）。
@@ -125622,7 +125622,7 @@ async function writeAgentModuleSnapshot_ACU(chat, targetIndex, snapshot) {
             revisionDrifts.push(`${name} 楼层=${floorRevision} 写入=${incomingRevision}`);
     }
     if (revisionDrifts.length > 0) {
-        console.warn(`[SP·数据库][续写资料] 检测到楼层快照修订号已被外部更新（疑似用户手动保存），放弃本次写入防止整份覆盖：${revisionDrifts.join('；')}（目标楼层 ${targetIndex}）`);
+        console.warn(`[UB·数据库][续写资料] 检测到楼层快照修订号已被外部更新（疑似用户手动保存），放弃本次写入防止整份覆盖：${revisionDrifts.join('；')}（目标楼层 ${targetIndex}）`);
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_WRITE_REJECTED', 'agent_persist', '资料快照修订号已漂移，写入被拒绝以停止当前结算', false, { targetIndex, revisionDrifts }));
     }
     const stamped = {
@@ -125635,7 +125635,7 @@ async function writeAgentModuleSnapshot_ACU(chat, targetIndex, snapshot) {
         // 规划层的 fail-closed 原因此前只有逐栏路径会透传，快照路径直接丢掉 ⇒「整条聊天没有可承载资料的
         // AI 楼层」这类真异常完全静默（用户只看到资料没更新）。留一条告警便于报障定位。
         if (plan.reason)
-            console.warn(`[SP·数据库][续写资料] 快照未落盘（目标楼层 ${targetIndex}）：${plan.reason}`);
+            console.warn(`[UB·数据库][续写资料] 快照未落盘（目标楼层 ${targetIndex}）：${plan.reason}`);
         return null;
     }
     try {
@@ -152160,7 +152160,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261001-17";
+        const stamp = "20261001-18";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

@@ -673,7 +673,7 @@ export function readAgentModuleFieldSnapshot_ACU(chat?: any[]): AgentModuleField
  */
 function warnIfSalvagedRead_ACU(folded: AgentModuleFoldResult_ACU): void {
   if (!folded.salvaged) return;
-  console.warn(`[SP·数据库][续写资料] 楼层 ${folded.adoptedIndex} 的资料快照未通过严格校验，已按宽容模式读取：${folded.candidates.find(item => item.index === folded.adoptedIndex)?.problems.join('；') ?? ''}`);
+  console.warn(`[UB·数据库][续写资料] 楼层 ${folded.adoptedIndex} 的资料快照未通过严格校验，已按宽容模式读取：${folded.candidates.find(item => item.index === folded.adoptedIndex)?.problems.join('；') ?? ''}`);
 }
 
 /**
@@ -726,7 +726,7 @@ export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: num
     if (floorRevision > incomingRevision) revisionDrifts.push(`${name} 楼层=${floorRevision} 写入=${incomingRevision}`);
   }
   if (revisionDrifts.length > 0) {
-    console.warn(`[SP·数据库][续写资料] 检测到楼层快照修订号已被外部更新（疑似用户手动保存），放弃本次写入防止整份覆盖：${revisionDrifts.join('；')}（目标楼层 ${targetIndex}）`);
+    console.warn(`[UB·数据库][续写资料] 检测到楼层快照修订号已被外部更新（疑似用户手动保存），放弃本次写入防止整份覆盖：${revisionDrifts.join('；')}（目标楼层 ${targetIndex}）`);
     throw new ContinuationValidationError_ACU(createContinuationError_ACU(
       'CONTINUATION_AGENT_WRITE_REJECTED',
       'agent_persist',
@@ -751,7 +751,7 @@ export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: num
   if (!plan.changed) {
     // 规划层的 fail-closed 原因此前只有逐栏路径会透传，快照路径直接丢掉 ⇒「整条聊天没有可承载资料的
     // AI 楼层」这类真异常完全静默（用户只看到资料没更新）。留一条告警便于报障定位。
-    if (plan.reason) console.warn(`[SP·数据库][续写资料] 快照未落盘（目标楼层 ${targetIndex}）：${plan.reason}`);
+    if (plan.reason) console.warn(`[UB·数据库][续写资料] 快照未落盘（目标楼层 ${targetIndex}）：${plan.reason}`);
     return null;
   }
   try {
