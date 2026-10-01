@@ -91,6 +91,7 @@ export interface VectorIndexForm {
   // 归档分块
   summaryChunkSentenceCount: number;
   summaryIndexChunkChronicleBySentence: boolean;
+  hybridRetrievalEnabled: boolean;
   summaryIndexArchiveMaxConcurrency: number;
   summaryIndexArchiveMaxInputChars: number;
   summaryIndexArchiveEmbeddingConcurrency: number;
@@ -160,6 +161,8 @@ function createEmptyForm(): VectorIndexForm {
     vectorNamespace: defaults.vectorNamespace || 'chat',
     summaryChunkSentenceCount: defaults.summaryChunkSentenceCount,
     summaryIndexChunkChronicleBySentence: (defaults as any).summaryIndexChunkChronicleBySentence === true,
+    // 与 vector-memory-config.ts:198 的「!== false」同口径：默认开，显式 false 才关。
+    hybridRetrievalEnabled: (defaults as any).hybridRetrievalEnabled !== false,
     summaryIndexArchiveMaxConcurrency: defaults.summaryIndexArchiveMaxConcurrency ?? 30,
     summaryIndexArchiveMaxInputChars: defaults.summaryIndexArchiveMaxInputChars ?? 24000,
     summaryIndexArchiveEmbeddingConcurrency: defaults.summaryIndexArchiveEmbeddingConcurrency ?? 3,
@@ -262,6 +265,7 @@ export function useVectorIndexConfig() {
     form.vectorNamespace = config.vectorNamespace || 'chat';
     form.summaryChunkSentenceCount = config.summaryChunkSentenceCount;
     form.summaryIndexChunkChronicleBySentence = config.summaryIndexChunkChronicleBySentence === true;
+    form.hybridRetrievalEnabled = config.hybridRetrievalEnabled !== false;
     form.summaryIndexArchiveMaxConcurrency = config.summaryIndexArchiveMaxConcurrency;
     form.summaryIndexArchiveMaxInputChars = config.summaryIndexArchiveMaxInputChars;
     form.summaryIndexArchiveEmbeddingConcurrency = config.summaryIndexArchiveEmbeddingConcurrency;
@@ -369,7 +373,7 @@ export function useVectorIndexConfig() {
 
   function setBooleanField<
     K extends 'summaryIndexRollingDeltaEnabled' | 'summaryIndexV2WriteEnabled' | 'summaryIndexContentPackWriteEnabled'
-      | 'keywordGenerationEnabled' | 'summaryIndexChunkChronicleBySentence',
+      | 'keywordGenerationEnabled' | 'summaryIndexChunkChronicleBySentence' | 'hybridRetrievalEnabled',
   >(key: K, value: boolean): void {
     const next = value === true;
     (form as any)[key] = next;

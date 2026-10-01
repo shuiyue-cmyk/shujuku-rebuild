@@ -121,6 +121,7 @@ vi.mock('../../../src/shared/json-helpers', () => ({
 
 // 现在 import 被测模块
 import {
+  applyParameterizedSqlMutationToTableDataSnapshot_ACU,
   applySqlEditsToTableDataSnapshot_ACU,
   assertNoHiddenPhysicalColumnMutations_ACU,
   buildSqlSheetBatchOperations_ACU,
@@ -513,6 +514,58 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
     expect(result.workingData?.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '9'], ['2', '治疗药水', '5']]);
     expect(inputSnapshot.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']]);
     expect(mockCurrentJsonTableData).toBeNull();
+  });
+
+  /**
+   * applySqlEditsToTableDataSnapshot_ACU 与 applyParameterizedSqlMutationToTableDataSnapshot
+   * 的 hydrate 必须与写入端/回放端用同一套 runtime DDL 口径（allowRuntimeDdlFallback）。
+   *
+   * 这两个函数是 update-orchestrator AI SQL 执行器（update-orchestrator.ts:2058）的
+   * 唯一入口：hydrate 的输入正是当前 canonical 基底（其 sourceData.ddl 是原串）。
+   * 若 hydrate 拒绝 fallback，同一份坏 DDL 的聊天在 loadFromChat / replaceAllData /
+   * 回放侧都能加载进 runtime，唯独 AI 填表整轮 {success:false} —— 写入端内部仍分叉。
+   *
+   * 列名必须与表头一致，否则命中「表头没有对应的 DDL 列」的列映射守卫（那是本就不该
+   * 放宽的 fail-closed），与本用例无关。
+   */
+  it('坏 DDL 快照的 hydrate 沿用 runtime fallback 基底，UPDATE 在其上成功', async () => {
+    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+    inputSnapshot.sheet_0.sourceData = {
+      ...inputSnapshot.sheet_0.sourceData,
+      ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, quantity INTEGER,)',
+    };
+    const result = await applySqlEditsToTableDataSnapshot_ACU(
+      "UPDATE inventory SET quantity = 9 WHERE row_id = 1;",
+      inputSnapshot,
+    );
+
+    expect(result.success, 'hydrate 必须回退到 fallback 基底，否则 AI 填表整轮失败').toBe(true);
+    expect(result.workingData?.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '9']]);
+    // 坏 DDL 不得被改写：sourceData 保留原串，修复只发生在 runtime 侧
+    expect(result.workingData?.sheet_0.sourceData.ddl).toContain('quantity INTEGER,)');
+  });
+
+  /**
+   * applyParameterizedSqlMutationToTableDataSnapshot 的 hydrate 必须与
+   * applySqlEditsToTableDataSnapshot_ACU 用同一口径：两者都是 update-orchestrator
+   * AI SQL 执行器的 hydrate 入口（后者在 update-orchestrator.ts:2058），输入都是
+   * 当前 canonical 基底。只修一处，另一处仍会让坏 DDL 的 AI 填表整轮失败。
+   */
+  it('坏 DDL 快照的参数化变异 hydrate 同样沿用 runtime fallback 基底', async () => {
+    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+    inputSnapshot.sheet_0.sourceData = {
+      ...inputSnapshot.sheet_0.sourceData,
+      ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, quantity INTEGER,)',
+    };
+    // 参数化路径必须用 ? 占位符：hydrate 同样发生在 SQL 执行之前。
+    const result = await applyParameterizedSqlMutationToTableDataSnapshot_ACU(
+      'UPDATE inventory SET quantity = ? WHERE row_id = ?;',
+      [9, 1],
+      inputSnapshot,
+    );
+
+    expect(result.success, '参数化路径的 hydrate 同样必须回退').toBe(true);
+    expect(result.workingData?.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '9']]);
   });
 
   it('generation 链将 sheetKey 和 uid alias 重绑定到权威物理表', async () => {
@@ -3036,6 +3089,36 @@ describe('SqlTableService', () => {
       expect(service.isReady()).toBe(true);
       expect(service.executeQuery('SELECT * FROM inventory').rowCount).toBe(2);
     });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  // saveToChat
+  // ═══════════════════════════════════════════════════════════════
+  /**
+   * replaceAllData 是持久化写入端，必须与 V2 回放 hydrate 用同一套 runtime DDL
+   * 加载口径（allowRuntimeDdlFallback）。
+   *
+   * 同族调用点 loadFromChat（:1681）与合并路径（:1708）都已带该 flag，唯独整体
+   * 替换这条漏了。后果与写入端/回放端口径分叉同源：显式 DDL 无法执行时（典型尾逗号
+   * `..., )`），本路径直接失败，而回放侧按 fallback 基底 hydrate → 两端基底不一致。
+   */
+  it('replaceAllData 对无法执行的显式 DDL 沿用 runtime fallback 基底，与回放端口径一致', async () => {
+    mockMergeAll.mockResolvedValue(JSON.parse(JSON.stringify(testTableData)));
+    await service.loadFromChat();
+
+    // 列名必须与表头一致（row_id/item_name/quantity），否则触发的是列映射守卫
+    // （「表头没有对应的 DDL 列，拒绝丢弃非空数据」）——那是本就不该放宽的 fail-closed。
+    const brokenDdl = 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, quantity INTEGER,)';
+    const payload = JSON.parse(JSON.stringify(testTableData)) as any;
+    const sheet = payload.sheet_0 ?? Object.values(payload).find((v: any) => v && Array.isArray(v.content));
+    sheet.sourceData = { ...(sheet.sourceData || {}), ddl: brokenDdl };
+
+    const replaced = await service.replaceAllData(payload);
+
+    expect(replaced.success, '整体替换不得因显式 DDL 不可执行而失败').toBe(true);
+    expect(service.executeQuery('SELECT * FROM inventory').rowCount).toBe(2);
+    // 坏 DDL 不得被改写：回写的数据里仍是原串，修复只发生在 runtime 侧。
+    expect((service.getCurrentData() as any).sheet_0.sourceData.ddl).toBe(brokenDdl);
   });
 
   // ═══════════════════════════════════════════════════════════════

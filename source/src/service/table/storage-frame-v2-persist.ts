@@ -3533,7 +3533,12 @@ async function assertValidInitialTemplateSnapshot_ACU(
       // 持久化契约校验路径：这里刻意保持严格（不传 allowRuntimeDdlFallback）。
       // 若在此降级，非法显式 DDL 会以全 TEXT fallback schema 进入权威 V2 快照，
       // 后续读取得到的是与用户编写 DDL 不符的结构，且损坏点离修改点很远。
-      // 运行时注入/协调路径（template-state-reset / chat-template-reconciler）才允许降级。
+      // 运行时注入/协调路径（template-state-reset / chat-template-reconciler /
+      // replaceAllData：整体替换 runtime 数据，不写权威 V2 快照）才允许降级。
+      // 同样刻意保持严格、但不在此列的调用点：table-schema-migration.ts 的
+      // buildSheetSchemaMigrationOperation / 迁移候选 hydrate（改 schema 后必须
+      // 严格验证候选），以及 schema-migration-preflight.ts 的完整 candidate 预检
+      // （须区分「环境类失败」与「语义类失败」，不能被 fallback 掩盖）。
       await hydrateTableDataStrict_ACU(data);
     } catch (error: any) {
       throw new Error(`V2 首次模板提交的完整 templateSource 无法通过 SQLite strict hydrate：${error?.message || String(error)}`);

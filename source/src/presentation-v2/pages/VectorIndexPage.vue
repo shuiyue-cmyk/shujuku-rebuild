@@ -272,6 +272,18 @@
       >
         <div class="acu-v2-vector-index-page__number-grid">
           <AcuFormRow
+            label="混合召回"
+            hint="开启后 BM25 稀疏召回与向量结果融合；关闭则只用向量召回。"
+          >
+            <AcuToggle
+              :model-value="vector.form.hybridRetrievalEnabled"
+              label="启用 BM25 混合召回"
+              @update:model-value="
+                vector.setBooleanField('hybridRetrievalEnabled', $event)
+              "
+            />
+          </AcuFormRow>
+          <AcuFormRow
             label="触发阈值"
             hint="纪要有效行数达标后，发送前生成关键词并召回分块，未达标则保留原索引流程。"
           >
@@ -312,7 +324,11 @@
           </AcuFormRow>
           <AcuFormRow
             label="候选上限"
-            hint="dense/BM25 各自保留的候选分片数，融合后的候选池上限；Rerank 会按每批条数自动分批处理。不能小于 TopK。"
+            :hint="
+              vector.form.hybridRetrievalEnabled
+                ? '向量与 BM25 各自保留的候选分片数，融合后的候选池上限；Rerank 会按每批条数自动分批处理。不能小于 TopK。'
+                : '向量召回保留的候选分片数；混合召回已关闭，无 BM25 候选参与融合。不能小于 TopK。'
+            "
           >
             <AcuInput
               :model-value="vector.form.recallCandidateLimit"

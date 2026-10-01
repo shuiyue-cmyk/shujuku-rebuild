@@ -1749,7 +1749,12 @@ export class SqlTableService implements ITableStorageProvider {
       this.engine = new SqliteEngine();
       this.syncBridge = new SyncBridge(this.engine);
       await this.engine.init();
-      this.syncBridge.loadFromTableData(cloned, { strict: true });
+      // 与 loadFromChat(:1681) / 合并路径(:1708) 及 V2 回放 hydrate 保持同一套 runtime
+      // DDL 加载口径：显式 DDL 无法执行时（典型尾逗号 `..., )`）首条 CREATE TABLE
+      // 回退 fallback schema 并继续，避免整体替换失败或与回放端产生基底分叉。
+      // 该 flag 只放宽建表 schema；行标识/行宽校验在 DDL 之前跑、映射与 INSERT 在
+      // runBatch 之前生成，行数据/约束/映射错误照旧 fail-closed，sourceData.ddl 不改写。
+      this.syncBridge.loadFromTableData(cloned, { strict: true, allowRuntimeDdlFallback: true });
       this._publishCanonicalView_ACU(cloned);
       ownJsonView = cloned;
       if (!this._tryPublishNameMapper_ACU(cloned)) {
@@ -2641,7 +2646,11 @@ export async function applyParameterizedSqlMutationToTableDataSnapshot_ACU(
     const snapshotCopy = JSON.parse(JSON.stringify(tableData || {})) as TableDataObject_ACU;
     const runtimeSql = rebindSqlMutationIdentifiers_ACU([normalizedSql], snapshotCopy)[0];
     await engine.init();
-    syncBridge.loadFromTableData(snapshotCopy, { strict: true });
+    // 与写入端（loadFromChat / replaceAllData）及 V2 回放 hydrate 同一口径：
+    // hydrate 的输入是当前 canonical 基底（sourceData.ddl 为原串），坏 DDL 下
+    // 若拒绝 fallback，上层 update-orchestrator 整轮 {success:false} 不可降级。
+    // 该 flag 只放宽建表 schema；列/行/约束错误照旧 fail-closed，ddl 不改写。
+    syncBridge.loadFromTableData(snapshotCopy, { strict: true, allowRuntimeDdlFallback: true });
     const result = engine.run(runtimeSql, params);
     const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(snapshotCopy), { strict: true });
     const modifiedTableNames = extractTableNamesFromStatements([runtimeSql]);
@@ -2701,8 +2710,9 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
       { requireKnownTables, requireKnownInsertColumns: true },
     );
     // 先 hydrate 再物化：INSERT…SELECT/WITH 的 SELECT 预执行需要一个已载入快照的引擎。
+    // 口径同上（写入端/回放端一致）：坏 DDL 下允许 runtime fallback，列/行/约束照旧拒绝。
     await engine.init();
-    syncBridge.loadFromTableData(snapshotCopy, { strict: true });
+    syncBridge.loadFromTableData(snapshotCopy, { strict: true, allowRuntimeDdlFallback: true });
     const statements = materializeSystemRowIdsForSqlInserts_ACU(reboundStatements, snapshotCopy, undefined, {
       selectQueryRunner: (sql: string) => engine.query(sql),
     }).filter(Boolean);

@@ -61708,7 +61708,12 @@ async function assertValidInitialTemplateSnapshot_ACU(data, guideData, storageMo
             // 持久化契约校验路径：这里刻意保持严格（不传 allowRuntimeDdlFallback）。
             // 若在此降级，非法显式 DDL 会以全 TEXT fallback schema 进入权威 V2 快照，
             // 后续读取得到的是与用户编写 DDL 不符的结构，且损坏点离修改点很远。
-            // 运行时注入/协调路径（template-state-reset / chat-template-reconciler）才允许降级。
+            // 运行时注入/协调路径（template-state-reset / chat-template-reconciler /
+            // replaceAllData：整体替换 runtime 数据，不写权威 V2 快照）才允许降级。
+            // 同样刻意保持严格、但不在此列的调用点：table-schema-migration.ts 的
+            // buildSheetSchemaMigrationOperation / 迁移候选 hydrate（改 schema 后必须
+            // 严格验证候选），以及 schema-migration-preflight.ts 的完整 candidate 预检
+            // （须区分「环境类失败」与「语义类失败」，不能被 fallback 掩盖）。
             await hydrateTableDataStrict_ACU(data);
         }
         catch (error) {
@@ -69985,7 +69990,12 @@ class SqlTableService {
             this.engine = new SqliteEngine();
             this.syncBridge = new SyncBridge(this.engine);
             await this.engine.init();
-            this.syncBridge.loadFromTableData(cloned, { strict: true });
+            // 与 loadFromChat(:1681) / 合并路径(:1708) 及 V2 回放 hydrate 保持同一套 runtime
+            // DDL 加载口径：显式 DDL 无法执行时（典型尾逗号 `..., )`）首条 CREATE TABLE
+            // 回退 fallback schema 并继续，避免整体替换失败或与回放端产生基底分叉。
+            // 该 flag 只放宽建表 schema；行标识/行宽校验在 DDL 之前跑、映射与 INSERT 在
+            // runBatch 之前生成，行数据/约束/映射错误照旧 fail-closed，sourceData.ddl 不改写。
+            this.syncBridge.loadFromTableData(cloned, { strict: true, allowRuntimeDdlFallback: true });
             this._publishCanonicalView_ACU(cloned);
             ownJsonView = cloned;
             if (!this._tryPublishNameMapper_ACU(cloned)) {
@@ -70808,7 +70818,11 @@ async function applyParameterizedSqlMutationToTableDataSnapshot_ACU(sql, params,
         const snapshotCopy = JSON.parse(JSON.stringify(tableData || {}));
         const runtimeSql = rebindSqlMutationIdentifiers_ACU([normalizedSql], snapshotCopy)[0];
         await engine.init();
-        syncBridge.loadFromTableData(snapshotCopy, { strict: true });
+        // 与写入端（loadFromChat / replaceAllData）及 V2 回放 hydrate 同一口径：
+        // hydrate 的输入是当前 canonical 基底（sourceData.ddl 为原串），坏 DDL 下
+        // 若拒绝 fallback，上层 update-orchestrator 整轮 {success:false} 不可降级。
+        // 该 flag 只放宽建表 schema；列/行/约束错误照旧 fail-closed，ddl 不改写。
+        syncBridge.loadFromTableData(snapshotCopy, { strict: true, allowRuntimeDdlFallback: true });
         const result = engine.run(runtimeSql, params);
         const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(snapshotCopy), { strict: true });
         const modifiedTableNames = extractTableNamesFromStatements([runtimeSql]);
@@ -70856,8 +70870,9 @@ async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _u
         const requireKnownTables = operationOptions.requireSheetScopedOperations === true;
         const reboundStatements = rebindSqlMutationIdentifiers_ACU(rawStatements.map(stmt => normalizeStatementValues(normalizeSqlStructure(stmt))), snapshotCopy, undefined, { requireKnownTables, requireKnownInsertColumns: true });
         // 先 hydrate 再物化：INSERT…SELECT/WITH 的 SELECT 预执行需要一个已载入快照的引擎。
+        // 口径同上（写入端/回放端一致）：坏 DDL 下允许 runtime fallback，列/行/约束照旧拒绝。
         await engine.init();
-        syncBridge.loadFromTableData(snapshotCopy, { strict: true });
+        syncBridge.loadFromTableData(snapshotCopy, { strict: true, allowRuntimeDdlFallback: true });
         const statements = materializeSystemRowIdsForSqlInserts_ACU(reboundStatements, snapshotCopy, undefined, {
             selectQueryRunner: (sql) => engine.query(sql),
         }).filter(Boolean);
@@ -91500,8 +91515,8 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"9.10.6"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261001-14"`。源码直跑、测试环境或注入失败时读不到，
+ * rollup 打包时把版本写进 `"9.10.7"`（与 manifest.json / source/package.json
+ * 同值），构建时间戳写进 `"20261001-15"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91510,7 +91525,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "9.10.6";
+        const version = "9.10.7";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
@@ -91520,7 +91535,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261001-14";
+        const stamp = "20261001-15";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -151722,7 +151737,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261001-14";
+        const stamp = "20261001-15";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -190925,6 +190940,8 @@ function createEmptyForm() {
         vectorNamespace: defaults.vectorNamespace || 'chat',
         summaryChunkSentenceCount: defaults.summaryChunkSentenceCount,
         summaryIndexChunkChronicleBySentence: defaults.summaryIndexChunkChronicleBySentence === true,
+        // 与 vector-memory-config.ts:198 的「!== false」同口径：默认开，显式 false 才关。
+        hybridRetrievalEnabled: defaults.hybridRetrievalEnabled !== false,
         summaryIndexArchiveMaxConcurrency: defaults.summaryIndexArchiveMaxConcurrency ?? 30,
         summaryIndexArchiveMaxInputChars: defaults.summaryIndexArchiveMaxInputChars ?? 24000,
         summaryIndexArchiveEmbeddingConcurrency: defaults.summaryIndexArchiveEmbeddingConcurrency ?? 3,
@@ -191015,6 +191032,7 @@ function useVectorIndexConfig() {
         form.vectorNamespace = config.vectorNamespace || 'chat';
         form.summaryChunkSentenceCount = config.summaryChunkSentenceCount;
         form.summaryIndexChunkChronicleBySentence = config.summaryIndexChunkChronicleBySentence === true;
+        form.hybridRetrievalEnabled = config.hybridRetrievalEnabled !== false;
         form.summaryIndexArchiveMaxConcurrency = config.summaryIndexArchiveMaxConcurrency;
         form.summaryIndexArchiveMaxInputChars = config.summaryIndexArchiveMaxInputChars;
         form.summaryIndexArchiveEmbeddingConcurrency = config.summaryIndexArchiveEmbeddingConcurrency;
@@ -191568,8 +191586,8 @@ var _sfc_main$i = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-vector-index-page[data-v-c0fcc17e] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack[data-v-c0fcc17e] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid[data-v-c0fcc17e] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-vector-api-form[data-v-c0fcc17e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section[data-v-c0fcc17e] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 18px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section[data-v-c0fcc17e]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section[data-v-c0fcc17e] {\r\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend[data-v-c0fcc17e] {\r\n  width: 100%;\r\n  margin: 0 0 2px;\r\n  padding: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions[data-v-c0fcc17e] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint[data-v-c0fcc17e] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__flush-queue[data-v-c0fcc17e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  min-width: 0;\n}\n.acu-v2-vector-index-page__flush-queue-error[data-v-c0fcc17e] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.45;\r\n  word-break: break-all;\r\n  cursor: help;\n}\n.acu-v2-vector-index-page__maintenance-spacer[data-v-c0fcc17e] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions[data-v-c0fcc17e] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions[data-v-c0fcc17e] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page[data-v-c0fcc17e] {\r\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea[data-v-c0fcc17e] {\r\n  width: 100%;\r\n  min-height: 60px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-index-page__scope-allowlist[data-v-c0fcc17e] {\r\n  width: 100%;\r\n  min-height: 72px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\r\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0-c0fcc17e");
-var VectorIndexPage_vue_vue_type_style_index_0_scoped_c0fcc17e_lang = null;
+injectSfcStyle("\n.acu-v2-vector-index-page[data-v-09ea4851] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack[data-v-09ea4851] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid[data-v-09ea4851] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-vector-api-form[data-v-09ea4851] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section[data-v-09ea4851] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 18px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section[data-v-09ea4851]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section[data-v-09ea4851] {\r\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend[data-v-09ea4851] {\r\n  width: 100%;\r\n  margin: 0 0 2px;\r\n  padding: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions[data-v-09ea4851] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint[data-v-09ea4851] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__flush-queue[data-v-09ea4851] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  min-width: 0;\n}\n.acu-v2-vector-index-page__flush-queue-error[data-v-09ea4851] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.45;\r\n  word-break: break-all;\r\n  cursor: help;\n}\n.acu-v2-vector-index-page__maintenance-spacer[data-v-09ea4851] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions[data-v-09ea4851] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions[data-v-09ea4851] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page[data-v-09ea4851] {\r\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea[data-v-09ea4851] {\r\n  width: 100%;\r\n  min-height: 60px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-index-page__scope-allowlist[data-v-09ea4851] {\r\n  width: 100%;\r\n  min-height: 72px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\r\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0-09ea4851");
+var VectorIndexPage_vue_vue_type_style_index_0_scoped_09ea4851_lang = null;
 
 const _hoisted_1$i = { class: "acu-v2-vector-index-page" };
 const _hoisted_2$h = { class: "acu-v2-vector-index-page__panel-stack" };
@@ -191617,14 +191635,14 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 						}, toDisplayString($setup.truncateFlushQueueError($setup.flushQueueLastError)), 9, _hoisted_4$d)) : createCommentVNode("v-if", true)])]),
 						_: 1
 					}, 8, ["items"]),
-					_cache[35] || (_cache[35] = createBaseVNode(
+					_cache[36] || (_cache[36] = createBaseVNode(
 						"p",
 						{ class: "acu-v2-vector-index-page__hint" },
 						" 发送前流程：关键词生成（可关闭）→ 用户输入与关键词合并 embedding → \"概览 + 纪要正文\"向量与 BM25 混合召回 → 可选 Rerank（按纪要正文分批精排，候选不多于 TopK 时跳过）→ 按纪要表原顺序覆盖原概要索引条目。 ",
 						-1
 						/* CACHED */
 					)),
-					_cache[36] || (_cache[36] = createBaseVNode(
+					_cache[37] || (_cache[37] = createBaseVNode(
 						"div",
 						{
 							class: "acu-v2-vector-index-page__maintenance-spacer",
@@ -191640,7 +191658,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.vector.buildBusy.value || $setup.vector.maintenanceBusy.value,
 							onClick: $setup.vector.buildNow
 						}, {
-							default: withCtx(() => [_cache[30] || (_cache[30] = createBaseVNode(
+							default: withCtx(() => [_cache[31] || (_cache[31] = createBaseVNode(
 								"i",
 								{ class: "fa-solid fa-brain" },
 								null,
@@ -191653,7 +191671,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							)]),
 							_: 1
 						}, 8, ["disabled", "onClick"]),
-						_cache[34] || (_cache[34] = createBaseVNode(
+						_cache[35] || (_cache[35] = createBaseVNode(
 							"p",
 							{ class: "acu-v2-vector-index-page__hint" },
 							" 检测到旧向量方案时会提示「向量方案已优化，需要重建」。链冲突与 checkpoint 指纹不匹配会自动修复，不弹确认。 ",
@@ -191665,7 +191683,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.vector.maintenanceBusy.value || $setup.vector.buildBusy.value,
 							onClick: $setup.vector.migrateLegacyIndex
 						}, {
-							default: withCtx(() => [..._cache[31] || (_cache[31] = [createTextVNode(
+							default: withCtx(() => [..._cache[32] || (_cache[32] = [createTextVNode(
 								" 非破坏迁移旧索引 ",
 								-1
 								/* CACHED */
@@ -191676,7 +191694,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.vector.maintenanceBusy.value || $setup.vector.buildBusy.value,
 							onClick: $setup.vector.clearIndexCache
 						}, {
-							default: withCtx(() => [..._cache[32] || (_cache[32] = [createTextVNode(
+							default: withCtx(() => [..._cache[33] || (_cache[33] = [createTextVNode(
 								" 清空临时缓存 ",
 								-1
 								/* CACHED */
@@ -191688,7 +191706,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.vector.maintenanceBusy.value || $setup.vector.buildBusy.value,
 							onClick: $setup.onDeleteCurrentIndex
 						}, {
-							default: withCtx(() => [..._cache[33] || (_cache[33] = [createTextVNode(
+							default: withCtx(() => [..._cache[34] || (_cache[34] = [createTextVNode(
 								" 删除当前索引 ",
 								-1
 								/* CACHED */
@@ -191771,7 +191789,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 					},
 					[
 						createBaseVNode("fieldset", _hoisted_8$9, [
-							_cache[37] || (_cache[37] = createBaseVNode(
+							_cache[38] || (_cache[38] = createBaseVNode(
 								"legend",
 								null,
 								"Embedding",
@@ -191807,7 +191825,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							})
 						]),
 						createBaseVNode("fieldset", _hoisted_9$8, [
-							_cache[38] || (_cache[38] = createBaseVNode(
+							_cache[39] || (_cache[39] = createBaseVNode(
 								"legend",
 								null,
 								"Rerank",
@@ -191903,7 +191921,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							variant: "primary",
 							"native-type": "submit"
 						}, {
-							default: withCtx(() => [..._cache[39] || (_cache[39] = [createTextVNode(
+							default: withCtx(() => [..._cache[40] || (_cache[40] = [createTextVNode(
 								"保存",
 								-1
 								/* CACHED */
@@ -191932,7 +191950,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 					key: 0,
 					kind: "warning"
 				}, {
-					default: withCtx(() => [..._cache[40] || (_cache[40] = [createTextVNode(
+					default: withCtx(() => [..._cache[41] || (_cache[41] = [createTextVNode(
 						" 关键词生成提示词为空，发送前会直接用用户输入参与召回；建议载入默认提示词后保存。 ",
 						-1
 						/* CACHED */
@@ -191942,7 +191960,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 					variant: "primary",
 					onClick: _cache[12] || (_cache[12] = ($event) => $setup.promptDrawerOpen = true)
 				}, {
-					default: withCtx(() => [..._cache[41] || (_cache[41] = [createTextVNode(
+					default: withCtx(() => [..._cache[42] || (_cache[42] = [createTextVNode(
 						"编辑提示词",
 						-1
 						/* CACHED */
@@ -191961,6 +191979,17 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 			}, {
 				default: withCtx(() => [createBaseVNode("div", _hoisted_12$8, [
 					createVNode($setup["AcuFormRow"], {
+						label: "混合召回",
+						hint: "开启后 BM25 稀疏召回与向量结果融合；关闭则只用向量召回。"
+					}, {
+						default: withCtx(() => [createVNode($setup["AcuToggle"], {
+							"model-value": $setup.vector.form.hybridRetrievalEnabled,
+							label: "启用 BM25 混合召回",
+							"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.vector.setBooleanField("hybridRetrievalEnabled", $event))
+						}, null, 8, ["model-value"])]),
+						_: 1
+					}),
+					createVNode($setup["AcuFormRow"], {
 						label: "触发阈值",
 						hint: "纪要有效行数达标后，发送前生成关键词并召回分块，未达标则保留原索引流程。"
 					}, {
@@ -191969,7 +191998,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							type: "number",
 							min: 1,
 							step: 1,
-							onChange: _cache[13] || (_cache[13] = ($event) => $setup.vector.setNumberField("summaryIndexKeywordMinRows", $event))
+							onChange: _cache[14] || (_cache[14] = ($event) => $setup.vector.setNumberField("summaryIndexKeywordMinRows", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -191982,7 +192011,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							type: "number",
 							min: 1,
 							step: 1,
-							onChange: _cache[14] || (_cache[14] = ($event) => $setup.vector.setNumberField("topK", $event))
+							onChange: _cache[15] || (_cache[15] = ($event) => $setup.vector.setNumberField("topK", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -191996,23 +192025,23 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							min: 0,
 							max: 1,
 							step: .01,
-							onChange: _cache[15] || (_cache[15] = ($event) => $setup.vector.setMinScore($event))
+							onChange: _cache[16] || (_cache[16] = ($event) => $setup.vector.setMinScore($event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
 					createVNode($setup["AcuFormRow"], {
 						label: "候选上限",
-						hint: "dense/BM25 各自保留的候选分片数，融合后的候选池上限；Rerank 会按每批条数自动分批处理。不能小于 TopK。"
+						hint: $setup.vector.form.hybridRetrievalEnabled ? "向量与 BM25 各自保留的候选分片数，融合后的候选池上限；Rerank 会按每批条数自动分批处理。不能小于 TopK。" : "向量召回保留的候选分片数；混合召回已关闭，无 BM25 候选参与融合。不能小于 TopK。"
 					}, {
 						default: withCtx(() => [createVNode($setup["AcuInput"], {
 							"model-value": $setup.vector.form.recallCandidateLimit,
 							type: "number",
 							min: 1,
 							step: 1,
-							onChange: _cache[16] || (_cache[16] = ($event) => $setup.vector.setNumberField("recallCandidateLimit", $event))
+							onChange: _cache[17] || (_cache[17] = ($event) => $setup.vector.setNumberField("recallCandidateLimit", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
-					}),
+					}, 8, ["hint"]),
 					createVNode($setup["AcuFormRow"], {
 						label: "固定写入",
 						hint: "最近 N 条纪要固定写入，不参与排序；计入触发阈值，不计入 TopK。"
@@ -192022,8 +192051,8 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							type: "number",
 							min: 1,
 							step: 1,
-							"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.vector.previewRecentFixedInjectCount($event)),
-							onChange: _cache[18] || (_cache[18] = ($event) => $setup.vector.setNumberField("recentFixedInjectCount", $event))
+							"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.vector.previewRecentFixedInjectCount($event)),
+							onChange: _cache[19] || (_cache[19] = ($event) => $setup.vector.setNumberField("recentFixedInjectCount", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -192035,7 +192064,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value": $setup.vector.form.vectorNamespace,
 							type: "text",
 							placeholder: "chat",
-							onChange: _cache[19] || (_cache[19] = ($event) => $setup.vector.setApiField("vectorNamespace", $event))
+							onChange: _cache[20] || (_cache[20] = ($event) => $setup.vector.setApiField("vectorNamespace", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})
@@ -192055,7 +192084,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							default: withCtx(() => [createVNode($setup["AcuToggle"], {
 								"model-value": $setup.vector.form.summaryIndexChunkChronicleBySentence,
 								label: "切分纪要正文为多个分片",
-								"onUpdate:modelValue": _cache[20] || (_cache[20] = ($event) => $setup.vector.setBooleanField("summaryIndexChunkChronicleBySentence", $event))
+								"onUpdate:modelValue": _cache[21] || (_cache[21] = ($event) => $setup.vector.setBooleanField("summaryIndexChunkChronicleBySentence", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
@@ -192069,7 +192098,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 								min: 1,
 								step: 1,
 								disabled: !$setup.vector.form.summaryIndexChunkChronicleBySentence,
-								onChange: _cache[21] || (_cache[21] = ($event) => $setup.vector.setNumberField("summaryChunkSentenceCount", $event))
+								onChange: _cache[22] || (_cache[22] = ($event) => $setup.vector.setNumberField("summaryChunkSentenceCount", $event))
 							}, null, 8, ["model-value", "disabled"])]),
 							_: 1
 						}),
@@ -192082,7 +192111,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 								type: "number",
 								min: 1,
 								step: 1,
-								onChange: _cache[22] || (_cache[22] = ($event) => $setup.vector.setNumberField("summaryIndexArchiveMaxConcurrency", $event))
+								onChange: _cache[23] || (_cache[23] = ($event) => $setup.vector.setNumberField("summaryIndexArchiveMaxConcurrency", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
@@ -192095,7 +192124,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 								type: "number",
 								min: 1,
 								step: 1,
-								onChange: _cache[23] || (_cache[23] = ($event) => $setup.vector.setNumberField("summaryIndexArchiveMaxInputChars", $event))
+								onChange: _cache[24] || (_cache[24] = ($event) => $setup.vector.setNumberField("summaryIndexArchiveMaxInputChars", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
@@ -192108,7 +192137,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 								type: "number",
 								min: 1,
 								step: 1,
-								onChange: _cache[24] || (_cache[24] = ($event) => $setup.vector.setNumberField("summaryIndexArchiveEmbeddingConcurrency", $event))
+								onChange: _cache[25] || (_cache[25] = ($event) => $setup.vector.setNumberField("summaryIndexArchiveEmbeddingConcurrency", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
@@ -192147,7 +192176,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 						default: withCtx(() => [createVNode($setup["AcuToggle"], {
 							"model-value": $setup.vector.form.summaryIndexV2WriteEnabled,
 							label: "允许 V2 快照写入",
-							"onUpdate:modelValue": _cache[25] || (_cache[25] = ($event) => $setup.vector.setBooleanField("summaryIndexV2WriteEnabled", $event))
+							"onUpdate:modelValue": _cache[26] || (_cache[26] = ($event) => $setup.vector.setBooleanField("summaryIndexV2WriteEnabled", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})) : createCommentVNode("v-if", true),
@@ -192162,7 +192191,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							rows: "4",
 							spellcheck: "false",
 							placeholder: "每行一个 scope fingerprint",
-							onChange: _cache[26] || (_cache[26] = ($event) => $setup.vector.setV2WriteScopeAllowlist($event.target.value))
+							onChange: _cache[27] || (_cache[27] = ($event) => $setup.vector.setV2WriteScopeAllowlist($event.target.value))
 						}, null, 40, _hoisted_14$7)]),
 						_: 1
 					})) : createCommentVNode("v-if", true)
@@ -192177,11 +192206,11 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 			dirty: $setup.vector.promptDirty.value,
 			message: $setup.vector.message.value,
 			"role-options": $setup.ROLE_OPTIONS,
-			onClose: _cache[27] || (_cache[27] = ($event) => $setup.promptDrawerOpen = false),
+			onClose: _cache[28] || (_cache[28] = ($event) => $setup.promptDrawerOpen = false),
 			onSave: $setup.vector.savePromptGroup,
 			onReset: $setup.vector.resetPromptGroup,
-			onAdd: _cache[28] || (_cache[28] = ($event) => $setup.vector.addPromptSegment($event)),
-			onDelete: _cache[29] || (_cache[29] = ($event) => $setup.vector.deletePromptSegment($event)),
+			onAdd: _cache[29] || (_cache[29] = ($event) => $setup.vector.addPromptSegment($event)),
+			onDelete: _cache[30] || (_cache[30] = ($event) => $setup.vector.deletePromptSegment($event)),
 			onUpdate: $setup.onPromptUpdate
 		}, null, 8, [
 			"is-open",
@@ -192193,7 +192222,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 		])
 	]);
 }
-var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$i], ["__scopeId", "data-v-c0fcc17e"]]);
+var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$i], ["__scopeId", "data-v-09ea4851"]]);
 
 /**
  * useDormantData — 休眠数据可见性与唤醒（S3-4）的 UI 编排。

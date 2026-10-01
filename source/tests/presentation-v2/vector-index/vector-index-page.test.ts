@@ -349,6 +349,47 @@ describe('VectorIndexPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  /**
+   * 交火模式必须把「混合召回」暴露成用户可开关的项。
+   *
+   * `hybridRetrievalEnabled` 在配置层一直是通的（vector-memory-config.ts:198/477，
+   * 默认 true），但 UI 此前完全没有它 → 用户无法关闭，也无从判断 BM25 是否在起作用。
+   * 这也是排查「BM25 看起来没效果」时的必要二分手段：关掉若召回质量无变化，
+   * 说明它当前近乎空转（真正该解决的是查询词来源，而非开关）。
+   *
+   * 与「发送前用 AI 补充检索关键词」是两个独立开关：前者管检索方式（纯本地），
+   * 后者补 BM25 的查询词（多一次 AI 调用）。默认都保持上游形态，不改默认值。
+   */
+  it('召回参数面板暴露混合召回开关：默认开启，点击可关闭并落盘', async () => {
+    const { mount, config, saveSettings } = await mountVectorIndexPage();
+
+    const text = document.querySelector('.acu-v2-vector-index-page')?.textContent || '';
+    expect(text, '必须向用户暴露 BM25 混合召回开关').toContain('混合召回');
+    expect(text, '必须说明关闭后只用向量召回').toContain('关闭则只用向量召回');
+
+    const toggle = Array.from(document.querySelectorAll('.acu-v2-vector-index-page [role="switch"]'))
+      .find(node => (node.textContent || '').includes('BM25'));
+    expect(toggle, '混合召回开关必须渲染为 role=switch 控件').toBeTruthy();
+    expect(toggle?.getAttribute('aria-checked'), '默认应开启（上游默认 hybridRetrievalEnabled=true）').toBe('true');
+
+    // 「可关闭」必须验到配置与持久化，否则只锁住了「开关存在」，
+    // 把 @update:model-value 改成 no-op 仍会全绿。
+    saveSettings.mockClear();
+    toggle!.dispatchEvent(new Event('click', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(config.hybridRetrievalEnabled, '关闭后必须写进配置（runtime 据此只用向量召回）').toBe(false);
+    expect(saveSettings, '配置变更必须落盘').toHaveBeenCalled();
+    // 关闭后「候选上限」hint 不得再提 BM25：recallCandidateLimit 实际只作用于向量召回
+    // （summary-vector-index-runtime.ts:959 的 slice），旧文案「dense/BM25 各自」是误导。
+    const limitHint = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
+      .find(el => /候选上限/.test(el.textContent || ''))?.textContent || '';
+    expect(limitHint).not.toContain('BM25 各自保留');
+    expect(limitHint).toContain('混合召回已关闭');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('每个面板都渲染常驻说明信息条', async () => {
     const { mount } = await mountVectorIndexPage();
 
