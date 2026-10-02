@@ -215,7 +215,9 @@ const promptSlotSummary = computed(() => ({
 const promptTemplateBadgeLabel = computed(() =>
   settings.promptTemplateMode.value === 'default'
     ? '使用默认提示词'
-    : '已自定义提示词',
+    : settings.nativeToolsEnabled.value
+      ? '已自定义提示词（工具调用仍开着）'
+      : '已自定义提示词',
 );
 const promptTemplateBadgeVariant = computed<AcuBadgeVariant>(() =>
   settings.promptTemplateMode.value === 'default' ? 'neutral' : 'accent',

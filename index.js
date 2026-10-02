@@ -172793,6 +172793,16 @@ function useFormFillSettings() {
         promptFingerprint$2(currentDefaultPromptSegments())
         ? "default"
         : "custom");
+    const nativeToolsLockedReason = computed(() => {
+        if (promptTemplateMode.value === "default")
+            return "";
+        // 只锁「开启」方向：已开启时必须允许用户关掉，否则改写过提示词就会卡在
+        // 「开着工具但改不了提示词、也关不掉工具」的死角。
+        return nativeToolsEnabled.value
+            ? "提示词已自定义，本开关仍可关闭。"
+            : "提示词已自定义，开关不可用；如需开启，请在「表格」页载入默认提示词并保存。";
+    });
+    const nativeToolsDisabled = computed(() => promptTemplateMode.value !== "default" && nativeToolsEnabled.value !== true);
     function refresh() {
         const nextValues = { ...FALLBACKS };
         for (const key of Object.keys(FALLBACKS)) {
@@ -172858,6 +172868,13 @@ function useFormFillSettings() {
         message.value = null;
     }
     function setNativeToolsEnabled(value) {
+        // 提示词已自定义时不允许「开启」：自定义主段不会被工具版覆盖，等于要求模型调用
+        // 一个用户提示词里没提的东西。关闭方向不拦——否则「开着工具 + 改写过提示词」
+        // 会变成既改不了提示词也关不掉工具的死角。UI 已置灰，这里再挡程序化调用。
+        if (value === true && nativeToolsDisabled.value) {
+            message.value = { kind: "warning", text: nativeToolsLockedReason.value, scope: "settings" };
+            return;
+        }
         // 先按切换前的默认判定是否仍是默认提示词，再改开关：比对基准变了就判不准。
         const wasDefault = promptTemplateMode.value === "default";
         nativeToolsEnabled.value = value === true;
@@ -173042,6 +173059,8 @@ function useFormFillSettings() {
         excludeRules,
         promptSegments,
         promptTemplateMode,
+        nativeToolsLockedReason,
+        nativeToolsDisabled,
         message,
         promptDirty,
         refresh,
@@ -173346,8 +173365,8 @@ var _sfc_main$T = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-form-fill-update-settings-panel__settings-groups[data-v-073e6d2a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-form-fill-update-settings-panel__setting-group[data-v-073e6d2a] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-form-fill-update-settings-panel__setting-group\r\n  + .acu-form-fill-update-settings-panel__setting-group[data-v-073e6d2a] {\r\n  padding-top: 14px;\r\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-form-fill-update-settings-panel__advanced[data-v-073e6d2a] {\r\n  border: 0;\r\n  background: transparent;\n}\n.acu-form-fill-update-settings-panel__number-grid[data-v-073e6d2a] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n@media (max-width: 560px) {\n.acu-form-fill-update-settings-panel__number-grid[data-v-073e6d2a] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/FormFillUpdateSettingsPanel.vue#style-0-073e6d2a");
-var FormFillUpdateSettingsPanel_vue_vue_type_style_index_0_scoped_073e6d2a_lang = null;
+injectSfcStyle("\n.acu-form-fill-update-settings-panel__settings-groups[data-v-97c7acf9] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-form-fill-update-settings-panel__setting-group[data-v-97c7acf9] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-form-fill-update-settings-panel__setting-group\r\n  + .acu-form-fill-update-settings-panel__setting-group[data-v-97c7acf9] {\r\n  padding-top: 14px;\r\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-form-fill-update-settings-panel__advanced[data-v-97c7acf9] {\r\n  border: 0;\r\n  background: transparent;\n}\n.acu-form-fill-update-settings-panel__number-grid[data-v-97c7acf9] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n@media (max-width: 560px) {\n.acu-form-fill-update-settings-panel__number-grid[data-v-97c7acf9] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/FormFillUpdateSettingsPanel.vue#style-0-97c7acf9");
+var FormFillUpdateSettingsPanel_vue_vue_type_style_index_0_scoped_97c7acf9_lang = null;
 
 const _hoisted_1$R = { class: "acu-form-fill-update-settings-panel__settings-groups" };
 const _hoisted_2$K = { class: "acu-form-fill-update-settings-panel__setting-group" };
@@ -173406,15 +173425,16 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 			}, 8, ["label", "hint"]),
 			createVNode($setup["AcuFormRow"], {
 				label: "原生工具提交",
-				hint: "开启后填表改走 table_sql 原生工具提交，默认提示词同步切换为工具版；模型不调用工具时回退正文提取。仅非流式请求生效。"
+				hint: $setup.settings.nativeToolsLockedReason.value || "开启后填表改走 table_sql 原生工具提交，默认提示词同步切换为工具版；模型不调用工具时回退正文提取。仅非流式请求生效。"
 			}, {
 				default: withCtx(() => [createVNode($setup["AcuToggle"], {
 					"model-value": $setup.settings.nativeToolsEnabled.value,
+					disabled: $setup.settings.nativeToolsDisabled.value,
 					label: "填表时调用 table_sql 原生工具",
 					"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.settings.setNativeToolsEnabled($event))
-				}, null, 8, ["model-value"])]),
+				}, null, 8, ["model-value", "disabled"])]),
 				_: 1
-			})
+			}, 8, ["hint"])
 		]), $props.showAdvanced ? (openBlock(), createBlock($setup["AcuDisclosureGroup"], {
 			key: 0,
 			class: "acu-form-fill-update-settings-panel__advanced",
@@ -173457,7 +173477,7 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var FormFillUpdateSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-073e6d2a"]]);
+var FormFillUpdateSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-97c7acf9"]]);
 
 /**
  * useDevOptions — 仪表盘 / 剧情推进页 / 未来开发者一级页共享的开发者选项读写入口
@@ -183102,7 +183122,9 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
         }));
         const promptTemplateBadgeLabel = computed(() => settings.promptTemplateMode.value === 'default'
             ? '使用默认提示词'
-            : '已自定义提示词');
+            : settings.nativeToolsEnabled.value
+                ? '已自定义提示词（工具调用仍开着）'
+                : '已自定义提示词');
         const promptTemplateBadgeVariant = computed(() => settings.promptTemplateMode.value === 'default' ? 'neutral' : 'accent');
         const promptMessage = computed(() => settings.message.value?.scope === 'prompt' ? settings.message.value : null);
         async function refreshInjectionLabel() {
@@ -183191,8 +183213,8 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-table-page[data-v-53037f4c] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-table-page__col[data-v-53037f4c] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\r\n  min-width: 0;\n}\n.acu-v2-table-page__filter[data-v-53037f4c] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-table-page__toggle-row[data-v-53037f4c] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-table-page__toggle-head[data-v-53037f4c] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\n}\n.acu-v2-table-page__toggle-label[data-v-53037f4c] {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\r\n  line-height: 1.35;\n}\n.acu-v2-table-page__toggle-desc[data-v-53037f4c] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-v2-table-page__actions[data-v-53037f4c] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-table-page__status-line[data-v-53037f4c] {\r\n  margin: 0 0 10px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-table-page__status-line strong[data-v-53037f4c] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\n.acu-v2-table-page__preset-row[data-v-53037f4c] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-v2-table-page__badge[data-v-53037f4c] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  padding: 2px 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 500;\n}\n.acu-v2-table-page__badge--inherit[data-v-53037f4c] {\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-table-page__badge--override[data-v-53037f4c] {\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-table-page__hint[data-v-53037f4c] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-table-page__hint strong[data-v-53037f4c] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-table-page[data-v-53037f4c] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/TablePage.vue#style-0-53037f4c");
-var TablePage_vue_vue_type_style_index_0_scoped_53037f4c_lang = null;
+injectSfcStyle("\n.acu-v2-table-page[data-v-2c578aa4] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-table-page__col[data-v-2c578aa4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\r\n  min-width: 0;\n}\n.acu-v2-table-page__filter[data-v-2c578aa4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-table-page__toggle-row[data-v-2c578aa4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-table-page__toggle-head[data-v-2c578aa4] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\n}\n.acu-v2-table-page__toggle-label[data-v-2c578aa4] {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\r\n  line-height: 1.35;\n}\n.acu-v2-table-page__toggle-desc[data-v-2c578aa4] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-v2-table-page__actions[data-v-2c578aa4] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-table-page__status-line[data-v-2c578aa4] {\r\n  margin: 0 0 10px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-table-page__status-line strong[data-v-2c578aa4] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\n.acu-v2-table-page__preset-row[data-v-2c578aa4] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-v2-table-page__badge[data-v-2c578aa4] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  padding: 2px 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 500;\n}\n.acu-v2-table-page__badge--inherit[data-v-2c578aa4] {\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-table-page__badge--override[data-v-2c578aa4] {\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-table-page__hint[data-v-2c578aa4] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-table-page__hint strong[data-v-2c578aa4] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-table-page[data-v-2c578aa4] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/TablePage.vue#style-0-2c578aa4");
+var TablePage_vue_vue_type_style_index_0_scoped_2c578aa4_lang = null;
 
 const _hoisted_1$v = { class: "acu-v2-table-page" };
 const _hoisted_2$r = { class: "acu-v2-table-page__col" };
@@ -183400,7 +183422,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 		])
 	]);
 }
-var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-53037f4c"]]);
+var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-2c578aa4"]]);
 
 var _sfc_main$u = /*@__PURE__*/ defineComponent({
     __name: 'ApiPage',

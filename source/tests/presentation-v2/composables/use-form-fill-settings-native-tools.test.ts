@@ -165,6 +165,110 @@ describe('填表工具开关与默认主段', () => {
         expect(mainTextOf(written)).not.toContain('必须调用 table_sql');
     });
 
+    it('锁定文案按开关状态分叉：已开启时说「可关闭」，关闭时说「载入默认」', () => {
+        // 单文案会让「已开启」的用户以为自己也被锁死，找不到出路。
+        mockSettings.tableFillNativeToolsEnabled = false;
+        const stored = buildTableFillDefaultPromptSegments_ACU(
+            DEFAULT_CHAR_CARD_PROMPT_SQL_ACU as any[],
+            false,
+        );
+        stored[stored.findIndex(s => s.mainSlot === 'A' || s.isMain)].content = '用户自定义主段';
+        mockSettings.charCardPrompt = stored;
+
+        const off = useFormFillSettings();
+        expect(off.nativeToolsLockedReason.value).toContain('载入默认');
+
+        mockSettings.tableFillNativeToolsEnabled = true;
+        const on = useFormFillSettings();
+        expect(on.nativeToolsLockedReason.value).toContain('可关闭');
+        expect(on.nativeToolsLockedReason.value).not.toContain('载入默认');
+    });
+
+    it('提示词已自定义时，工具开关置为不可用（灰掉）并给出原因', () => {
+    // 自定义主段不会被工具版覆盖：开着工具要求模型调用，而用户改写的主段可能没有
+    // 输出格式节 → 运行时 fail-closed 不工具化，行为与用户预期不符。
+    mockSettings.tableFillNativeToolsEnabled = false;
+        const stored = buildTableFillDefaultPromptSegments_ACU(
+            DEFAULT_CHAR_CARD_PROMPT_SQL_ACU as any[],
+            false,
+        );
+        stored[stored.findIndex(s => s.mainSlot === 'A' || s.isMain)].content = '用户自定义主段';
+        mockSettings.charCardPrompt = stored;
+
+        const settings = useFormFillSettings();
+        expect(settings.promptTemplateMode.value).toBe('custom');
+        expect(settings.nativeToolsLockedReason.value).toContain('已自定义');
+    });
+
+    it('提示词已自定义时，程序化开启工具开关也被拒绝（UI 置灰之外的第二道闸）', () => {
+        mockSettings.tableFillNativeToolsEnabled = false;
+        const stored = buildTableFillDefaultPromptSegments_ACU(
+            DEFAULT_CHAR_CARD_PROMPT_SQL_ACU as any[],
+            false,
+        );
+        stored[stored.findIndex(s => s.mainSlot === 'A' || s.isMain)].content = '用户自定义主段';
+        mockSettings.charCardPrompt = stored;
+
+        const settings = useFormFillSettings();
+        settings.setNativeToolsEnabled(true);
+
+        expect(settings.nativeToolsEnabled.value, '自定义提示词下不得开启').toBe(false);
+        expect(mockSettings.tableFillNativeToolsEnabled).toBe(false);
+        expect(settings.message.value?.text).toContain('已自定义');
+    });
+
+    it('提示词为默认时，工具开关可用且无锁定原因', () => {
+        mockSettings.charCardPrompt = buildTableFillDefaultPromptSegments_ACU(
+            DEFAULT_CHAR_CARD_PROMPT_SQL_ACU as any[],
+            false,
+        );
+
+        const settings = useFormFillSettings();
+        expect(settings.promptTemplateMode.value).toBe('default');
+        expect(settings.nativeToolsLockedReason.value).toBe('');
+    });
+
+    it('提示词已自定义但工具已开启时：允许关闭（不得变成关不掉的死角）', () => {
+        mockSettings.tableFillNativeToolsEnabled = true;
+        const stored = buildTableFillDefaultPromptSegments_ACU(
+            DEFAULT_CHAR_CARD_PROMPT_SQL_ACU as any[],
+            true,
+        );
+        stored[stored.findIndex(s => s.mainSlot === 'A' || s.isMain)].content = '用户在工具版上改的主段';
+        mockSettings.charCardPrompt = stored;
+
+        const settings = useFormFillSettings();
+        expect(settings.promptTemplateMode.value).toBe('custom');
+        expect(settings.nativeToolsDisabled.value, '已开启时不得置灰（要留关闭出口）').toBe(false);
+
+        settings.setNativeToolsEnabled(false);
+        expect(settings.nativeToolsEnabled.value, '必须能关闭').toBe(false);
+        expect(mockSettings.tableFillNativeToolsEnabled).toBe(false);
+    });
+
+    it('提示词编辑器载入默认提示词后，锁定解除、开关可重新开启', () => {
+    // 用户从死角（开着工具 + 改写过提示词）的自救路径必须真的走得通。
+    mockSettings.tableFillNativeToolsEnabled = true;
+    const stored = buildTableFillDefaultPromptSegments_ACU(
+        DEFAULT_CHAR_CARD_PROMPT_SQL_ACU as any[],
+        true,
+    );
+    stored[stored.findIndex(s => s.mainSlot === 'A' || s.isMain)].content = '用户改过的主段';
+    mockSettings.charCardPrompt = stored;
+
+    const settings = useFormFillSettings();
+    expect(settings.promptTemplateMode.value).toBe('custom');
+
+    settings.resetPrompt();   // 载入默认（当前开关开着 → 工具版默认）
+    expect(settings.promptTemplateMode.value).toBe('default');
+    expect(settings.nativeToolsDisabled.value, '恢复默认后不得再置灰').toBe(false);
+
+    settings.setNativeToolsEnabled(false);
+    expect(settings.nativeToolsEnabled.value).toBe(false);
+    settings.setNativeToolsEnabled(true);
+    expect(settings.nativeToolsEnabled.value, '恢复默认后可重新开启').toBe(true);
+});
+
     it('载入归一只在整份等于另一套默认时生效：用户改过 B 段则整份保留', () => {
         // 判据只看主段会吞掉用户对 B 段/新增段的改写：主段未动、B 段被改时也会命中。
         mockSettings.tableFillNativeToolsEnabled = true;
@@ -221,6 +325,7 @@ describe('填表工具开关与默认主段', () => {
             content: '自定义主段：只按正文输出 SQL。',
         };
         customized.setNativeToolsEnabled(false);
+        expect(customized.nativeToolsEnabled.value, '关闭方向必须真的生效').toBe(false);
         expect(mainTextOf(customized.promptSegments.value)).toBe('自定义主段：只按正文输出 SQL。');
     });
 });

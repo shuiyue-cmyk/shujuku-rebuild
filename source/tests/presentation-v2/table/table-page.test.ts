@@ -37,6 +37,8 @@ async function mountTablePage(opts: {
   selectedChatPreset?: string;
   selectedGlobalPreset?: string;
   injectionCharPrimary?: string | null;
+  /** 覆盖设置（用于构造「自定义提示词 + 工具仍开着」这类组合）。 */
+  overrideSettings?: (settings: any) => void;
 } = {}) {
   vi.resetModules();
   document.body.innerHTML = '';
@@ -45,6 +47,7 @@ async function mountTablePage(opts: {
 
   const { ref, shallowRef, computed } = await import('vue');
   const settings = createSettings();
+  opts.overrideSettings?.(settings);
   const saveSettings = vi.fn(() => ({ saved: true, storageType: 'memory' }));
 
   // —— useTableTemplatePresets（页面顶部下拉） ——
@@ -266,6 +269,20 @@ describe('TablePage', () => {
     const mobileNavItems = Array.from(page!.querySelectorAll('.acu-mobile-panel-nav__item'))
       .map(item => (item.textContent || '').trim());
     expect(mobileNavItems).toEqual(['附加世界书条目', '提示词', '标签筛选', '写入目标世界书']);
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('提示词已自定义且工具仍开着时，badge 提示工具未关（提示词与开关分处两页）', async () => {
+    // 提示词编辑器在本页、工具开关在填表页：自定义后必须在本页就能看出工具还开着。
+    const { mount } = await mountTablePage({
+      overrideSettings: (settings) => {
+        settings.tableFillNativeToolsEnabled = true;
+      },
+    });
+
+    const text = document.body.textContent || '';
+    expect(text).toContain('工具调用仍开着');
 
     mount.__resetAcuV2MountForTests();
   });

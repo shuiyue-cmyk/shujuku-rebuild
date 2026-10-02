@@ -383,19 +383,48 @@ describe('FormFillPage', () => {
   });
 
   it('填表设置面板暴露原生工具提交开关：默认关闭，点击可开启并落盘', async () => {
-    const { mount, settings, saveSettings } = await mountFormFillPage(createSettings());
+    // charCardPrompt 留空 → 回落内置默认提示词，mode 才是「使用默认」（开关不置灰）。
+    const pristine = createSettings();
+    pristine.charCardPrompt = [];
+    const { mount, settings, saveSettings } = await mountFormFillPage(pristine);
     expect(settings.tableFillNativeToolsEnabled).not.toBe(true);
 
     const toggle = Array.from(document.querySelectorAll('.acu-v2-form-fill-page [role="switch"]'))
       .find(node => (node.textContent || '').includes('table_sql'));
     expect(toggle, '原生工具开关必须渲染为 role=switch 控件').toBeTruthy();
     expect(toggle?.getAttribute('aria-checked'), '默认应关闭').toBe('false');
+    expect(toggle?.className || '', '提示词为默认时开关可点，不得置灰').not.toContain('acu-toggle--disabled');
 
     (toggle as HTMLElement).click();
     await new Promise(r => setTimeout(r, 0));
 
     expect(settings.tableFillNativeToolsEnabled, '开启后必须写进设置').toBe(true);
     expect(saveSettings, '配置变更必须落盘').toHaveBeenCalled();
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('提示词已自定义时，工具开关置灰且点击无效', async () => {
+    const customized = createSettings();
+    // 自定义主段：与两套默认都不同 → 判定为「已自定义」。
+    customized.charCardPrompt = [{
+      role: 'USER',
+      content: '用户手写的填表主段，不含任何默认提示词内容。',
+      mainSlot: 'A',
+      isMain: true,
+      deletable: false,
+    }];
+    const { mount, settings } = await mountFormFillPage(customized);
+
+    const toggle = Array.from(document.querySelectorAll('.acu-v2-form-fill-page [role="switch"]'))
+      .find(node => (node.textContent || '').includes('table_sql'));
+    expect(toggle, '原生工具开关必须渲染').toBeTruthy();
+    expect(toggle?.className || '', '提示词已自定义时开关必须置灰').toContain('acu-toggle--disabled');
+    expect(document.body.textContent || '').toContain('提示词已自定义');
+
+    (toggle as HTMLElement).click();
+    await new Promise(r => setTimeout(r, 0));
+    expect(settings.tableFillNativeToolsEnabled, '置灰后点击不得改设置').not.toBe(true);
 
     mount.__resetAcuV2MountForTests();
   });

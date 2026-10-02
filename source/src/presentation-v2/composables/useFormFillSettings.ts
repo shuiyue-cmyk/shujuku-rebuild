@@ -69,6 +69,14 @@ export interface FormFillSettingsState {
   tableEditLastPairOnly: Ref<boolean>;
   discardUnauthorizedTableEditsEnabled: Ref<boolean>;
   nativeToolsEnabled: Ref<boolean>;
+  /**
+   * 工具开关的锁定原因（非空即 UI 应置灰）。提示词被手动编辑过时返回说明文案：
+   * 自定义主段不会被工具版覆盖（运行时只逐字替换默认主段），开着工具等于要求模型
+   * 调用一个用户提示词里根本没提的东西。
+   */
+  nativeToolsLockedReason: ComputedRef<string>;
+  /** UI 置灰判据：锁定且当前是关闭态（已开启时必须留可关的出口）。 */
+  nativeToolsDisabled: ComputedRef<boolean>;
   extractRules: Ref<FormFillRulePair[]>;
   excludeRules: Ref<FormFillRulePair[]>;
   promptSegments: Ref<FormFillPromptSegment[]>;
@@ -361,6 +369,17 @@ export function useFormFillSettings(): FormFillSettingsState {
       ? "default"
       : "custom",
   );
+  const nativeToolsLockedReason = computed<string>(() => {
+    if (promptTemplateMode.value === "default") return "";
+    // 只锁「开启」方向：已开启时必须允许用户关掉，否则改写过提示词就会卡在
+    // 「开着工具但改不了提示词、也关不掉工具」的死角。
+    return nativeToolsEnabled.value
+      ? "提示词已自定义，本开关仍可关闭。"
+      : "提示词已自定义，开关不可用；如需开启，请在「表格」页载入默认提示词并保存。";
+  });
+  const nativeToolsDisabled = computed<boolean>(
+    () => promptTemplateMode.value !== "default" && nativeToolsEnabled.value !== true,
+  );
 
   function refresh(): void {
     const nextValues = { ...FALLBACKS } as Record<NumberSettingKey, number>;
@@ -444,6 +463,13 @@ export function useFormFillSettings(): FormFillSettingsState {
   }
 
   function setNativeToolsEnabled(value: boolean): void {
+    // 提示词已自定义时不允许「开启」：自定义主段不会被工具版覆盖，等于要求模型调用
+    // 一个用户提示词里没提的东西。关闭方向不拦——否则「开着工具 + 改写过提示词」
+    // 会变成既改不了提示词也关不掉工具的死角。UI 已置灰，这里再挡程序化调用。
+    if (value === true && nativeToolsDisabled.value) {
+      message.value = { kind: "warning", text: nativeToolsLockedReason.value, scope: "settings" };
+      return;
+    }
     // 先按切换前的默认判定是否仍是默认提示词，再改开关：比对基准变了就判不准。
     const wasDefault = promptTemplateMode.value === "default";
     nativeToolsEnabled.value = value === true;
@@ -656,6 +682,8 @@ export function useFormFillSettings(): FormFillSettingsState {
     excludeRules,
     promptSegments,
     promptTemplateMode,
+    nativeToolsLockedReason,
+    nativeToolsDisabled,
     message,
     promptDirty,
     refresh,
