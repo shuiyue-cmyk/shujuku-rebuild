@@ -165,8 +165,49 @@ describe('填表工具开关与默认主段', () => {
         expect(mainTextOf(written)).not.toContain('必须调用 table_sql');
     });
 
-    it('锁定文案按开关状态分叉：已开启时说「可关闭」，关闭时说「载入默认」', () => {
-        // 单文案会让「已开启」的用户以为自己也被锁死，找不到出路。
+    it('保存自定义提示词时自动关闭工具开关（而不是留着开关亮着再灰掉）', () => {
+    mockSettings.tableFillNativeToolsEnabled = true;
+    mockSettings.charCardPrompt = buildTableFillDefaultPromptSegments_ACU(
+        DEFAULT_CHAR_CARD_PROMPT_SQL_ACU as any[],
+        true,
+    );
+
+    const settings = useFormFillSettings();
+    expect(settings.nativeToolsEnabled.value).toBe(true);
+
+    // 用户在工具版默认基础上改主段并保存
+    const index = settings.promptSegments.value.findIndex(s => s.mainSlot === 'A' || s.isMain);
+    settings.promptSegments.value[index] = {
+        ...settings.promptSegments.value[index],
+        content: '用户改写的填表主段。',
+    };
+    settings.savePrompt();
+
+    // 保存即自动关闭：用户不必先手动关开关、再发现被灰掉
+    expect(settings.nativeToolsEnabled.value, '保存自定义提示词后应自动关闭').toBe(false);
+    expect(mockSettings.tableFillNativeToolsEnabled).toBe(false);
+    expect(settings.nativeToolsDisabled.value, '关闭后应呈灰态').toBe(true);
+    // 用户的改写必须原样落盘
+    expect(mainTextOf(mockSetCharCardPrompt.mock.calls[0][0])).toBe('用户改写的填表主段。');
+    expect(settings.promptTemplateMode.value).toBe('custom');
+});
+
+it('保存的仍是默认提示词时，工具开关保持原状态', () => {
+    mockSettings.tableFillNativeToolsEnabled = true;
+    mockSettings.charCardPrompt = buildTableFillDefaultPromptSegments_ACU(
+        DEFAULT_CHAR_CARD_PROMPT_SQL_ACU as any[],
+        true,
+    );
+
+    const settings = useFormFillSettings();
+    settings.savePrompt();
+
+    expect(settings.nativeToolsEnabled.value, '默认提示词不得触发自动关闭').toBe(true);
+    expect(settings.promptTemplateMode.value).toBe('default');
+});
+
+it('锁定文案按开关状态分叉：已开启时说「可关闭」，关闭时说「不可用」', () => {
+        // 单文案会让「已开启」（旧版本落盘）的用户以为自己也被锁死，找不到出路。
         mockSettings.tableFillNativeToolsEnabled = false;
         const stored = buildTableFillDefaultPromptSegments_ACU(
             DEFAULT_CHAR_CARD_PROMPT_SQL_ACU as any[],
@@ -176,12 +217,11 @@ describe('填表工具开关与默认主段', () => {
         mockSettings.charCardPrompt = stored;
 
         const off = useFormFillSettings();
-        expect(off.nativeToolsLockedReason.value).toContain('载入默认');
+        expect(off.nativeToolsLockedReason.value).toContain('不可用');
 
         mockSettings.tableFillNativeToolsEnabled = true;
         const on = useFormFillSettings();
         expect(on.nativeToolsLockedReason.value).toContain('可关闭');
-        expect(on.nativeToolsLockedReason.value).not.toContain('载入默认');
     });
 
     it('提示词已自定义时，工具开关置为不可用（灰掉）并给出原因', () => {

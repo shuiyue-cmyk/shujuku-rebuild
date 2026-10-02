@@ -373,8 +373,10 @@ export function useFormFillSettings(): FormFillSettingsState {
     if (promptTemplateMode.value === "default") return "";
     // 只锁「开启」方向：已开启时必须允许用户关掉，否则改写过提示词就会卡在
     // 「开着工具但改不了提示词、也关不掉工具」的死角。
+    // 正常路径下保存自定义提示词会自动关闭开关，走不到「已开启 + 自定义」这一支；
+// 但旧版本已把开关开着落盘的设置仍会进来（加载时），必须在这里给出出路。
     return nativeToolsEnabled.value
-      ? "提示词已自定义，本开关仍可关闭。"
+      ? "提示词已自定义，可关闭本开关；如需开启，请在「表格」页载入默认提示词并保存。"
       : "提示词已自定义，开关不可用；如需开启，请在「表格」页载入默认提示词并保存。";
   });
   const nativeToolsDisabled = computed<boolean>(
@@ -612,6 +614,18 @@ export function useFormFillSettings(): FormFillSettingsState {
     // 与实际发出的不一致，且 mode 翻成 custom 后切开关不再跟随默认。
     promptSegments.value = bufferAfterSave;
     promptDirty.value = false;
+    // 自定义提示词与工具提交互斥（自定义主段不会被工具版覆盖）。与其留一个亮着
+    // 又点不动的开关，不如在保存这一刻直接把开关落到关闭——用户看到的是「开关已关
+    // 且因提示词已自定义而不可用」，而不是「开关还开着却灰了」这种自相矛盾的状态。
+    if (
+      nativeToolsEnabled.value
+      && settings_ACU.tableFillNativeToolsEnabled === true
+      && promptTemplateMode.value !== "default"
+    ) {
+      nativeToolsEnabled.value = false;
+      settings_ACU.tableFillNativeToolsEnabled = false;
+      saveSettings_ACU();
+    }
     message.value = null;
     toast.success("提示词已保存");
   }
