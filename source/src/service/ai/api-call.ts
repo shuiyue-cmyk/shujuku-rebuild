@@ -319,10 +319,20 @@ export const JSON_OBJECT_RESPONSE_FORMAT_ACU = Object.freeze({ type: 'json_objec
 /**
  * 构建 Chat Completions 自定义 API 请求体（支持 bodyParams / excludeBodyParams / requestHeaders）
  */
+/** 原生工具定义形态校验：非空数组 + 每项带 function.name 非空串，否则调用方省略 tools 键。 */
+function isValidNativeTools_ACU(tools: unknown): tools is unknown[] {
+    if (!Array.isArray(tools) || tools.length === 0) return false;
+    return tools.every(item => !!item && typeof item === 'object' && !Array.isArray(item)
+      && typeof (item as Record<string, any>).function === 'object'
+      && !!(item as Record<string, any>).function
+      && typeof (item as Record<string, any>).function.name === 'string'
+      && ((item as Record<string, any>).function.name as string).length > 0);
+}
+
 export function buildCustomApiRequestBody_ACU(
   messages: any[],
   effectiveApiConfig: any,
-  overrides?: { maxTokens?: number; temperature?: number; topP?: number; stripModelPrefix?: boolean; nonPrefillSupport?: boolean; promptCacheKey?: string; includeStreamUsage?: boolean; responseFormat?: Record<string, any>; sessionNamespace?: string }
+  overrides?: { maxTokens?: number; temperature?: number; topP?: number; stripModelPrefix?: boolean; nonPrefillSupport?: boolean; promptCacheKey?: string; includeStreamUsage?: boolean; responseFormat?: Record<string, any>; sessionNamespace?: string; tools?: unknown; toolChoice?: unknown }
 ): Record<string, any> {
   const opts = overrides || {};
   if (effectiveApiConfig?.url) {
@@ -454,6 +464,12 @@ export function buildCustomApiRequestBody_ACU(
     custom_include_headers: headers,
     custom_include_body: composedIncludeBody.value,
     custom_exclude_body: sanitizeExcludeBodyForPresetFields_ACU(effectiveApiConfig.excludeBodyParams, effectiveApiConfig),
+    // 原生工具调用（可选项，如填表 table_sql）：顶层 tools / tool_choice 字段，
+    // 由 TT 后端透传给上游 provider。形态非法一律省略，绝不发送残缺工具定义。
+    ...(isValidNativeTools_ACU(opts.tools) ? { tools: opts.tools } : {}),
+    ...(opts.toolChoice !== undefined && opts.toolChoice !== null && (typeof opts.toolChoice === 'string' || typeof opts.toolChoice === 'object')
+      ? { tool_choice: opts.toolChoice }
+      : {}),
   };
 
   logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${'reasoning_effort' in body ? String(body.reasoning_effort) : '(auto 省略)'}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
@@ -512,6 +528,70 @@ export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal
     }
     const requestWantsStream = (body as any)?.stream === true;
     return handleApiResponse_ACU(res, requestWantsStream);
+}
+
+/** 非流式回合：正文 + 归一化后的原生工具调用（arguments 恒为字符串）。 */
+export interface ChatCompletionTurn_ACU {
+    content: string;
+    toolCalls: Array<{ name: string; arguments: string }>;
+}
+
+/**
+ * 非流式 OpenAI 形态响应的回合提取（正文 + 原生工具调用）。
+ * 只要 content 与 tool_calls 两处能取到的都取；两处皆无返回 null（调用方按可重试处理）。
+ * tool_calls 只收录 function.name 为非空串的项；arguments 非字符串时 JSON 序列化保留，
+ * 下游 resolve 阶段再按缺字段判失败（此处不丢信息）。
+ */
+export function parseNonStreamChatTurn_ACU(data: unknown): ChatCompletionTurn_ACU | null {
+    const message = (data as any)?.choices?.[0]?.message;
+    const fallbackContent = typeof (data as any)?.content === 'string'
+      ? (data as any).content
+      : (typeof data === 'string' ? data : '');
+    const content = typeof message?.content === 'string' ? message.content : fallbackContent;
+    const rawCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+    const toolCalls: Array<{ name: string; arguments: string }> = [];
+    for (const call of rawCalls) {
+        const fn = (call as any)?.function;
+        if (!fn || typeof fn.name !== 'string' || !fn.name) continue;
+        const args = typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments ?? {});
+        toolCalls.push({ name: fn.name, arguments: args });
+    }
+    if (!content && toolCalls.length === 0) return null;
+    return { content, toolCalls };
+}
+
+/** 非流式回合出口（填表工具调用可选项）：与 postChatCompletion_ACU 同一错误语义，另取 tool_calls。 */
+export async function postChatCompletionTurn_ACU(body: unknown, signal?: AbortSignal | null, onUsage?: (usage: AiUsageMetadata_ACU) => void): Promise<ChatCompletionTurn_ACU | null> {
+    let res: Response;
+    try {
+        res = await fetch('/api/backends/chat-completions/generate', {
+            method: 'POST',
+            redirect: 'error',
+            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: signal || undefined,
+        });
+    } catch (e: any) {
+        logWarn_ACU(`[postChatCompletionTurn] 网络请求失败: ${String(e?.message || e?.name || 'unknown')}`, { aborted: e?.name === 'AbortError' || String(e?.message || '').toLowerCase().includes('aborted') });
+        throw e;
+    }
+    if (!res.ok) {
+        const errTxt = sanitizeUpstreamErrorBodyForDisplay_ACU(await res.text());
+        throw new AgentApiHttpError_ACU(res.status, `API请求失败: ${res.status} ${errTxt}`);
+    }
+    let data: unknown;
+    try {
+        data = await res.json();
+    } catch (e: any) {
+        if (e?.name === 'AbortError') throw e;
+        logWarn_ACU('[postChatCompletionTurn] Failed to parse response:', e);
+        return null;
+    }
+    const turnUsage = extractAiUsageMetadata_ACU((data as any)?.usage);
+    if (turnUsage && onUsage) {
+        try { onUsage(turnUsage); } catch { /* 用量回调异常不允许影响响应主流程。 */ }
+    }
+    return parseNonStreamChatTurn_ACU(data);
 }
 
 /**

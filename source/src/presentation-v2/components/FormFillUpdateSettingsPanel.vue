@@ -39,6 +39,17 @@
             @update:model-value="setSkipLatestLayer"
           />
         </AcuFormRow>
+
+        <AcuFormRow
+          label="原生工具提交"
+          hint="开启后填表请求挂载 table_sql 工具，命中则结构化提交；宿主或模型不支持时自动回退正文提取。仅非流式请求生效。"
+        >
+          <AcuToggle
+            :model-value="settings.nativeToolsEnabled.value"
+            label="填表时调用 table_sql 原生工具"
+            @update:model-value="settings.setNativeToolsEnabled($event)"
+          />
+        </AcuFormRow>
       </section>
 
       <AcuDisclosureGroup

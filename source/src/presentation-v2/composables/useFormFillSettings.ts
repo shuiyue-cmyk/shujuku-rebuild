@@ -67,6 +67,7 @@ export interface FormFillSettingsState {
   tableApiPreset: Ref<string>;
   tableEditLastPairOnly: Ref<boolean>;
   discardUnauthorizedTableEditsEnabled: Ref<boolean>;
+  nativeToolsEnabled: Ref<boolean>;
   extractRules: Ref<FormFillRulePair[]>;
   excludeRules: Ref<FormFillRulePair[]>;
   promptSegments: Ref<FormFillPromptSegment[]>;
@@ -81,6 +82,7 @@ export interface FormFillSettingsState {
   ) => void;
   setTableEditLastPairOnly: (value: boolean) => void;
   setDiscardUnauthorizedTableEditsEnabled: (value: boolean) => void;
+  setNativeToolsEnabled: (value: boolean) => void;
   setExtractRules: (rules: FormFillRulePair[]) => void;
   setExcludeRules: (rules: FormFillRulePair[]) => void;
   addPromptSegment: (position: "top" | "bottom") => void;
@@ -303,6 +305,9 @@ export function useFormFillSettings(): FormFillSettingsState {
   const discardUnauthorizedTableEditsEnabled = ref(
     settings_ACU.discardUnauthorizedTableEditsEnabled !== false,
   );
+  const nativeToolsEnabled = ref(
+    settings_ACU.tableFillNativeToolsEnabled === true,
+  );
   const extractRules = ref<FormFillRulePair[]>([]);
   const excludeRules = ref<FormFillRulePair[]>([]);
   const promptSegments = ref<FormFillPromptSegment[]>([]);
@@ -333,6 +338,7 @@ export function useFormFillSettings(): FormFillSettingsState {
     tableApiPreset.value = String(settings_ACU.tableApiPreset || "");
     tableEditLastPairOnly.value = settings_ACU.tableEditLastPairOnly !== false;
     discardUnauthorizedTableEditsEnabled.value = settings_ACU.discardUnauthorizedTableEditsEnabled !== false;
+    nativeToolsEnabled.value = settings_ACU.tableFillNativeToolsEnabled === true;
     extractRules.value = normalizeRules(
       settings_ACU.tableContextExtractRules,
       settings_ACU.tableContextExtractTags || "",
@@ -398,6 +404,13 @@ export function useFormFillSettings(): FormFillSettingsState {
   function setDiscardUnauthorizedTableEditsEnabled(value: boolean): void {
     discardUnauthorizedTableEditsEnabled.value = !!value;
     settings_ACU.discardUnauthorizedTableEditsEnabled = discardUnauthorizedTableEditsEnabled.value;
+    saveSettings_ACU();
+    message.value = null;
+  }
+
+  function setNativeToolsEnabled(value: boolean): void {
+    nativeToolsEnabled.value = value === true;
+    settings_ACU.tableFillNativeToolsEnabled = nativeToolsEnabled.value;
     saveSettings_ACU();
     message.value = null;
   }
@@ -565,6 +578,7 @@ export function useFormFillSettings(): FormFillSettingsState {
     tableApiPreset,
     tableEditLastPairOnly,
     discardUnauthorizedTableEditsEnabled,
+    nativeToolsEnabled,
     extractRules,
     excludeRules,
     promptSegments,
@@ -577,6 +591,7 @@ export function useFormFillSettings(): FormFillSettingsState {
     setNumbers,
     setTableEditLastPairOnly,
     setDiscardUnauthorizedTableEditsEnabled,
+    setNativeToolsEnabled,
     setExtractRules,
     setExcludeRules,
     addPromptSegment,

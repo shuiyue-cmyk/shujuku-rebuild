@@ -124,6 +124,20 @@ vi.mock('../../../src/service/ai/api-call', () => ({
     const data = await res.json();
     return data?.choices?.[0]?.message?.content ?? data?.content ?? null;
   }),
+  postChatCompletionTurn_ACU: vi.fn(async (body: any, signal?: any) => {
+    const res = await mockFetch('/api/backends/chat-completions/generate', {
+      method: 'POST', headers: {}, body: JSON.stringify(body), signal,
+    });
+    if (!res.ok) { const errTxt = await res.text(); throw new Error(`API请求失败: ${res.status} ${errTxt}`); }
+    const data = await res.json();
+    const message = data?.choices?.[0]?.message;
+    const content = typeof message?.content === 'string' ? message.content : '';
+    const toolCalls = (Array.isArray(message?.tool_calls) ? message.tool_calls : [])
+      .filter((call: any) => call?.function?.name)
+      .map((call: any) => ({ name: call.function.name, arguments: String(call.function.arguments ?? '{}') }));
+    if (!content && toolCalls.length === 0) return null;
+    return { content, toolCalls };
+  }),
 }));
 
 import {
@@ -250,6 +264,47 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
     expect(content).toContain('角色描述');
     expect(content).not.toContain('$0');
     expect(content).not.toContain('$U');
+  });
+
+  it('填表原生工具开关开 + 非流式：请求挂载 table_sql 工具并合成工具调用结果', async () => {
+    mockSettings.tableFillNativeToolsEnabled = true;
+    mockSettings.streamingEnabled = false;
+    mockSettings.charCardPrompt = [
+      { role: 'USER', content: '## 输出格式（严格执行）\n\n<content>\nX\n</content>', mainSlot: 'A', isMain: true },
+    ];
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: {
+        content: '分析完毕',
+        tool_calls: [{ type: 'function', function: { name: 'table_sql', arguments: '{"sql":"UPDATE t SET a = 1;"}' } }],
+      } }] }),
+    });
+
+    const result = await callCustomOpenAI_ACU({ tableDataText: '数据' });
+
+    const overrides = mockBuildCustomBody.mock.calls[0][2];
+    expect(overrides.tools).toEqual([expect.objectContaining({ type: 'function' })]);
+    expect(overrides.tools[0].function.name).toBe('table_sql');
+    expect(overrides.toolChoice).toBe('auto');
+    expect(result).toContain('<tableEdit>');
+    expect(result).toContain('UPDATE t SET a = 1;');
+    delete mockSettings.tableFillNativeToolsEnabled;
+  });
+
+  it('填表原生工具开关关：请求不挂工具，走旧正文路径（零变化）', async () => {
+    mockSettings.tableFillNativeToolsEnabled = false;
+    mockSettings.charCardPrompt = [{ role: 'USER', content: '## 输出格式（严格执行）\n\n正文' }];
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'AI回复' } }] }),
+    });
+
+    const result = await callCustomOpenAI_ACU({ tableDataText: '数据' });
+
+    const overrides = mockBuildCustomBody.mock.calls[0][2];
+    expect(overrides.tools).toBeUndefined();
+    expect(result).toBe('AI回复');
+    delete mockSettings.tableFillNativeToolsEnabled;
   });
 
   it('if seed 优先使用 prepare 阶段冻结的填表上下文范围', async () => {

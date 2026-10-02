@@ -83417,6 +83417,96 @@ async function resolveCandidateScopeEntriesForTable_ACU(readContext, scopeNames,
     return resolveGeneratedEntriesForTable_ACU(allEntries, tableName, tableData);
 }
 
+/**
+ * service/ai/prompt-builder/table-fill-tools.ts — 填表原生工具调用（可选项，默认关闭）
+ *
+ * 开启（settings tableFillNativeToolsEnabled === true）且非流式请求时，填表在
+ * 自定义直连通道挂载 table_sql 工具：
+ * - 提示词主段运行时注入中间态指引（有工具则调用、无则按正文输出），从不落盘，
+ *   因此不需要版本化迁移；开关关闭时提示词字节与历史完全一致。
+ * - 命中工具调用则参数合成为 <tableEdit> 块走既有解析链；未命中原样走正文提取兜底。
+ * - 流式请求不挂工具（delta 组装 tool_calls 复杂度高，降级为正文路径）。
+ */
+const TABLE_SQL_TOOL_NAME_ACU = 'table_sql';
+const TABLE_SQL_TOOL_ACU = {
+    type: 'function',
+    function: {
+        name: TABLE_SQL_TOOL_NAME_ACU,
+        description: '一次性提交本轮全部表格修改。sql 填写完整 SQL 脚本（INSERT / UPDATE / DELETE，每条以分号结尾），格式与 <tableEdit> 块内完全相同；本轮没有修改时填空字符串。',
+        parameters: {
+            type: 'object',
+            properties: {
+                sql: { type: 'string', description: '完整 SQL 脚本，多条语句换行分隔。' },
+            },
+            required: ['sql'],
+            additionalProperties: false,
+        },
+    },
+};
+/** SQLite 为唯一存储模式，填表只挂 table_sql 一个工具。 */
+function buildTableFillNativeTools_ACU(_sqlite) {
+    return [TABLE_SQL_TOOL_ACU];
+}
+const INTERMEDIATE_GUIDANCE_MARKER_ACU = '## 输出格式（严格执行）\n\n';
+const TABLE_SQL_INTERMEDIATE_GUIDANCE_ACU = `【工具提交（优先）】
+如果本次请求提供了 table_sql 工具，必须调用 table_sql 一次性提交本轮全部表格修改：sql 参数填写与下方 <tableEdit> 内格式完全相同的完整 SQL 脚本（每条语句以分号结尾、换行分隔）；本轮没有任何修改时 sql 填空字符串。调用工具后，正文中不要再输出 SQL。
+如果本次请求没有提供该工具，则按下方格式在正文中输出。
+
+`;
+/**
+ * 运行时向主段注入中间态指引（幂等；无输出格式节时原样返回）。
+ * 只改本次请求的内存副本，不写回设置，因此开关关闭/打开都不需要迁移旧默认。
+ */
+function injectTableSqlIntermediateGuidance_ACU(content) {
+    const text = typeof content === 'string' ? content : String(content ?? '');
+    if (!text || text.includes('table_sql 工具，必须调用 table_sql'))
+        return text;
+    const index = text.indexOf(INTERMEDIATE_GUIDANCE_MARKER_ACU);
+    if (index < 0)
+        return text;
+    const at = index + INTERMEDIATE_GUIDANCE_MARKER_ACU.length;
+    return `${text.slice(0, at)}${TABLE_SQL_INTERMEDIATE_GUIDANCE_ACU}${text.slice(at)}`;
+}
+/**
+ * 把一次模型回复（正文 + 工具调用）归一为正文提取链可消费的文本。
+ * - 命中 table_sql：参数合成为 <tableEdit> 块；正文残留块剔除，避免下游取块规则
+ *   取到与工具不一致的内容。
+ * - 未调用：原样返回正文，走既有正文提取兜底。
+ * - 参数非 JSON / 缺 sql 字段：ok=false，调用方按可重试模型输出错误处理。
+ */
+function resolveTableFillToolTurn_ACU(turn) {
+    const content = typeof turn?.content === 'string' ? turn.content : '';
+    const calls = (Array.isArray(turn?.toolCalls) ? turn.toolCalls : [])
+        .filter(call => !!call && call.name === TABLE_SQL_TOOL_NAME_ACU);
+    if (calls.length === 0)
+        return { ok: true, text: content, viaTool: false };
+    const parts = [];
+    for (const call of calls) {
+        let parsed;
+        try {
+            parsed = JSON.parse(String(call.arguments ?? '{}'));
+        }
+        catch {
+            return { ok: false, error: `${TABLE_SQL_TOOL_NAME_ACU} 工具参数不是合法 JSON，请重新调用并确保参数完整。` };
+        }
+        const value = parsed && typeof parsed === 'object'
+            ? parsed.sql
+            : undefined;
+        if (typeof value !== 'string') {
+            return { ok: false, error: `${TABLE_SQL_TOOL_NAME_ACU} 工具参数缺少字符串字段 sql。` };
+        }
+        if (value.trim())
+            parts.push(value.trim());
+    }
+    const residual = content.replace(/<tableEdit>[\s\S]*?<\/tableEdit>/gi, '').trim();
+    const block = `<tableEdit>\n${parts.join('\n')}\n</tableEdit>`;
+    return { ok: true, text: residual ? `${residual}\n${block}` : block, viaTool: true };
+}
+/** 工具挂载纯判定：仅开启且非流式时为 true。 */
+function shouldUseTableFillNativeTools_ACU(gate) {
+    return !!gate && gate.enabled === true && gate.streaming !== true;
+}
+
 // service/ai/preset-rate-limiter.ts — 预设级请求限速（公益站兼容）
 // 每个开启「公益站兼容」的 API 预设独立计数：滑动窗口内最多 maxPerMinute 次请求，
 // 超出时挂起等待最早一条记录滑出窗口，期间响应 abort 信号。
@@ -83585,6 +83675,21 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
     else if (typeof charCardPromptSetting === 'string') {
         promptSegments = [{ role: 'USER', content: charCardPromptSetting }];
     }
+    // 填表原生工具调用（可选项，默认关闭）：运行时给主段注入中间态指引
+    // （有工具则调用、无则按正文输出），只改本次请求的内存副本，不写回设置。
+    // 流式请求不挂工具（delta 不组装 tool_calls），静默走正文路径。
+    const fillRequestWantsStream = effectiveApiConfig.streamingEnabled !== undefined
+        ? effectiveApiConfig.streamingEnabled === true
+        : settings_ACU.streamingEnabled === true;
+    const fillNativeToolsOn = shouldUseTableFillNativeTools_ACU({
+        enabled: settings_ACU.tableFillNativeToolsEnabled === true,
+        streaming: fillRequestWantsStream,
+    });
+    if (fillNativeToolsOn) {
+        promptSegments = promptSegments.map((segment) => ((segment?.mainSlot === 'A' || segment?.isMain) && typeof segment?.content === 'string'
+            ? { ...segment, content: injectTableSqlIntermediateGuidance_ACU(segment.content) }
+            : segment));
+    }
     let userInfoContent_Table = '';
     try {
         userInfoContent_Table = getPersonaDescription_ACU();
@@ -83715,6 +83820,19 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
             await acquirePresetRateLimitSlot_ACU(effectiveTableApiPreset || '_current_config', { signal: abortSignal });
         }
         logDebug_ACU('ACU: 调用后端生成 API, Model:', effectiveApiConfig.model);
+        if (fillNativeToolsOn) {
+            const turn = await postChatCompletionTurn_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill', tools: buildTableFillNativeTools_ACU(sqliteMode), toolChoice: 'auto' }), abortSignal);
+            const resolved = resolveTableFillToolTurn_ACU(turn ?? { content: '', toolCalls: [] });
+            // 项目未开启 strictNullChecks 时布尔判别联合不收窄，显式取 error 分支。
+            if (!resolved.ok)
+                throw new RetryableAiResponseError_ACU(resolved.error);
+            if (resolved.viaTool)
+                logDebug_ACU('[填表] 原生工具调用已合成为 <tableEdit>，走既有解析链。');
+            if (resolved.text) {
+                return resolved.text.trim();
+            }
+            throw new RetryableAiResponseError_ACU();
+        }
         const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill' }), abortSignal);
         if (content) {
             return content.trim();
@@ -85943,6 +86061,16 @@ const JSON_OBJECT_RESPONSE_FORMAT_ACU = Object.freeze({ type: 'json_object' });
 /**
  * 构建 Chat Completions 自定义 API 请求体（支持 bodyParams / excludeBodyParams / requestHeaders）
  */
+/** 原生工具定义形态校验：非空数组 + 每项带 function.name 非空串，否则调用方省略 tools 键。 */
+function isValidNativeTools_ACU(tools) {
+    if (!Array.isArray(tools) || tools.length === 0)
+        return false;
+    return tools.every(item => !!item && typeof item === 'object' && !Array.isArray(item)
+        && typeof item.function === 'object'
+        && !!item.function
+        && typeof item.function.name === 'string'
+        && item.function.name.length > 0);
+}
 function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) {
     const opts = overrides || {};
     if (effectiveApiConfig?.url) {
@@ -86072,6 +86200,12 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         custom_include_headers: headers,
         custom_include_body: composedIncludeBody.value,
         custom_exclude_body: sanitizeExcludeBodyForPresetFields_ACU(effectiveApiConfig.excludeBodyParams, effectiveApiConfig),
+        // 原生工具调用（可选项，如填表 table_sql）：顶层 tools / tool_choice 字段，
+        // 由 TT 后端透传给上游 provider。形态非法一律省略，绝不发送残缺工具定义。
+        ...(isValidNativeTools_ACU(opts.tools) ? { tools: opts.tools } : {}),
+        ...(opts.toolChoice !== undefined && opts.toolChoice !== null && (typeof opts.toolChoice === 'string' || typeof opts.toolChoice === 'object')
+            ? { tool_choice: opts.toolChoice }
+            : {}),
     };
     logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${'reasoning_effort' in body ? String(body.reasoning_effort) : '(auto 省略)'}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
     if (isDebugLogEnabled()) {
@@ -86137,6 +86271,70 @@ async function postChatCompletion_ACU(body, signal) {
     }
     const requestWantsStream = body?.stream === true;
     return handleApiResponse_ACU(res, requestWantsStream);
+}
+/**
+ * 非流式 OpenAI 形态响应的回合提取（正文 + 原生工具调用）。
+ * 只要 content 与 tool_calls 两处能取到的都取；两处皆无返回 null（调用方按可重试处理）。
+ * tool_calls 只收录 function.name 为非空串的项；arguments 非字符串时 JSON 序列化保留，
+ * 下游 resolve 阶段再按缺字段判失败（此处不丢信息）。
+ */
+function parseNonStreamChatTurn_ACU(data) {
+    const message = data?.choices?.[0]?.message;
+    const fallbackContent = typeof data?.content === 'string'
+        ? data.content
+        : (typeof data === 'string' ? data : '');
+    const content = typeof message?.content === 'string' ? message.content : fallbackContent;
+    const rawCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+    const toolCalls = [];
+    for (const call of rawCalls) {
+        const fn = call?.function;
+        if (!fn || typeof fn.name !== 'string' || !fn.name)
+            continue;
+        const args = typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments ?? {});
+        toolCalls.push({ name: fn.name, arguments: args });
+    }
+    if (!content && toolCalls.length === 0)
+        return null;
+    return { content, toolCalls };
+}
+/** 非流式回合出口（填表工具调用可选项）：与 postChatCompletion_ACU 同一错误语义，另取 tool_calls。 */
+async function postChatCompletionTurn_ACU(body, signal, onUsage) {
+    let res;
+    try {
+        res = await fetch('/api/backends/chat-completions/generate', {
+            method: 'POST',
+            redirect: 'error',
+            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: signal || undefined,
+        });
+    }
+    catch (e) {
+        logWarn_ACU(`[postChatCompletionTurn] 网络请求失败: ${String(e?.message || e?.name || 'unknown')}`, { aborted: e?.name === 'AbortError' || String(e?.message || '').toLowerCase().includes('aborted') });
+        throw e;
+    }
+    if (!res.ok) {
+        const errTxt = sanitizeUpstreamErrorBodyForDisplay_ACU(await res.text());
+        throw new AgentApiHttpError_ACU(res.status, `API请求失败: ${res.status} ${errTxt}`);
+    }
+    let data;
+    try {
+        data = await res.json();
+    }
+    catch (e) {
+        if (e?.name === 'AbortError')
+            throw e;
+        logWarn_ACU('[postChatCompletionTurn] Failed to parse response:', e);
+        return null;
+    }
+    const turnUsage = extractAiUsageMetadata_ACU(data?.usage);
+    if (turnUsage && onUsage) {
+        try {
+            onUsage(turnUsage);
+        }
+        catch { /* 用量回调异常不允许影响响应主流程。 */ }
+    }
+    return parseNonStreamChatTurn_ACU(data);
 }
 /**
  * 剧情推进任务级 API 调用 — 接受显式预设名称
@@ -91574,7 +91772,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261001-22"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261002-10"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91593,7 +91791,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261001-22";
+        const stamp = "20261002-10";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -101000,6 +101198,8 @@ let settings_ACU = {
     tableApiPreset: '',
     plotApiPreset: '',
     discardUnauthorizedTableEditsEnabled: true,
+    // 填表原生工具调用（可选项，默认关闭）：开启且非流式时填表挂载 table_sql 工具。
+    tableFillNativeToolsEnabled: false,
     // [剧情推进] 按剧情任务ID保存的任务级 API 预设覆盖（key=taskId, value=presetName）
     // 不保存入聊天记录或剧情推进预设，只写进插件全局设置。
     plotTaskApiPresetOverridesById: {},
@@ -102579,6 +102779,8 @@ function buildDefaultSettings_ACU() {
         tableApiPreset: '',
         plotApiPreset: '',
         discardUnauthorizedTableEditsEnabled: true,
+        // 填表原生工具调用（可选项，默认关闭）：开启且非流式时填表挂载 table_sql 工具。
+        tableFillNativeToolsEnabled: false,
         // [剧情推进] 按剧情任务ID保存的任务级 API 预设覆盖（key=taskId, value=presetName）
         // 不保存入聊天记录或剧情推进预设，只写进插件全局设置。
         plotTaskApiPresetOverridesById: {},
@@ -152158,7 +152360,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261001-22";
+        const stamp = "20261002-10";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -172481,6 +172683,7 @@ function useFormFillSettings() {
     const tableApiPreset = ref(String(settings_ACU.tableApiPreset || ""));
     const tableEditLastPairOnly = ref(settings_ACU.tableEditLastPairOnly !== false);
     const discardUnauthorizedTableEditsEnabled = ref(settings_ACU.discardUnauthorizedTableEditsEnabled !== false);
+    const nativeToolsEnabled = ref(settings_ACU.tableFillNativeToolsEnabled === true);
     const extractRules = ref([]);
     const excludeRules = ref([]);
     const promptSegments = ref([]);
@@ -172505,6 +172708,7 @@ function useFormFillSettings() {
         tableApiPreset.value = String(settings_ACU.tableApiPreset || "");
         tableEditLastPairOnly.value = settings_ACU.tableEditLastPairOnly !== false;
         discardUnauthorizedTableEditsEnabled.value = settings_ACU.discardUnauthorizedTableEditsEnabled !== false;
+        nativeToolsEnabled.value = settings_ACU.tableFillNativeToolsEnabled === true;
         extractRules.value = normalizeRules(settings_ACU.tableContextExtractRules, settings_ACU.tableContextExtractTags || "", "extract");
         excludeRules.value = normalizeRules(settings_ACU.tableContextExcludeRules, settings_ACU.tableContextExcludeTags || "", "exclude");
         promptSegments.value = normalizePromptSegments(currentPromptSource());
@@ -172554,6 +172758,12 @@ function useFormFillSettings() {
     function setDiscardUnauthorizedTableEditsEnabled(value) {
         discardUnauthorizedTableEditsEnabled.value = !!value;
         settings_ACU.discardUnauthorizedTableEditsEnabled = discardUnauthorizedTableEditsEnabled.value;
+        saveSettings_ACU();
+        message.value = null;
+    }
+    function setNativeToolsEnabled(value) {
+        nativeToolsEnabled.value = value === true;
+        settings_ACU.tableFillNativeToolsEnabled = nativeToolsEnabled.value;
         saveSettings_ACU();
         message.value = null;
     }
@@ -172701,6 +172911,7 @@ function useFormFillSettings() {
         tableApiPreset,
         tableEditLastPairOnly,
         discardUnauthorizedTableEditsEnabled,
+        nativeToolsEnabled,
         extractRules,
         excludeRules,
         promptSegments,
@@ -172713,6 +172924,7 @@ function useFormFillSettings() {
         setNumbers,
         setTableEditLastPairOnly,
         setDiscardUnauthorizedTableEditsEnabled,
+        setNativeToolsEnabled,
         setExtractRules,
         setExcludeRules,
         addPromptSegment,
@@ -173008,8 +173220,8 @@ var _sfc_main$T = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-form-fill-update-settings-panel__settings-groups[data-v-a368f47a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-form-fill-update-settings-panel__setting-group[data-v-a368f47a] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-form-fill-update-settings-panel__setting-group\r\n  + .acu-form-fill-update-settings-panel__setting-group[data-v-a368f47a] {\r\n  padding-top: 14px;\r\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-form-fill-update-settings-panel__advanced[data-v-a368f47a] {\r\n  border: 0;\r\n  background: transparent;\n}\n.acu-form-fill-update-settings-panel__number-grid[data-v-a368f47a] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n@media (max-width: 560px) {\n.acu-form-fill-update-settings-panel__number-grid[data-v-a368f47a] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/FormFillUpdateSettingsPanel.vue#style-0-a368f47a");
-var FormFillUpdateSettingsPanel_vue_vue_type_style_index_0_scoped_a368f47a_lang = null;
+injectSfcStyle("\n.acu-form-fill-update-settings-panel__settings-groups[data-v-4b35534f] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-form-fill-update-settings-panel__setting-group[data-v-4b35534f] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-form-fill-update-settings-panel__setting-group\r\n  + .acu-form-fill-update-settings-panel__setting-group[data-v-4b35534f] {\r\n  padding-top: 14px;\r\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-form-fill-update-settings-panel__advanced[data-v-4b35534f] {\r\n  border: 0;\r\n  background: transparent;\n}\n.acu-form-fill-update-settings-panel__number-grid[data-v-4b35534f] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n@media (max-width: 560px) {\n.acu-form-fill-update-settings-panel__number-grid[data-v-4b35534f] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/FormFillUpdateSettingsPanel.vue#style-0-4b35534f");
+var FormFillUpdateSettingsPanel_vue_vue_type_style_index_0_scoped_4b35534f_lang = null;
 
 const _hoisted_1$R = { class: "acu-form-fill-update-settings-panel__settings-groups" };
 const _hoisted_2$K = { class: "acu-form-fill-update-settings-panel__setting-group" };
@@ -173065,7 +173277,18 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 					"onUpdate:modelValue": $setup.setSkipLatestLayer
 				}, null, 8, ["model-value"])]),
 				_: 1
-			}, 8, ["label", "hint"])
+			}, 8, ["label", "hint"]),
+			createVNode($setup["AcuFormRow"], {
+				label: "原生工具提交",
+				hint: "开启后填表请求挂载 table_sql 工具，命中则结构化提交；宿主或模型不支持时自动回退正文提取。仅非流式请求生效。"
+			}, {
+				default: withCtx(() => [createVNode($setup["AcuToggle"], {
+					"model-value": $setup.settings.nativeToolsEnabled.value,
+					label: "填表时调用 table_sql 原生工具",
+					"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.settings.setNativeToolsEnabled($event))
+				}, null, 8, ["model-value"])]),
+				_: 1
+			})
 		]), $props.showAdvanced ? (openBlock(), createBlock($setup["AcuDisclosureGroup"], {
 			key: 0,
 			class: "acu-form-fill-update-settings-panel__advanced",
@@ -173074,7 +173297,7 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 			expanded: $setup.advancedExpanded,
 			"body-id": "acu-form-fill-update-advanced",
 			"body-mode": "if",
-			onToggle: _cache[1] || (_cache[1] = ($event) => $setup.advancedExpanded = !$setup.advancedExpanded)
+			onToggle: _cache[2] || (_cache[2] = ($event) => $setup.advancedExpanded = !$setup.advancedExpanded)
 		}, {
 			default: withCtx(() => [createBaseVNode("div", _hoisted_3$E, [(openBlock(true), createElementBlock(
 				Fragment,
@@ -173108,7 +173331,7 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var FormFillUpdateSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-a368f47a"]]);
+var FormFillUpdateSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-4b35534f"]]);
 
 /**
  * useDevOptions — 仪表盘 / 剧情推进页 / 未来开发者一级页共享的开发者选项读写入口

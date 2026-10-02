@@ -59,6 +59,7 @@ import {
   callAIWithResolvedPreset_ACU,
   buildCustomApiRequestBody_ACU,
   postChatCompletion_ACU,
+  postChatCompletionTurn_ACU,
   withOpencodeSessionHeader_ACU,
   normalizeOpencodeSessionNamespace_ACU,
   normalizeOpencodeSessionModel_ACU,
@@ -224,6 +225,39 @@ describe('callAIWithPreset_ACU', () => {
     expect(error.message.length).toBeLessThanOrEqual(2100);
   });
 
+  it('postChatCompletionTurn_ACU 取回正文与 tool_calls（填表工具调用可选项）', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        choices: [{ message: {
+          content: '分析完毕',
+          tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'table_sql', arguments: '{"sql":"UPDATE t SET a = 1;"}' } }],
+        } }],
+      }),
+    });
+
+    const turn = await postChatCompletionTurn_ACU({ stream: false });
+    expect(turn?.content).toBe('分析完毕');
+    expect(turn?.toolCalls).toEqual([{ name: 'table_sql', arguments: '{"sql":"UPDATE t SET a = 1;"}' }]);
+  });
+
+  it('postChatCompletionTurn_ACU 无 tool_calls 时 toolCalls 为空数组（走正文兜底）', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ choices: [{ message: { content: '<tableEdit>\nUPDATE t SET a = 1;\n</tableEdit>' } }] }),
+    });
+
+    const turn = await postChatCompletionTurn_ACU({ stream: false });
+    expect(turn?.toolCalls).toEqual([]);
+    expect(turn?.content).toContain('<tableEdit>');
+  });
+
+  it('postChatCompletionTurn_ACU 非 OpenAI 形态取不到内容时返回 null（调用方按可重试处理）', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({ foo: 1 }) });
+
+    await expect(postChatCompletionTurn_ACU({ stream: false })).resolves.toBeNull();
+  });
+
   it('isRetryableAiRequestError_ACU 只放行瞬时失败，AbortError 一律立停', () => {
     const aborted = Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' });
     expect(isRetryableAiRequestError_ACU(aborted)).toBe(false);
@@ -350,6 +384,37 @@ describe('buildCustomApiRequestBody_ACU', () => {
       { url: 'https://api.example.com', model: 'gpt-4', promptPostProcessing: 'fake-mode' },
     );
     expect(body.custom_prompt_post_processing).toBe('strict');
+  });
+
+  it('tools 随 toolChoice 顶层透传（填表原生工具调用可选项）', () => {
+    const tools = [{ type: 'function', function: { name: 'table_sql', parameters: { type: 'object', properties: { sql: { type: 'string' } }, required: ['sql'] } } }];
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4' },
+      { tools, toolChoice: 'auto' },
+    );
+    expect(body.tools).toEqual(tools);
+    expect(body.tool_choice).toBe('auto');
+  });
+
+  it('tools 非法形态一律省略（fail-closed，不发送残缺工具定义）', () => {
+    for (const tools of [null, {}, 'tools', [{ type: 'function' }], [{ function: { name: '' } }]]) {
+      const body = buildCustomApiRequestBody_ACU(
+        [{ role: 'user', content: 'test' }],
+        { url: 'https://api.example.com', model: 'gpt-4' },
+        { tools: tools as any },
+      );
+      expect(body).not.toHaveProperty('tools');
+    }
+  });
+
+  it('不传 tools 时请求体无 tools 键（默认行为零变化）', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4' },
+    );
+    expect(body).not.toHaveProperty('tools');
+    expect(body).not.toHaveProperty('tool_choice');
   });
 
   it('reasoning_effort 七档原样透传（minimal 最低、ultra 最高）', () => {

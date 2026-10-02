@@ -12,8 +12,15 @@ import {
 import {
   getApiConfigByPreset_ACU,
   buildCustomApiRequestBody_ACU,
-  postChatCompletion_ACU
+  postChatCompletion_ACU,
+  postChatCompletionTurn_ACU
 } from '../api-call';
+import {
+  buildTableFillNativeTools_ACU,
+  injectTableSqlIntermediateGuidance_ACU,
+  resolveTableFillToolTurn_ACU,
+  shouldUseTableFillNativeTools_ACU
+} from './table-fill-tools';
 import { acquirePresetRateLimitSlot_ACU } from '../preset-rate-limiter';
 import {
   currentJsonTableData_ACU,
@@ -145,6 +152,24 @@ export class RetryableAiResponseError_ACU extends Error {
         promptSegments = charCardPromptSetting;
     } else if (typeof charCardPromptSetting === 'string') {
         promptSegments = [{ role: 'USER', content: charCardPromptSetting }];
+    }
+
+    // 填表原生工具调用（可选项，默认关闭）：运行时给主段注入中间态指引
+    // （有工具则调用、无则按正文输出），只改本次请求的内存副本，不写回设置。
+    // 流式请求不挂工具（delta 不组装 tool_calls），静默走正文路径。
+    const fillRequestWantsStream = effectiveApiConfig.streamingEnabled !== undefined
+        ? effectiveApiConfig.streamingEnabled === true
+        : settings_ACU.streamingEnabled === true;
+    const fillNativeToolsOn = shouldUseTableFillNativeTools_ACU({
+        enabled: settings_ACU.tableFillNativeToolsEnabled === true,
+        streaming: fillRequestWantsStream,
+    });
+    if (fillNativeToolsOn) {
+        promptSegments = promptSegments.map((segment: any) => (
+            (segment?.mainSlot === 'A' || segment?.isMain) && typeof segment?.content === 'string'
+                ? { ...segment, content: injectTableSqlIntermediateGuidance_ACU(segment.content) }
+                : segment
+        ));
     }
 
     let userInfoContent_Table = '';
@@ -282,6 +307,17 @@ export class RetryableAiResponseError_ACU extends Error {
             await acquirePresetRateLimitSlot_ACU(effectiveTableApiPreset || '_current_config', { signal: abortSignal });
         }
         logDebug_ACU('ACU: 调用后端生成 API, Model:', effectiveApiConfig.model);
+        if (fillNativeToolsOn) {
+            const turn = await postChatCompletionTurn_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill', tools: buildTableFillNativeTools_ACU(sqliteMode), toolChoice: 'auto' }), abortSignal);
+            const resolved = resolveTableFillToolTurn_ACU(turn ?? { content: '', toolCalls: [] });
+            // 项目未开启 strictNullChecks 时布尔判别联合不收窄，显式取 error 分支。
+            if (!resolved.ok) throw new RetryableAiResponseError_ACU((resolved as { ok: false; error: string }).error);
+            if (resolved.viaTool) logDebug_ACU('[填表] 原生工具调用已合成为 <tableEdit>，走既有解析链。');
+            if (resolved.text) {
+                return resolved.text.trim();
+            }
+            throw new RetryableAiResponseError_ACU();
+        }
         const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill' }), abortSignal);
         if (content) {
             return content.trim();

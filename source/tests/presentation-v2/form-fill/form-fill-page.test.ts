@@ -382,6 +382,24 @@ describe('FormFillPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('填表设置面板暴露原生工具提交开关：默认关闭，点击可开启并落盘', async () => {
+    const { mount, settings, saveSettings } = await mountFormFillPage(createSettings());
+    expect(settings.tableFillNativeToolsEnabled).not.toBe(true);
+
+    const toggle = Array.from(document.querySelectorAll('.acu-v2-form-fill-page [role="switch"]'))
+      .find(node => (node.textContent || '').includes('table_sql'));
+    expect(toggle, '原生工具开关必须渲染为 role=switch 控件').toBeTruthy();
+    expect(toggle?.getAttribute('aria-checked'), '默认应关闭').toBe('false');
+
+    (toggle as HTMLElement).click();
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(settings.tableFillNativeToolsEnabled, '开启后必须写进设置').toBe(true);
+    expect(saveSettings, '配置变更必须落盘').toHaveBeenCalled();
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('每个主页面板都渲染常驻说明信息条', async () => {
     const { mount } = await mountFormFillPage();
 
