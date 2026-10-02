@@ -72,7 +72,7 @@ function replacePromptSection_ACU(content: string, startMarker: string, endMarke
 /**
  * 开关开启时的工具版主段：输出格式节整体换成工具提交节，结尾句同步切换。
  * 缺输出格式节或 thought 块时原样返回（fail-closed：提示词保持正文版，
- * 工具照挂，未命中则走正文兜底，不破坏填表）。
+ * 工具照挂，模型未调用时走正文兜底，不破坏填表）。
  */
 export function buildTableSqlToolPrompt_ACU(content: unknown): string {
   const text = typeof content === 'string' ? content : String(content ?? '');
@@ -140,6 +140,20 @@ export function resolveTableFillToolTurn_ACU(turn: TableFillTurn_ACU | null | un
   const residual = content.replace(/<tableEdit>[\s\S]*?<\/tableEdit>/gi, '').trim();
   const block = `<tableEdit>\n${parts.join('\n')}\n</tableEdit>`;
   return { ok: true, text: residual ? `${residual}\n${block}` : block, viaTool: true };
+}
+
+/**
+ * 按开关构造「当前生效的默认主段」：供填表设置编辑器展示与「恢复默认」对齐。
+ * 逐段浅拷贝，不就地改写入参——否则默认值本身被工具化，关掉开关也回不去正文版。
+ */
+export function buildTableFillDefaultPromptSegments_ACU(segments: any[], toolEnabled: boolean): any[] {
+    if (!Array.isArray(segments)) return segments;
+    if (toolEnabled !== true) return segments.map(segment => ({ ...segment }));
+    return segments.map(segment => (
+        (segment?.mainSlot === 'A' || segment?.isMain) && typeof segment?.content === 'string'
+            ? { ...segment, content: buildTableSqlToolPrompt_ACU(segment.content) }
+            : { ...segment }
+    ));
 }
 
 export interface TableFillNativeToolsGate_ACU {

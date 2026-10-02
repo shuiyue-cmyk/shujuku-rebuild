@@ -4,6 +4,7 @@ import { saveSettings_ACU } from "../../service/settings/settings-service";
 import { setFeatureApiPreset_ACU } from "../../service/settings/feature-preset-reference-service";
 import { setUpdateNumberFields_ACU, setTableContextRules_ACU, setCharCardPrompt_ACU } from "../../service/settings/settings-write-service";
 import { getCurrentStorageMode } from "../../service/table/storage-mode";
+import { buildTableFillDefaultPromptSegments_ACU } from "../../service/ai/prompt-builder/table-fill-tools";
 import {
   DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
   DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
@@ -278,17 +279,51 @@ function preparePromptForSave(
   }));
 }
 
-function currentDefaultPromptSegments(): FormFillPromptSegment[] {
+/** 按开关取两套默认提示词之一。toolEnabled 为 true 时主段切换为要求调用 table_sql 的工具版。 */
+function currentDefaultPromptSegmentsFor_ACU(toolEnabled: boolean): FormFillPromptSegment[] {
   const defaults =
     getCurrentStorageMode() === "sqlite"
       ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU
       : DEFAULT_CHAR_CARD_PROMPT_ACU;
-  return normalizePromptSegments(defaults);
+  return normalizePromptSegments(
+    buildTableFillDefaultPromptSegments_ACU(defaults as any[], toolEnabled),
+  );
+}
+
+function currentDefaultPromptSegments(): FormFillPromptSegment[] {
+  // 正文/工具两套默认主段必须随填表工具开关对齐：开关关着时编辑器若展示要求调用
+  // 工具的默认提示词，用户看到的与实际发出的不一致（上游同批修正此项）。
+  return currentDefaultPromptSegmentsFor_ACU(settings_ACU.tableFillNativeToolsEnabled === true);
+}
+
+/**
+ * 设置里持久化的提示词可能是「另一套开关状态」下的默认（用户开关前后保存过一次）。
+ * 整份逐段指纹等于另一套默认时按当前开关归一，否则一律视为用户自定义。
+ * 不归一会让开关开启后每次重载都误判「已自定义」，切换开关也不再跟随默认。
+ * 只比对整份、不只看主段：只看主段会吞掉用户对 B 段/追加段的改写。
+ */
+function normalizeStoredPromptAgainstCurrentDefault_ACU(value: unknown): unknown {
+  if (!Array.isArray(value) || value.length === 0) return value;
+  const toolEnabled = settings_ACU.tableFillNativeToolsEnabled === true;
+  // 整份逐段比对：只看主段会吞掉用户对 B 段或新增段的改写（判据命中后整份被替换）。
+  const bodyDefaultFingerprint = JSON.stringify(
+    preparePromptForSave(currentDefaultPromptSegmentsFor_ACU(false)),
+  );
+  const toolDefaultFingerprint = JSON.stringify(
+    preparePromptForSave(currentDefaultPromptSegmentsFor_ACU(true)),
+  );
+  const storedFingerprint = JSON.stringify(preparePromptForSave(normalizePromptSegments(value)));
+  const otherFingerprint = toolEnabled ? bodyDefaultFingerprint : toolDefaultFingerprint;
+  // 存储值逐字等于「与当前开关不一致的那套默认」→ 用户没改写，只是开关变了，按当前开关归一。
+  return storedFingerprint === otherFingerprint
+    ? currentDefaultPromptSegments()
+    : value;
 }
 
 function currentPromptSource(): unknown {
   const value = settings_ACU.charCardPrompt;
-  return Array.isArray(value) && value.length > 0 ? value : currentDefaultPromptSegments();
+  if (!Array.isArray(value) || value.length === 0) return currentDefaultPromptSegments();
+  return normalizeStoredPromptAgainstCurrentDefault_ACU(value);
 }
 
 function promptFingerprint(segments: FormFillPromptSegment[]): string {
@@ -409,8 +444,15 @@ export function useFormFillSettings(): FormFillSettingsState {
   }
 
   function setNativeToolsEnabled(value: boolean): void {
+    // 先按切换前的默认判定是否仍是默认提示词，再改开关：比对基准变了就判不准。
+    const wasDefault = promptTemplateMode.value === "default";
     nativeToolsEnabled.value = value === true;
     settings_ACU.tableFillNativeToolsEnabled = nativeToolsEnabled.value;
+    // 仍用默认提示词时跟随切换到对应默认主段；用户改写过的提示词原样保留。
+    if (wasDefault) {
+      promptSegments.value = currentDefaultPromptSegments();
+      promptDirty.value = false;
+    }
     saveSettings_ACU();
     message.value = null;
   }
@@ -505,13 +547,44 @@ export function useFormFillSettings(): FormFillSettingsState {
   }
 
   function savePrompt(): void {
+    // 工具版默认主段不得落进设置：运行时只在开关开启时按 mainSlot A 替换主段，
+    // 一旦把「必须调用 table_sql」写进 charCardPrompt，关掉开关后提示词仍在要求
+    // 调用未挂载的工具 → 填表退化。用户在工具版下改写过主段则原样保留（用户负责）。
+    //
+    // 判据按内容而非开关：导出→关开关→导入 的路径会让缓冲区带着工具版主段进入保存，
+    // 此时开关已是关闭态，若用开关门控就会原样落盘。
     const prepared = preparePromptForSave(promptSegments.value);
+    let bufferAfterSave = prepared;
+    const bodyDefaultMain = currentDefaultPromptSegmentsFor_ACU(false).find(
+      (segment: FormFillPromptSegment) => segment.mainSlot === "A" || segment.isMain,
+    );
+    const toolDefaultMain = currentDefaultPromptSegmentsFor_ACU(true).find(
+      (segment: FormFillPromptSegment) => segment.mainSlot === "A" || segment.isMain,
+    );
+    const mainIndex = prepared.findIndex(
+      (segment: FormFillPromptSegment) => segment.mainSlot === "A" || segment.isMain,
+    );
+    if (bodyDefaultMain && toolDefaultMain && mainIndex >= 0
+      && prepared[mainIndex].content === String(toolDefaultMain.content ?? '')) {
+      // 落盘：主段回落正文版（其余段保留用户的改写/追加）。
+      const persisted = prepared.map((segment, index) => (index === mainIndex ? { ...bodyDefaultMain } : segment));
+      // 缓冲区：主段换回当前开关下的工具版，其余段保持用户编辑后的内容。
+      bufferAfterSave = prepared.map((segment, index) => (
+        index === mainIndex
+          ? { ...toolDefaultMain }
+          : { ...segment }
+      ));
+      prepared.length = 0;
+      prepared.push(...persisted);
+    }
     const result = setCharCardPrompt_ACU(clone(prepared));
     if (!result.ok) {
       message.value = { kind: "error", text: result.message || "提示词保存失败。", scope: "prompt" };
       return;
     }
-    promptSegments.value = prepared;
+    // 缓冲区回填「当前开关下的生效提示词」，不是刚落盘的正文版：否则编辑器显示的
+    // 与实际发出的不一致，且 mode 翻成 custom 后切开关不再跟随默认。
+    promptSegments.value = bufferAfterSave;
     promptDirty.value = false;
     message.value = null;
     toast.success("提示词已保存");

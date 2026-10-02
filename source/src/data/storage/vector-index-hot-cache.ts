@@ -219,56 +219,69 @@ function isRecordCompatible_ACU(record: VectorIndexHotCacheChunkRecord_ACU | nul
  * 只作用于 chunk 数据 store，绝不触碰 flush 任务 store（任务是持久化意图，不是缓存）。
  */
 const VECTOR_HOT_CACHE_MAX_BYTES_ACU = 64 * 1024 * 1024;
-const VECTOR_HOT_CACHE_TRIM_THROTTLE_MS_ACU = 60_000;
+/**
+ * 预算淘汰节流窗口 5s（不是 60s）：写入前已按 scope 清理同 scope 旧版本，
+ * 节流只需挡住同一波连续写入的重复全量统计，不必等一分钟。
+ */
+const VECTOR_HOT_CACHE_TRIM_THROTTLE_MS_ACU = 5_000;
 let lastHotCacheTrimAt_ACU = 0;
 
+/**
+ * 超出 maxBytes 时按 lastAccessAt 从最旧开始淘汰 LRU。
+ * 失败向调用方抛出（不再静默吞）：由 maybeScheduleHotCacheTrim_ACU 统一告警，
+ * 直接调本函数的调用点（如显式预算收敛）必须知道淘汰没成功。
+ */
 export async function trimSummaryVectorHotCacheToBudget_ACU(
     maxBytes: number = VECTOR_HOT_CACHE_MAX_BYTES_ACU,
 ): Promise<void> {
-    try {
-        const db = await openDb_ACU();
-        const totalBytes = await new Promise<number>((resolve, reject) => {
-            let bytes = 0;
-            const tx = db.transaction(STORE_NAME_ACU, 'readonly');
-            const request = tx.objectStore(STORE_NAME_ACU).openCursor();
-            request.onsuccess = () => {
-                const cursor = request.result;
-                if (cursor) {
-                    bytes += Math.max(0, Number((cursor.value as VectorIndexHotCacheChunkRecord_ACU).byteSize) || 0);
-                    cursor.continue();
-                }
-            };
-            request.onerror = () => reject(request.error || new Error('统计交火向量热缓存体积失败'));
-            tx.oncomplete = () => { db.close(); resolve(bytes); };
-            tx.onerror = () => { db.close(); reject(tx.error || new Error('统计交火向量热缓存体积事务失败')); };
-        });
-        if (totalBytes <= maxBytes) return;
-        let bytesToFree = totalBytes - maxBytes;
-        const trimDb = await openDb_ACU();
-        await new Promise<void>((resolve, reject) => {
-            const tx = trimDb.transaction(STORE_NAME_ACU, 'readwrite');
-            const request = tx.objectStore(STORE_NAME_ACU).index('lastAccessAt').openCursor();
-            request.onsuccess = () => {
-                const cursor = request.result;
-                if (cursor && bytesToFree > 0) {
-                    bytesToFree -= Math.max(0, Number((cursor.value as VectorIndexHotCacheChunkRecord_ACU).byteSize) || 0);
-                    cursor.delete();
-                    cursor.continue();
-                }
-            };
-            request.onerror = () => reject(request.error || new Error('交火向量热缓存 LRU 淘汰失败'));
-            tx.oncomplete = () => { trimDb.close(); resolve(); };
-            tx.onerror = () => { trimDb.close(); reject(tx.error || new Error('交火向量热缓存 LRU 淘汰事务失败')); };
-        });
-    } catch {
-        // 淘汰失败不影响读写链路，下次写入会再次尝试。
-    }
+    const db = await openDb_ACU();
+    const totalBytes = await new Promise<number>((resolve, reject) => {
+        let bytes = 0;
+        const tx = db.transaction(STORE_NAME_ACU, 'readonly');
+        const request = tx.objectStore(STORE_NAME_ACU).openCursor();
+        request.onsuccess = () => {
+            const cursor = request.result;
+            if (cursor) {
+                bytes += Math.max(0, Number((cursor.value as VectorIndexHotCacheChunkRecord_ACU).byteSize) || 0);
+                cursor.continue();
+            }
+        };
+        request.onerror = () => reject(request.error || new Error('统计交火向量热缓存体积失败'));
+        tx.oncomplete = () => { db.close(); resolve(bytes); };
+        tx.onerror = () => { db.close(); reject(tx.error || new Error('统计交火向量热缓存体积事务失败')); };
+    });
+    if (totalBytes <= maxBytes) return;
+    let bytesToFree = totalBytes - maxBytes;
+    const trimDb = await openDb_ACU();
+    await new Promise<void>((resolve, reject) => {
+        const tx = trimDb.transaction(STORE_NAME_ACU, 'readwrite');
+        const request = tx.objectStore(STORE_NAME_ACU).index('lastAccessAt').openCursor();
+        request.onsuccess = () => {
+            const cursor = request.result;
+            if (cursor && bytesToFree > 0) {
+                bytesToFree -= Math.max(0, Number((cursor.value as VectorIndexHotCacheChunkRecord_ACU).byteSize) || 0);
+                cursor.delete();
+                cursor.continue();
+            }
+        };
+        request.onerror = () => reject(request.error || new Error('交火向量热缓存 LRU 淘汰失败'));
+        tx.oncomplete = () => { trimDb.close(); resolve(); };
+        tx.onerror = () => { trimDb.close(); reject(tx.error || new Error('交火向量热缓存 LRU 淘汰事务失败')); };
+    });
 }
 
-function maybeScheduleHotCacheTrim_ACU(): void {
+/**
+ * 预算淘汰：失败不阻断写入链，但必须留一条告警——热缓存是可丢失加速层，
+ * 静默失败会让 64MB 预算长期失效而不自知。
+ */
+async function maybeScheduleHotCacheTrim_ACU(): Promise<void> {
     if (Date.now() - lastHotCacheTrimAt_ACU < VECTOR_HOT_CACHE_TRIM_THROTTLE_MS_ACU) return;
     lastHotCacheTrimAt_ACU = Date.now();
-    void trimSummaryVectorHotCacheToBudget_ACU().catch((): undefined => undefined);
+    try {
+        await trimSummaryVectorHotCacheToBudget_ACU();
+    } catch (error) {
+        console.warn('[交火向量热缓存] LRU 淘汰失败，缓存可能超出预算:', error);
+    }
 }
 
 export async function putSummaryVectorHotCacheChunks_ACU(options: VectorIndexHotCacheWriteOptions_ACU): Promise<void> {
@@ -279,6 +292,23 @@ export async function putSummaryVectorHotCacheChunks_ACU(options: VectorIndexHot
 
         // 不可变 V2 快照：外部文件即权威，写入热缓存只会产生无效 IDB 扫描。
         if (isImmutableV2SnapshotManifest_ACU(manifest)) return;
+
+        // 写入前先清掉同一 scope 的旧缓存。indexId 每次更新都不同，历史版本的 chunk
+        // 会一直占位到 64MB 预算触发 LRU，而 isRecordCompatible 对旧版本恒判否
+        // （它们已不可用），等于纯浪费存储。清理失败不阻断本轮写入（热缓存是可
+        // 丢失加速层），只告警——下次写入会再次尝试。
+        //
+        // isolationKey 必须按落库口径归一：记录存的是 normalizeSummaryVectorIsolationKey_ACU 的
+        // 结果（''→'default'），而删除侧 normalizeKeyPart_ACU 把 '' 当通配。直接传
+        // manifest.isolationKey 会让空槽退化成「同 chatKey 下全部隔离槽」，每次回填
+        // 擦掉别的隔离域的缓存。
+        if ((await deleteSummaryVectorHotCacheByScope_ACU({
+            chatKey: manifest.chatKey,
+            isolationKey: normalizeSummaryVectorIsolationKey_ACU(manifest.isolationKey),
+            sourceTableKey: manifest.sourceTableKey,
+        })) !== true) {
+            console.warn('[交火向量热缓存] 写入前清理同 scope 旧缓存失败，残留将在预算淘汰时回收');
+        }
 
         // ── 单文件快照模式：直接写入所有 chunks，不依赖 contentAddressed.chunkRefs ──
         if (isSingleFileSnapshotManifest_ACU(manifest)) {
@@ -322,7 +352,7 @@ export async function putSummaryVectorHotCacheChunks_ACU(options: VectorIndexHot
                 tx.oncomplete = () => { db.close(); resolve(); };
                 tx.onerror = () => { db.close(); reject(tx.error || new Error('写入交火向量热缓存事务失败（单文件快照）')); };
             });
-            maybeScheduleHotCacheTrim_ACU();
+            await maybeScheduleHotCacheTrim_ACU();
             return;
         }
 
@@ -377,7 +407,7 @@ export async function putSummaryVectorHotCacheChunks_ACU(options: VectorIndexHot
                 reject(tx.error || new Error('写入交火向量热缓存事务失败'));
             };
         });
-        maybeScheduleHotCacheTrim_ACU();
+        await maybeScheduleHotCacheTrim_ACU();
     } catch {
         // 热缓存只是可丢失加速层，失败不能影响外置权威链路。
     }

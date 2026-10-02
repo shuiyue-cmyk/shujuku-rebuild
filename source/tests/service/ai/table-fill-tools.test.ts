@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   TABLE_SQL_TOOL_ACU,
   TABLE_SQL_TOOL_NAME_ACU,
+  buildTableFillDefaultPromptSegments_ACU,
   buildTableFillNativeTools_ACU,
   buildTableSqlToolPrompt_ACU,
   resolveTableFillToolTurn_ACU,
@@ -13,8 +14,7 @@ import {
  *
  * 开启后填表请求挂载 table_sql 工具，主段整体切换为工具版（要求调用工具、
  * 正文不再写 SQL）；命中则工具参数合成为 <tableEdit> 块走既有解析链。
- * 宿主/模型不支持工具时模型听话反而无块可用，最多按 tableMaxRetries 重试后报错，
- * 此类环境请勿开启。开关关闭时行为与历史完全一致。
+ * 模型选择不调用工具时原样走正文提取兜底。开关关闭时行为与历史完全一致。
  */
 describe('填表原生工具（table_sql，可选项）', () => {
   it('工具定义为 OpenAI function 形态，参数只有 sql', () => {
@@ -102,6 +102,25 @@ describe('填表原生工具（table_sql，可选项）', () => {
   it('工具参数缺 sql 字段时判失败', () => {
     expect(resolveTableFillToolTurn_ACU({ content: '', toolCalls: [{ name: 'table_sql', arguments: '{}' }] }))
       .toEqual({ ok: false, error: expect.stringContaining('sql') });
+  });
+
+  it('默认段构造：开关关返回正文版默认，开关开返回工具版默认', () => {
+    const defaults = [{
+      role: 'USER',
+      content: '## 输出格式（严格执行）\n\n<thought>\n[分析步骤]\n</thought>\n\n<content>\n<tableEdit>\nX\n</tableEdit>\n</content>\n\n## 关键规则\n1. 守规\n\n现在开始按此格式执行填表任务。',
+      mainSlot: 'A',
+      isMain: true,
+    }];
+
+    const off = buildTableFillDefaultPromptSegments_ACU(defaults as any, false);
+    const on = buildTableFillDefaultPromptSegments_ACU(defaults as any, true);
+
+    expect(String(off[0].content)).toContain('<tableEdit>');
+    expect(String(off[0].content)).not.toContain('必须调用 table_sql');
+    expect(String(on[0].content)).toContain('必须调用 table_sql');
+    // 逐段浅拷贝：不得就地改写入参（否则默认值本身被工具化，关闭开关也回不去）
+    expect(String(defaults[0].content)).toContain('<tableEdit>');
+    expect(String(defaults[0].content)).not.toContain('必须调用 table_sql');
   });
 
   it('门控：仅开启且非流式时挂工具（流式 delta 不组装 tool_calls）', () => {

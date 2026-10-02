@@ -42,7 +42,7 @@
 
         <AcuFormRow
           label="原生工具提交"
-          hint="开启后填表主段切换为工具版并挂载 table_sql 工具；宿主或模型不支持工具时填表会失败，此类环境请勿开启。仅非流式请求生效。"
+          hint="开启后填表改走 table_sql 原生工具提交，默认提示词同步切换为工具版；模型不调用工具时回退正文提取。仅非流式请求生效。"
         >
           <AcuToggle
             :model-value="settings.nativeToolsEnabled.value"

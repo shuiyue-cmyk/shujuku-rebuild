@@ -47532,55 +47532,68 @@ function isRecordCompatible_ACU(record, manifest, ref) {
  * 只作用于 chunk 数据 store，绝不触碰 flush 任务 store（任务是持久化意图，不是缓存）。
  */
 const VECTOR_HOT_CACHE_MAX_BYTES_ACU = 64 * 1024 * 1024;
-const VECTOR_HOT_CACHE_TRIM_THROTTLE_MS_ACU = 60000;
+/**
+ * 预算淘汰节流窗口 5s（不是 60s）：写入前已按 scope 清理同 scope 旧版本，
+ * 节流只需挡住同一波连续写入的重复全量统计，不必等一分钟。
+ */
+const VECTOR_HOT_CACHE_TRIM_THROTTLE_MS_ACU = 5000;
 let lastHotCacheTrimAt_ACU = 0;
+/**
+ * 超出 maxBytes 时按 lastAccessAt 从最旧开始淘汰 LRU。
+ * 失败向调用方抛出（不再静默吞）：由 maybeScheduleHotCacheTrim_ACU 统一告警，
+ * 直接调本函数的调用点（如显式预算收敛）必须知道淘汰没成功。
+ */
 async function trimSummaryVectorHotCacheToBudget_ACU(maxBytes = VECTOR_HOT_CACHE_MAX_BYTES_ACU) {
-    try {
-        const db = await openDb_ACU$1();
-        const totalBytes = await new Promise((resolve, reject) => {
-            let bytes = 0;
-            const tx = db.transaction(STORE_NAME_ACU$1, 'readonly');
-            const request = tx.objectStore(STORE_NAME_ACU$1).openCursor();
-            request.onsuccess = () => {
-                const cursor = request.result;
-                if (cursor) {
-                    bytes += Math.max(0, Number(cursor.value.byteSize) || 0);
-                    cursor.continue();
-                }
-            };
-            request.onerror = () => reject(request.error || new Error('统计交火向量热缓存体积失败'));
-            tx.oncomplete = () => { db.close(); resolve(bytes); };
-            tx.onerror = () => { db.close(); reject(tx.error || new Error('统计交火向量热缓存体积事务失败')); };
-        });
-        if (totalBytes <= maxBytes)
-            return;
-        let bytesToFree = totalBytes - maxBytes;
-        const trimDb = await openDb_ACU$1();
-        await new Promise((resolve, reject) => {
-            const tx = trimDb.transaction(STORE_NAME_ACU$1, 'readwrite');
-            const request = tx.objectStore(STORE_NAME_ACU$1).index('lastAccessAt').openCursor();
-            request.onsuccess = () => {
-                const cursor = request.result;
-                if (cursor && bytesToFree > 0) {
-                    bytesToFree -= Math.max(0, Number(cursor.value.byteSize) || 0);
-                    cursor.delete();
-                    cursor.continue();
-                }
-            };
-            request.onerror = () => reject(request.error || new Error('交火向量热缓存 LRU 淘汰失败'));
-            tx.oncomplete = () => { trimDb.close(); resolve(); };
-            tx.onerror = () => { trimDb.close(); reject(tx.error || new Error('交火向量热缓存 LRU 淘汰事务失败')); };
-        });
-    }
-    catch {
-        // 淘汰失败不影响读写链路，下次写入会再次尝试。
-    }
+    const db = await openDb_ACU$1();
+    const totalBytes = await new Promise((resolve, reject) => {
+        let bytes = 0;
+        const tx = db.transaction(STORE_NAME_ACU$1, 'readonly');
+        const request = tx.objectStore(STORE_NAME_ACU$1).openCursor();
+        request.onsuccess = () => {
+            const cursor = request.result;
+            if (cursor) {
+                bytes += Math.max(0, Number(cursor.value.byteSize) || 0);
+                cursor.continue();
+            }
+        };
+        request.onerror = () => reject(request.error || new Error('统计交火向量热缓存体积失败'));
+        tx.oncomplete = () => { db.close(); resolve(bytes); };
+        tx.onerror = () => { db.close(); reject(tx.error || new Error('统计交火向量热缓存体积事务失败')); };
+    });
+    if (totalBytes <= maxBytes)
+        return;
+    let bytesToFree = totalBytes - maxBytes;
+    const trimDb = await openDb_ACU$1();
+    await new Promise((resolve, reject) => {
+        const tx = trimDb.transaction(STORE_NAME_ACU$1, 'readwrite');
+        const request = tx.objectStore(STORE_NAME_ACU$1).index('lastAccessAt').openCursor();
+        request.onsuccess = () => {
+            const cursor = request.result;
+            if (cursor && bytesToFree > 0) {
+                bytesToFree -= Math.max(0, Number(cursor.value.byteSize) || 0);
+                cursor.delete();
+                cursor.continue();
+            }
+        };
+        request.onerror = () => reject(request.error || new Error('交火向量热缓存 LRU 淘汰失败'));
+        tx.oncomplete = () => { trimDb.close(); resolve(); };
+        tx.onerror = () => { trimDb.close(); reject(tx.error || new Error('交火向量热缓存 LRU 淘汰事务失败')); };
+    });
 }
-function maybeScheduleHotCacheTrim_ACU() {
+/**
+ * 预算淘汰：失败不阻断写入链，但必须留一条告警——热缓存是可丢失加速层，
+ * 静默失败会让 64MB 预算长期失效而不自知。
+ */
+async function maybeScheduleHotCacheTrim_ACU() {
     if (Date.now() - lastHotCacheTrimAt_ACU < VECTOR_HOT_CACHE_TRIM_THROTTLE_MS_ACU)
         return;
     lastHotCacheTrimAt_ACU = Date.now();
-    void trimSummaryVectorHotCacheToBudget_ACU().catch(() => undefined);
+    try {
+        await trimSummaryVectorHotCacheToBudget_ACU();
+    }
+    catch (error) {
+        console.warn('[交火向量热缓存] LRU 淘汰失败，缓存可能超出预算:', error);
+    }
 }
 async function putSummaryVectorHotCacheChunks_ACU(options) {
     try {
@@ -47592,6 +47605,22 @@ async function putSummaryVectorHotCacheChunks_ACU(options) {
         // 不可变 V2 快照：外部文件即权威，写入热缓存只会产生无效 IDB 扫描。
         if (isImmutableV2SnapshotManifest_ACU(manifest))
             return;
+        // 写入前先清掉同一 scope 的旧缓存。indexId 每次更新都不同，历史版本的 chunk
+        // 会一直占位到 64MB 预算触发 LRU，而 isRecordCompatible 对旧版本恒判否
+        // （它们已不可用），等于纯浪费存储。清理失败不阻断本轮写入（热缓存是可
+        // 丢失加速层），只告警——下次写入会再次尝试。
+        //
+        // isolationKey 必须按落库口径归一：记录存的是 normalizeSummaryVectorIsolationKey_ACU 的
+        // 结果（''→'default'），而删除侧 normalizeKeyPart_ACU 把 '' 当通配。直接传
+        // manifest.isolationKey 会让空槽退化成「同 chatKey 下全部隔离槽」，每次回填
+        // 擦掉别的隔离域的缓存。
+        if ((await deleteSummaryVectorHotCacheByScope_ACU({
+            chatKey: manifest.chatKey,
+            isolationKey: normalizeSummaryVectorIsolationKey_ACU(manifest.isolationKey),
+            sourceTableKey: manifest.sourceTableKey,
+        })) !== true) {
+            console.warn('[交火向量热缓存] 写入前清理同 scope 旧缓存失败，残留将在预算淘汰时回收');
+        }
         // ── 单文件快照模式：直接写入所有 chunks，不依赖 contentAddressed.chunkRefs ──
         if (isSingleFileSnapshotManifest_ACU$2(manifest)) {
             const db = await openDb_ACU$1();
@@ -47635,7 +47664,7 @@ async function putSummaryVectorHotCacheChunks_ACU(options) {
                 tx.oncomplete = () => { db.close(); resolve(); };
                 tx.onerror = () => { db.close(); reject(tx.error || new Error('写入交火向量热缓存事务失败（单文件快照）')); };
             });
-            maybeScheduleHotCacheTrim_ACU();
+            await maybeScheduleHotCacheTrim_ACU();
             return;
         }
         // ── 旧版内容寻址模式：通过 chunkRefs 匹配写入 ──
@@ -47691,7 +47720,7 @@ async function putSummaryVectorHotCacheChunks_ACU(options) {
                 reject(tx.error || new Error('写入交火向量热缓存事务失败'));
             };
         });
-        maybeScheduleHotCacheTrim_ACU();
+        await maybeScheduleHotCacheTrim_ACU();
     }
     catch {
         // 热缓存只是可丢失加速层，失败不能影响外置权威链路。
@@ -83471,7 +83500,7 @@ function replacePromptSection_ACU(content, startMarker, endMarker, replacement) 
 /**
  * 开关开启时的工具版主段：输出格式节整体换成工具提交节，结尾句同步切换。
  * 缺输出格式节或 thought 块时原样返回（fail-closed：提示词保持正文版，
- * 工具照挂，未命中则走正文兜底，不破坏填表）。
+ * 工具照挂，模型未调用时走正文兜底，不破坏填表）。
  */
 function buildTableSqlToolPrompt_ACU(content) {
     const text = typeof content === 'string' ? content : String(content ?? '');
@@ -83527,6 +83556,19 @@ function resolveTableFillToolTurn_ACU(turn) {
     const residual = content.replace(/<tableEdit>[\s\S]*?<\/tableEdit>/gi, '').trim();
     const block = `<tableEdit>\n${parts.join('\n')}\n</tableEdit>`;
     return { ok: true, text: residual ? `${residual}\n${block}` : block, viaTool: true };
+}
+/**
+ * 按开关构造「当前生效的默认主段」：供填表设置编辑器展示与「恢复默认」对齐。
+ * 逐段浅拷贝，不就地改写入参——否则默认值本身被工具化，关掉开关也回不去正文版。
+ */
+function buildTableFillDefaultPromptSegments_ACU(segments, toolEnabled) {
+    if (!Array.isArray(segments))
+        return segments;
+    if (toolEnabled !== true)
+        return segments.map(segment => ({ ...segment }));
+    return segments.map(segment => ((segment?.mainSlot === 'A' || segment?.isMain) && typeof segment?.content === 'string'
+        ? { ...segment, content: buildTableSqlToolPrompt_ACU(segment.content) }
+        : { ...segment }));
 }
 /** 工具挂载纯判定：仅开启且非流式时为 true。 */
 function shouldUseTableFillNativeTools_ACU(gate) {
@@ -91798,7 +91840,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261002-10"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261002-12"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91817,7 +91859,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261002-10";
+        const stamp = "20261002-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -152386,7 +152428,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261002-10";
+        const stamp = "20261002-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -172690,15 +172732,43 @@ function preparePromptForSave(segments) {
         isMain2: seg.mainSlot === "B",
     }));
 }
-function currentDefaultPromptSegments() {
+/** 按开关取两套默认提示词之一。toolEnabled 为 true 时主段切换为要求调用 table_sql 的工具版。 */
+function currentDefaultPromptSegmentsFor_ACU(toolEnabled) {
     const defaults = getCurrentStorageMode() === "sqlite"
         ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU
         : DEFAULT_CHAR_CARD_PROMPT_ACU;
-    return normalizePromptSegments(defaults);
+    return normalizePromptSegments(buildTableFillDefaultPromptSegments_ACU(defaults, toolEnabled));
+}
+function currentDefaultPromptSegments() {
+    // 正文/工具两套默认主段必须随填表工具开关对齐：开关关着时编辑器若展示要求调用
+    // 工具的默认提示词，用户看到的与实际发出的不一致（上游同批修正此项）。
+    return currentDefaultPromptSegmentsFor_ACU(settings_ACU.tableFillNativeToolsEnabled === true);
+}
+/**
+ * 设置里持久化的提示词可能是「另一套开关状态」下的默认（用户开关前后保存过一次）。
+ * 整份逐段指纹等于另一套默认时按当前开关归一，否则一律视为用户自定义。
+ * 不归一会让开关开启后每次重载都误判「已自定义」，切换开关也不再跟随默认。
+ * 只比对整份、不只看主段：只看主段会吞掉用户对 B 段/追加段的改写。
+ */
+function normalizeStoredPromptAgainstCurrentDefault_ACU(value) {
+    if (!Array.isArray(value) || value.length === 0)
+        return value;
+    const toolEnabled = settings_ACU.tableFillNativeToolsEnabled === true;
+    // 整份逐段比对：只看主段会吞掉用户对 B 段或新增段的改写（判据命中后整份被替换）。
+    const bodyDefaultFingerprint = JSON.stringify(preparePromptForSave(currentDefaultPromptSegmentsFor_ACU(false)));
+    const toolDefaultFingerprint = JSON.stringify(preparePromptForSave(currentDefaultPromptSegmentsFor_ACU(true)));
+    const storedFingerprint = JSON.stringify(preparePromptForSave(normalizePromptSegments(value)));
+    const otherFingerprint = toolEnabled ? bodyDefaultFingerprint : toolDefaultFingerprint;
+    // 存储值逐字等于「与当前开关不一致的那套默认」→ 用户没改写，只是开关变了，按当前开关归一。
+    return storedFingerprint === otherFingerprint
+        ? currentDefaultPromptSegments()
+        : value;
 }
 function currentPromptSource() {
     const value = settings_ACU.charCardPrompt;
-    return Array.isArray(value) && value.length > 0 ? value : currentDefaultPromptSegments();
+    if (!Array.isArray(value) || value.length === 0)
+        return currentDefaultPromptSegments();
+    return normalizeStoredPromptAgainstCurrentDefault_ACU(value);
 }
 function promptFingerprint$2(segments) {
     return JSON.stringify(preparePromptForSave(segments));
@@ -172788,8 +172858,15 @@ function useFormFillSettings() {
         message.value = null;
     }
     function setNativeToolsEnabled(value) {
+        // 先按切换前的默认判定是否仍是默认提示词，再改开关：比对基准变了就判不准。
+        const wasDefault = promptTemplateMode.value === "default";
         nativeToolsEnabled.value = value === true;
         settings_ACU.tableFillNativeToolsEnabled = nativeToolsEnabled.value;
+        // 仍用默认提示词时跟随切换到对应默认主段；用户改写过的提示词原样保留。
+        if (wasDefault) {
+            promptSegments.value = currentDefaultPromptSegments();
+            promptDirty.value = false;
+        }
         saveSettings_ACU();
         message.value = null;
     }
@@ -172870,13 +172947,36 @@ function useFormFillSettings() {
         promptDirty.value = true;
     }
     function savePrompt() {
+        // 工具版默认主段不得落进设置：运行时只在开关开启时按 mainSlot A 替换主段，
+        // 一旦把「必须调用 table_sql」写进 charCardPrompt，关掉开关后提示词仍在要求
+        // 调用未挂载的工具 → 填表退化。用户在工具版下改写过主段则原样保留（用户负责）。
+        //
+        // 判据按内容而非开关：导出→关开关→导入 的路径会让缓冲区带着工具版主段进入保存，
+        // 此时开关已是关闭态，若用开关门控就会原样落盘。
         const prepared = preparePromptForSave(promptSegments.value);
+        let bufferAfterSave = prepared;
+        const bodyDefaultMain = currentDefaultPromptSegmentsFor_ACU(false).find((segment) => segment.mainSlot === "A" || segment.isMain);
+        const toolDefaultMain = currentDefaultPromptSegmentsFor_ACU(true).find((segment) => segment.mainSlot === "A" || segment.isMain);
+        const mainIndex = prepared.findIndex((segment) => segment.mainSlot === "A" || segment.isMain);
+        if (bodyDefaultMain && toolDefaultMain && mainIndex >= 0
+            && prepared[mainIndex].content === String(toolDefaultMain.content ?? '')) {
+            // 落盘：主段回落正文版（其余段保留用户的改写/追加）。
+            const persisted = prepared.map((segment, index) => (index === mainIndex ? { ...bodyDefaultMain } : segment));
+            // 缓冲区：主段换回当前开关下的工具版，其余段保持用户编辑后的内容。
+            bufferAfterSave = prepared.map((segment, index) => (index === mainIndex
+                ? { ...toolDefaultMain }
+                : { ...segment }));
+            prepared.length = 0;
+            prepared.push(...persisted);
+        }
         const result = setCharCardPrompt_ACU(clone$1(prepared));
         if (!result.ok) {
             message.value = { kind: "error", text: result.message || "提示词保存失败。", scope: "prompt" };
             return;
         }
-        promptSegments.value = prepared;
+        // 缓冲区回填「当前开关下的生效提示词」，不是刚落盘的正文版：否则编辑器显示的
+        // 与实际发出的不一致，且 mode 翻成 custom 后切开关不再跟随默认。
+        promptSegments.value = bufferAfterSave;
         promptDirty.value = false;
         message.value = null;
         toast.success("提示词已保存");
@@ -173246,8 +173346,8 @@ var _sfc_main$T = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-form-fill-update-settings-panel__settings-groups[data-v-e4fa32a6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-form-fill-update-settings-panel__setting-group[data-v-e4fa32a6] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-form-fill-update-settings-panel__setting-group\r\n  + .acu-form-fill-update-settings-panel__setting-group[data-v-e4fa32a6] {\r\n  padding-top: 14px;\r\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-form-fill-update-settings-panel__advanced[data-v-e4fa32a6] {\r\n  border: 0;\r\n  background: transparent;\n}\n.acu-form-fill-update-settings-panel__number-grid[data-v-e4fa32a6] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n@media (max-width: 560px) {\n.acu-form-fill-update-settings-panel__number-grid[data-v-e4fa32a6] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/FormFillUpdateSettingsPanel.vue#style-0-e4fa32a6");
-var FormFillUpdateSettingsPanel_vue_vue_type_style_index_0_scoped_e4fa32a6_lang = null;
+injectSfcStyle("\n.acu-form-fill-update-settings-panel__settings-groups[data-v-073e6d2a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-form-fill-update-settings-panel__setting-group[data-v-073e6d2a] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-form-fill-update-settings-panel__setting-group\r\n  + .acu-form-fill-update-settings-panel__setting-group[data-v-073e6d2a] {\r\n  padding-top: 14px;\r\n  border-top: 1px solid var(--acu-border-2);\n}\n.acu-form-fill-update-settings-panel__advanced[data-v-073e6d2a] {\r\n  border: 0;\r\n  background: transparent;\n}\n.acu-form-fill-update-settings-panel__number-grid[data-v-073e6d2a] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n@media (max-width: 560px) {\n.acu-form-fill-update-settings-panel__number-grid[data-v-073e6d2a] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/FormFillUpdateSettingsPanel.vue#style-0-073e6d2a");
+var FormFillUpdateSettingsPanel_vue_vue_type_style_index_0_scoped_073e6d2a_lang = null;
 
 const _hoisted_1$R = { class: "acu-form-fill-update-settings-panel__settings-groups" };
 const _hoisted_2$K = { class: "acu-form-fill-update-settings-panel__setting-group" };
@@ -173306,7 +173406,7 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 			}, 8, ["label", "hint"]),
 			createVNode($setup["AcuFormRow"], {
 				label: "原生工具提交",
-				hint: "开启后填表主段切换为工具版并挂载 table_sql 工具；宿主或模型不支持工具时填表会失败，此类环境请勿开启。仅非流式请求生效。"
+				hint: "开启后填表改走 table_sql 原生工具提交，默认提示词同步切换为工具版；模型不调用工具时回退正文提取。仅非流式请求生效。"
 			}, {
 				default: withCtx(() => [createVNode($setup["AcuToggle"], {
 					"model-value": $setup.settings.nativeToolsEnabled.value,
@@ -173357,7 +173457,7 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var FormFillUpdateSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-e4fa32a6"]]);
+var FormFillUpdateSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-073e6d2a"]]);
 
 /**
  * useDevOptions — 仪表盘 / 剧情推进页 / 未来开发者一级页共享的开发者选项读写入口

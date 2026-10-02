@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// 模拟 IndexedDB：记录 open 调用次数；open 抛错使 legacy 分支在 openDb_ACU 处失败，
+// 计数 open 调用；open 抛错使 legacy 分支在 openDb_ACU 处失败，
 // 从而可以断言「V2 判定早退时不触碰 IDB」与「legacy 分支仍会触碰 IDB」。
 const openSpy = vi.fn(() => {
   throw new Error('indexedDB.open not available in test');
@@ -84,7 +84,18 @@ describe('put 早退', () => {
 
   it('legacy manifest 仍走 legacy 写入（触碰 IDB）', async () => {
     await putSummaryVectorHotCacheChunks_ACU({ manifest: legacyManifest(), chunks: [chunk()] });
-    expect(openSpy).toHaveBeenCalledTimes(1);
+    // 写入前先按 scope 清理同 scope 旧缓存（+1 次 open），再写本轮 chunks（+1 次 open）；
+    // open 抛错所以只数到第一次 attempt，逐次 open 的实现（fake-indexeddb）另测。
+    expect(openSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('put 写入前按 scope 清理旧缓存', () => {
+  it('scope 清理失败不阻断本轮写入（热缓存是可丢失加速层）', async () => {
+    // open 抛错时 scope 清理与写入都失败，但 put 必须静默返回、不抛出。
+    await expect(putSummaryVectorHotCacheChunks_ACU({ manifest: legacyManifest(), chunks: [chunk()] }))
+      .resolves.toBeUndefined();
+    expect(openSpy).toHaveBeenCalled();
   });
 });
 
