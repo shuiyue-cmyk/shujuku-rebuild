@@ -270,7 +270,7 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
     mockSettings.tableFillNativeToolsEnabled = true;
     mockSettings.streamingEnabled = false;
     mockSettings.charCardPrompt = [
-      { role: 'USER', content: '## 输出格式（严格执行）\n\n<content>\nX\n</content>', mainSlot: 'A', isMain: true },
+      { role: 'USER', content: '## 输出格式（严格执行）\n\n<thought>\n[分析步骤]\n</thought>\n\n<content>\nX\n</content>\n\n## 关键规则\n1. 守规\n\n现在开始按此格式执行填表任务。', mainSlot: 'A', isMain: true },
     ];
     mockFetch.mockResolvedValue({
       ok: true,
@@ -286,6 +286,11 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
     expect(overrides.tools).toEqual([expect.objectContaining({ type: 'function' })]);
     expect(overrides.tools[0].function.name).toBe('table_sql');
     expect(overrides.toolChoice).toBe('auto');
+    // 开关开则主段整体切换为工具版（要求调用工具、正文不再写 SQL）。
+    const sentMessages = mockBuildCustomBody.mock.calls[0][0];
+    const sentText = sentMessages.map((message: any) => String(message.content)).join('\n');
+    expect(sentText).toContain('必须调用 table_sql');
+    expect(sentText).toContain('正文中不要再写任何 SQL');
     expect(result).toContain('<tableEdit>');
     expect(result).toContain('UPDATE t SET a = 1;');
     delete mockSettings.tableFillNativeToolsEnabled;

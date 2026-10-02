@@ -3,7 +3,7 @@ import {
   TABLE_SQL_TOOL_ACU,
   TABLE_SQL_TOOL_NAME_ACU,
   buildTableFillNativeTools_ACU,
-  injectTableSqlIntermediateGuidance_ACU,
+  buildTableSqlToolPrompt_ACU,
   resolveTableFillToolTurn_ACU,
   shouldUseTableFillNativeTools_ACU,
 } from '../../../src/service/ai/prompt-builder/table-fill-tools';
@@ -11,9 +11,10 @@ import {
 /**
  * 填表原生工具调用（可选项，默认关闭）。
  *
- * 开启后填表请求挂载 table_sql 工具：命中则工具参数合成为 <tableEdit> 块走既有
- * 解析链；未命中（宿主/模型不支持）则原样走正文提取兜底。提示词用中间态写法
- * （有工具则调用、无则按正文输出），任一侧缺失都不破坏填表。
+ * 开启后填表请求挂载 table_sql 工具，主段整体切换为工具版（要求调用工具、
+ * 正文不再写 SQL）；命中则工具参数合成为 <tableEdit> 块走既有解析链。
+ * 宿主/模型不支持工具时模型听话反而无块可用，最多按 tableMaxRetries 重试后报错，
+ * 此类环境请勿开启。开关关闭时行为与历史完全一致。
  */
 describe('填表原生工具（table_sql，可选项）', () => {
   it('工具定义为 OpenAI function 形态，参数只有 sql', () => {
@@ -28,21 +29,21 @@ describe('填表原生工具（table_sql，可选项）', () => {
     expect(buildTableFillNativeTools_ACU(true)).toEqual([TABLE_SQL_TOOL_ACU]);
   });
 
-  it('中间态指引插在输出格式节之后', () => {
-    const content = '## 输出格式（严格执行）\n\n<content>\n<tableEdit>\nX\n</tableEdit>\n</content>';
-    const next = injectTableSqlIntermediateGuidance_ACU(content);
-    expect(next).toContain('如果本次请求提供了 table_sql 工具，必须调用 table_sql');
-    expect(next).toContain('如果本次请求没有提供该工具，则按下方格式在正文中输出');
-    expect(next.indexOf('table_sql')).toBeGreaterThan(next.indexOf('## 输出格式（严格执行）'));
+  it('工具版主段：要求调用 table_sql，正文中不再写 SQL', () => {
+    const content = '## 输出格式（严格执行）\n\n<thought>\n[分析步骤]\n</thought>\n\n<content>\n<tableEdit>\nX\n</tableEdit>\n</content>\n\n## 关键规则\n1. 守规\n\n现在开始按此格式执行填表任务。';
+    const next = buildTableSqlToolPrompt_ACU(content);
+    expect(next).toContain('必须调用 table_sql');
+    expect(next).toContain('正文中不要再写任何 SQL');
+    expect(next).toContain('[分析步骤]');
+    expect(next).toContain('现在开始分析，并调用 table_sql 工具提交本轮填表结果。');
+    expect(next).not.toContain('<tableEdit>');
+    expect(next).not.toContain('现在开始按此格式执行填表任务。');
+    expect(next).toContain('## 关键规则');
   });
 
-  it('重复注入幂等', () => {
-    const once = injectTableSqlIntermediateGuidance_ACU('## 输出格式（严格执行）\n\n正文');
-    expect(injectTableSqlIntermediateGuidance_ACU(once)).toBe(once);
-  });
-
-  it('无输出格式节时原样返回', () => {
-    expect(injectTableSqlIntermediateGuidance_ACU('普通文本')).toBe('普通文本');
+  it('缺输出格式节或 thought 块时原样返回（fail-closed，不破坏填表）', () => {
+    expect(buildTableSqlToolPrompt_ACU('普通文本')).toBe('普通文本');
+    expect(buildTableSqlToolPrompt_ACU('## 输出格式（严格执行）\n\n无 thought 块\n\n## 关键规则')).toContain('## 输出格式（严格执行）');
   });
 
   it('命中工具调用时合成为 <tableEdit> 块', () => {

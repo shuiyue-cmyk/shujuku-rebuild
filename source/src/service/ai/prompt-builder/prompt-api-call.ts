@@ -17,7 +17,7 @@ import {
 } from '../api-call';
 import {
   buildTableFillNativeTools_ACU,
-  injectTableSqlIntermediateGuidance_ACU,
+  buildTableSqlToolPrompt_ACU,
   resolveTableFillToolTurn_ACU,
   shouldUseTableFillNativeTools_ACU
 } from './table-fill-tools';
@@ -154,8 +154,8 @@ export class RetryableAiResponseError_ACU extends Error {
         promptSegments = [{ role: 'USER', content: charCardPromptSetting }];
     }
 
-    // 填表原生工具调用（可选项，默认关闭）：运行时给主段注入中间态指引
-    // （有工具则调用、无则按正文输出），只改本次请求的内存副本，不写回设置。
+    // 填表原生工具调用（可选项，默认关闭）：开关开时主段整体切换为工具版
+    // （要求调用 table_sql、正文不再写 SQL），只改本次请求的内存副本，不写回设置。
     // 流式请求不挂工具（delta 不组装 tool_calls），静默走正文路径。
     const fillRequestWantsStream = effectiveApiConfig.streamingEnabled !== undefined
         ? effectiveApiConfig.streamingEnabled === true
@@ -167,7 +167,7 @@ export class RetryableAiResponseError_ACU extends Error {
     if (fillNativeToolsOn) {
         promptSegments = promptSegments.map((segment: any) => (
             (segment?.mainSlot === 'A' || segment?.isMain) && typeof segment?.content === 'string'
-                ? { ...segment, content: injectTableSqlIntermediateGuidance_ACU(segment.content) }
+                ? { ...segment, content: buildTableSqlToolPrompt_ACU(segment.content) }
                 : segment
         ));
     }

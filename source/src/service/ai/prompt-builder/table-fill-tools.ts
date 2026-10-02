@@ -1,10 +1,9 @@
 /**
  * service/ai/prompt-builder/table-fill-tools.ts — 填表原生工具调用（可选项，默认关闭）
  *
- * 开启（settings tableFillNativeToolsEnabled === true）且非流式请求时，填表在
- * 自定义直连通道挂载 table_sql 工具：
- * - 提示词主段运行时注入中间态指引（有工具则调用、无则按正文输出），从不落盘，
- *   因此不需要版本化迁移；开关关闭时提示词字节与历史完全一致。
+ * 开关开启（settings tableFillNativeToolsEnabled === true）且非流式请求时，填表在
+ * 自定义直连通道挂载 table_sql 工具，主段整体切换为工具版（要求调用工具、正文不再写
+ * SQL）；开关关闭时提示词字节与历史完全一致。切换只改本次请求的内存副本，不写回设置。
  * - 命中工具调用则参数合成为 <tableEdit> 块走既有解析链；未命中原样走正文提取兜底。
  * - 流式请求不挂工具（delta 组装 tool_calls 复杂度高，降级为正文路径）。
  */
@@ -47,25 +46,53 @@ export function buildTableFillNativeTools_ACU(_sqlite: boolean): TableSqlToolDef
   return [TABLE_SQL_TOOL_ACU];
 }
 
-const INTERMEDIATE_GUIDANCE_MARKER_ACU = '## 输出格式（严格执行）\n\n';
+const TABLE_SQL_TOOL_SECTION_ACU = `分析完成后，必须调用 table_sql 工具一次性提交本轮全部表格修改：
+- sql 参数填写完整 SQL 脚本，只允许 INSERT / UPDATE / DELETE，例如：
+INSERT INTO table_name (col1, col2) VALUES ('值1', '值2');
+UPDATE table_name SET col1 = '新值' WHERE row_id = 1;
+DELETE FROM table_name WHERE row_id = 2;
+- 本轮没有任何修改时，sql 填空字符串。
+- 表格修改只能通过 table_sql 工具提交，正文中不要再写任何 SQL。`;
 
-const TABLE_SQL_INTERMEDIATE_GUIDANCE_ACU = `【工具提交（优先）】
-如果本次请求提供了 table_sql 工具，必须调用 table_sql 一次性提交本轮全部表格修改：sql 参数填写与下方 <tableEdit> 内格式完全相同的完整 SQL 脚本（每条语句以分号结尾、换行分隔）；本轮没有任何修改时 sql 填空字符串。调用工具后，正文中不要再输出 SQL。
-如果本次请求没有提供该工具，则按下方格式在正文中输出。
+/** 取主段 <thought> 内的分析步骤与纪要规则，工具化后原样沿用。 */
+function extractThoughtSteps_ACU(content: string): string | null {
+  const start = content.indexOf('<thought>');
+  const end = content.indexOf('</thought>', start);
+  if (start < 0 || end < 0) return null;
+  return content.slice(start + '<thought>'.length, end).trim();
+}
 
-`;
+function replacePromptSection_ACU(content: string, startMarker: string, endMarker: string, replacement: string): string | null {
+  const start = content.indexOf(startMarker);
+  const end = content.indexOf(endMarker, start + startMarker.length);
+  if (start < 0 || end < 0) return null;
+  return `${content.slice(0, start)}${replacement}${content.slice(end)}`;
+}
 
 /**
- * 运行时向主段注入中间态指引（幂等；无输出格式节时原样返回）。
- * 只改本次请求的内存副本，不写回设置，因此开关关闭/打开都不需要迁移旧默认。
+ * 开关开启时的工具版主段：输出格式节整体换成工具提交节，结尾句同步切换。
+ * 缺输出格式节或 thought 块时原样返回（fail-closed：提示词保持正文版，
+ * 工具照挂，未命中则走正文兜底，不破坏填表）。
  */
-export function injectTableSqlIntermediateGuidance_ACU(content: unknown): string {
+export function buildTableSqlToolPrompt_ACU(content: unknown): string {
   const text = typeof content === 'string' ? content : String(content ?? '');
-  if (!text || text.includes('table_sql 工具，必须调用 table_sql')) return text;
-  const index = text.indexOf(INTERMEDIATE_GUIDANCE_MARKER_ACU);
-  if (index < 0) return text;
-  const at = index + INTERMEDIATE_GUIDANCE_MARKER_ACU.length;
-  return `${text.slice(0, at)}${TABLE_SQL_INTERMEDIATE_GUIDANCE_ACU}${text.slice(at)}`;
+  if (!text) return text;
+  const steps = extractThoughtSteps_ACU(text);
+  if (steps === null) return text;
+  const section = `## 输出格式（严格执行）
+
+先在正文中完成分析，可写在 <thought></thought> 内：
+${steps}
+
+${TABLE_SQL_TOOL_SECTION_ACU}
+
+`;
+  const replaced = replacePromptSection_ACU(text, '## 输出格式（严格执行）', '## 关键规则', section);
+  if (replaced === null) return text;
+  return replaced.replace(
+    '现在开始按此格式执行填表任务。',
+    '现在开始分析，并调用 table_sql 工具提交本轮填表结果。',
+  );
 }
 
 export interface TableFillToolCall_ACU {
