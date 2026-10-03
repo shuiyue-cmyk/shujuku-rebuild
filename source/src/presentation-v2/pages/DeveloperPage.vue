@@ -66,12 +66,6 @@ const toggles = computed<DeveloperFieldItem[]>(() => {
       value: devOptions.plotAdvanced.value,
     },
     {
-      key: "vectorIndexAdvanced",
-      label: "交火模式",
-      description: "显示召回参数与归档分块面板。需要调整向量相关参数时开启。",
-      value: devOptions.vectorIndexAdvanced.value,
-    },
-    {
       key: "apiReconfirm",
       label: "API二次确认",
       description: "打开时，API 预设在别处变化后其他使用该预设的位置会标黄提醒；关闭后不再标黄。",
@@ -96,9 +90,6 @@ const maxConcurrentGroups = computed(
 function handleToggleChange(key: string, value: boolean): void {
   if (key === "plotAdvanced") {
     devOptions.setPlotAdvanced(value);
-  }
-  if (key === "vectorIndexAdvanced") {
-    devOptions.setVectorIndexAdvanced(value);
   }
   if (key === "apiReconfirm") {
     devOptions.setApiReconfirm(value);

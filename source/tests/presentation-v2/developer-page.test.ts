@@ -109,6 +109,23 @@ describe('DeveloperPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('已失效的「交火模式」开关不得再渲染：遗留 vectorIndexAdvanced=true 存量也不出现', async () => {
+    // 自「交火参数常显」后该开关无任何消费方（VectorIndexPage 根本不读它），
+    // 拨动只写存储、不改变任何渲染。剥离：遗留存量也不得再出现该开关。
+    const { mount } = await mountDeveloperPage({ vectorIndexAdvanced: true });
+
+    const page = document.querySelector('.acu-v2-developer-page');
+    expect(page).not.toBeNull();
+    expect(page!.textContent || '', '失效的交火模式开关必须已剥离').not.toContain('交火模式');
+    // 结构级双保险：不只看文本，开关控件本身也不得存在（防文本巧合/空转）。
+    expect(
+      page!.querySelector('[data-acu-toggle-key="vectorIndexAdvanced"]'),
+      'vectorIndexAdvanced 开关控件必须已剥离',
+    ).toBeNull();
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('最大并发更新组数输入会保存到 settings', async () => {
     const { mount, settings, saveSettings } = await mountDeveloperPage();
 

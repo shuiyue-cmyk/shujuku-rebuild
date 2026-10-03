@@ -91840,7 +91840,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261002-13"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261003-08"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91859,7 +91859,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261002-13";
+        const stamp = "20261003-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -152428,7 +152428,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261002-13";
+        const stamp = "20261003-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -172467,7 +172467,6 @@ function __resetPersistenceForTests() {
  *   "开发者"一级页（plan §D24）。不联动任何 gated 字段的真假状态。
  * - plotAdvanced：编辑剧情推进预设抽屉中的"匹配替换"字段（sulv1-4 / zhaohui）
  *   是否显示。开关 UI 在开发者一级页内；与总开关相互独立。
- * - vectorIndexAdvanced：交火模式页中的"召回参数"与"归档与分块"面板是否显示。
  * - warnLogEnabled：WARN 日志是否输出并写入运行日志，默认关闭。
  *   这是 warn 采集的「常驻来源」，与 Debug 面板的临时采集各占一格（log-buffer 取或），
  *   所以停止 Debug 不会关掉这里显式打开的常驻采集，本 store 也不会被 Debug 改写。
@@ -172482,7 +172481,6 @@ function loadFromStorage$1() {
     return {
         developerOptionsEnabled: raw.developerOptionsEnabled === true,
         plotAdvanced: raw.plotAdvanced === true,
-        vectorIndexAdvanced: raw.vectorIndexAdvanced === true,
         warnLogEnabled: raw.warnLogEnabled === true,
         apiReconfirm: raw.apiReconfirm !== false,
     };
@@ -172491,7 +172489,6 @@ function persist$2(state) {
     writeSection(SECTION_KEY$4, {
         developerOptionsEnabled: state.developerOptionsEnabled,
         plotAdvanced: state.plotAdvanced,
-        vectorIndexAdvanced: state.vectorIndexAdvanced,
         warnLogEnabled: state.warnLogEnabled,
         apiReconfirm: state.apiReconfirm,
     });
@@ -172511,10 +172508,6 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
             this.plotAdvanced = !!enabled;
             persist$2(this.$state);
         },
-        setVectorIndexAdvanced(enabled) {
-            this.vectorIndexAdvanced = !!enabled;
-            persist$2(this.$state);
-        },
         setWarnLogEnabled(enabled) {
             this.warnLogEnabled = !!enabled;
             setWarnLogEnabledByDevOption_ACU(this.warnLogEnabled);
@@ -172528,7 +172521,6 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
             const next = loadFromStorage$1();
             this.developerOptionsEnabled = next.developerOptionsEnabled;
             this.plotAdvanced = next.plotAdvanced;
-            this.vectorIndexAdvanced = next.vectorIndexAdvanced;
             this.warnLogEnabled = next.warnLogEnabled;
             this.apiReconfirm = next.apiReconfirm;
             setWarnLogEnabledByDevOption_ACU(this.warnLogEnabled);
@@ -173498,14 +173490,12 @@ var FormFillUpdateSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["re
  */
 function useDevOptions() {
     const store = useDevOptionsStore();
-    const { developerOptionsEnabled, plotAdvanced, vectorIndexAdvanced, warnLogEnabled, apiReconfirm, } = storeToRefs(store);
+    const { developerOptionsEnabled, plotAdvanced, warnLogEnabled, apiReconfirm, } = storeToRefs(store);
     return {
         developerOptionsEnabled,
         setDeveloperOptionsEnabled: (enabled) => store.setDeveloperOptionsEnabled(enabled),
         plotAdvanced,
         setPlotAdvanced: (enabled) => store.setPlotAdvanced(enabled),
-        vectorIndexAdvanced,
-        setVectorIndexAdvanced: (enabled) => store.setVectorIndexAdvanced(enabled),
         warnLogEnabled,
         setWarnLogEnabled: (enabled) => store.setWarnLogEnabled(enabled),
         apiReconfirm,
@@ -199850,12 +199840,6 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
                     value: devOptions.plotAdvanced.value,
                 },
                 {
-                    key: "vectorIndexAdvanced",
-                    label: "交火模式",
-                    description: "显示召回参数与归档分块面板。需要调整向量相关参数时开启。",
-                    value: devOptions.vectorIndexAdvanced.value,
-                },
-                {
                     key: "apiReconfirm",
                     label: "API二次确认",
                     description: "打开时，API 预设在别处变化后其他使用该预设的位置会标黄提醒；关闭后不再标黄。",
@@ -199874,9 +199858,6 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
             if (key === "plotAdvanced") {
                 devOptions.setPlotAdvanced(value);
             }
-            if (key === "vectorIndexAdvanced") {
-                devOptions.setVectorIndexAdvanced(value);
-            }
             if (key === "apiReconfirm") {
                 devOptions.setApiReconfirm(value);
             }
@@ -199892,8 +199873,8 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-developer-page[data-v-57fd41a0] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-57fd41a0] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-57fd41a0] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-57fd41a0");
-var DeveloperPage_vue_vue_type_style_index_0_scoped_57fd41a0_lang = null;
+injectSfcStyle("\n.acu-v2-developer-page[data-v-93fc37aa] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-93fc37aa] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-93fc37aa] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-93fc37aa");
+var DeveloperPage_vue_vue_type_style_index_0_scoped_93fc37aa_lang = null;
 
 const _hoisted_1$b = { class: "acu-v2-developer-page" };
 const _hoisted_2$a = { class: "acu-v2-developer-page__toggle-list" };
@@ -199939,7 +199920,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-57fd41a0"]]);
+var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-93fc37aa"]]);
 
 /**
  * page-registry — 一级页静态注册表（plan §4.1 + §D24）

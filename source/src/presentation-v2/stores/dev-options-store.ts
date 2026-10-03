@@ -6,7 +6,6 @@
  *   "开发者"一级页（plan §D24）。不联动任何 gated 字段的真假状态。
  * - plotAdvanced：编辑剧情推进预设抽屉中的"匹配替换"字段（sulv1-4 / zhaohui）
  *   是否显示。开关 UI 在开发者一级页内；与总开关相互独立。
- * - vectorIndexAdvanced：交火模式页中的"召回参数"与"归档与分块"面板是否显示。
  * - warnLogEnabled：WARN 日志是否输出并写入运行日志，默认关闭。
  *   这是 warn 采集的「常驻来源」，与 Debug 面板的临时采集各占一格（log-buffer 取或），
  *   所以停止 Debug 不会关掉这里显式打开的常驻采集，本 store 也不会被 Debug 改写。
@@ -26,8 +25,6 @@ export interface DevOptionsState {
   developerOptionsEnabled: boolean;
   /** 编辑剧情推进预设抽屉中的"匹配替换"字段是否显示。与 developerOptionsEnabled 相互独立。 */
   plotAdvanced: boolean;
-  /** 交火模式页中的高级索引参数面板是否显示。与 developerOptionsEnabled 相互独立。 */
-  vectorIndexAdvanced: boolean;
   /** WARN 日志是否输出并写入运行日志。默认关闭。 */
   warnLogEnabled: boolean;
   /** API 二次确认：预设变更后他处是否标黄。默认打开；缺省视为打开。 */
@@ -37,7 +34,6 @@ export interface DevOptionsState {
 interface PersistedShape {
   developerOptionsEnabled?: unknown;
   plotAdvanced?: unknown;
-  vectorIndexAdvanced?: unknown;
   warnLogEnabled?: unknown;
   apiReconfirm?: unknown;
 }
@@ -47,7 +43,6 @@ function loadFromStorage(): DevOptionsState {
   return {
     developerOptionsEnabled: raw.developerOptionsEnabled === true,
     plotAdvanced: raw.plotAdvanced === true,
-    vectorIndexAdvanced: raw.vectorIndexAdvanced === true,
     warnLogEnabled: raw.warnLogEnabled === true,
     apiReconfirm: raw.apiReconfirm !== false,
   };
@@ -57,7 +52,6 @@ function persist(state: DevOptionsState): void {
   writeSection(SECTION_KEY, {
     developerOptionsEnabled: state.developerOptionsEnabled,
     plotAdvanced: state.plotAdvanced,
-    vectorIndexAdvanced: state.vectorIndexAdvanced,
     warnLogEnabled: state.warnLogEnabled,
     apiReconfirm: state.apiReconfirm,
   });
@@ -78,10 +72,6 @@ export const useDevOptionsStore = defineStore('acu-v2-dev-options', {
       this.plotAdvanced = !!enabled;
       persist(this.$state);
     },
-    setVectorIndexAdvanced(enabled: boolean): void {
-      this.vectorIndexAdvanced = !!enabled;
-      persist(this.$state);
-    },
     setWarnLogEnabled(enabled: boolean): void {
       this.warnLogEnabled = !!enabled;
       applyWarnLogEnabled(this.warnLogEnabled);
@@ -95,7 +85,6 @@ export const useDevOptionsStore = defineStore('acu-v2-dev-options', {
       const next = loadFromStorage();
       this.developerOptionsEnabled = next.developerOptionsEnabled;
       this.plotAdvanced = next.plotAdvanced;
-      this.vectorIndexAdvanced = next.vectorIndexAdvanced;
       this.warnLogEnabled = next.warnLogEnabled;
       this.apiReconfirm = next.apiReconfirm;
       applyWarnLogEnabled(this.warnLogEnabled);
