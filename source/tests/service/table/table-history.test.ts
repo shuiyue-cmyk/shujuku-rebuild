@@ -60,6 +60,88 @@ describe('resolveTableHistoryStateFromChat_ACU', () => {
     expect(state.lastTrackedUpdateAiFloor).toBe(1);
   });
 
+  it('导入恢复帧：声明覆盖楼层存在时前沿用声明值，不用帧楼层', async () => {
+    // P1 守卫：a86bbb9b 的 restoreUpToAiFloor 机制。快照覆盖楼层 1，恢复帧落在楼层 2，
+    // 追平必须从 2 开始规划；若按帧楼层算会误报「已追平」。
+    const chat = [
+      { is_user: true },
+      v2Message({
+        version: 2,
+        checkpoint: {
+          kind: 'full',
+          createdAt: 1,
+          reason: 'init',
+          data: { mate: {}, sheet_0: { name: '表A', content: [['row_id']] } },
+          event: { filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [] },
+        },
+        logEntries: [],
+      }),
+      { is_user: true },
+      v2Message({
+        version: 2,
+        checkpoint: {
+          kind: 'full',
+          createdAt: 2,
+          reason: 'import',
+          data: { mate: {}, sheet_0: { name: '表A', content: [['row_id'], ['1']] } },
+          event: { filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [] },
+          restoreUpToAiFloor: 1,
+        },
+        logEntries: [],
+      }),
+    ];
+
+    const state = resolveTableHistoryStateFromChat_ACU(chat, {
+      sheetKey: 'sheet_0',
+      isSummaryTable: false,
+      isolationKey: '',
+      settings,
+    });
+
+    expect(state.lastTrackedUpdateAiFloor, '导入恢复前沿必须用声明值 1，不用帧楼层 2').toBe(1);
+  });
+
+  it('导入恢复后的一次无填表 checkpoint：烘焙的前沿是声明值时 history 必须认', async () => {
+    // P2b 配套（非判别，改前即绿）：烘焙器修好后，compact 帧存的 scheduleSummary 是声明钳制过的 1；
+    // history 读到它必须报前沿 1（端到端不断链）。真正的判别在 P2a（烘焙器侧），本用例只防回退断链。
+    const chat = [
+      { is_user: true },
+      v2Message({
+        version: 2,
+        checkpoint: {
+          kind: 'full',
+          createdAt: 1,
+          reason: 'init',
+          data: { mate: {}, sheet_0: { name: '表A', content: [['row_id']] } },
+          event: { filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [] },
+        },
+        logEntries: [],
+      }),
+      { is_user: true },
+      v2Message({
+        version: 2,
+        checkpoint: {
+          kind: 'full',
+          createdAt: 3,
+          reason: 'compact',
+          data: { mate: {}, sheet_0: { name: '表A', content: [['row_id'], ['1']] } },
+          scheduleSummary: { sheet_0: { lastFilledAiFloor: 1 } },
+          event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
+        },
+        logEntries: [],
+      }),
+    ];
+
+    const state = resolveTableHistoryStateFromChat_ACU(chat, {
+      sheetKey: 'sheet_0',
+      isSummaryTable: false,
+      isolationKey: '',
+      settings,
+    });
+
+    expect(state.lastTrackedUpdateAiFloor, '烘焙前沿 1 必须被认作前沿').toBe(1);
+  });
+
   it('识别 V2 operation log 的 filledSheetKeys 作为最后填表楼层', () => {
     const chat = [
       v2Message({

@@ -3366,6 +3366,153 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     expect(result?.sheet_new).toEqual(introducedSheet);
     expect(summary.sheet_new).toEqual({ lastFilledAiFloor: 1, lastChangedAiFloor: 1 });
   });
+  it('导入恢复帧的 filled 事件烘焙前沿时不得超过声明覆盖楼层（P2a）', () => {
+    // 快照覆盖楼层 1，恢复帧落在楼层 2：烘焙出的 lastFilledAiFloor 必须是 1。
+    // 否则后续 checkpoint 把 2 存进 scheduleSummary，声明丢失后 history 永久误报前沿，
+    // 追平跳过从未填过的楼层（上游 c0237dae 同类问题；本仓用 restoreUpToAiFloor 做同一载体）。
+    const rootData = makeCheckpointData();
+    const chat = [
+      { is_user: true },
+      {
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: rootData, event: { filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [] } },
+              logEntries: [],
+            },
+          },
+        },
+      },
+      { is_user: true },
+      {
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: {
+                kind: 'full', createdAt: 2, reason: 'import', data: rootData,
+                event: { filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [] },
+                restoreUpToAiFloor: 1,
+              },
+              logEntries: [],
+            },
+          },
+        },
+      },
+    ];
+
+    const summary = collectScheduleSummaryFromFramesV2_ACU(chat, '');
+
+    expect(summary.sheet_0?.lastFilledAiFloor, '导入帧烘焙前沿必须钳制到声明值 1').toBe(1);
+  });
+  it('同帧真实 entry 与降级 entry 共存时顺序不得影响前沿（P2d，取 max 与 history 同口径）', () => {
+    // history 侧是跨证据 max()（table-history），烘焙侧若用覆盖+钳制，
+    // 「真实在先、降级在后」会把刚写的前沿拉下来，与 history 读数分叉。
+    // 两种顺序都必须得 2。
+    const rootData = makeCheckpointData();
+    const realEntry = {
+      seq: 1, entryId: 'real-fill', createdAt: 1, source: 'system',
+      targetMessageIndex: 2, aiFloor: 2,
+      filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+      operations: [{ kind: 'row_upsert', sheetKey: 'sheet_0', rowId: '1', cells: ['1', 'x'] }],
+    };
+    const downgradeEntry = {
+      seq: 2, entryId: 'downgraded-checkpoint-2-1', createdAt: 2, source: 'system',
+      targetMessageIndex: 2, aiFloor: 2, restoreUpToAiFloor: 1,
+      filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+      operations: [{ kind: 'data_replace', data: rootData, reason: 'checkpoint_fallback' }],
+    };
+    const buildChat = (entries: any[]) => [
+      { is_user: true },
+      {
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: rootData, event: { filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [] } },
+              logEntries: [],
+            },
+          },
+        },
+      },
+      { is_user: true },
+      {
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', createdAt: 2, reason: 'compact', data: rootData, event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] } },
+              logEntries: entries,
+            },
+          },
+        },
+      },
+    ];
+
+    expect(
+      collectScheduleSummaryFromFramesV2_ACU(buildChat([realEntry, downgradeEntry]), '').sheet_0?.lastFilledAiFloor,
+      '真实在先、降级在后：不得拉下前沿',
+    ).toBe(2);
+    expect(
+      collectScheduleSummaryFromFramesV2_ACU(buildChat([downgradeEntry, realEntry]), '').sheet_0?.lastFilledAiFloor,
+      '降级在先、真实在后：同样得 2',
+    ).toBe(2);
+  });
+  it('降级 entry 自带的覆盖声明同样钳制烘焙前沿（P2c）', () => {
+    // 边界轮转时降级 entry 会带着原 full checkpoint 的覆盖声明（chat-service 保留），
+    // 烘焙时同样不得超过它。
+    const rootData = makeCheckpointData();
+    const chat = [
+      { is_user: true },
+      {
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: rootData, event: { filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [] } },
+              logEntries: [],
+            },
+          },
+        },
+      },
+      { is_user: true },
+      {
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', createdAt: 2, reason: 'compact', data: rootData, event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] } },
+              logEntries: [
+                {
+                  seq: 1, entryId: 'downgraded-checkpoint-2-1', createdAt: 2, source: 'system',
+                  targetMessageIndex: 2, aiFloor: 2, restoreUpToAiFloor: 1,
+                  filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+                  operations: [{ kind: 'data_replace', data: rootData, reason: 'checkpoint_fallback' }],
+                },
+              ],
+            },
+          },
+        },
+      },
+    ];
+
+    const summary = collectScheduleSummaryFromFramesV2_ACU(chat, '');
+
+    expect(summary.sheet_0?.lastFilledAiFloor, '降级 entry 烘焙前沿必须钳制到声明值 1').toBe(1);
+  });
   it('rebase 分片在 afterSeq 之后整表替换既有表结构（E3：前置日志先应用）', async () => {
     const rootData = makeCheckpointData();
     // 边界楼层已有 AI 填表日志（seq=1 追加一行），随后 rebase 在 afterSeq=1 之后整表替换为新结构。

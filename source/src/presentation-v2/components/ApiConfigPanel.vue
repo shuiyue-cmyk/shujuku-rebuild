@@ -164,7 +164,7 @@
         </AcuFormRow>
         <AcuFormRow
           label="提示词后处理"
-          hint="随请求体 custom_prompt_post_processing 透传。默认严格（与旧版本行为一致）；未选择=省略该字段、后端原样透传消息，可保留提示词组中部 system 段的角色。严格等模式会把中部 system 消息改写为 user。"
+          hint="随请求体 custom_prompt_post_processing 透传。默认严格（与旧版本行为一致）；未选择=省略该字段、后端原样透传消息，可保留提示词组中部 system 段的角色。严格等模式会把中部 system 消息改写为 user。分组（纯文本 / 含工具）只决定消息改写策略，不剥离 tools 字段，填表工具调用等照常挂载。"
         >
           <AcuSelect
             :options="promptPostProcessingOptions"
@@ -282,12 +282,12 @@ const customApiFormatOptions: AcuSelectOption[] = [
 // ─── 提示词后处理选项（custom_prompt_post_processing 八值契约；'' 为「未选择」，默认 'strict'） ───
 const promptPostProcessingOptions: AcuSelectOption[] = [
   { value: "", label: "未选择" },
-  { value: "merge_tools", label: "合并相同角色连续的发言（含工具）", group: "With Tools" },
-  { value: "semi_tools", label: "半严格（强制对话角色交替）（含工具）", group: "With Tools" },
-  { value: "strict_tools", label: "严格（强制对话角色交替、用户最先）（含工具）", group: "With Tools" },
-  { value: "merge", label: "合并相同角色连续的发言", group: "No Tools" },
-  { value: "semi", label: "半严格（强制对话角色交替）", group: "No Tools" },
-  { value: "strict", label: "严格（强制对话角色交替、用户最先）", group: "No Tools" },
+  { value: "merge_tools", label: "合并相同角色连续的发言（含工具）", group: "含工具消息改写" },
+  { value: "semi_tools", label: "半严格（强制对话角色交替）（含工具）", group: "含工具消息改写" },
+  { value: "strict_tools", label: "严格（强制对话角色交替、用户最先）（含工具）", group: "含工具消息改写" },
+  { value: "merge", label: "合并相同角色连续的发言", group: "纯文本消息改写" },
+  { value: "semi", label: "半严格（强制对话角色交替）", group: "纯文本消息改写" },
+  { value: "strict", label: "严格（强制对话角色交替、用户最先）", group: "纯文本消息改写" },
   { value: "single", label: "单一用户消息（无工具）" },
 ];
 

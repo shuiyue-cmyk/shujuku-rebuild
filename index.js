@@ -45001,6 +45001,32 @@ function applyEventToScheduleSummary_ACU(summary, event, aiFloor) {
         summary[sheetKey].lastChangedAiFloor = aiFloor;
     }
 }
+/**
+ * 带导入恢复声明的事件应用：changed 沿用覆盖语义；filled 改走 max 合并。
+ *
+ * filled 贡献先按声明钳制（`Math.min(decl, aiFloor)`，与 history 读取侧
+ * v2RestoreUpToAiFloor_ACU 同口径；无合法声明即应用楼层本身），再与既有值取 max——
+ * 同帧多 entry 谁先谁后不得影响前沿（真实 entry 与降级 entry 共存时顺序任意），
+ * 跨帧楼层递增时 max 与原覆盖语义逐字等价。
+ */
+function applyScheduleEventWithRestoreDeclMax_ACU(summary, event, aiFloor, restoreDecl) {
+    if (!event)
+        return;
+    for (const sheetKey of event.changedSheetKeys || []) {
+        if (!summary[sheetKey])
+            summary[sheetKey] = {};
+        summary[sheetKey].lastChangedAiFloor = aiFloor;
+    }
+    const decl = Number(restoreDecl);
+    const effective = Number.isInteger(decl) && decl > 0 ? Math.min(decl, aiFloor) : aiFloor;
+    const filledKeys = [...new Set([...(event.filledSheetKeys || []), ...(event.groupKeys || [])])];
+    for (const sheetKey of filledKeys) {
+        if (!summary[sheetKey])
+            summary[sheetKey] = {};
+        const prev = summary[sheetKey].lastFilledAiFloor;
+        summary[sheetKey].lastFilledAiFloor = prev === undefined ? effective : Math.max(prev, effective);
+    }
+}
 function replayEventForState_ACU(event, aiFloor) {
     if (!event)
         return;
@@ -46211,7 +46237,7 @@ function collectScheduleSummaryFromFramesV2_ACU(chatArg, isolationKey, options =
             ? deepClone_ACU(checkpointRef.frame.checkpoint.scheduleSummary || {})
             : {});
     if (!transitionRef && checkpointRef?.frame.checkpoint) {
-        applyEventToScheduleSummary_ACU(summary, checkpointRef.frame.checkpoint.event, checkpointRef.aiFloor);
+        applyScheduleEventWithRestoreDeclMax_ACU(summary, checkpointRef.frame.checkpoint.event, checkpointRef.aiFloor, checkpointRef.frame.checkpoint.restoreUpToAiFloor);
     }
     for (const ref of frameRefs) {
         if (!transitionRef && checkpointRef && ref.messageIndex < checkpointRef.messageIndex)
@@ -46242,7 +46268,7 @@ function collectScheduleSummaryFromFramesV2_ACU(chatArg, isolationKey, options =
             if (transitionRef && !isEntryAfterSpv79TransitionCutoff_ACU(ref.messageIndex, entry.seq, transitionRef.checkpoint))
                 continue;
             applyDueIntroductions(entry.seq);
-            applyEventToScheduleSummary_ACU(summary, entry, ref.aiFloor);
+            applyScheduleEventWithRestoreDeclMax_ACU(summary, entry, ref.aiFloor, entry.restoreUpToAiFloor);
         }
         applyDueIntroductions(Number.POSITIVE_INFINITY);
     }
@@ -91840,7 +91866,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261003-08"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261004-09"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91859,7 +91885,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261003-08";
+        const stamp = "20261004-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -152428,7 +152454,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261003-08";
+        const stamp = "20261004-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -171259,12 +171285,12 @@ var _sfc_main$V = /*@__PURE__*/ defineComponent({
         // ─── 提示词后处理选项（custom_prompt_post_processing 八值契约；'' 为「未选择」，默认 'strict'） ───
         const promptPostProcessingOptions = [
             { value: "", label: "未选择" },
-            { value: "merge_tools", label: "合并相同角色连续的发言（含工具）", group: "With Tools" },
-            { value: "semi_tools", label: "半严格（强制对话角色交替）（含工具）", group: "With Tools" },
-            { value: "strict_tools", label: "严格（强制对话角色交替、用户最先）（含工具）", group: "With Tools" },
-            { value: "merge", label: "合并相同角色连续的发言", group: "No Tools" },
-            { value: "semi", label: "半严格（强制对话角色交替）", group: "No Tools" },
-            { value: "strict", label: "严格（强制对话角色交替、用户最先）", group: "No Tools" },
+            { value: "merge_tools", label: "合并相同角色连续的发言（含工具）", group: "含工具消息改写" },
+            { value: "semi_tools", label: "半严格（强制对话角色交替）（含工具）", group: "含工具消息改写" },
+            { value: "strict_tools", label: "严格（强制对话角色交替、用户最先）（含工具）", group: "含工具消息改写" },
+            { value: "merge", label: "合并相同角色连续的发言", group: "纯文本消息改写" },
+            { value: "semi", label: "半严格（强制对话角色交替）", group: "纯文本消息改写" },
+            { value: "strict", label: "严格（强制对话角色交替、用户最先）", group: "纯文本消息改写" },
             { value: "single", label: "单一用户消息（无工具）" },
         ];
         function setPromptPostProcessing(value) {
@@ -171443,8 +171469,8 @@ var _sfc_main$V = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__hint[data-v-38678159] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-38678159] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-38678159] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-38678159] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-38678159] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-38678159] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-38678159] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-38678159] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-38678159] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-38678159] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-38678159] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-38678159");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_38678159_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__hint[data-v-4d8cd7b4] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-4d8cd7b4] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-4d8cd7b4] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-4d8cd7b4] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-4d8cd7b4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-4d8cd7b4] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-4d8cd7b4] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-4d8cd7b4] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-4d8cd7b4] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-4d8cd7b4] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-4d8cd7b4] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-4d8cd7b4");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_4d8cd7b4_lang = null;
 
 const _hoisted_1$T = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$M = { class: "acu-api-config-panel__editor-section" };
@@ -171679,7 +171705,7 @@ function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
 						}),
 						createVNode($setup["AcuFormRow"], {
 							label: "提示词后处理",
-							hint: "随请求体 custom_prompt_post_processing 透传。默认严格（与旧版本行为一致）；未选择=省略该字段、后端原样透传消息，可保留提示词组中部 system 段的角色。严格等模式会把中部 system 消息改写为 user。"
+							hint: "随请求体 custom_prompt_post_processing 透传。默认严格（与旧版本行为一致）；未选择=省略该字段、后端原样透传消息，可保留提示词组中部 system 段的角色。严格等模式会把中部 system 消息改写为 user。分组（纯文本 / 含工具）只决定消息改写策略，不剥离 tools 字段，填表工具调用等照常挂载。"
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuSelect"], {
 								options: $setup.promptPostProcessingOptions,
@@ -171774,7 +171800,7 @@ function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$V, [["render", _sfc_render$V], ["__scopeId", "data-v-38678159"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$V, [["render", _sfc_render$V], ["__scopeId", "data-v-4d8cd7b4"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用

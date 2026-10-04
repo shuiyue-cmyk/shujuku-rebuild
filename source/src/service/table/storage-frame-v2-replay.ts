@@ -977,6 +977,35 @@ function applyEventToScheduleSummary_ACU(
   }
 }
 
+/**
+ * 带导入恢复声明的事件应用：changed 沿用覆盖语义；filled 改走 max 合并。
+ *
+ * filled 贡献先按声明钳制（`Math.min(decl, aiFloor)`，与 history 读取侧
+ * v2RestoreUpToAiFloor_ACU 同口径；无合法声明即应用楼层本身），再与既有值取 max——
+ * 同帧多 entry 谁先谁后不得影响前沿（真实 entry 与降级 entry 共存时顺序任意），
+ * 跨帧楼层递增时 max 与原覆盖语义逐字等价。
+ */
+function applyScheduleEventWithRestoreDeclMax_ACU(
+  summary: TableScheduleSummaryV2_ACU,
+  event: Pick<TableMutationLogEntryV2_ACU, 'filledSheetKeys' | 'changedSheetKeys' | 'groupKeys'> | undefined,
+  aiFloor: number,
+  restoreDecl: unknown,
+): void {
+  if (!event) return;
+  for (const sheetKey of event.changedSheetKeys || []) {
+    if (!summary[sheetKey]) summary[sheetKey] = {};
+    summary[sheetKey].lastChangedAiFloor = aiFloor;
+  }
+  const decl = Number(restoreDecl);
+  const effective = Number.isInteger(decl) && decl > 0 ? Math.min(decl, aiFloor) : aiFloor;
+  const filledKeys = [...new Set([...(event.filledSheetKeys || []), ...(event.groupKeys || [])])];
+  for (const sheetKey of filledKeys) {
+    if (!summary[sheetKey]) summary[sheetKey] = {};
+    const prev = summary[sheetKey].lastFilledAiFloor;
+    summary[sheetKey].lastFilledAiFloor = prev === undefined ? effective : Math.max(prev, effective);
+  }
+}
+
 function replayEventForState_ACU(event: Pick<TableMutationLogEntryV2_ACU, 'filledSheetKeys' | 'changedSheetKeys' | 'groupKeys'> | undefined, aiFloor: number): void {
   if (!event) return;
 
@@ -2308,7 +2337,12 @@ export function collectScheduleSummaryFromFramesV2_ACU(
       ? deepClone_ACU(checkpointRef.frame.checkpoint.scheduleSummary || {})
       : {});
   if (!transitionRef && checkpointRef?.frame.checkpoint) {
-    applyEventToScheduleSummary_ACU(summary, checkpointRef.frame.checkpoint.event, checkpointRef.aiFloor);
+    applyScheduleEventWithRestoreDeclMax_ACU(
+      summary,
+      checkpointRef.frame.checkpoint.event,
+      checkpointRef.aiFloor,
+      (checkpointRef.frame.checkpoint as { restoreUpToAiFloor?: unknown }).restoreUpToAiFloor,
+    );
   }
 
   for (const ref of frameRefs) {
@@ -2344,7 +2378,12 @@ export function collectScheduleSummaryFromFramesV2_ACU(
         ref.messageIndex, entry.seq, transitionRef.checkpoint,
       )) continue;
       applyDueIntroductions(entry.seq);
-      applyEventToScheduleSummary_ACU(summary, entry, ref.aiFloor);
+      applyScheduleEventWithRestoreDeclMax_ACU(
+        summary,
+        entry,
+        ref.aiFloor,
+        (entry as { restoreUpToAiFloor?: unknown }).restoreUpToAiFloor,
+      );
     }
     applyDueIntroductions(Number.POSITIVE_INFINITY);
   }
