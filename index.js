@@ -38210,10 +38210,10 @@ function reconcileMatchedSheet_ACU(before, template, sheetKey, templateSheetKey,
         if (source.physical !== target.physical)
             mappings.push({ fromPhysicalName: source.physical, toPhysicalName: target.physical });
     }
-    // 同一稳定 Sheet key 下，physical column 才是持久化数据身份；表头只是可变显示名。
-    // 不同 key 的导入模板仍禁止依赖 physical 同名推断，以免把无关字段重新解释为旧数据。
+    // 已匹配为同一张表时，physical column 是列身份；表头只是可变显示名。
+    // 模板作者 key 不影响列继承，匹配仍保持一对一，持久化沿用旧聊天表的 key。
     // native 无独立于表头的物理身份（physical=表头），canonical 匹配已覆盖，跳过。
-    if (sqlite && sheetKey === templateSheetKey) {
+    if (sqlite) {
         for (const target of targetEntries) {
             if (matchedTargetCanonical.has(target.canonical))
                 continue;
@@ -38376,7 +38376,7 @@ function reconcileMatchedSheet_ACU(before, template, sheetKey, templateSheetKey,
     let retainedHiddenPhysicalNames;
     if (sqlite) {
         const retainedHiddenColumns = hiddenEntries.map(entry => beforeColumns[entry.index]);
-        // 列身份由 canonical 显示名决定，物理列名一旦确立就不再随模板 DDL 文本变动。
+        // 列经显示名、physical 或显式别名匹配后，沿用既有物理列名，不随模板 DDL 文本变动。
         // 若采用模板的物理名，同一显示名会在切模板时被改名（如 last_round_time → prev_scene_time），
         // 而历史 log 里的 SQL 仍按旧物理名书写，回放时必然撞 "has no column named ..."。
         const effectiveTargetColumns = targetColumns.map((column, index) => {
@@ -91866,7 +91866,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261004-09"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261005-09"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91885,7 +91885,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261004-09";
+        const stamp = "20261005-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -152454,7 +152454,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261004-09";
+        const stamp = "20261005-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
