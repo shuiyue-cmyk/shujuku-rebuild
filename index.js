@@ -90559,6 +90559,13 @@ function checkPlotAbortRequested_ACU() {
         throw new Error('TaskAbortedByUser');
     }
 }
+/**
+ * 只有本次用户中止信号或明确的用户取消错误才是手动取消。
+ * 宿主 AbortError、超时和世界书取消分类不能自动中断发送（调用方按普通失败继续）。
+ */
+function isManualPlotAbort_ACU(error) {
+    return abortController_ACU?.signal.aborted === true || error?.message === 'TaskAbortedByUser';
+}
 function getPlotTaskApiPresetOverrides_ACU$1() {
     if (!settings_ACU.plotTaskApiPresetOverridesById || typeof settings_ACU.plotTaskApiPresetOverridesById !== 'object' || Array.isArray(settings_ACU.plotTaskApiPresetOverridesById)) {
         settings_ACU.plotTaskApiPresetOverridesById = {};
@@ -90867,6 +90874,8 @@ async function buildPlotSharedContext_ACU(plotSettings, userMessage, runtimeOpti
         performReplacements,
         resolveTableWorldbookTokens,
         finalSystemDirectiveContent,
+        // UI 侧告警通道（planning-ui 透传）：任务级 warn-继续可直接提示用户。
+        reportWarning: runtimeOptions.reportWarning,
         seedContentForConditional,
         recentContextMessages: Array.isArray(agentContextMessages) ? agentContextMessages : [],
         allTablesJson: currentJsonTableData_ACU,
@@ -90890,15 +90899,25 @@ async function renderPlotTaskMessages_ACU(task, sharedContext, runtimeOptions = 
     for (const seg of messagesToUse) {
         if (!seg || typeof seg.content !== 'string')
             continue;
-        let c = seg.content;
-        if (typeof sharedContext.resolveTaskTableWorldbookTokens === 'function') {
-            c = await sharedContext.resolveTaskTableWorldbookTokens(c);
+        try {
+            let c = seg.content;
+            if (typeof sharedContext.resolveTaskTableWorldbookTokens === 'function') {
+                c = await sharedContext.resolveTaskTableWorldbookTokens(c);
+            }
+            c = await tryRenderPlotTemplateWithEjs_ACU(c);
+            c = sharedContext.performReplacements(c, replacementOverrides);
+            c = replacePlotTagPlaceholders_ACU(c, relayTagMap, historyTagMap);
+            c = renderPlotTaskContentWithIsolatedVariables_ACU(c, sharedContext);
+            seg.__renderedContent = c;
         }
-        c = await tryRenderPlotTemplateWithEjs_ACU(c);
-        c = sharedContext.performReplacements(c, replacementOverrides);
-        c = replacePlotTagPlaceholders_ACU(c, relayTagMap, historyTagMap);
-        c = renderPlotTaskContentWithIsolatedVariables_ACU(c, sharedContext);
-        seg.__renderedContent = c;
+        catch (error) {
+            if (isManualPlotAbort_ACU(error))
+                throw error;
+            sharedContext.reportWarning?.('提示词段处理未完成，保留已处理的文本并继续任务。');
+            logWarn_ACU('[剧情推进] 提示词段处理异常，继续任务。', {
+                error: summarizePlotRuntimeError_ACU(error),
+            });
+        }
     }
     return messagesToUse
         .filter(seg => seg && typeof seg.__renderedContent === 'string' && seg.__renderedContent.trim().length > 0)
@@ -90992,25 +91011,15 @@ async function executeSinglePlotTask_ACU(task, sharedContext, runtimeOptions = {
         resolveTaskTableWorldbookTokens = (text) => sharedContext.resolveTableWorldbookTokens(text, worldbookTriggerText, taskWorldbookOptions);
     }
     catch (wbError) {
-        if (wbError?.message === 'TaskAbortedByUser' || wbError?.name === 'AbortError' || String(wbError?.message || '').toLowerCase().includes('aborted')) {
+        if (isManualPlotAbort_ACU(wbError)) {
             throw wbError;
         }
-        logWarn_ACU(`[剧情推进] [任务:${taskLabel}] 严格世界书读取失败，已阻断 AI 调用。`, {
+        sharedContext.reportWarning?.(`任务「${taskLabel}」的世界书处理失败，使用已取得的资料继续。`);
+        logWarn_ACU(`[剧情推进] [任务:${taskLabel}] 世界书处理失败，继续 AI 调用。`, {
             phase: 'strict_worldbook_read',
             runId: sharedContext.worldbookReadContext?.runId || '',
             error: summarizeStrictLorebookReadError_ACU(wbError) || summarizePlotRuntimeError_ACU(wbError),
         });
-        return {
-            taskId: normalizedTask.id,
-            taskName: taskLabel,
-            success: false,
-            rawResponse: '',
-            extractedTags: {},
-            injectedFragments: [],
-            error: '必需世界书读取失败，已阻断任务 AI 调用。',
-            stage: taskStage,
-            order: normalizedTask.order ?? 0,
-        };
     }
     // 构建任务级共享上下文：覆盖 $1/$9 替换值，并在 EJS 前解析表名占位符。
     const taskSharedContext = {
@@ -91038,6 +91047,7 @@ async function executeSinglePlotTask_ACU(task, sharedContext, runtimeOptions = {
         }
         let rawResponse = '';
         let lastErrorMessage = '';
+        let apiErrorSeen = false;
         let lastExtractedTags = {};
         let lastInjectedFragments = [];
         let lastInjectOnlyTags = {};
@@ -91058,10 +91068,11 @@ async function executeSinglePlotTask_ACU(task, sharedContext, runtimeOptions = {
                 tempMessage = await callApiWithPlotPreset_ACU(messages, effectivePlotApiPreset, abortController_ACU?.signal || null);
             }
             catch (apiCallError) {
-                if (apiCallError?.name === 'AbortError' || String(apiCallError?.message || '').toLowerCase().includes('aborted')) {
+                if (isManualPlotAbort_ACU(apiCallError)) {
                     throw apiCallError;
                 }
                 apiError = apiCallError;
+                apiErrorSeen = true;
                 lastErrorMessage = apiCallError?.message || 'API调用失败';
                 logWarn_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 第 ${attemptIndex + 1} 次API调用失败:`, lastErrorMessage);
             }
@@ -91104,6 +91115,8 @@ async function executeSinglePlotTask_ACU(task, sharedContext, runtimeOptions = {
                 extractedTags: {},
                 injectedFragments: [],
                 error: lastErrorMessage || '任务在最大重试次数后仍未返回有效结果。',
+                // API 侧失败耗尽重试才标记：模型有回但过短/未摘到标签属于内容不合格，不触发发送中断。
+                ...(apiErrorSeen ? { apiRetriesExhausted: true } : {}),
                 stage: taskStage,
                 order: normalizedTask.order ?? 0,
             };
@@ -91128,20 +91141,8 @@ async function executeSinglePlotTask_ACU(task, sharedContext, runtimeOptions = {
         };
     }
     catch (error) {
-        if (error?.message === 'TaskAbortedByUser' || error?.name === 'AbortError' || String(error?.message || '').toLowerCase().includes('aborted')) {
+        if (isManualPlotAbort_ACU(error)) {
             throw error;
-        }
-        if (isStrictLorebookReadError_ACU(error) || String(error?.message || '').startsWith('StrictLorebookRead:')) {
-            logWarn_ACU(`[剧情推进] [任务:${taskLabel}] 严格世界书读取失败，已阻断 AI 调用。`, {
-                phase: 'strict_worldbook_read',
-                runId: sharedContext.worldbookReadContext?.runId || '',
-                error: summarizeStrictLorebookReadError_ACU(error) || summarizePlotRuntimeError_ACU(error),
-            });
-            return {
-                taskId: normalizedTask.id, taskName: taskLabel, success: false, rawResponse: '',
-                extractedTags: {}, injectedFragments: [], error: '必需世界书读取失败，已阻断任务 AI 调用。',
-                stage: taskStage, order: normalizedTask.order ?? 0,
-            };
         }
         logError_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 执行失败:`, error);
         return {
@@ -91244,6 +91245,7 @@ async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions
             inputForHash,
             hasExistingUserMessage,
             readContext: worldbookReadContext,
+            reportWarning: runtimeOptions.reportWarning,
         });
         sharedContext.worldbookReadContext = worldbookReadContext;
         checkPlotAbortRequested_ACU();
@@ -91402,6 +91404,8 @@ async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions
                 failedResults,
                 aggregatedTags: new Map(),
                 enabledTaskCount: enabledTasks.length,
+                // 任一任务 API 耗尽即透出：发送层据此中断，不继续宿主发送。
+                ...(failedResults.some((result) => result?.apiRetriesExhausted === true) ? { apiRetriesExhausted: true } : {}),
             };
         }
         if (agentDecisionPromise) {
@@ -91866,7 +91870,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261005-09"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261005-11"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91885,7 +91889,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261005-09";
+        const stamp = "20261005-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -91900,30 +91904,12 @@ function readAcuBuildStamp_ACU() {
  */
 const PLOT_RUNTIME_BUILD_VERSION_ACU = readAcuBuildVersion_ACU();
 /**
- * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
- * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
+ * 只有本次用户中止信号或明确的用户取消错误才恢复手动取消语义。
+ * 宿主 AbortError、超时和世界书取消分类不能自动中断发送。
  */
 function isTaskAbortedError_ACU(error) {
-    // PlotStageError 的 cause 已由 clearFinalGenerationGreenlights 透传安全摘要；
-    // category='aborted' 必须恢复为取消语义，不伪装成普通预检失败。
-    if (isPlotStageError_ACU(error)) {
-        const cause = error.cause;
-        if (cause && typeof cause === 'object') {
-            const category = cause.category;
-            if (category === 'aborted')
-                return true;
-        }
-        return false;
-    }
-    if (error && typeof error === 'object') {
-        const name = error.name;
-        if (name === 'AbortError')
-            return true;
-        const message = error.message;
-        if (typeof message === 'string' && message === 'TaskAbortedByUser')
-            return true;
-    }
-    return isLorebookReadAbortedError_ACU(error);
+    return abortController_ACU?.signal.aborted === true
+        || error?.message === 'TaskAbortedByUser';
 }
 /**
  * 核心优化逻辑（纯 service 层：读数据→业务决策→写数据→构造返回值）。
@@ -91964,6 +91950,7 @@ async function runOptimizationLogic_ACU(userMessage, options = {}) {
             inputForHash,
             hasExistingUserMessage,
             runtimeScope: initialScope,
+            reportWarning: options.reportWarning,
         });
         const currentScope = capturePlotRuntimeScope_ACU();
         const scopeStillCurrent = initialScope.reliable
@@ -91992,6 +91979,14 @@ async function runOptimizationLogic_ACU(userMessage, options = {}) {
             };
         }
         if (!runtimeResult?.finalMessage) {
+            if (runtimeResult?.apiRetriesExhausted === true) {
+                return {
+                    success: false,
+                    apiRetriesExhausted: true,
+                    errorType: 'api_retries_exhausted',
+                    errorMessage: runtimeResult.errorMessage || '剧情任务 API 调用失败且已耗尽重试次数。',
+                };
+            }
             if (runtimeResult?.abortedByStageFailure) {
                 return {
                     success: false,
@@ -92007,7 +92002,7 @@ async function runOptimizationLogic_ACU(userMessage, options = {}) {
                 return {
                     success: false,
                     errorType: 'all_failed',
-                    errorMessage: `共 ${runtimeResult.enabledTaskCount} 个剧情任务均未返回有效结果，操作已取消。`,
+                    errorMessage: `共 ${runtimeResult.enabledTaskCount} 个剧情任务均未返回有效结果，继续宿主发送。`,
                     enabledTaskCount: runtimeResult.enabledTaskCount,
                 };
             }
@@ -101846,6 +101841,95 @@ try {
 }
 catch (_) { }
 
+/**
+ * service/plot/time-recall-prefill.ts — 时间召回预设旧 assistant 尾段 → user 预填充。
+ *
+ * 上游 9bb5b242 同功能本仓适配：我方预设 schema 为 prompts[] + 顶层 promptGroup
+ *（无 plotTasks），指纹基准为本仓当前 DEFAULT_TIME_RECALL_PLOT_PRESET_ACU。
+ * 只有整组与默认逐字一致的 pristine 默认才升级（尾段允许旧 assistant 尾或已升级的
+ * user 预填充），用户改写过的一律保留。已是目标形态返回 null，保证加载迁移幂等。
+ */
+const LEGACY_TIME_RECALL_TAIL_ACU = '收到，天之音开始执行！';
+function isLegacyTail_ACU(tail) {
+    return String(tail?.role || '').toLowerCase() === 'assistant'
+        && (tail.content === LEGACY_TIME_RECALL_TAIL_ACU || tail.content === USER_PREFILL_CONTENT_ACU)
+        && !tail.mainSlot && !tail.isMain && !tail.isMain2;
+}
+function isUpgradedTail_ACU(tail) {
+    return String(tail?.role || '').toLowerCase() === 'user' && tail.content === USER_PREFILL_CONTENT_ACU;
+}
+/** 比较消息身份与完整正文；开关及其他用户段元数据不作为默认指纹。 */
+function matchesGroup_ACU(group, reference) {
+    if (!Array.isArray(group) || !Array.isArray(reference) || group.length < 2 || group.length !== reference.length)
+        return false;
+    return group.every((segment, index) => index === group.length - 1
+        ? isLegacyTail_ACU(segment) && (isLegacyTail_ACU(reference[index])
+            || (reference[index]?.role === 'user' && reference[index]?.content === USER_PREFILL_CONTENT_ACU))
+        : segment?.content === reference[index]?.content
+            && String(segment?.role || '').toLowerCase() === String(reference[index]?.role || '').toLowerCase());
+}
+function matchesDefaultGroup_ACU(group) {
+    const current = DEFAULT_TIME_RECALL_PLOT_PRESET_ACU;
+    // 迁移对象只有顶层 promptGroup（prompts[] 尾段是 system 最终指令，无旧 assistant 尾）。
+    return matchesGroup_ACU(group, current.promptGroup);
+}
+function isTimeRecallPreset_ACU(source) {
+    if (!source || typeof source !== 'object')
+        return false;
+    if (source._acuBuiltinPresetId)
+        return source._acuBuiltinPresetId === 'time-recall';
+    return source.name === '时间召回' && matchesDefaultGroup_ACU(source.promptGroup);
+}
+/** 仅升级仍匹配旧内置尾段的配置，保留其余提示词、开关和段元数据。 */
+function upgradeTimeRecallPrefill_ACU(holder) {
+    if (!holder || typeof holder !== 'object' || Array.isArray(holder))
+        return null;
+    const presets = Array.isArray(holder.promptPresets) ? holder.promptPresets : [];
+    const activePreset = presets.find((preset) => preset?.name === holder.lastUsedPresetName);
+    const builtin = holder._acuBuiltinPresetId === 'time-recall';
+    const legacyPreset = !holder._acuBuiltinPresetId && isTimeRecallPreset_ACU(holder);
+    const activeTimeRecall = !holder.name && !holder._acuBuiltinPresetId
+        && activePreset && isTimeRecallPreset_ACU(activePreset);
+    // 迁移对象只有顶层 promptGroup（prompts[] 尾段是 system 最终指令，无旧 assistant 尾）。
+    const rootCandidate = builtin
+        || (legacyPreset && matchesDefaultGroup_ACU(holder.promptGroup))
+        || (activeTimeRecall && matchesGroup_ACU(holder.promptGroup, activePreset.promptGroup));
+    let changed = false;
+    const upgradeGroup = (group) => {
+        if (!Array.isArray(group) || group.length === 0)
+            return group;
+        const tail = group[group.length - 1];
+        // 已是目标形态：幂等直返，避免每次加载脏写（上游无此短路）。
+        if (isUpgradedTail_ACU(tail))
+            return group;
+        if (!isLegacyTail_ACU(tail))
+            return group;
+        changed = true;
+        return [...group.slice(0, -1), { ...tail, role: 'user', content: USER_PREFILL_CONTENT_ACU }];
+    };
+    const next = { ...holder };
+    if (rootCandidate) {
+        // 非时间召回 holder 只有指纹命中才动；builtin 直接升级 promptGroup。
+        const shouldTouch = builtin || matchesDefaultGroup_ACU(holder.promptGroup)
+            || (activeTimeRecall && matchesGroup_ACU(holder.promptGroup, activePreset.promptGroup));
+        if (shouldTouch) {
+            const group = upgradeGroup(holder.promptGroup);
+            if (group !== holder.promptGroup)
+                next.promptGroup = group;
+        }
+    }
+    const promptPresets = Array.isArray(holder.promptPresets) ? holder.promptPresets.map((preset) => {
+        const upgraded = upgradeTimeRecallPrefill_ACU(preset);
+        if (!upgraded)
+            return preset;
+        changed = true;
+        return upgraded;
+    }) : holder.promptPresets;
+    if (promptPresets !== holder.promptPresets)
+        next.promptPresets = promptPresets;
+    return changed ? next : null;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // service/settings/settings-service.ts — 设置加载/保存编排
 // 从 04_shared_helpers.js 迁入
@@ -102444,6 +102528,12 @@ function loadSettings_ACU() {
     if (ensureBuiltinPlotPresets_ACU()) {
         shouldPersistSettingsAfterLoad_ACU = true;
         logDebug_ACU('[剧情推进预设] 已补齐内置预设：时间召回');
+    }
+    // [时间召回] 旧 assistant 尾段 → user 预填充：只有 pristine 默认升级，用户自定义保留。
+    const upgradedPlotSettings = upgradeTimeRecallPrefill_ACU(settings_ACU.plotSettings);
+    if (upgradedPlotSettings) {
+        settings_ACU.plotSettings = upgradedPlotSettings;
+        shouldPersistSettingsAfterLoad_ACU = true;
     }
     settingsStorageReadyForSave_ACU = true;
     // [M5] 就绪翻转点：补存门控拒绝期间登记的挂起保存
@@ -127571,7 +127661,12 @@ async function orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageInd
             originalUserInput: messageToProcess,
             hasExistingUserMessage: true,
         });
-        // 3. 处理跳过
+        // API 重试耗尽：透出 failed，由发送层中断发送；普通失败继续走跳过/原文路径。
+        if (finalMessage && typeof finalMessage === 'object' && finalMessage.apiRetriesExhausted === true) {
+            return { action: 'failed', apiRetriesExhausted: true, originalMessage: messageToProcess, lastMessageIndex };
+        }
+        // 3. 处理跳过：S1 已匹配直接返回，不再进 S2（S2 框多为空或同文，重跑一次规划是浪费；
+        // 旧 null→no_match→S2 属于失败误兜底，失败转 skipped 后不再触发）。
         if (finalMessage && finalMessage.skipped) {
             logDebug_ACU('[剧情推进] Planning skipped in Strategy 1 (duplicate).');
             return { action: 'skipped' };
@@ -127629,6 +127724,10 @@ async function orchestrateAfterCommandsStrategy2_ACU(textInBox, runPlanning, run
             originalUserInput: originalInputText,
             hasExistingUserMessage: false,
         });
+        // API 重试耗尽：透出 failed，由发送层中断发送；普通失败继续走跳过/原文路径。
+        if (finalMessage && typeof finalMessage === 'object' && finalMessage.apiRetriesExhausted === true) {
+            return { action: 'failed', apiRetriesExhausted: true };
+        }
         // 处理跳过
         if (finalMessage && finalMessage.skipped) {
             logDebug_ACU('[剧情推进] Planning skipped in Strategy 2 (duplicate).');
@@ -127754,11 +127853,12 @@ function triggerHostGenerate_ACU(type) {
  * 在 presentation 层调用 runOptimizationLogic_ACU 并处理所有 UI 反馈。
  * 返回值与原 runOptimizationLogic_ACU 兼容：
  *   - string: 规划成功的最终消息
- *   - null: 规划失败/跳过/未启用
- *   - { skipped: true }: 重复触发被跳过
+ *   - { apiRetriesExhausted: true }: API 调用失败且重试耗尽（发送层据此中断）
+ *   - { skipped: true, reason: string }: 未执行规划或普通失败（继续宿主发送）
  *   - { aborted: true, manual: true, restoreText: string }: 用户中止
  */
 async function runOptimizationLogicWithUI_ACU(userMessage, options = {}) {
+    let manuallyAborted = false;
     // 1. 创建带中止按钮的进度 toast
     const toastMsg = `
       <div style="display: flex; align-items: center; justify-content: space-between;">
@@ -127783,6 +127883,7 @@ async function runOptimizationLogicWithUI_ACU(userMessage, options = {}) {
             $abortBtn.off('click').on('click', function (e) {
                 e.preventDefault();
                 e.stopPropagation();
+                manuallyAborted = true;
                 logDebug_ACU('[剧情推进] 用户点击了中止按钮。');
                 if (abortController_ACU) {
                     abortController_ACU.abort();
@@ -127810,8 +127911,25 @@ async function runOptimizationLogicWithUI_ACU(userMessage, options = {}) {
             logWarn_ACU('[剧情推进] 未找到中止按钮元素。');
         }
     }, 200);
-    // 3. 调用 service 层纯函数
-    const result = await runOptimizationLogic_ACU(userMessage, options);
+    // 3. 调用 service 层纯函数：异常不向外抛，统一转 skipped 继续宿主发送
+    let result;
+    try {
+        result = await runOptimizationLogic_ACU(userMessage, {
+            ...options,
+            reportWarning: (text) => showToastr_ACU('warning', text, '剧情推进'),
+        });
+    }
+    catch {
+        showToastr_ACU('warning', '剧情任务处理异常，继续宿主发送。', '剧情推进');
+        try {
+            if ($toast)
+                toastr_API_ACU.clear($toast);
+        }
+        catch (e) { }
+        return manuallyAborted
+            ? { aborted: true, manual: true, restoreText: String(userMessage || '') }
+            : { skipped: true, reason: 'processing_error' };
+    }
     // 4. 清除进度 toast
     try {
         if ($toast)
@@ -127819,31 +127937,30 @@ async function runOptimizationLogicWithUI_ACU(userMessage, options = {}) {
     }
     catch (e) { }
     // 5. 根据结果做 UI 通知
+    if (manuallyAborted)
+        return { aborted: true, manual: true, restoreText: String(userMessage || '') };
     if (!result) {
-        return null;
+        return { skipped: true, reason: 'no_result' };
     }
     // 跳过的情况（retrying / inflight / disabled）—— 不弹 toast，静默返回
     if (result.skipped) {
-        return result.reason === 'inflight' ? { skipped: true } : null;
+        return { skipped: true, reason: result.reason };
     }
     // 用户中止
     if (result.aborted) {
         return { aborted: true, manual: result.manual, restoreText: result.restoreText };
     }
-    // 失败：根据 errorType 弹对应 toast
+    // 只有 API 重试耗尽是自动停止；普通失败告警后继续宿主发送。
     if (!result.success) {
-        const errorMsg = result.errorMessage || '剧情规划失败。';
-        if (result.errorType === 'stage_failure' || result.errorType === 'all_failed' || result.errorType === 'no_tasks') {
+        const errorMsg = result.errorMessage || '剧情任务未返回结果，继续宿主发送。';
+        if (result.apiRetriesExhausted === true) {
             showToastr_ACU('error', errorMsg, '规划失败', {
                 acuToastCategory: ACU_TOAST_CATEGORY_ACU.ERROR,
             });
+            return { apiRetriesExhausted: true };
         }
-        else if (result.errorType === 'exception') {
-            showToastr_ACU('error', errorMsg, '规划失败', {
-                acuToastCategory: ACU_TOAST_CATEGORY_ACU.ERROR,
-            });
-        }
-        return null;
+        showToastr_ACU('warning', errorMsg, '剧情推进');
+        return { skipped: true, reason: result.errorType || 'no_result' };
     }
     // 成功：弹结果 toast
     if (result.aggregatedTagNames && result.aggregatedTagNames.length > 0) {
@@ -146564,8 +146681,12 @@ function mainInitialize_ACU() {
                             if (s1.action !== 'no_match') {
                                 // 策略1匹配，根据结果做 UI 操作
                                 switch (s1.action) {
-                                    case 'aborted':
-                                        if (s1.manual) {
+                                    case 'failed':
+                                    case 'aborted': {
+                                        // API 重试耗尽与手动中止同口径中断：停生成、删刚建的用户楼、恢复输入框。
+                                        // failed 必带 apiRetriesExhausted（编排器保证），裸 failed 不处理。
+                                        const interrupted = s1.action === 'aborted' ? !!s1.manual : s1.apiRetriesExhausted === true;
+                                        if (interrupted) {
                                             // 停止生成
                                             try {
                                                 if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function')
@@ -146586,16 +146707,19 @@ function mainInitialize_ACU() {
                                                 }
                                             }
                                             catch (e) { }
-                                            // 恢复输入框（伪装激活时经 finally 的 release 统一交还，直接写框会被覆盖导致 restoreText 丢失）
+                                            // 恢复输入框（failed 无 restoreText 时用 originalMessage，编排器已回填；
+                                            // 伪装激活时经 finally 的 release 统一交还，直接写框会被覆盖导致文本丢失）
+                                            const restore = s1.restoreText || (s1.action === 'failed' ? s1.originalMessage : '') || '';
                                             if (disguise)
-                                                textForHost = s1.restoreText || '';
+                                                textForHost = restore;
                                             else
                                                 try {
-                                                    setSendTextareaValue_ACU(s1.restoreText || '');
+                                                    setSendTextareaValue_ACU(restore);
                                                 }
                                                 catch (e) { }
                                         }
                                         break;
+                                    }
                                     case 'planned':
                                         // 写回 params 和消息对象
                                         params.prompt = s1.finalMessage;
@@ -146644,8 +146768,12 @@ function mainInitialize_ACU() {
                                 return;
                             }
                             switch (s2.action) {
-                                case 'aborted':
-                                    if (s2.manual) {
+                                case 'failed':
+                                case 'aborted': {
+                                    // API 重试耗尽与手动中止同口径：停掉本轮生成（S2 楼层未建，输入框原文保留供重试）。
+                                    // 注：此处只能截停已起的生成，拦不住宿主续发（无发送门控）；真中断要改 params.prompt，
+                                    // 超出本批口径，保持现状。
+                                    if (s2.manual || s2.apiRetriesExhausted === true) {
                                         try {
                                             if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function')
                                                 SillyTavern_API_ACU.stopGeneration();
@@ -146655,6 +146783,7 @@ function mainInitialize_ACU() {
                                         catch (e) { }
                                     }
                                     break;
+                                }
                                 case 'planned':
                                     // 伪装接管时发送框写入由 finally 的 release 统一交还，避免双写；
                                     // 未伪装保持原行为（直接写框 + params.prompt）。
@@ -152454,7 +152583,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261005-09";
+        const stamp = "20261005-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

@@ -17,6 +17,7 @@ import { getCurrentVectorMemoryConfig_ACU } from '../vector/vector-memory-config
 import { isIndexedDbAvailable_ACU } from '../../shared/idb-import-temp';
 import { configIdbCacheLoaded_ACU, ensureConfigIdbCacheLoaded_ACU, getConfigStorage_ACU, initTavernSettingsBridge_ACU, migrateKeyToTavernStorageIfNeeded_ACU, pendingSettingsReloadFromIdb_ACU, _set_pendingSettingsReloadFromIdb_ACU} from '../../data/storage/tavern-storage';
 import { ensureTagRulesCompat_ACU } from '../plot/plot-logic';
+import { upgradeTimeRecallPrefill_ACU } from '../plot/time-recall-prefill';
 import { getDefaultTemplateSnapshot_ACU, getTemplatePreset_ACU } from '../template/template-preset-service';
 import { getCurrentIsolationKey_ACU, settings_ACU, _set_settings_ACU} from '../runtime/state-manager';
 import { getCurrentCharSettings_ACU, getCurrentWorldbookConfig_ACU } from './settings-readers';
@@ -672,6 +673,12 @@ export   function loadSettings_ACU() {
       if (ensureBuiltinPlotPresets_ACU()) {
           shouldPersistSettingsAfterLoad_ACU = true;
           logDebug_ACU('[剧情推进预设] 已补齐内置预设：时间召回');
+      }
+      // [时间召回] 旧 assistant 尾段 → user 预填充：只有 pristine 默认升级，用户自定义保留。
+      const upgradedPlotSettings = upgradeTimeRecallPrefill_ACU(settings_ACU.plotSettings as any);
+      if (upgradedPlotSettings) {
+          settings_ACU.plotSettings = upgradedPlotSettings as any;
+          shouldPersistSettingsAfterLoad_ACU = true;
       }
 
       settingsStorageReadyForSave_ACU = true;

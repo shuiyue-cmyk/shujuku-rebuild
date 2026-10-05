@@ -84,6 +84,21 @@ describe('orchestrateAfterCommandsStrategy1_ACU', () => {
     expect(result.action).toBe('aborted');
     expect(result.manual).toBe(true);
   });
+  it('规划跳过返回 skipped（S1 已匹配不再进 S2）', async () => {
+    const msg = { is_user: true, mes: '你好' };
+    const runPlanning = vi.fn().mockResolvedValue({ skipped: true, reason: 'disabled' });
+    const result = await orchestrateAfterCommandsStrategy1_ACU(msg, 5, runPlanning);
+    expect(result.action).toBe('skipped');
+  });
+  it('API 重试耗尽透出 failed（发送层据此中断，不吞成 no_match）', async () => {
+    const msg = { is_user: true, mes: '你好' };
+    const runPlanning = vi.fn().mockResolvedValue({ apiRetriesExhausted: true });
+    const result = await orchestrateAfterCommandsStrategy1_ACU(msg, 5, runPlanning);
+    expect(result.action).toBe('failed');
+    expect(result.apiRetriesExhausted).toBe(true);
+    expect(result.originalMessage).toBe('你好');
+    expect(result.lastMessageIndex).toBe(5);
+  });
 });
 
 // ═══ orchestrateAfterCommandsStrategy2_ACU ═══
@@ -102,6 +117,12 @@ describe('orchestrateAfterCommandsStrategy2_ACU', () => {
     const runPlanning = vi.fn().mockResolvedValue({ skipped: true });
     const result = await orchestrateAfterCommandsStrategy2_ACU('继续', runPlanning);
     expect(result.action).toBe('skip');
+  });
+  it('API 重试耗尽透出 failed（发送层据此中断，不吞成 skip）', async () => {
+    const runPlanning = vi.fn().mockResolvedValue({ apiRetriesExhausted: true });
+    const result = await orchestrateAfterCommandsStrategy2_ACU('继续', runPlanning);
+    expect(result.action).toBe('failed');
+    expect(result.apiRetriesExhausted).toBe(true);
   });
   it('用户中止返回 aborted', async () => {
     const runPlanning = vi.fn().mockResolvedValue({ aborted: true, manual: true });

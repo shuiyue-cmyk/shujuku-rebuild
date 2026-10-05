@@ -404,6 +404,67 @@ describe('mainInitialize_ACU 剧情最终写回作用域复检', () => {
   });
 });
 
+describe('mainInitialize_ACU 剧情 API 重试耗尽中断发送', () => {
+  it('策略1耗尽：停生成、删刚建用户楼、恢复输入框原文', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(true);
+    const hostInput = await import('../../../src/shared/host-input');
+    m.api.chat = [{ is_user: true, mes: 'A 输入' }];
+    m.currentChatKey = 'chat-a';
+    const stopGeneration = vi.fn();
+    const deleteLastMessage = vi.fn();
+    const prevSillyTavern = (window as any).SillyTavern;
+    (window as any).SillyTavern = { stopGeneration, deleteLastMessage };
+    try {
+      m.orchestrate.mockResolvedValueOnce({ action: 'failed', apiRetriesExhausted: true, originalMessage: 'A 输入' });
+
+      await m.afterCommandsHandler!('normal', {}, false);
+
+      expect(stopGeneration).toHaveBeenCalledTimes(1);
+      expect(deleteLastMessage).toHaveBeenCalledTimes(1);
+      expect(hostInput.setSendTextareaValue_ACU).toHaveBeenCalledWith('A 输入');
+    } finally {
+      (window as any).SillyTavern = prevSillyTavern;
+    }
+  });
+
+  it('策略1跳过后不再进策略2（失败转 skipped，不二次规划）', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(true);
+    m.api.chat = [{ is_user: true, mes: 'A 输入' }];
+    m.currentChatKey = 'chat-a';
+    m.orchestrate.mockResolvedValueOnce({ action: 'skipped' });
+
+    await m.afterCommandsHandler!('normal', {}, false);
+
+    // S1 已匹配 skipped：直接返回，S2 编排不得再被调用。
+    expect(m.orchestrate).toHaveBeenCalledTimes(1);
+  });
+
+  it('策略2耗尽：停生成，输入框原文保留供重试', async () => {    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(true);
+    const hostInput = await import('../../../src/shared/host-input');
+    vi.mocked(hostInput.getSendTextareaValue_ACU).mockReturnValue('A 输入');
+    m.api.chat = [{ is_user: false, mes: 'A AI' }];
+    m.currentChatKey = 'chat-a';
+    const stopGeneration = vi.fn();
+    const prevSillyTavern = (window as any).SillyTavern;
+    (window as any).SillyTavern = { stopGeneration };
+    try {
+      m.orchestrate
+        .mockResolvedValueOnce({ action: 'no_match' })
+        .mockResolvedValueOnce({ action: 'failed', apiRetriesExhausted: true });
+
+      await m.afterCommandsHandler!('normal', {}, false);
+
+      expect(stopGeneration).toHaveBeenCalledTimes(1);
+      expect(hostInput.setSendTextareaValue_ACU).not.toHaveBeenCalled();
+    } finally {
+      (window as any).SillyTavern = prevSillyTavern;
+    }
+  });
+});
+
 describe('mainInitialize_ACU GENERATION_STARTED 复位终止残留', () => {
   it('宿主开始生成时把残留 true 复位为 false', () => {
     m.wasStoppedByUser = true;

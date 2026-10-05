@@ -184,12 +184,58 @@ describe('runOptimizationLogic_ACU', () => {
     expect(result.aborted).toBe(true);
   });
 
-  it('AbortError 返回 aborted', async () => {
+  it('AbortError 名称不再是取消：宿主 AbortError 不能自动中断发送', async () => {
     const err = new DOMException('The operation was aborted', 'AbortError');
     mockRunPlotTasks.mockRejectedValue(err);
     const result = await runOptimizationLogic_ACU('继续');
     expect(result.success).toBe(false);
-    expect(result.aborted).toBe(true);
+    expect(result.aborted).toBeUndefined();
+    expect(result.errorType).toBe('exception');
+  });
+
+  it('宿主中止信号（signal.aborted）仍是取消', async () => {
+    const stateManager = await import('../../../../src/service/runtime/state-manager');
+    (stateManager as any).abortController_ACU = { signal: { aborted: true } };
+    try {
+      mockRunPlotTasks.mockRejectedValue(new Error('some failure'));
+      const result = await runOptimizationLogic_ACU('继续');
+      expect(result.success).toBe(false);
+      expect(result.aborted).toBe(true);
+      expect(result.manual).toBe(true);
+    } finally {
+      (stateManager as any).abortController_ACU = null;
+    }
+  });
+
+  it('API 重试耗尽透出 apiRetriesExhausted 标记（中断口径，不再吞成普通失败）', async () => {
+    mockRunPlotTasks.mockResolvedValue({
+      finalMessage: null,
+      apiRetriesExhausted: true,
+      errorMessage: 'API 失败且耗尽重试',
+      enabledTaskCount: 1,
+      successfulResults: [],
+      failedResults: [],
+    });
+    const result = await runOptimizationLogic_ACU('继续');
+    expect(result.success).toBe(false);
+    expect(result.apiRetriesExhausted).toBe(true);
+    expect(result.errorType).toBe('api_retries_exhausted');
+  });
+
+  it('reportWarning 原样透传给任务运行时', async () => {
+    mockRunPlotTasks.mockResolvedValue({
+      finalMessage: 'ok',
+      successfulResults: [{ taskId: 't' }],
+      failedResults: [],
+      enabledTaskCount: 1,
+    });
+    const reportWarning = vi.fn();
+    await runOptimizationLogic_ACU('继续', { reportWarning });
+    expect(mockRunPlotTasks).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ reportWarning }),
+    );
   });
 
   it('未知异常返回通用错误且日志与结果均不泄露宿主正文', async () => {
@@ -319,7 +365,7 @@ describe('runOptimizationLogic_ACU', () => {
   });
 });
 
-  it('PlotStageError 的 cause.category=aborted 恢复为取消语义，不伪装成预检失败', async () => {
+  it('PlotStageError 的 cause.category=aborted 不再是取消：走世界书预检失败分支', async () => {
     const stageError = Object.assign(new Error('stage failed'), {
       name: 'PlotStageError_ACU',
       phase: 'clear_final_generation_greenlights',
@@ -328,8 +374,7 @@ describe('runOptimizationLogic_ACU', () => {
     mockRunPlotTasks.mockRejectedValue(stageError);
     const result = await runOptimizationLogic_ACU('继续');
     expect(result.success).toBe(false);
-    expect(result.aborted).toBe(true);
-    expect(result.manual).toBe(true);
-    expect(result.errorType).toBeUndefined();
+    expect(result.aborted).toBeUndefined();
+    expect(result.errorType).toBe('worldbook_preflight_failure');
   });
 

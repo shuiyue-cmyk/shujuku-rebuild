@@ -128,6 +128,14 @@ vi.mock('../../../src/shared/data-constants', () => ({
 
 vi.mock('../../../src/shared/defaults-json.js', () => ({
   DEFAULT_BUILTIN_PLOT_PRESETS_ACU: [{ name: '时间召回', _acuBuiltinPresetId: 'time-recall', _acuBuiltinPresetVersion: 'test' }],
+  DEFAULT_TIME_RECALL_PLOT_PRESET_ACU: {
+    name: '时间召回',
+    _acuBuiltinPresetId: 'time-recall',
+    promptGroup: [
+      { role: 'SYSTEM', content: '时间召回头段' },
+      { role: 'assistant', content: '收到，天之音开始执行！', deletable: true },
+    ],
+  },
   DEFAULT_CHAR_CARD_PROMPT_ACU: [{ role: 'USER', content: '默认提示词' }],
   DEFAULT_CHAR_CARD_PROMPT_SQL_ACU: [{ role: 'USER', content: '默认 sql 提示词' }],
   DEFAULT_MERGE_SUMMARY_PROMPT_ACU: '默认合并提示词',
@@ -885,6 +893,36 @@ describe('loadSettings_ACU', () => {
     expect(mockGlobalMeta.vectorMemoryConfigGlobal.topK).toBe(80);
     expect(mockGlobalMeta.vectorMemoryConfigGlobal.minScore).toBe(0.5);
     expect(mockGlobalMeta.vectorMemoryConfigGlobal.recentFixedInjectCount).toBe(20);
+  });
+
+  // ═══ 时间召回旧尾段迁移（移植上游 9bb5b242 time-recall-prefill）═══
+
+  it('加载时迁移时间召回 pristine 默认尾段为 user 预填充', async () => {
+    const { DEFAULT_TIME_RECALL_PLOT_PRESET_ACU } = await import('../../../src/shared/defaults-json.js');
+    const { USER_PREFILL_CONTENT_ACU } = await import('../../../src/shared/user-prefill.js');
+    // 先关掉 spv9.3 profile 覆盖（marker 缺失时会无条件重写 promptGroup，与本迁移无关）。
+    mockSettings.userPrefillProfileForceDefaultVersion = 'spv9.3-user-prefill-profile';
+    mockReadProfileSettings.mockReturnValue({
+      plotSettings: JSON.parse(JSON.stringify(DEFAULT_TIME_RECALL_PLOT_PRESET_ACU)),
+    });
+
+    loadSettings_ACU();
+
+    const tail = mockSettings.plotSettings.promptGroup.at(-1);
+    expect(tail.role).toBe('user');
+    expect(tail.content).toBe(USER_PREFILL_CONTENT_ACU);
+  });
+
+  it('加载时时间召回用户改过的尾段不迁移', async () => {
+    const { DEFAULT_TIME_RECALL_PLOT_PRESET_ACU } = await import('../../../src/shared/defaults-json.js');
+    mockSettings.userPrefillProfileForceDefaultVersion = 'spv9.3-user-prefill-profile';
+    const stored = JSON.parse(JSON.stringify(DEFAULT_TIME_RECALL_PLOT_PRESET_ACU));
+    stored.promptGroup[stored.promptGroup.length - 1] = { role: 'assistant', content: '用户自己写的结尾', deletable: true };
+    mockReadProfileSettings.mockReturnValue({ plotSettings: stored });
+
+    loadSettings_ACU();
+
+    expect(mockSettings.plotSettings.promptGroup.at(-1).content).toBe('用户自己写的结尾');
   });
 
   // ═══ spv9.3 user-prefill 一次性覆盖迁移（TT 移植上游 ce867f86）═══

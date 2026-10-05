@@ -199,6 +199,14 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
     }
   }
 
+  /**
+   * 只有本次用户中止信号或明确的用户取消错误才是手动取消。
+   * 宿主 AbortError、超时和世界书取消分类不能自动中断发送（调用方按普通失败继续）。
+   */
+  function isManualPlotAbort_ACU(error: any): boolean {
+    return abortController_ACU?.signal.aborted === true || error?.message === 'TaskAbortedByUser';
+  }
+
   function getPlotTaskApiPresetOverrides_ACU(): Record<string, string> {
     if (!settings_ACU.plotTaskApiPresetOverridesById || typeof settings_ACU.plotTaskApiPresetOverridesById !== 'object' || Array.isArray(settings_ACU.plotTaskApiPresetOverridesById)) {
       settings_ACU.plotTaskApiPresetOverridesById = {};
@@ -530,6 +538,8 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
       performReplacements,
       resolveTableWorldbookTokens,
       finalSystemDirectiveContent,
+      // UI 侧告警通道（planning-ui 透传）：任务级 warn-继续可直接提示用户。
+      reportWarning: runtimeOptions.reportWarning,
       seedContentForConditional,
       recentContextMessages: Array.isArray(agentContextMessages) ? agentContextMessages : [],
       allTablesJson: currentJsonTableData_ACU,
@@ -555,15 +565,23 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
 
     for (const seg of messagesToUse) {
       if (!seg || typeof seg.content !== 'string') continue;
-      let c = seg.content;
-      if (typeof sharedContext.resolveTaskTableWorldbookTokens === 'function') {
-        c = await sharedContext.resolveTaskTableWorldbookTokens(c);
+      try {
+        let c = seg.content;
+        if (typeof sharedContext.resolveTaskTableWorldbookTokens === 'function') {
+          c = await sharedContext.resolveTaskTableWorldbookTokens(c);
+        }
+        c = await tryRenderPlotTemplateWithEjs_ACU(c);
+        c = sharedContext.performReplacements(c, replacementOverrides);
+        c = replacePlotTagPlaceholders_ACU(c, relayTagMap, historyTagMap);
+        c = renderPlotTaskContentWithIsolatedVariables_ACU(c, sharedContext);
+        seg.__renderedContent = c;
+      } catch (error) {
+        if (isManualPlotAbort_ACU(error)) throw error;
+        sharedContext.reportWarning?.('提示词段处理未完成，保留已处理的文本并继续任务。');
+        logWarn_ACU('[剧情推进] 提示词段处理异常，继续任务。', {
+          error: summarizePlotRuntimeError_ACU(error),
+        });
       }
-      c = await tryRenderPlotTemplateWithEjs_ACU(c);
-      c = sharedContext.performReplacements(c, replacementOverrides);
-      c = replacePlotTagPlaceholders_ACU(c, relayTagMap, historyTagMap);
-      c = renderPlotTaskContentWithIsolatedVariables_ACU(c, sharedContext);
-      seg.__renderedContent = c;
     }
 
     return messagesToUse
@@ -667,25 +685,15 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
         taskWorldbookOptions,
       );
     } catch (wbError) {
-      if (wbError?.message === 'TaskAbortedByUser' || wbError?.name === 'AbortError' || String(wbError?.message || '').toLowerCase().includes('aborted')) {
+      if (isManualPlotAbort_ACU(wbError)) {
         throw wbError;
       }
-      logWarn_ACU(`[剧情推进] [任务:${taskLabel}] 严格世界书读取失败，已阻断 AI 调用。`, {
+      sharedContext.reportWarning?.(`任务「${taskLabel}」的世界书处理失败，使用已取得的资料继续。`);
+      logWarn_ACU(`[剧情推进] [任务:${taskLabel}] 世界书处理失败，继续 AI 调用。`, {
         phase: 'strict_worldbook_read',
         runId: sharedContext.worldbookReadContext?.runId || '',
         error: summarizeStrictLorebookReadError_ACU(wbError) || summarizePlotRuntimeError_ACU(wbError),
       });
-      return {
-        taskId: normalizedTask.id,
-        taskName: taskLabel,
-        success: false,
-        rawResponse: '',
-        extractedTags: {},
-        injectedFragments: [],
-        error: '必需世界书读取失败，已阻断任务 AI 调用。',
-        stage: taskStage,
-        order: normalizedTask.order ?? 0,
-      };
     }
 
     // 构建任务级共享上下文：覆盖 $1/$9 替换值，并在 EJS 前解析表名占位符。
@@ -717,6 +725,7 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
 
       let rawResponse = '';
       let lastErrorMessage = '';
+      let apiErrorSeen = false;
       let lastExtractedTags: Record<string, string> = {};
       let lastInjectedFragments: string[] = [];
       let lastInjectOnlyTags: Record<string, string> = {};
@@ -740,10 +749,11 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
           logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 使用任务级API预设: ${effectivePlotApiPreset || '当前配置'}`);
           tempMessage = await callApiWithPlotPreset_ACU(messages, effectivePlotApiPreset, abortController_ACU?.signal || null);
         } catch (apiCallError) {
-          if (apiCallError?.name === 'AbortError' || String(apiCallError?.message || '').toLowerCase().includes('aborted')) {
+          if (isManualPlotAbort_ACU(apiCallError)) {
             throw apiCallError;
           }
           apiError = apiCallError;
+          apiErrorSeen = true;
           lastErrorMessage = apiCallError?.message || 'API调用失败';
           logWarn_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 第 ${attemptIndex + 1} 次API调用失败:`, lastErrorMessage);
         }
@@ -786,8 +796,10 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
           success: false,
           rawResponse: '',
           extractedTags: {},
-          injectedFragments: [],
+          injectedFragments: [] as any[],
           error: lastErrorMessage || '任务在最大重试次数后仍未返回有效结果。',
+          // API 侧失败耗尽重试才标记：模型有回但过短/未摘到标签属于内容不合格，不触发发送中断。
+          ...(apiErrorSeen ? { apiRetriesExhausted: true } : {}),
           stage: taskStage,
           order: normalizedTask.order ?? 0,
         };
@@ -813,20 +825,8 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
         order: normalizedTask.order ?? 0,
       };
     } catch (error) {
-      if (error?.message === 'TaskAbortedByUser' || error?.name === 'AbortError' || String(error?.message || '').toLowerCase().includes('aborted')) {
+      if (isManualPlotAbort_ACU(error)) {
         throw error;
-      }
-      if (isStrictLorebookReadError_ACU(error) || String((error as any)?.message || '').startsWith('StrictLorebookRead:')) {
-        logWarn_ACU(`[剧情推进] [任务:${taskLabel}] 严格世界书读取失败，已阻断 AI 调用。`, {
-          phase: 'strict_worldbook_read',
-          runId: sharedContext.worldbookReadContext?.runId || '',
-          error: summarizeStrictLorebookReadError_ACU(error) || summarizePlotRuntimeError_ACU(error),
-        });
-        return {
-          taskId: normalizedTask.id, taskName: taskLabel, success: false, rawResponse: '',
-          extractedTags: {}, injectedFragments: [], error: '必需世界书读取失败，已阻断任务 AI 调用。',
-          stage: taskStage, order: normalizedTask.order ?? 0,
-        };
       }
       logError_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 执行失败:`, error);
       return {
@@ -939,6 +939,7 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
         inputForHash,
         hasExistingUserMessage,
         readContext: worldbookReadContext,
+        reportWarning: runtimeOptions.reportWarning,
       });
       sharedContext.worldbookReadContext = worldbookReadContext;
     checkPlotAbortRequested_ACU();
@@ -1111,6 +1112,8 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
         failedResults,
         aggregatedTags: new Map(),
         enabledTaskCount: enabledTasks.length,
+        // 任一任务 API 耗尽即透出：发送层据此中断，不继续宿主发送。
+        ...(failedResults.some((result: any) => result?.apiRetriesExhausted === true) ? { apiRetriesExhausted: true } : {}),
       };
     }
 

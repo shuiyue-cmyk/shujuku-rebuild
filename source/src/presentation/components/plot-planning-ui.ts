@@ -13,11 +13,12 @@ import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
  * 在 presentation 层调用 runOptimizationLogic_ACU 并处理所有 UI 反馈。
  * 返回值与原 runOptimizationLogic_ACU 兼容：
  *   - string: 规划成功的最终消息
- *   - null: 规划失败/跳过/未启用
- *   - { skipped: true }: 重复触发被跳过
+ *   - { apiRetriesExhausted: true }: API 调用失败且重试耗尽（发送层据此中断）
+ *   - { skipped: true, reason: string }: 未执行规划或普通失败（继续宿主发送）
  *   - { aborted: true, manual: true, restoreText: string }: 用户中止
  */
 export async function runOptimizationLogicWithUI_ACU(userMessage: any, options: any = {}) {
+  let manuallyAborted = false;
   // 1. 创建带中止按钮的进度 toast
   const toastMsg = `
       <div style="display: flex; align-items: center; justify-content: space-between;">
@@ -44,6 +45,7 @@ export async function runOptimizationLogicWithUI_ACU(userMessage: any, options: 
       $abortBtn.off('click').on('click', function(e) {
         e.preventDefault();
         e.stopPropagation();
+        manuallyAborted = true;
         logDebug_ACU('[剧情推进] 用户点击了中止按钮。');
 
         if (abortController_ACU) {
@@ -70,20 +72,33 @@ export async function runOptimizationLogicWithUI_ACU(userMessage: any, options: 
     }
   }, 200);
 
-  // 3. 调用 service 层纯函数
-  const result = await runOptimizationLogic_ACU(userMessage, options);
+  // 3. 调用 service 层纯函数：异常不向外抛，统一转 skipped 继续宿主发送
+  let result: Awaited<ReturnType<typeof runOptimizationLogic_ACU>>;
+  try {
+    result = await runOptimizationLogic_ACU(userMessage, {
+      ...options,
+      reportWarning: (text: string) => showToastr_ACU('warning', text, '剧情推进'),
+    });
+  } catch {
+    showToastr_ACU('warning', '剧情任务处理异常，继续宿主发送。', '剧情推进');
+    try { if ($toast) toastr_API_ACU.clear($toast); } catch (e) {}
+    return manuallyAborted
+      ? { aborted: true, manual: true, restoreText: String(userMessage || '') }
+      : { skipped: true, reason: 'processing_error' };
+  }
 
   // 4. 清除进度 toast
   try { if ($toast) toastr_API_ACU.clear($toast); } catch (e) {}
 
   // 5. 根据结果做 UI 通知
+  if (manuallyAborted) return { aborted: true, manual: true, restoreText: String(userMessage || '') };
   if (!result) {
-    return null;
+    return { skipped: true, reason: 'no_result' };
   }
 
   // 跳过的情况（retrying / inflight / disabled）—— 不弹 toast，静默返回
   if (result.skipped) {
-    return result.reason === 'inflight' ? { skipped: true } : null;
+    return { skipped: true, reason: result.reason };
   }
 
   // 用户中止
@@ -91,19 +106,17 @@ export async function runOptimizationLogicWithUI_ACU(userMessage: any, options: 
     return { aborted: true, manual: result.manual, restoreText: result.restoreText };
   }
 
-  // 失败：根据 errorType 弹对应 toast
+  // 只有 API 重试耗尽是自动停止；普通失败告警后继续宿主发送。
   if (!result.success) {
-    const errorMsg = result.errorMessage || '剧情规划失败。';
-    if (result.errorType === 'stage_failure' || result.errorType === 'all_failed' || result.errorType === 'no_tasks') {
+    const errorMsg = result.errorMessage || '剧情任务未返回结果，继续宿主发送。';
+    if (result.apiRetriesExhausted === true) {
       showToastr_ACU('error', errorMsg, '规划失败', {
         acuToastCategory: ACU_TOAST_CATEGORY_ACU.ERROR,
       });
-    } else if (result.errorType === 'exception') {
-      showToastr_ACU('error', errorMsg, '规划失败', {
-        acuToastCategory: ACU_TOAST_CATEGORY_ACU.ERROR,
-      });
+      return { apiRetriesExhausted: true };
     }
-    return null;
+    showToastr_ACU('warning', errorMsg, '剧情推进');
+    return { skipped: true, reason: result.errorType || 'no_result' };
   }
 
   // 成功：弹结果 toast

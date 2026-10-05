@@ -943,8 +943,12 @@ export   function mainInitialize_ACU() {
             if (s1.action !== 'no_match') {
               // 策略1匹配，根据结果做 UI 操作
               switch (s1.action) {
-                case 'aborted':
-                  if (s1.manual) {
+                case 'failed':
+                case 'aborted': {
+                  // API 重试耗尽与手动中止同口径中断：停生成、删刚建的用户楼、恢复输入框。
+                  // failed 必带 apiRetriesExhausted（编排器保证），裸 failed 不处理。
+                  const interrupted = s1.action === 'aborted' ? !!s1.manual : s1.apiRetriesExhausted === true;
+                  if (interrupted) {
                     // 停止生成
                     try {
                       if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function') SillyTavern_API_ACU.stopGeneration();
@@ -959,11 +963,14 @@ export   function mainInitialize_ACU() {
                         else if ((window as any).SillyTavern?.deleteLastMessage) await (window as any).SillyTavern.deleteLastMessage();
                       }
                     } catch (e) {}
-                    // 恢复输入框（伪装激活时经 finally 的 release 统一交还，直接写框会被覆盖导致 restoreText 丢失）
-                    if (disguise) textForHost = s1.restoreText || '';
-                    else try { setSendTextareaValue_ACU(s1.restoreText || ''); } catch (e) {}
+                    // 恢复输入框（failed 无 restoreText 时用 originalMessage，编排器已回填；
+                    // 伪装激活时经 finally 的 release 统一交还，直接写框会被覆盖导致文本丢失）
+                    const restore = s1.restoreText || (s1.action === 'failed' ? s1.originalMessage : '') || '';
+                    if (disguise) textForHost = restore;
+                    else try { setSendTextareaValue_ACU(restore); } catch (e) {}
                   }
                   break;
+                }
 
                 case 'planned':
                   // 写回 params 和消息对象
@@ -1017,14 +1024,19 @@ export   function mainInitialize_ACU() {
             }
 
             switch (s2.action) {
-              case 'aborted':
-                if (s2.manual) {
+              case 'failed':
+              case 'aborted': {
+                // API 重试耗尽与手动中止同口径：停掉本轮生成（S2 楼层未建，输入框原文保留供重试）。
+                // 注：此处只能截停已起的生成，拦不住宿主续发（无发送门控）；真中断要改 params.prompt，
+                // 超出本批口径，保持现状。
+                if (s2.manual || s2.apiRetriesExhausted === true) {
                   try {
                     if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function') SillyTavern_API_ACU.stopGeneration();
                     else if ((window as any).SillyTavern?.stopGeneration) (window as any).SillyTavern.stopGeneration();
                   } catch (e) {}
                 }
                 break;
+              }
 
               case 'planned':
                 // 伪装接管时发送框写入由 finally 的 release 统一交还，避免双写；
