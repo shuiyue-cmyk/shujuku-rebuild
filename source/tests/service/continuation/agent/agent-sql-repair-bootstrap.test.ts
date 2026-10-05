@@ -23,7 +23,7 @@ beforeEach(() => {
 });
 
 describe('SQL 修复提示（移植上游 9ee4f0f TT 子集）', () => {
-  it('字段数不一致时提示单引号要写成两个', async () => {
+  it('字段数不一致时指导逐项核对列名与 VALUES（移植上游 5f8afe3a）', async () => {
     const runtime = await import('../../../../src/service/continuation/agent/agent-subagent-runtime');
     const render = (runtime as Record<string, unknown>).renderWriteSqlRepair_ACU as unknown as
       ((receipt: Record<string, unknown>) => string) | undefined;
@@ -35,10 +35,41 @@ describe('SQL 修复提示（移植上游 9ee4f0f TT 子集）', () => {
       revisions: { storyArc: 0, hooks: 0, infoGap: 0, chronology: 0, webRefs: 0 },
     };
     const repair = render!(receipt);
-    // 上游 9ee4f0f：不再抱怨“字段个数”，改为解释引号拆值并安抚 id 缺失焦虑。
-    expect(repair).toContain('单引号要写成两个单引号');
-    expect(repair).toContain('不是缺 id');
+    // 上游 5f8afe3a：不再解释缺 id，改为逐项核对列名与 VALUES。
+    expect(repair).toContain('逐项对应');
+    expect(repair).not.toContain('不是缺 id');
     expect(repair).not.toContain('字段个数必须等于值的个数');
+  });
+
+  it('revisions 缺失时不输出 null 垃圾，给出核实指引', async () => {
+    const runtime = await import('../../../../src/service/continuation/agent/agent-subagent-runtime');
+    const render = (runtime as Record<string, unknown>).renderWriteSqlRepair_ACU as unknown as
+      ((receipt: Record<string, unknown>) => string) | undefined;
+    const repair = render!({
+      status: 'rejected',
+      accepted: [],
+      rejected: [{ path: 'hooks#H1', reason: 'revision_conflict: expected=0, actual=1' }],
+      partials: [],
+      revisions: null,
+    });
+    expect(repair).not.toContain('revisions：null');
+    expect(repair).toContain('先 read 对应');
+  });
+
+  it('同值重发已确认时提示不要重复提交（移植上游 5f8afe3a）', async () => {
+    const runtime = await import('../../../../src/service/continuation/agent/agent-subagent-runtime');
+    const render = (runtime as Record<string, unknown>).renderWriteSqlRepair_ACU as unknown as
+      ((receipt: Record<string, unknown>) => string) | undefined;
+    const repair = render!({
+      status: 'committed',
+      accepted: [],
+      alreadySaved: [{ module: 'hooks', id: 'H1', field: 'summary', revision: 1 }],
+      rejected: [],
+      partials: [],
+      revisions: { storyArc: 0, hooks: 1, infoGap: 0, chronology: 0, webRefs: 0 },
+    });
+    expect(repair).toContain('hooks#H1.summary');
+    expect(repair).toContain('不要再次提交');
   });
 
   it('revision_conflict 时区分新行与已有行', async () => {

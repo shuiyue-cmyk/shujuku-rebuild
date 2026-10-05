@@ -110,6 +110,10 @@ export interface ContinuationWorkflowInput_ACU {
   readCommittedSnapshot?: () => AgentModuleSnapshot_ACU;
   runComposer: (call: { prompt: string; revisionFeedback: string; priorInstruction: string }) => Promise<AgentComposerOutput_ACU>;
   runFinalReview: (instruction: string, summary: string) => Promise<AgentFinalReviewerOutput_ACU>;
+  /** 本轮实际注入的正文起点；缺省保留既有完整结算语义。 */
+  settlementStartIndex?: number;
+  /** 窗口外仍有未处理正文时，不得推进连续结算水位。 */
+  canAdvanceSettlement?: boolean;
 }
 
 export interface ContinuationMaterialRepairInput_ACU {
@@ -218,7 +222,7 @@ function maintainerPrompt_ACU(focus: string, snapshot: AgentModuleSnapshot_ACU, 
   const fixes = snapshot.pendingFixes.filter(item => (MAINTAINER_MODULES_ACU as readonly string[]).includes(item.module));
   return [
     repair ? '这是独立预算的自动修复。只提交违规模块的增量 patch，不要重写无关模块。' : `本轮焦点：${focus}`,
-    '结算已经发生的正文。没有新事实时 delta 留空并在 summary 写明 no_change。',
+    '只逐楼结算 $HISTORY_UNSETTLED 实际提供的窗口内正文；窗口外省略内容不得宣称已读或已结算。没有新事实时 delta 留空并在 summary 写明 no_change。',
     `待修复：${formatFixes_ACU(fixes)}`,
   ].join('\n');
 }
@@ -333,12 +337,24 @@ function completionModules_ACU(
 function clearCompletedPending_ACU(
   snapshot: AgentModuleSnapshot_ACU,
   modules: Partial<Record<AgentWritableModule_ACU, Exclude<AgentMaterialCompletionState_ACU, 'legacy_unknown'>>>,
+  rangeStartIndex?: number,
+  rangeEndIndex?: number,
 ): AgentModuleSnapshot_ACU {
   const completed = new Set(Object.entries(modules)
     .filter(([, state]) => state === 'complete_changed' || state === 'complete_no_change')
     .map(([module]) => module));
   if (!completed.size) return snapshot;
-  return { ...snapshot, pendingFixes: snapshot.pendingFixes.filter(item => !completed.has(item.module)) };
+  // 结算窗口外的缺口不受本轮清账影响：按模块清账不能丢掉窗口外的待修复项。
+  return { ...snapshot, pendingFixes: snapshot.pendingFixes.filter(item => !completed.has(item.module)
+    || !pendingWithinSettlement_ACU(item, rangeStartIndex, rangeEndIndex)) };
+}
+
+/** 缺口是否落在本次结算窗口内；无窗口约束时一律视为窗口内（保持旧行为）。 */
+function pendingWithinSettlement_ACU(item: AgentPendingFix_ACU, start?: number, end?: number): boolean {
+  if (start === undefined || end === undefined) return true;
+  const itemStart = item.rangeStartIndex ?? start;
+  const itemEnd = item.rangeEndIndex ?? end;
+  return start <= end && itemStart >= start && itemEnd <= end;
 }
 
 function repairAgentForModule_ACU(module: AgentWritableModule_ACU): string | null {
@@ -540,7 +556,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
   // 删楼后 settledIndex 可能小于旧 pending 的 rangeStart：起点钳到终点以内，
   // 否则写出的 materialCompletion 会出现 rangeStart>rangeEnd 的非法区间。
   const rawSettlementStart = pendingRangeStarts.length ? Math.min(...pendingRangeStarts) : Math.max(0, snapshot.settledThroughIndex + 1);
-  const settlementStartIndex = Math.min(rawSettlementStart, settlementEndIndex);
+  const settlementStartIndex = Math.min(input.settlementStartIndex ?? rawSettlementStart, settlementEndIndex);
 
   const runSafe_ACU = async (call: ContinuationWorkflowAgentCall_ACU): Promise<ContinuationWorkflowAgentPayload_ACU> => {
     try {
@@ -556,10 +572,11 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     writes: readonly string[],
     readRevisions: AgentModuleRevisions_ACU | undefined,
     agentName: string,
+    settlementRange?: { start: number; end: number },
   ): Promise<AgentWritableModule_ACU[]> => {
     if (!output || !deltaTouched_ACU(output.delta)) return [];
     const delta = readRevisions ? mergeAgentDeltaRevisions_ACU(output.delta, readRevisions) : output.delta;
-    const applied = await applyAgentModuleDeltaViaSql_ACU(snapshot, delta, writes, input.settledIndex, input.completedStageNumbers, input.allowedEvidenceIndexes, tolerantOptions_ACU(agentName));
+    const applied = await applyAgentModuleDeltaViaSql_ACU(snapshot, delta, writes, input.settledIndex, input.completedStageNumbers, input.allowedEvidenceIndexes, { ...tolerantOptions_ACU(agentName), ...(settlementRange ? { settlementRange } : {}) });
     snapshot = applied.snapshot;
     return applied.appliedModules;
   };
@@ -626,7 +643,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       }
     } else {
       appliedModules = maintainer.ok
-        ? await applyMaintainerLike_ACU(maintainer.maintainer, writes, maintainer.readRevisions, MAINTAINER_NAME_ACU)
+        ? await applyMaintainerLike_ACU(maintainer.maintainer, writes, maintainer.readRevisions, MAINTAINER_NAME_ACU, { start: settlementStartIndex, end: settlementEndIndex })
         : [];
     }
     const issues = [...(maintainer.unresolvedIssues ?? [])];
@@ -648,7 +665,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       }
       completion = appliedModules.length ? 'partial' : 'failed';
     } else {
-      snapshot = clearCompletedPending_ACU(snapshot, modules);
+      snapshot = clearCompletedPending_ACU(snapshot, modules, settlementStartIndex, settlementEndIndex);
     }
     const now = Date.now();
     snapshot = {
@@ -674,7 +691,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     } else {
       steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'ok', summary: maintainer.summary });
     }
-      const repairPending = snapshot.pendingFixes.filter(item =>
+        const repairPending = snapshot.pendingFixes.filter(item =>
         (MAINTAINER_MODULES_ACU as readonly string[]).includes(item.module)
         && item.source !== 'truncated');
       if (!repairPending.length || repairAttempts >= maxRepairAttempts) break;

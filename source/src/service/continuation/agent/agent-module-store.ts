@@ -826,6 +826,8 @@ export interface AgentModuleFieldAccepted_ACU { module: AgentWritableModule_ACU;
 export interface AgentModuleFieldReceipt_ACU {
   status: 'committed' | 'rejected' | 'persist_failed' | 'readback_failed';
   accepted: AgentModuleFieldAccepted_ACU[];
+  /** 从权威基线确认的同值重发；不产生新写入或推进修订号。 */
+  alreadySaved?: Array<AgentModuleFieldAccepted_ACU & { value: unknown }>;
   rejected: AgentModuleSqlFieldRejection_ACU[];
   /** null 表示保存/补偿后的当前状态无法确认；必须重新读取权威帧。 */
   partials: Array<{ module: AgentWritableModule_ACU; id: string; missingFields: string[]; promotionError?: string }> | null;
@@ -850,24 +852,30 @@ function fieldCommitStringArray_ACU(value: unknown): boolean { return Array.isAr
 function fieldCommitRecord_ACU(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }
 function fieldCommitInList_ACU(value: unknown, list: readonly string[]): boolean { return fieldCommitText_ACU(value) && list.includes(value); }
 
+/** 证据楼层纠错后缀：给模型可核对的楼层清单，不让它为通过校验换号。 */
+function fieldCommitEvidenceRepair_ACU(snapshot: AgentModuleSnapshot_ACU, evidence: ReadonlySet<number>): string {
+  const indexes = [...evidence].filter(item => item <= snapshot.settledThroughIndex).sort((a, b) => a - b);
+  return `；本次引用上限 ${snapshot.settledThroughIndex}，可核对的 AI 正文楼层号：${indexes.join(', ') || '无'}。使用正文标注的原始楼层号，不要按第几条 AI 回复重新计数；须核对对应正文，不得仅为通过校验换号`;
+}
+
 /** 显式栏目逐栏校验；null、合法空值与缺栏不可混淆。 */
 function fieldCommitProblem_ACU(module: FieldCommitModule_ACU, field: string, value: unknown, snapshot: AgentModuleSnapshot_ACU, evidence: ReadonlySet<number>): string | null {
   switch (module) {
     case 'hooks':
       if (field === 'status') return fieldCommitInList_ACU(value, AGENT_HOOK_STATUSES_ACU) ? null : 'status 枚举非法';
       if (field === 'importance') return fieldCommitInList_ACU(value, AGENT_HOOK_IMPORTANCES_ACU) ? null : 'importance 枚举非法';
-      if (field === 'plantedIndex') return fieldCommitIndex_ACU(value) && (value as number) <= snapshot.settledThroughIndex && evidence.has(value as number) ? null : 'plantedIndex 必须引用已结算正文楼层';
+      if (field === 'plantedIndex') return fieldCommitIndex_ACU(value) && (value as number) <= snapshot.settledThroughIndex && evidence.has(value as number) ? null : 'plantedIndex 必须引用已结算正文楼层' + fieldCommitEvidenceRepair_ACU(snapshot, evidence);
       return field === 'summary' ? (fieldCommitNonempty_ACU(value) ? null : 'summary 必须为非空文本') : (fieldCommitText_ACU(value) ? null : '必须为字符串');
     case 'infoGap':
       if (field === 'revealStatus') return fieldCommitInList_ACU(value, AGENT_REVEAL_STATUSES_ACU) ? null : 'revealStatus 枚举非法';
-      if (field === 'revealIndex') return value === null || (fieldCommitIndex_ACU(value) && (value as number) <= snapshot.settledThroughIndex && evidence.has(value as number)) ? null : 'revealIndex 必须为空或已结算正文楼层';
-      if (field === 'characterKnowledge') return Array.isArray(value) && value.every(item => fieldCommitRecord_ACU(item) && fieldCommitNonempty_ACU(item.name) && fieldCommitText_ACU(item.knows)) ? null : 'characterKnowledge 需要带 name / knows 的数组';
+      if (field === 'revealIndex') return value === null || (fieldCommitIndex_ACU(value) && (value as number) <= snapshot.settledThroughIndex && evidence.has(value as number)) ? null : 'revealIndex 必须为空或已结算正文楼层' + fieldCommitEvidenceRepair_ACU(snapshot, evidence);
+      if (field === 'characterKnowledge') return Array.isArray(value) && value.every(item => fieldCommitRecord_ACU(item) && fieldCommitNonempty_ACU(item.name) && fieldCommitText_ACU(item.knows)) ? null : 'characterKnowledge 需要带 name / knows 的数组；SQL 列名 character_knowledge，值用单引号包裹完整 JSON 数组，如 \'[{"name":"角色","knows":"亲眼所见"}]\'；JSON 文本内部双引号须用反斜杠转义，SQL 文本内部单引号须写成两个单引号';
       return field === 'topic' ? (fieldCommitNonempty_ACU(value) ? null : 'topic 必须为非空文本') : (fieldCommitText_ACU(value) ? null : '必须为字符串');
     case 'chronology':
       if (field === 'precision') return fieldCommitInList_ACU(value, AGENT_CHRONOLOGY_PRECISIONS_ACU) ? null : 'precision 枚举非法';
       if (field === 'evidenceIndexes') {
         const indexes = normalizeEvidenceIndexes_ACU(value);
-        return indexes?.length && indexes.every(item => item <= snapshot.settledThroughIndex && evidence.has(item)) ? null : 'evidenceIndexes 必须是非空、已结算正文楼层数组';
+        return indexes?.length && indexes.every(item => item <= snapshot.settledThroughIndex && evidence.has(item)) ? null : 'evidenceIndexes 必须是非空、已结算正文楼层数组' + fieldCommitEvidenceRepair_ACU(snapshot, evidence);
       }
       return fieldCommitNonempty_ACU(value) ? null : '时间事实栏目必须为非空文本';
     case 'storyArc':
@@ -984,7 +992,7 @@ export function commitAgentModuleFieldWrites_ACU(input: {
     const parsed = parseAgentModuleSqlFieldWrites_ACU(input.sql, input.role);
     const folded = readAgentModuleFoldState_ACU(input.chat);
     const receipt: AgentModuleFieldReceipt_ACU = {
-      status: 'rejected', accepted: [], rejected: [...parsed.rejected],
+      status: 'rejected', accepted: [], alreadySaved: [], rejected: [...parsed.rejected],
       partials: fieldCommitConfirmedPartials_ACU(folded.fields),
       revisions: { ...folded.snapshot.revisions }, constraintProposals: parsed.constraintProposals,
     };
@@ -1054,6 +1062,25 @@ export function commitAgentModuleFieldWrites_ACU(input: {
       const key = `${module}#${id}`;
       const existing = fieldCommitDomainRow_ACU(folded.snapshot, module, id);
       const record = folded.fields.records[module]?.[id];
+      // 同值重发先认：折叠记录是权威当前值（快照领域行若有该栏也必须一致），
+      // 记 alreadySaved，不写不推修订号，也不卡 revision（数据一致，重发旧号无需模型再 read 一轮）。
+      if (intent.kind === 'insert' && !reserved.has(key)) {
+        const intentFields = Object.keys(intent.fields);
+        const allSame = intentFields.length > 0 && !!record && intentFields.every(field =>
+          fieldCommitCanonical_ACU(record?.fields[field]?.value) === fieldCommitCanonical_ACU(intent.fields[field])
+          && (!existing || !Object.prototype.hasOwnProperty.call(existing, field)
+            || fieldCommitCanonical_ACU(existing[field]) === fieldCommitCanonical_ACU(intent.fields[field])));
+        if (allSame) {
+          for (const field of intentFields) {
+            (receipt.alreadySaved ??= []).push({
+              module, id, field,
+              revision: record?.fields[field]?.revision ?? folded.snapshot.revisions[module],
+              value: record?.fields[field]?.value,
+            });
+          }
+          continue;
+        }
+      }
       // 新行固定 0；省略修订号时按该规则自动补，模块修订号只约束显式写错的已有行（移植上游 56540c9+2a8472e）。
       const newInsert = intent.kind === 'insert' && !existing && !record && !reserved.has(key);
       if (intent.expectedRevision === undefined) intent.expectedRevision = newInsert ? 0 : folded.snapshot.revisions[module];
@@ -1072,6 +1099,17 @@ export function commitAgentModuleFieldWrites_ACU(input: {
         }
         if ((field === 'plantedIndex' && existing) || (field === 'scope' && existing && existing.scope !== raw)) {
           receipt.rejected.push({ path: fieldPath, reason: '已登记的不可变栏目不能改写' }); continue;
+        }
+        // 同值重发记 alreadySaved：折叠记录是权威当前值（快照领域行若有该栏也必须一致）。
+        if (record && fieldCommitCanonical_ACU(record?.fields[field]?.value) === fieldCommitCanonical_ACU(raw)
+          && (!existing || !Object.prototype.hasOwnProperty.call(existing, field)
+            || fieldCommitCanonical_ACU(existing[field]) === fieldCommitCanonical_ACU(raw))) {
+          (receipt.alreadySaved ??= []).push({
+            module, id, field,
+            revision: record?.fields[field]?.revision ?? folded.snapshot.revisions[module],
+            value: record?.fields[field]?.value,
+          });
+          continue;
         }
         const problem = fieldCommitProblem_ACU(module, field, raw, folded.snapshot, evidence);
         if (problem) { receipt.rejected.push({ path: fieldPath, reason: problem }); continue; }
@@ -1144,7 +1182,12 @@ export function commitAgentModuleFieldWrites_ACU(input: {
       }
       if (intent.kind === 'insert') reserved.add(key);
     }
-    if (!Object.keys(upserts).length) return receipt;
+    if (!Object.keys(upserts).length) {
+      // 无新写入但有同值确认（或仅剩已成立的删除）：按提交确认，不留待修复缺口。
+      if ((receipt.rejected.length || (receipt.alreadySaved?.length ?? 0) > 0)
+        && receipt.rejected.every(item => item.reason.startsWith('already_absent'))) receipt.status = 'committed';
+      return receipt;
+    }
     // SQL 分栏层复算门：白名单/乐观锁与帧侧同强度；失败即整批拒绝，不落帧。
     let view: Awaited<ReturnType<typeof materializeAgentModuleSqlView_ACU>> | undefined;
     try {
@@ -1197,7 +1240,7 @@ export function commitAgentModuleFieldWrites_ACU(input: {
       }
       receipt.status = 'persist_failed';
       receipt.recovery = 'unavailable';
-      receipt.partials = null; receipt.revisions = null;
+      receipt.partials = null; receipt.revisions = null; receipt.alreadySaved = [];
       receipt.rejected.push({ path: 'host', reason: error instanceof Error ? error.message : String(error) });
       return receipt;
     }

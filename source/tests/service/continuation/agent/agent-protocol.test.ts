@@ -8,6 +8,7 @@ import {
   parseAgentMainAction_ACU,
   parseAgentMainOutput_ACU,
   parseAgentMaintainerOutput_ACU,
+  parseAgentModuleSqlFieldWrites_ACU,
   parseAgentPlannerOutput_ACU,
   parseAgentRequirementsMaintainerOutput_ACU,
   parseAgentReviewerOutput_ACU,
@@ -314,5 +315,42 @@ describe('协议错误压缩', () => {
       expect(compactAgentProtocolError_ACU(error)).toContain('CONTINUATION_AGENT_PROTOCOL_INVALID');
     }
     expect(compactAgentProtocolError_ACU(new Error('普通错误'))).toBe('普通错误');
+  });
+});
+
+describe('逐栏 SQL 解析（容忍管线，移植上游 5f8afe3a）', () => {
+  const ROLE = 'hook-cognition-maintainer';
+  it('合法写集解析为意图（含别名归一）', () => {
+    const result = parseAgentModuleSqlFieldWrites_ACU(
+      "INSERT INTO hooks (id, summary) VALUES ('H1', 's')",
+      ROLE,
+    );
+    expect(result.intents).toHaveLength(1);
+    expect(result.intents[0]).toMatchObject({ module: 'hooks', kind: 'insert' });
+    expect(result.rejected).toEqual([]);
+  });
+
+  it('坏语句进 rejected 并带纠错关联，好语句保留（位置按原始下标）', () => {
+    const result = parseAgentModuleSqlFieldWrites_ACU(
+      "INSERT INTO hooks (id, summary) VALUES ('H0', 's'); INSERT INTO hooks (id, summary) VALUES ('H1')",
+      ROLE,
+    );
+    expect(result.intents).toHaveLength(1);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0].path).toBe('sql[1]');
+    expect(result.rejected[0].reason).toContain('该语句未写入');
+    expect(result.rejected[0].repairTarget).toMatchObject({ module: 'hooks', column: 'id', value: 'H1' });
+  });
+
+  it('空写集仍拒绝（空串/纯注释）', () => {
+    expect(() => parseAgentModuleSqlFieldWrites_ACU('   ', ROLE)).toThrowError(/不允许空写集/);
+  });
+
+  it('白名单外栏目报错附可写列清单', () => {
+    const result = parseAgentModuleSqlFieldWrites_ACU(
+      "INSERT INTO hooks (id, summary, 胡写) VALUES ('H1', 's', 'x')",
+      ROLE,
+    );
+    expect(result.rejected.some(item => item.reason.includes('可写 SQL 列'))).toBe(true);
   });
 });

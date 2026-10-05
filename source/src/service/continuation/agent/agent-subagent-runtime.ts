@@ -422,10 +422,14 @@ export function renderWriteSqlRepair_ACU(receipt: AgentModuleFieldReceipt_ACU): 
   const lines: string[] = [];
   const fatal = receipt.rejected.find(item => item.path === 'host' || item.path === 'sql');
   if (fatal?.reason.includes('字段数与值数量不一致')) {
-    lines.push('这条 SQL 没有解析，任何栏目都没写入。不是缺 id。正文里的单引号要写成两个单引号，否则一个值会被拆成好几段。id 和 expected_revision 可以不写。');
+    lines.push('这条 SQL 没有解析，任何栏目都没写入。列名与 VALUES 必须逐项对应；检查是否把正文误放进列名列表或漏写值，不要盲目添加 id / expected_revision。只有失败语句未写入，其他语句按 accepted / alreadySaved 确认，不重发。');
   } else if (fatal?.reason.includes('领域快照')) {
     lines.push('这条 SQL 被整句退回，没有写入。把要改的行放在同一次调用里再交。');
   }
+  if (receipt.rejected.length || receipt.partials?.length) lines.push(receipt.revisions
+    ? `WHERE expected_revision 使用当前模块修订号 revisions：${JSON.stringify(receipt.revisions)}；accepted / alreadySaved 的 revision 是字段修订号，不是模块修订号。`
+    : 'WHERE expected_revision 使用回执 revisions 里该模块的当前值；accepted / alreadySaved 的 revision 是字段修订号，不是模块修订号（本次回执暂无 revisions，先 read 对应 $FIELD:模块:ID 核实）。');
+  if (receipt.alreadySaved?.length) lines.push(`此前已保存且本次未重复写入：${receipt.alreadySaved.map(item => `${item.module}#${item.id}.${item.field}`).join('、')}。不要再次提交这些栏目。`);
   for (const item of receipt.rejected) {
     if (item.path === 'host' || item.path === 'sql') continue;
     if (item.reason.includes('必须是非空字符串数组')) lines.push(`${item.path} 要写成单引号包裹的 JSON 数组，例如 '["经营线"]'，不要用竖线或一整句中文。`);
@@ -437,6 +441,8 @@ export function renderWriteSqlRepair_ACU(receipt: AgentModuleFieldReceipt_ACU): 
     else if (item.reason === 'not_found') lines.push(`${item.path} 还没有记录，用 INSERT，不要 UPDATE。`);
     else if (item.reason === 'id_exists') lines.push(`${item.path} 已有记录，用 UPDATE，不要再 INSERT。`);
     else if (item.reason.includes('SET 不得指定')) lines.push('UPDATE 的 SET 里不要写 id 或 expected_revision，这两项只放在 WHERE。');
+    else if (item.reason.includes('字段数与值数量不一致')) lines.push('列名与 VALUES 必须逐项对应；检查是否把正文误放进列名列表或漏写值，不要盲目添加 id / expected_revision。只有失败语句未写入，其他语句按 accepted / alreadySaved 确认，不重发。');
+    else if (item.reason.includes('字符串字面量未闭合')) lines.push('检查字符串的英文单引号是否成对，正文里的单引号写成两个单引号。');
   }
   if ((receipt.partials ?? []).some(item => item.promotionError?.includes('active') || item.promotionError?.includes('sustainingThreads'))) {
     lines.push('同一时刻只能有一条 volume 的 status 为 active，其余用 planned。scope=story 不要带卷级栏目。');

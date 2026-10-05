@@ -67,6 +67,37 @@ function harness_ACU(patch: Partial<ContinuationWorkflowInput_ACU> = {}) {
 }
 
 describe('续写固定工作流（TT）', () => {
+  it('结算窗口外的 pendingFixes 不被按模块清账（移植上游 5f8afe3a）', async () => {
+    const inWindow = {
+      module: 'hooks', agentName: 'hook-cognition-maintainer',
+      violations: [{ path: 'hooks', message: 'x' }], attempts: 1, firstFailedAtIndex: 5,
+      lastError: 'x', source: 'maintainer', completion: 'failed',
+      rangeStartIndex: 5, rangeEndIndex: 6, acceptedKeys: [], createdAt: 1, updatedAt: 1,
+    } as const;
+    const outWindow = { ...inWindow, rangeStartIndex: 100, rangeEndIndex: 100 };
+    const { run } = harness_ACU({
+      snapshot: snapshot_ACU({ pendingFixes: [inWindow as any, outWindow as any] }),
+    });
+    const result = await run();
+    const remaining = result.pendingFixes;
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0]).toMatchObject({ module: 'hooks', rangeStartIndex: 100, rangeEndIndex: 100 });
+  });
+
+  it('settlementStartIndex 入参覆盖缺省起点（移植上游 5f8afe3a）', async () => {
+    const pending = {
+      module: 'hooks', agentName: 'hook-cognition-maintainer',
+      violations: [{ path: 'hooks', message: 'x' }], attempts: 1, firstFailedAtIndex: 5,
+      lastError: 'x', source: 'maintainer', completion: 'failed',
+      rangeStartIndex: 5, rangeEndIndex: 6, acceptedKeys: [], createdAt: 1, updatedAt: 1,
+    } as const;
+    const { run } = harness_ACU({
+      snapshot: snapshot_ACU({ pendingFixes: [pending as any] }),
+      settlementStartIndex: 2,
+    });
+    const result = await run();
+    expect(result.snapshot.materialCompletion.rangeStartIndex).toBe(2);
+  });
   it('伏笔义务由程序判定（turnNumber 接管轮次判定）', () => {
     expect(continuationBeatObligation_ACU({ function: 'payoff', goal: '喝茶' })).toBe(true);
     expect(continuationBeatObligation_ACU({ goal: '回收旧伏笔' })).toBe(true);

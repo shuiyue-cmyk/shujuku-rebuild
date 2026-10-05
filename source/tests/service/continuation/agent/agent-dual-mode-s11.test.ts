@@ -149,6 +149,64 @@ describe('S11-TT 判别：融合提交（帧/plan 路径，不另起文件）', 
     expect(receipt.status).toBe('committed');
     expect(readAgentModuleFieldSnapshot_ACU(chat).records.hooks?.HF1?.fields.summary.value).toBe('融合提交');
   });
+
+  it('同值重发不产生新写入：记 alreadySaved 且不推进修订号（移植上游 5f8afe3a）', async () => {
+    const chat: any[] = [{ mes: 'a', is_user: false }];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const store = await import('../../../../src/service/continuation/agent/agent-module-store');
+    const commit = (store as Record<string, unknown>).commitAgentModuleFieldWrites_ACU as unknown as
+      ((input: Record<string, unknown>) => Promise<{ status: string; accepted: unknown[]; rejected: unknown[]; revisions: any; alreadySaved?: Array<{ module: string; id: string; field: string }> }>) | undefined;
+    await (store as Record<string, (chat: unknown[], index: number, snapshot: AgentModuleSnapshot_ACU) => Promise<void>>)
+      .writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt(0));
+    chat.push({ mes: '正文', is_user: false });
+    const sql = "INSERT INTO hooks (id, expected_revision, summary) VALUES ('HF1', 0, '融合提交')";
+    const first = await commit!({ chat, targetIndex: 1, sql, role: 'hook-cognition-maintainer' });
+    expect(first.status).toBe('committed');
+
+    const second = await commit!({ chat, targetIndex: 1, sql, role: 'hook-cognition-maintainer' });
+    expect(second.status).toBe('committed');
+    expect(second.rejected).toEqual([]);
+    expect(second.alreadySaved).toMatchObject([{ module: 'hooks', id: 'HF1', field: 'summary' }]);
+    expect(second.revisions?.hooks).toBe(first.revisions?.hooks);
+  });
+
+  it('证据楼层号错误附本次引用上限与可核对楼层（移植上游 5f8afe3a）', async () => {
+    const chat: any[] = [{ mes: 'a', is_user: false }];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const store = await import('../../../../src/service/continuation/agent/agent-module-store');
+    const commit = (store as Record<string, unknown>).commitAgentModuleFieldWrites_ACU as unknown as
+      ((input: Record<string, unknown>) => Promise<{ status: string; accepted: unknown[]; rejected: Array<{ path: string; reason: string }>; revisions: unknown }>) | undefined;
+    await (store as Record<string, (chat: unknown[], index: number, snapshot: AgentModuleSnapshot_ACU) => Promise<void>>)
+      .writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt(0));
+    chat.push({ mes: '正文', is_user: false });
+    const receipt = await commit!({
+      chat,
+      targetIndex: 1,
+      sql: "INSERT INTO hooks (id, summary, planted_index) VALUES ('HF9', 's', 999)",
+      role: 'hook-cognition-maintainer',
+    });
+    const reasons = receipt.rejected.map(item => item.reason).join('\n');
+    expect(reasons).toContain('本次引用上限');
+  });
+
+  it('characterKnowledge 形状错误附 SQL 列名写法（移植上游 5f8afe3a）', async () => {
+    const chat: any[] = [{ mes: 'a', is_user: false }];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const store = await import('../../../../src/service/continuation/agent/agent-module-store');
+    const commit = (store as Record<string, unknown>).commitAgentModuleFieldWrites_ACU as unknown as
+      ((input: Record<string, unknown>) => Promise<{ status: string; accepted: unknown[]; rejected: Array<{ path: string; reason: string }>; revisions: unknown }>) | undefined;
+    await (store as Record<string, (chat: unknown[], index: number, snapshot: AgentModuleSnapshot_ACU) => Promise<void>>)
+      .writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt(0));
+    chat.push({ mes: '正文', is_user: false });
+    const receipt = await commit!({
+      chat,
+      targetIndex: 1,
+      sql: "INSERT INTO info_gap (id, topic, character_knowledge) VALUES ('E9', 't', '不是数组')",
+      role: 'hook-cognition-maintainer',
+    });
+    const reasons = receipt.rejected.map(item => item.reason).join('\n');
+    expect(reasons).toContain('character_knowledge');
+  });
 });
 
 describe('S11-TT 判别：逐栏顺序补号 / 修订号自动分配 / 批量新行（移植上游 2a8472e+56540c9 TT 子集）', () => {
@@ -248,7 +306,7 @@ describe('S11-TT 判别：逐栏顺序补号 / 修订号自动分配 / 批量新
     expect(record?.fields.status.value).toBe('active');
   });
 
-  it('字段数不一致的整句错误穿透到逐栏提交入口，并解释引号拆分而非缺字段（9ee4f0f）', async () => {
+  it('字段数不一致进 rejected 并带纠错关联，不再整句抛错（移植上游 5f8afe3a）', async () => {
     const chat: any[] = [{ mes: 'a', is_user: false }];
     _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
     const commit = await commitStore();
@@ -256,12 +314,13 @@ describe('S11-TT 判别：逐栏顺序补号 / 修订号自动分配 / 批量新
     await (store as Record<string, (chat: unknown[], index: number, snapshot: AgentModuleSnapshot_ACU) => Promise<void>>)
       .writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt(0));
     chat.push({ mes: '正文', is_user: false });
-    const error = await commit({ chat, targetIndex: 1, sql: "INSERT INTO story_arc (id, title, direction, expected_revision) VALUES ('S1', '很好', 3)", role: 'arc-architect' })
-      .then(() => null, e => e);
-    const message = JSON.stringify((error as Error)?.message ?? error);
-    expect(message).toContain('字段数与值数量不一致（4 个字段、3 个值）');
-    expect(message).toContain('不是缺 id');
-    expect(message).toContain('单引号要写成两个单引号');
+    const receipt = await commit({ chat, targetIndex: 1, sql: "INSERT INTO story_arc (id, title, direction, expected_revision) VALUES ('S1', '很好', 3)", role: 'arc-architect' });
+    expect(receipt.status).toBe('rejected');
+    expect(receipt.rejected).toHaveLength(1);
+    expect(receipt.rejected[0].path).toBe('sql[0]');
+    expect(receipt.rejected[0].reason).toContain('字段数与值数量不一致（4 个字段、3 个值）');
+    expect(receipt.rejected[0].reason).toContain('逐项核对');
+    expect((receipt.rejected[0] as any).repairTarget).toMatchObject({ module: 'storyArc', column: 'id', value: 'S1' });
   });
 });
 
@@ -341,6 +400,8 @@ describe('infoGap 回退自动修复（移植上游 a830de93 前半 TT 子集）
       role: 'hook-cognition-maintainer',
     });
     expect(conflict.status).toBe('rejected');
-    expect(conflict.rejected).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'infoGap#G2.revealStatus' })]));
+    // 已是 unrevealed 的栏记 alreadySaved（不再判它），显式冲突的栏仍拒绝。
+    expect((conflict as any).alreadySaved).toMatchObject([{ module: 'infoGap', id: 'G2', field: 'revealStatus' }]);
+    expect(conflict.rejected).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'infoGap#G2.revealIndex' })]));
   });
 });

@@ -69,6 +69,8 @@ export interface AgentModuleApplyOptions_ACU {
   /** 不传则违规模块抛错，整次调用没有返回值。传入且不抛时，该模块记入 pendingFixes，其余模块继续。 */
   onViolation?: (message: string, details?: Record<string, unknown>) => void;
   agentName?: string;
+  /** 结算窗口：delta 落库成功时只清除窗口内的同模块缺口，窗口外的保留。缺省保持旧行为（全清）。 */
+  settlementRange?: { start: number; end: number };
 }
 
 export interface AgentModuleApplyResult_ACU {
@@ -126,9 +128,17 @@ function recordPendingFix_ACU(
     acceptedKeys: [], createdAt: now, updatedAt: now });
 }
 
-function clearPendingModule_ACU(pending: AgentPendingFix_ACU[], module: AgentPendingFix_ACU['module']): void {
+function clearPendingModule_ACU(pending: AgentPendingFix_ACU[], module: AgentPendingFix_ACU['module'], range?: { start: number; end: number }): void {
   for (let index = pending.length - 1; index >= 0; index -= 1) {
-    if (pending[index].module === module) pending.splice(index, 1);
+    if (pending[index].module !== module) continue;
+    // 有结算窗口时只清窗口内的缺口，窗口外的（未来工作）保留。
+    if (range) {
+      const item = pending[index];
+      const itemStart = item.rangeStartIndex ?? range.start;
+      const itemEnd = item.rangeEndIndex ?? range.end;
+      if (!(range.start <= range.end && itemStart >= range.start && itemEnd <= range.end)) continue;
+    }
+    pending.splice(index, 1);
   }
 }
 
@@ -151,7 +161,7 @@ function isolateModule_ACU<T>(
 ): T {
   try {
     const value = run();
-    clearPendingModule_ACU(pending, module);
+    clearPendingModule_ACU(pending, module, options?.settlementRange);
     applied.push(module);
     return value;
   } catch (error) {

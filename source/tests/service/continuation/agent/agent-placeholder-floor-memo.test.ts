@@ -24,6 +24,8 @@ import {
   renderAgentStoryRange_ACU,
   renderAgentStoryTail_ACU,
   renderAgentStoryText_ACU,
+  renderAgentUnsettledHistory_ACU,
+  resolveAgentUnsettledStoryWindow_ACU,
   type AgentContextRules_ACU,
   type AgentStoryFloorSource_ACU,
 } from '../../../../src/service/continuation/agent/agent-placeholder-resolver';
@@ -322,23 +324,83 @@ function renderEverything(chat: any[], rules: AgentContextRules_ACU | undefined,
 function naiveStoryText(chat: any[]): string {
   const highest = chat.length - 1;
   if (highest < 0) return '当前聊天还没有任何楼层，也就没有已经发生的正文。';
-  const settledThrough = Math.min(5, highest);
   const floors = naiveFloors(chat, RULES);
   if (!floors.length) return '当前聊天还没有 AI 产出的正文楼层。';
   const window = 8;
+  const settledThrough = 5;
+  const windowFloors = window > 0 ? floors.slice(-window) : [];
+  const pendingIndexes = new Set(windowFloors.filter(item => item.index > settledThrough).map(item => item.index));
+  const shownSettled = windowFloors.filter(item => !pendingIndexes.has(item.index));
   const settled = floors.filter(item => item.index <= settledThrough);
-  const unsettled = floors.filter(item => item.index > settledThrough);
-  const shownSettled = window > 0 ? settled.slice(-window) : [];
   const hiddenSettled = settled.length - shownSettled.length;
   const render = (items: Array<{ index: number; text: string }>) => items.map(item => `【楼层 ${item.index}】\n${item.text}`).join('\n\n');
   const sections: string[] = [];
   const settledHead = hiddenSettled > 0
-    ? `## 已结算正文（只列最近 ${shownSettled.length} 楼；更早的 ${hiddenSettled} 楼未注入，其事实已沉淀进资料模块与纪要，需要时派工读取）`
+    ? `## 已结算正文（窗口内 ${shownSettled.length} 楼；更早的 ${hiddenSettled} 楼未注入，需要时通过事件概览与纪要回溯）`
     : '## 已结算正文';
   if (shownSettled.length) sections.push(`${settledHead}\n${render(shownSettled)}`);
   else if (settled.length) sections.push(`${settledHead}\n（本次未注入任何已结算正文。）`);
-  sections.push(unsettled.length
-    ? `## 尚未结算的最新正文（全量）\n${render(unsettled)}`
-    : '## 尚未结算的最新正文\n没有尚未结算的正文楼层；上一轮已结算到当前最后一楼。');
+  const unsettledAll = floors.filter(item => item.index > settledThrough);
+  const selFloors = windowFloors.filter(item => item.index > settledThrough);
+  const hiddenCount = unsettledAll.length - selFloors.length;
+  let unsettledSection: string;
+  if (!hiddenCount && !selFloors.length) {
+    unsettledSection = '没有尚未结算的真实历史；当前正文已完成结算。';
+  } else {
+    const note = hiddenCount > 0
+      ? `更早的 ${hiddenCount} 个未结算 AI 楼层不在正文可读窗口内，本次未注入、也不属于本次逐楼结算范围；不能据此宣称旧正文已被完整结算。更早剧情请通过事件概览或 $TABLE:纪要表:行区间 回溯。`
+      : '';
+    unsettledSection = [note, selFloors.length
+      ? render(selFloors)
+      : '当前可读窗口内没有待结算正文（窗口为 0 或窗口内正文已处理）；本次不注入或逐楼结算正文。'].filter(Boolean).join('\n\n');
+  }
+  sections.push(`## 尚未结算的最新正文（正文可读窗口内）\n${unsettledSection}`);
   return sections.join('\n\n');
 }
+
+describe('未结算窗口选择（移植上游 5f8afe3a）', () => {
+  it('只选窗口内未结算楼层，窗口外计数为 hiddenCount', () => {
+    // 60 楼交替：AI 楼 30 个（奇数下标），settled=5 → 未结算 27 个；窗口 8 → 选 8 个。
+    const chat = buildChat();
+    const selection = resolveAgentUnsettledStoryWindow_ACU(resolveContext(chat, RULES));
+    expect(selection.floors.map(floor => floor.index)).toEqual([45, 47, 49, 51, 53, 55, 57, 59]);
+    expect(selection.hiddenCount).toBe(19);
+    expect(selection.startIndex).toBe(45);
+  });
+
+  it('已完成区间内的楼层不计入未结算', () => {
+    const chat = buildChat();
+    const context = resolveContext(chat, RULES);
+    context.moduleSnapshot = {
+      ...context.moduleSnapshot,
+      materialCompletion: {
+        state: 'complete_changed', rangeStartIndex: 45, rangeEndIndex: 49,
+        modules: {}, updatedAt: 1,
+      },
+    };
+    const selection = resolveAgentUnsettledStoryWindow_ACU(context);
+    expect(selection.floors.map(floor => floor.index)).toEqual([51, 53, 55, 57, 59]);
+    // 窗口首楼落在已完成区间内、选中首楼在其后：起点顺延到区间之后。
+    expect(selection.startIndex).toBe(50);
+  });
+
+  it('未结算渲染只含窗口内楼层并注明窗口外省略', () => {
+    const chat = buildChat();
+    const text = renderAgentUnsettledHistory_ACU(resolveContext(chat, RULES));
+    expect(text).toContain('正文可读窗口内');
+    expect(text).toContain('19');
+    expect(text).not.toContain('全量');
+    expect(text).not.toContain('上一轮已结算到当前最后一楼');
+  });
+
+  it('正文渲染的未结算段使用窗口标题与窗口内楼层', () => {
+    const chat = buildChat();
+    const text = renderAgentStoryText_ACU(resolveContext(chat, RULES));
+    expect(text).toContain('## 尚未结算的最新正文（正文可读窗口内）');
+    expect(text).not.toContain('尚未结算的最新正文（全量）');
+    // 窗口外未结算楼层（如 7）不得出现在未结算段。
+    const unsettledSection = text.split('## 尚未结算的最新正文')[1] ?? '';
+    expect(unsettledSection).not.toContain('【楼层 7】');
+    expect(unsettledSection).toContain('【楼层 59】');
+  });
+});

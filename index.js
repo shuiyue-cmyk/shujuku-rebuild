@@ -91870,7 +91870,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261005-11"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261005-14"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91889,7 +91889,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261005-11";
+        const stamp = "20261005-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -121591,7 +121591,7 @@ const AGENT_CONVERSATION_SEGMENT_SCHEMA_VERSION_ACU = 2;
  * - handoff：token 预算压缩时生成的交接报告
  */
 const AGENT_CONVERSATION_MESSAGE_KINDS_ACU = ['user', 'agent', 'tool', 'runtime', 'turn', 'handoff'];
-/** Agent 可读/可搜正文窗口的默认楼数。未结算楼层始终在窗口内，不受此值限制。 */
+/** Agent 可读、可搜与逐楼结算正文窗口的默认 AI 楼层数。 */
 const AGENT_STORY_WINDOW_DEFAULT_ACU = 20;
 /** 骨架里固定注入全文的末尾 AI 楼层数默认值（承接锚点）。 */
 const AGENT_STORY_TAIL_FLOORS_DEFAULT_ACU = 2;
@@ -123728,7 +123728,7 @@ function parseRestrictedSqlDml_ACU(sql) {
             if (new Set(columns).size !== columns.length)
                 throw new Error('INSERT 字段不能重复');
             if (columns.length !== values.length)
-                throw new Error(`INSERT 字段数与值数量不一致（${columns.length} 个字段、${values.length} 个值）。不是缺 id，也不是表少了字段；字符串里的单引号把值拆开了，单引号要写成两个单引号。逐栏 write_sql 里 id 和 expected_revision 可以不写`);
+                throw new Error(`INSERT 字段数与值数量不一致（${columns.length} 个字段、${values.length} 个值）。请逐项核对列名列表与 VALUES 一一对应：不要把正文内容写进列名，也不要漏写值；若正文含单引号，应写成两个单引号。逐栏 write_sql 里 id 和 expected_revision 可以不写`);
             return { kind: 'insert', table: unquoteIdentifier_ACU(match[1]), values: Object.fromEntries(columns.map((column, index) => [column, values[index]])) };
         }
         match = statement.match(/^UPDATE\s+([A-Za-z_][\w]*)\s+SET\s+([\s\S]+?)\s+WHERE\s+([\s\S]+)$/i);
@@ -123748,6 +123748,152 @@ function parseRestrictedSqlDml_ACU(sql) {
         }
         throw new Error(`只允许 INSERT、UPDATE、DELETE：${statement.slice(0, 80)}`);
     });
+}
+/**
+ * 模型偶尔用弯引号、全角引号、反斜杠转义或夹带零宽字符包裹字符串，界面上与英文单引号几乎无法区分。
+ * 只在一条语句按原文解析失败后使用：零宽字符与 \' 总是可安全改写；弯/全角引号仅在该语句完全没有英文单引号时才当作定界符。
+ */
+function normalizeSqlQuoteLookalikes_ACU(text) {
+    let next = text.replace(/[​-‍﻿]/g, '');
+    // 全部单引号都带反斜杠时，\' 是被误用的定界符；否则是字符串内的转义，改成 SQL 的两个单引号。
+    const bare = next.replace(/\\'/g, '').includes("'");
+    next = next.replace(/\\'/g, bare ? "''" : "'");
+    if (!next.includes("'"))
+        next = next.replace(/[‘’＇]/g, "'");
+    return next;
+}
+/**
+ * 模型偶尔多写一个右括号（VALUES (...)) 或给 JSON 值又套一层括号），症状是最后一个值里残留 ')'。
+ * 只在按原文解析失败后使用：仅当引号外的右括号多于左括号时，从尾部逐个去掉多余的右括号。
+ */
+function normalizeSqlParenBalance_ACU(text) {
+    let depth = 0;
+    let surplus = 0;
+    let quoted = false;
+    for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+        if (char === "'") {
+            if (quoted && text[index + 1] === "'") {
+                index += 1;
+                continue;
+            }
+            quoted = !quoted;
+            continue;
+        }
+        if (quoted)
+            continue;
+        if (char === '(')
+            depth += 1;
+        else if (char === ')') {
+            if (depth > 0)
+                depth -= 1;
+            else
+                surplus += 1;
+        }
+    }
+    let result = text.trimEnd();
+    while (surplus > 0 && result.endsWith(')')) {
+        result = result.slice(0, -1).trimEnd();
+        surplus -= 1;
+    }
+    return result;
+}
+function inspectSqlRepairTarget_ACU(text) {
+    try {
+        const insert = text.match(/^INSERT\s+INTO\s+([A-Za-z_][\w]*)\s*\(([^)]+)\)\s*VALUES\s*\(([\s\S]+)\)$/i);
+        if (insert) {
+            const columns = splitSqlList_ACU(insert[2]).map(unquoteIdentifier_ACU);
+            const values = splitSqlList_ACU(insert[3]);
+            if (!/^[A-Za-z_][\w]*$/.test(columns[0] ?? '') || !values.length)
+                return undefined;
+            return { table: unquoteIdentifier_ACU(insert[1]), column: columns[0], value: parseValue_ACU(values[0]), columns };
+        }
+        const update = text.match(/^UPDATE\s+([A-Za-z_][\w]*)\s+SET\s+([\s\S]+?)\s+WHERE\s+([\s\S]+)$/i);
+        if (update) {
+            const where = parseAssignments_ACU(update[3], 'and');
+            if (typeof where.id !== 'string' || !where.id.trim() || Object.keys(where).some(key => !['id', 'expected_revision'].includes(key)))
+                return undefined;
+            const columns = splitSqlAssignments_ACU(update[2], 'comma').map(part => /^([A-Za-z_][\w]*)\s*=/.exec(part)?.[1]?.toLowerCase() ?? '');
+            if (columns.some(column => !column))
+                return undefined;
+            return { table: unquoteIdentifier_ACU(update[1]), column: 'id', value: where.id, columns };
+        }
+    }
+    catch { /* 不能可靠识别时保留未关联诊断，不猜测目标。 */ }
+    return undefined;
+}
+/** 按独立语句保留合法写集；无法确定的语法只报告拒绝，不猜补列或值。 */
+function parseRestrictedSqlDmlTolerant_ACU(sql) {
+    let source = String(sql ?? '').replace(/```sql|```/gi, '').trim();
+    const scan = (value) => {
+        const parts = [];
+        let start = 0;
+        let open = false;
+        for (let index = 0; index < value.length; index += 1) {
+            if (value[index] === "'") {
+                if (open && value[index + 1] === "'") {
+                    index += 1;
+                    continue;
+                }
+                open = !open;
+            }
+            else if (value[index] === ';' && !open) {
+                const part = value.slice(start, index).trim();
+                if (part)
+                    parts.push(part);
+                start = index + 1;
+            }
+        }
+        return { parts, tail: value.slice(start).trim(), open };
+    };
+    let scanned = scan(source);
+    if (scanned.open && source.endsWith("'") && !scan(source.slice(0, -1)).open) {
+        source = source.slice(0, -1).trimEnd();
+        scanned = scan(source);
+    }
+    // 引号不配平时，常见原因是正文里的 \' 转义或近似引号；归一后能配平才采用，否则保留原文按原规则报错。
+    if (scanned.open) {
+        const normalized = normalizeSqlQuoteLookalikes_ACU(source);
+        const rescanned = scan(normalized);
+        if (normalized !== source && !rescanned.open) {
+            source = normalized;
+            scanned = rescanned;
+        }
+    }
+    const rejected = [];
+    const statements = [];
+    const statementIndexes = [];
+    const parts = [...scanned.parts, ...(scanned.tail ? [scanned.tail] : [])];
+    // 单句解析复用严格管线：成功进写集，失败走改写/拒绝（与严格版同一文法）。
+    const parseOne = (text) => parseRestrictedSqlDml_ACU(text);
+    parts.forEach((text, index) => {
+        if (scanned.open && index === parts.length - 1) {
+            rejected.push({ index, text, reason: '字符串字面量未闭合' });
+            return;
+        }
+        try {
+            statements.push(...parseOne(text));
+            statementIndexes.push(index);
+        }
+        catch (error) {
+            // 逐个尝试可安全改写的形状：引号近似字符、尾部多余右括号，以及两者叠加。
+            const quoteFixed = normalizeSqlQuoteLookalikes_ACU(text);
+            const variants = [quoteFixed, normalizeSqlParenBalance_ACU(text), normalizeSqlParenBalance_ACU(quoteFixed)];
+            for (const variant of variants) {
+                if (variant === text)
+                    continue;
+                try {
+                    statements.push(...parseOne(variant));
+                    statementIndexes.push(index);
+                    return;
+                }
+                catch { /* 换下一种改写 */ }
+            }
+            const repairTarget = inspectSqlRepairTarget_ACU(text);
+            rejected.push({ index, text, reason: error instanceof Error ? error.message : String(error), ...(repairTarget ? { repairTarget } : {}) });
+        }
+    });
+    return { statements, statementIndexes, rejected };
 }
 
 /**
@@ -124861,19 +125007,50 @@ function validateContinuationSqlColumns_ACU(table, values, path) {
 function sqlColumnName_ACU(value) {
     return value.replace(/_([a-z])/g, (_match, letter) => letter.toUpperCase());
 }
+/** 只将已声明的 SQL 列或领域字段名归一化，未知列仍由原白名单拒绝。 */
+function canonicalSqlColumn_ACU(table, column) {
+    const allowed = CONTINUATION_SQL_COLUMNS_ACU[table];
+    if (!allowed || allowed.has(column))
+        return column;
+    return [...allowed].find(key => key.replace(/_/g, '') === column
+        || FIELD_SQL_COLUMNS_ACU[table]?.[key]?.toLowerCase() === column) ?? column;
+}
+function normalizeContinuationSqlStatement_ACU(statement) {
+    const normalize = (values) => {
+        const result = {};
+        for (const [column, value] of Object.entries(values)) {
+            const key = canonicalSqlColumn_ACU(statement.table, column);
+            if (Object.prototype.hasOwnProperty.call(result, key))
+                failProtocol_ACU(`SQL 同一栏目不能通过不同别名重复写入：${statement.table}.${key}`);
+            result[key] = value;
+        }
+        return result;
+    };
+    if (statement.kind === 'insert')
+        return { ...statement, values: normalize(statement.values) };
+    if (statement.kind === 'update')
+        return { ...statement, values: normalize(statement.values), where: normalize(statement.where) };
+    return { ...statement, where: normalize(statement.where) };
+}
 function sqlProtocolValue_ACU(value) {
     if (typeof value !== 'string')
         return value;
-    const trimmed = value.trim();
-    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-        try {
-            return JSON.parse(trimmed);
-        }
-        catch { /* 普通文本按原值保留 */ }
+    let text = value.trim();
+    // 支持多包一层 JSON 字符串；不抢救截断结构，也不猜补正文里的引号。
+    for (let depth = 0; depth < 3; depth += 1) {
+        const structured = (text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'));
+        if (!structured && !(text.startsWith('"') && text.endsWith('"')))
+            break;
+        const parsed = parseJsonLenient_ACU(text);
+        if (parsed !== null && typeof parsed === 'object')
+            return parsed;
+        if (typeof parsed !== 'string' || parsed === text)
+            break;
+        text = parsed.trim();
     }
-    if (trimmed === 'true')
+    if (text === 'true')
         return true;
-    if (trimmed === 'false')
+    if (text === 'false')
         return false;
     return value;
 }
@@ -124891,7 +125068,8 @@ function requireSqlText_ACU(value, field) {
 function continuationSqlDelta_ACU(statements, role) {
     const delta = { expectedRevisions: {} };
     const revisions = delta.expectedRevisions;
-    for (const statement of statements) {
+    for (const rawStatement of statements) {
+        const statement = normalizeContinuationSqlStatement_ACU(rawStatement);
         if (role === 'maintainer' && statement.table !== 'hooks' && statement.table !== 'info_gap' && statement.table !== 'story_arc' && statement.table !== 'chronology' && statement.table !== 'constraint_proposals')
             failProtocol_ACU(`维护类角色无权写入 ${statement.table}`);
         if (role === 'researcher' && statement.table !== 'web_refs')
@@ -125237,18 +125415,36 @@ const FIELD_SQL_ROLE_TABLES_ACU = {
 };
 /** 一次性解析语法；语句/栏目错误归入拒绝清单，合法栏保留供提交入口独立领域校验。 */
 function parseAgentModuleSqlFieldWrites_ACU(sql, role) {
-    let statements;
-    try {
-        statements = parseRestrictedSqlDml_ACU(sql);
-    }
-    catch (error) {
-        failProtocol_ACU(`受限 SQL 解析失败：${error instanceof Error ? error.message : String(error)}`);
-    }
-    if (!statements.length)
+    const parsed = parseRestrictedSqlDmlTolerant_ACU(sql);
+    if (!parsed.statements.length && !parsed.rejected.length)
         failProtocol_ACU('受限 SQL 不允许空写集');
-    const result = { intents: [], rejected: [], constraintProposals: [] };
     const allowed = FIELD_SQL_ROLE_TABLES_ACU[role] ?? [];
-    statements.forEach((statement, index) => {
+    const result = { intents: [], rejected: parsed.rejected.map(item => {
+            const target = item.repairTarget;
+            const module = target && allowed.includes(target.table)
+                ? CONTINUATION_SQL_TABLE_MODULE_ACU[target.table] : undefined;
+            const columns = target ? FIELD_SQL_COLUMNS_ACU[target.table] : undefined;
+            const column = target ? canonicalSqlColumn_ACU(target.table, target.column) : '';
+            const field = column === 'id' ? 'id' : columns?.[column];
+            const fields = target ? [...new Set(target.columns.map(key => columns?.[canonicalSqlColumn_ACU(target.table, key)])
+                    .filter((key) => !!key))] : [];
+            const identifiable = module && field && ['id', 'summary', 'topic', 'title', 'anchor'].includes(field)
+                && typeof target?.value === 'string' && !!target.value.trim() && fields.length > 0;
+            return {
+                path: `sql[${item.index}]`, reason: `受限 SQL 解析失败，该语句未写入：${item.reason}`,
+                ...(identifiable ? { repairTarget: { module, column: field, value: target.value, fields } } : {}),
+            };
+        }), constraintProposals: [] };
+    parsed.statements.forEach((rawStatement, position) => {
+        const index = parsed.statementIndexes[position];
+        let statement;
+        try {
+            statement = normalizeContinuationSqlStatement_ACU(rawStatement);
+        }
+        catch (error) {
+            result.rejected.push({ path: `sql[${index}].${rawStatement.table}`, reason: error instanceof Error ? error.message : String(error) });
+            return;
+        }
         const path = `sql[${index}].${statement.table}`;
         const reject = (field, reason) => result.rejected.push({ path: `${path}${field ? `.${field}` : ''}`, reason });
         if (statement.table === 'constraint_proposals') {
@@ -125305,7 +125501,7 @@ function parseAgentModuleSqlFieldWrites_ACU(sql, role) {
             }
             const field = columns[column];
             if (!field) {
-                reject(column, '栏目不在逐栏写入白名单');
+                reject(column, `栏目不在逐栏写入白名单；${statement.table} 可写 SQL 列：${Object.keys(columns).join(', ')}`);
                 continue;
             }
             if (field === 'pageRef') {
@@ -126099,6 +126295,11 @@ function fieldCommitIndex_ACU(value) { return typeof value === 'number' && Numbe
 function fieldCommitStringArray_ACU(value) { return Array.isArray(value) && value.every(fieldCommitNonempty_ACU); }
 function fieldCommitRecord_ACU(value) { return !!value && typeof value === 'object' && !Array.isArray(value); }
 function fieldCommitInList_ACU(value, list) { return fieldCommitText_ACU(value) && list.includes(value); }
+/** 证据楼层纠错后缀：给模型可核对的楼层清单，不让它为通过校验换号。 */
+function fieldCommitEvidenceRepair_ACU(snapshot, evidence) {
+    const indexes = [...evidence].filter(item => item <= snapshot.settledThroughIndex).sort((a, b) => a - b);
+    return `；本次引用上限 ${snapshot.settledThroughIndex}，可核对的 AI 正文楼层号：${indexes.join(', ') || '无'}。使用正文标注的原始楼层号，不要按第几条 AI 回复重新计数；须核对对应正文，不得仅为通过校验换号`;
+}
 /** 显式栏目逐栏校验；null、合法空值与缺栏不可混淆。 */
 function fieldCommitProblem_ACU(module, field, value, snapshot, evidence) {
     switch (module) {
@@ -126108,22 +126309,22 @@ function fieldCommitProblem_ACU(module, field, value, snapshot, evidence) {
             if (field === 'importance')
                 return fieldCommitInList_ACU(value, AGENT_HOOK_IMPORTANCES_ACU) ? null : 'importance 枚举非法';
             if (field === 'plantedIndex')
-                return fieldCommitIndex_ACU(value) && value <= snapshot.settledThroughIndex && evidence.has(value) ? null : 'plantedIndex 必须引用已结算正文楼层';
+                return fieldCommitIndex_ACU(value) && value <= snapshot.settledThroughIndex && evidence.has(value) ? null : 'plantedIndex 必须引用已结算正文楼层' + fieldCommitEvidenceRepair_ACU(snapshot, evidence);
             return field === 'summary' ? (fieldCommitNonempty_ACU(value) ? null : 'summary 必须为非空文本') : (fieldCommitText_ACU(value) ? null : '必须为字符串');
         case 'infoGap':
             if (field === 'revealStatus')
                 return fieldCommitInList_ACU(value, AGENT_REVEAL_STATUSES_ACU) ? null : 'revealStatus 枚举非法';
             if (field === 'revealIndex')
-                return value === null || (fieldCommitIndex_ACU(value) && value <= snapshot.settledThroughIndex && evidence.has(value)) ? null : 'revealIndex 必须为空或已结算正文楼层';
+                return value === null || (fieldCommitIndex_ACU(value) && value <= snapshot.settledThroughIndex && evidence.has(value)) ? null : 'revealIndex 必须为空或已结算正文楼层' + fieldCommitEvidenceRepair_ACU(snapshot, evidence);
             if (field === 'characterKnowledge')
-                return Array.isArray(value) && value.every(item => fieldCommitRecord_ACU(item) && fieldCommitNonempty_ACU(item.name) && fieldCommitText_ACU(item.knows)) ? null : 'characterKnowledge 需要带 name / knows 的数组';
+                return Array.isArray(value) && value.every(item => fieldCommitRecord_ACU(item) && fieldCommitNonempty_ACU(item.name) && fieldCommitText_ACU(item.knows)) ? null : 'characterKnowledge 需要带 name / knows 的数组；SQL 列名 character_knowledge，值用单引号包裹完整 JSON 数组，如 \'[{"name":"角色","knows":"亲眼所见"}]\'；JSON 文本内部双引号须用反斜杠转义，SQL 文本内部单引号须写成两个单引号';
             return field === 'topic' ? (fieldCommitNonempty_ACU(value) ? null : 'topic 必须为非空文本') : (fieldCommitText_ACU(value) ? null : '必须为字符串');
         case 'chronology':
             if (field === 'precision')
                 return fieldCommitInList_ACU(value, AGENT_CHRONOLOGY_PRECISIONS_ACU) ? null : 'precision 枚举非法';
             if (field === 'evidenceIndexes') {
                 const indexes = normalizeEvidenceIndexes_ACU(value);
-                return indexes?.length && indexes.every(item => item <= snapshot.settledThroughIndex && evidence.has(item)) ? null : 'evidenceIndexes 必须是非空、已结算正文楼层数组';
+                return indexes?.length && indexes.every(item => item <= snapshot.settledThroughIndex && evidence.has(item)) ? null : 'evidenceIndexes 必须是非空、已结算正文楼层数组' + fieldCommitEvidenceRepair_ACU(snapshot, evidence);
             }
             return fieldCommitNonempty_ACU(value) ? null : '时间事实栏目必须为非空文本';
         case 'storyArc':
@@ -126236,7 +126437,7 @@ function commitAgentModuleFieldWrites_ACU(input) {
         const parsed = parseAgentModuleSqlFieldWrites_ACU(input.sql, input.role);
         const folded = readAgentModuleFoldState_ACU(input.chat);
         const receipt = {
-            status: 'rejected', accepted: [], rejected: [...parsed.rejected],
+            status: 'rejected', accepted: [], alreadySaved: [], rejected: [...parsed.rejected],
             partials: fieldCommitConfirmedPartials_ACU(folded.fields),
             revisions: { ...folded.snapshot.revisions }, constraintProposals: parsed.constraintProposals,
         };
@@ -126328,6 +126529,24 @@ function commitAgentModuleFieldWrites_ACU(input) {
             const key = `${module}#${id}`;
             const existing = fieldCommitDomainRow_ACU(folded.snapshot, module, id);
             const record = folded.fields.records[module]?.[id];
+            // 同值重发先认：折叠记录是权威当前值（快照领域行若有该栏也必须一致），
+            // 记 alreadySaved，不写不推修订号，也不卡 revision（数据一致，重发旧号无需模型再 read 一轮）。
+            if (intent.kind === 'insert' && !reserved.has(key)) {
+                const intentFields = Object.keys(intent.fields);
+                const allSame = intentFields.length > 0 && !!record && intentFields.every(field => fieldCommitCanonical_ACU(record?.fields[field]?.value) === fieldCommitCanonical_ACU(intent.fields[field])
+                    && (!existing || !Object.prototype.hasOwnProperty.call(existing, field)
+                        || fieldCommitCanonical_ACU(existing[field]) === fieldCommitCanonical_ACU(intent.fields[field])));
+                if (allSame) {
+                    for (const field of intentFields) {
+                        (receipt.alreadySaved ?? (receipt.alreadySaved = [])).push({
+                            module, id, field,
+                            revision: record?.fields[field]?.revision ?? folded.snapshot.revisions[module],
+                            value: record?.fields[field]?.value,
+                        });
+                    }
+                    continue;
+                }
+            }
             // 新行固定 0；省略修订号时按该规则自动补，模块修订号只约束显式写错的已有行（移植上游 56540c9+2a8472e）。
             const newInsert = intent.kind === 'insert' && !existing && !record && !reserved.has(key);
             if (intent.expectedRevision === undefined)
@@ -126358,6 +126577,17 @@ function commitAgentModuleFieldWrites_ACU(input) {
                 }
                 if ((field === 'plantedIndex' && existing) || (field === 'scope' && existing && existing.scope !== raw)) {
                     receipt.rejected.push({ path: fieldPath, reason: '已登记的不可变栏目不能改写' });
+                    continue;
+                }
+                // 同值重发记 alreadySaved：折叠记录是权威当前值（快照领域行若有该栏也必须一致）。
+                if (record && fieldCommitCanonical_ACU(record?.fields[field]?.value) === fieldCommitCanonical_ACU(raw)
+                    && (!existing || !Object.prototype.hasOwnProperty.call(existing, field)
+                        || fieldCommitCanonical_ACU(existing[field]) === fieldCommitCanonical_ACU(raw))) {
+                    (receipt.alreadySaved ?? (receipt.alreadySaved = [])).push({
+                        module, id, field,
+                        revision: record?.fields[field]?.revision ?? folded.snapshot.revisions[module],
+                        value: record?.fields[field]?.value,
+                    });
                     continue;
                 }
                 const problem = fieldCommitProblem_ACU(module, field, raw, folded.snapshot, evidence);
@@ -126443,8 +126673,13 @@ function commitAgentModuleFieldWrites_ACU(input) {
             if (intent.kind === 'insert')
                 reserved.add(key);
         }
-        if (!Object.keys(upserts).length)
+        if (!Object.keys(upserts).length) {
+            // 无新写入但有同值确认（或仅剩已成立的删除）：按提交确认，不留待修复缺口。
+            if ((receipt.rejected.length || (receipt.alreadySaved?.length ?? 0) > 0)
+                && receipt.rejected.every(item => item.reason.startsWith('already_absent')))
+                receipt.status = 'committed';
             return receipt;
+        }
         // SQL 分栏层复算门：白名单/乐观锁与帧侧同强度；失败即整批拒绝，不落帧。
         let view;
         try {
@@ -126508,6 +126743,7 @@ function commitAgentModuleFieldWrites_ACU(input) {
             receipt.recovery = 'unavailable';
             receipt.partials = null;
             receipt.revisions = null;
+            receipt.alreadySaved = [];
             receipt.rejected.push({ path: 'host', reason: error instanceof Error ? error.message : String(error) });
             return receipt;
         }
@@ -134991,10 +135227,19 @@ function recordPendingFix_ACU(pending, module, agentName, message, details, inde
         source: 'transaction_rejected', completion: 'failed', rangeStartIndex: index, rangeEndIndex: index,
         acceptedKeys: [], createdAt: now, updatedAt: now });
 }
-function clearPendingModule_ACU(pending, module) {
+function clearPendingModule_ACU(pending, module, range) {
     for (let index = pending.length - 1; index >= 0; index -= 1) {
-        if (pending[index].module === module)
-            pending.splice(index, 1);
+        if (pending[index].module !== module)
+            continue;
+        // 有结算窗口时只清窗口内的缺口，窗口外的（未来工作）保留。
+        if (range) {
+            const item = pending[index];
+            const itemStart = item.rangeStartIndex ?? range.start;
+            const itemEnd = item.rangeEndIndex ?? range.end;
+            if (!(range.start <= range.end && itemStart >= range.start && itemEnd <= range.end))
+                continue;
+        }
+        pending.splice(index, 1);
     }
 }
 function assertModuleRevision_ACU(module, delta, snapshot) {
@@ -135008,7 +135253,7 @@ function assertModuleRevision_ACU(module, delta, snapshot) {
 function isolateModule_ACU(module, current, run, pending, applied, options, settledIndex) {
     try {
         const value = run();
-        clearPendingModule_ACU(pending, module);
+        clearPendingModule_ACU(pending, module, options?.settlementRange);
         applied.push(module);
         return value;
     }
@@ -135983,7 +136228,7 @@ function maintainerPrompt_ACU(focus, snapshot, repair) {
     const fixes = snapshot.pendingFixes.filter(item => MAINTAINER_MODULES_ACU.includes(item.module));
     return [
         repair ? '这是独立预算的自动修复。只提交违规模块的增量 patch，不要重写无关模块。' : `本轮焦点：${focus}`,
-        '结算已经发生的正文。没有新事实时 delta 留空并在 summary 写明 no_change。',
+        '只逐楼结算 $HISTORY_UNSETTLED 实际提供的窗口内正文；窗口外省略内容不得宣称已读或已结算。没有新事实时 delta 留空并在 summary 写明 no_change。',
         `待修复：${formatFixes_ACU(fixes)}`,
     ].join('\n');
 }
@@ -136083,13 +136328,23 @@ function completionModules_ACU(payload, writes, fallback) {
             modules[module] = fallback;
     return modules;
 }
-function clearCompletedPending_ACU(snapshot, modules) {
+function clearCompletedPending_ACU(snapshot, modules, rangeStartIndex, rangeEndIndex) {
     const completed = new Set(Object.entries(modules)
         .filter(([, state]) => state === 'complete_changed' || state === 'complete_no_change')
         .map(([module]) => module));
     if (!completed.size)
         return snapshot;
-    return { ...snapshot, pendingFixes: snapshot.pendingFixes.filter(item => !completed.has(item.module)) };
+    // 结算窗口外的缺口不受本轮清账影响：按模块清账不能丢掉窗口外的待修复项。
+    return { ...snapshot, pendingFixes: snapshot.pendingFixes.filter(item => !completed.has(item.module)
+            || !pendingWithinSettlement_ACU(item, rangeStartIndex, rangeEndIndex)) };
+}
+/** 缺口是否落在本次结算窗口内；无窗口约束时一律视为窗口内（保持旧行为）。 */
+function pendingWithinSettlement_ACU(item, start, end) {
+    if (start === undefined || end === undefined)
+        return true;
+    const itemStart = item.rangeStartIndex ?? start;
+    const itemEnd = item.rangeEndIndex ?? end;
+    return start <= end && itemStart >= start && itemEnd <= end;
 }
 function repairAgentForModule_ACU(module) {
     if (MAINTAINER_MODULES_ACU.includes(module))
@@ -136267,7 +136522,7 @@ async function runContinuationAgentWorkflow_ACU(input) {
     // 删楼后 settledIndex 可能小于旧 pending 的 rangeStart：起点钳到终点以内，
     // 否则写出的 materialCompletion 会出现 rangeStart>rangeEnd 的非法区间。
     const rawSettlementStart = pendingRangeStarts.length ? Math.min(...pendingRangeStarts) : Math.max(0, snapshot.settledThroughIndex + 1);
-    const settlementStartIndex = Math.min(rawSettlementStart, settlementEndIndex);
+    const settlementStartIndex = Math.min(input.settlementStartIndex ?? rawSettlementStart, settlementEndIndex);
     const runSafe_ACU = async (call) => {
         try {
             return await input.runAgent(call);
@@ -136278,11 +136533,11 @@ async function runContinuationAgentWorkflow_ACU(input) {
             return { ok: false, summary: errorText_ACU(error) };
         }
     };
-    const applyMaintainerLike_ACU = async (output, writes, readRevisions, agentName) => {
+    const applyMaintainerLike_ACU = async (output, writes, readRevisions, agentName, settlementRange) => {
         if (!output || !deltaTouched_ACU(output.delta))
             return [];
         const delta = readRevisions ? mergeAgentDeltaRevisions_ACU(output.delta, readRevisions) : output.delta;
-        const applied = await applyAgentModuleDeltaViaSql_ACU(snapshot, delta, writes, input.settledIndex, input.completedStageNumbers, input.allowedEvidenceIndexes, tolerantOptions_ACU(agentName));
+        const applied = await applyAgentModuleDeltaViaSql_ACU(snapshot, delta, writes, input.settledIndex, input.completedStageNumbers, input.allowedEvidenceIndexes, { ...tolerantOptions_ACU(agentName), ...(settlementRange ? { settlementRange } : {}) });
         snapshot = applied.snapshot;
         return applied.appliedModules;
     };
@@ -136345,7 +136600,7 @@ async function runContinuationAgentWorkflow_ACU(input) {
             }
             else {
                 appliedModules = maintainer.ok
-                    ? await applyMaintainerLike_ACU(maintainer.maintainer, writes, maintainer.readRevisions, MAINTAINER_NAME_ACU)
+                    ? await applyMaintainerLike_ACU(maintainer.maintainer, writes, maintainer.readRevisions, MAINTAINER_NAME_ACU, { start: settlementStartIndex, end: settlementEndIndex })
                     : [];
             }
             const issues = [...(maintainer.unresolvedIssues ?? [])];
@@ -136368,7 +136623,7 @@ async function runContinuationAgentWorkflow_ACU(input) {
                 completion = appliedModules.length ? 'partial' : 'failed';
             }
             else {
-                snapshot = clearCompletedPending_ACU(snapshot, modules);
+                snapshot = clearCompletedPending_ACU(snapshot, modules, settlementStartIndex, settlementEndIndex);
             }
             const now = Date.now();
             snapshot = {
@@ -140566,63 +140821,76 @@ function renderAgentStoryRange_ACU(context, startRaw, endRaw) {
     return renderStoryFloors_ACU(hit);
 }
 /**
- * 渲染已经发生的小说正文。
- *
- * 只取 AI 楼层——用户楼是操作指令而不是小说内容，把它当正文注入会让模型把指令误读成剧情。
- * 分「已结算」「尚未结算」两段：已结算段按窗口取最近若干楼（更早部分已经沉淀进资料模块与纪要），
- * 未结算段全量注入（它还没被任何资料模块吸收，是本轮必须亲自读的部分）。
- * @param context 解析上下文
- * @returns 分段的逐楼正文；没有 AI 楼层时如实说明
+ * 未结算正文与目录、区间读取共用最近 AI 楼层窗口。
+ * 返回实际处理起点，供工作流记录完成范围；窗口外的旧正文并不代表已被资料模块吸收。
  */
-function renderAgentStoryText_ACU(context) {
-    const chat = Array.isArray(context.chat) ? context.chat : [];
-    const highestIndex = chat.length - 1;
-    if (highestIndex < 0)
-        return '当前聊天还没有任何楼层，也就没有已经发生的正文。';
-    // 删楼后残留的水位可能指向已不存在的楼层，必须钳制，否则未结算段起点会越过末楼输出空段。
-    const settledThrough = Math.min(context.settledThroughIndex, highestIndex);
-    // 与正文目录/窗口共用同一次「AI 楼 + 文本」枚举（含记忆化），不再各自全量提取一遍。
-    const floors = listAgentStoryFloors_ACU({ chat, contextRules: context.contextRules });
+function resolveAgentUnsettledStoryWindow_ACU(context) {
+    const allFloors = listAgentStoryFloors_ACU(context);
+    const window = agentStoryWindowSize_ACU(context);
+    const windowFloors = window > 0 ? allFloors.slice(-window) : [];
+    const completion = context.moduleSnapshot.materialCompletion;
+    const completedRange = completion
+        && (completion.state === 'complete_changed' || completion.state === 'complete_no_change')
+        && completion.rangeStartIndex >= 0 && completion.rangeEndIndex >= completion.rangeStartIndex
+        ? completion : null;
+    const isUnsettled = (floor) => floor.index > context.settledThroughIndex
+        && !(completedRange && floor.index >= completedRange.rangeStartIndex && floor.index <= completedRange.rangeEndIndex);
+    const unsettledFloors = allFloors.filter(isUnsettled);
+    const floors = windowFloors.filter(isUnsettled);
+    const hiddenCount = unsettledFloors.length - floors.length;
+    let startIndex = hiddenCount > 0
+        ? floors[0]?.index ?? context.chat.length
+        : Math.max(0, context.settledThroughIndex + 1);
+    // 最近窗口已完成后，只处理其后新增的正文；保留连续水位与窗口完成区间的区别。
+    if (floors.length && completedRange && windowFloors[0].index >= completedRange.rangeStartIndex
+        && windowFloors[0].index <= completedRange.rangeEndIndex
+        && floors[0].index > completedRange.rangeEndIndex) {
+        startIndex = completedRange.rangeEndIndex + 1;
+    }
     if (!floors.length)
+        startIndex = windowFloors[0]?.index ?? context.chat.length;
+    return { floors, hiddenCount, startIndex };
+}
+function renderUnsettledWindow_ACU(selection) {
+    if (!selection.hiddenCount && !selection.floors.length) {
+        return '没有尚未结算的真实历史；当前正文已完成结算。';
+    }
+    const note = selection.hiddenCount > 0
+        ? `更早的 ${selection.hiddenCount} 个未结算 AI 楼层不在正文可读窗口内，本次未注入、也不属于本次逐楼结算范围；不能据此宣称旧正文已被完整结算。更早剧情请通过事件概览或 $TABLE:纪要表:行区间 回溯。`
+        : '';
+    return [note, selection.floors.length
+            ? renderStoryFloors_ACU(selection.floors)
+            : '当前可读窗口内没有待结算正文（窗口为 0 或窗口内正文已处理）；本次不注入或逐楼结算正文。'].filter(Boolean).join('\n\n');
+}
+/** 已发生正文只注入可读窗口内的 AI 楼层，已结算与未结算两段共用同一个上限。 */
+function renderAgentStoryText_ACU(context) {
+    if (!context.chat.length)
+        return '当前聊天还没有任何楼层，也就没有已经发生的正文。';
+    const allFloors = listAgentStoryFloors_ACU(context);
+    if (!allFloors.length)
         return '当前聊天还没有 AI 产出的正文楼层。';
-    const window = Math.max(0, context.storyWindowFloors ?? AGENT_STORY_WINDOW_DEFAULT_ACU);
-    const settled = floors.filter(item => item.index <= settledThrough);
-    const unsettled = floors.filter(item => item.index > settledThrough);
-    const shownSettled = window > 0 ? settled.slice(-window) : [];
+    const selection = resolveAgentUnsettledStoryWindow_ACU(context);
+    const pendingIndexes = new Set(selection.floors.map(floor => floor.index));
+    const shownSettled = listAgentStoryWindowFloors_ACU(context).filter(floor => !pendingIndexes.has(floor.index));
+    const settled = allFloors.filter(floor => floor.index <= context.settledThroughIndex);
     const hiddenSettled = settled.length - shownSettled.length;
-    const render = (items) => items.map(item => `【楼层 ${item.index}】\n${item.text}`).join('\n\n');
     const sections = [];
     const settledHead = hiddenSettled > 0
-        ? `## 已结算正文（只列最近 ${shownSettled.length} 楼；更早的 ${hiddenSettled} 楼未注入，其事实已沉淀进资料模块与纪要，需要时派工读取）`
+        ? `## 已结算正文（窗口内 ${shownSettled.length} 楼；更早的 ${hiddenSettled} 楼未注入，需要时通过事件概览与纪要回溯）`
         : '## 已结算正文';
     if (shownSettled.length)
-        sections.push(`${settledHead}\n${render(shownSettled)}`);
+        sections.push(`${settledHead}\n${renderStoryFloors_ACU(shownSettled)}`);
     else if (settled.length)
         sections.push(`${settledHead}\n（本次未注入任何已结算正文。）`);
-    sections.push(unsettled.length
-        ? `## 尚未结算的最新正文（全量）\n${render(unsettled)}`
-        : '## 尚未结算的最新正文\n没有尚未结算的正文楼层；上一轮已结算到当前最后一楼。');
+    sections.push(`## 尚未结算的最新正文（正文可读窗口内）\n${renderUnsettledWindow_ACU(selection)}`);
     return sections.join('\n\n');
 }
 /**
- * 渲染尚未结算的真实历史。只含 AI 楼层——正文域永远不含用户楼层，
- * 用户楼层的唯一职责是承载召回码（见 extractAgentRecallCodesFromChat_ACU）。
- * 该区间不做任何截断：结算子代理必须看到全部未结算正文，否则水位推进会吞掉未处理的楼层。
- * @param context 解析上下文
- * @returns 逐楼文本；无未结算楼层时如实标注
+ * 渲染可读窗口内尚未结算的 AI 正文。冷启动不回灌全部旧楼层；
+ * 省略范围明确说明，结算工作流用同一选择结果记录实际完成范围。
  */
 function renderAgentUnsettledHistory_ACU(context) {
-    const start = context.settledThroughIndex + 1;
-    const lines = [];
-    for (let index = start; index < context.chat.length; index += 1) {
-        const message = context.chat[index];
-        if (!isAiFloor_ACU(message))
-            continue;
-        const text = messageText_ACU(message, context.contextRules);
-        if (text)
-            lines.push(`【楼层 ${index}】\n${text}`);
-    }
-    return lines.length ? lines.join('\n\n') : '没有尚未结算的真实历史；上一轮已结算到当前最后一楼。';
+    return renderUnsettledWindow_ACU(resolveAgentUnsettledStoryWindow_ACU(context));
 }
 /**
  * 世界书触发只扫描最近一个用户楼层与最近一个 AI 楼层；不拼入任务、初始要求或旧历史
@@ -142139,11 +142407,17 @@ function renderWriteSqlRepair_ACU(receipt) {
     const lines = [];
     const fatal = receipt.rejected.find(item => item.path === 'host' || item.path === 'sql');
     if (fatal?.reason.includes('字段数与值数量不一致')) {
-        lines.push('这条 SQL 没有解析，任何栏目都没写入。不是缺 id。正文里的单引号要写成两个单引号，否则一个值会被拆成好几段。id 和 expected_revision 可以不写。');
+        lines.push('这条 SQL 没有解析，任何栏目都没写入。列名与 VALUES 必须逐项对应；检查是否把正文误放进列名列表或漏写值，不要盲目添加 id / expected_revision。只有失败语句未写入，其他语句按 accepted / alreadySaved 确认，不重发。');
     }
     else if (fatal?.reason.includes('领域快照')) {
         lines.push('这条 SQL 被整句退回，没有写入。把要改的行放在同一次调用里再交。');
     }
+    if (receipt.rejected.length || receipt.partials?.length)
+        lines.push(receipt.revisions
+            ? `WHERE expected_revision 使用当前模块修订号 revisions：${JSON.stringify(receipt.revisions)}；accepted / alreadySaved 的 revision 是字段修订号，不是模块修订号。`
+            : 'WHERE expected_revision 使用回执 revisions 里该模块的当前值；accepted / alreadySaved 的 revision 是字段修订号，不是模块修订号（本次回执暂无 revisions，先 read 对应 $FIELD:模块:ID 核实）。');
+    if (receipt.alreadySaved?.length)
+        lines.push(`此前已保存且本次未重复写入：${receipt.alreadySaved.map(item => `${item.module}#${item.id}.${item.field}`).join('、')}。不要再次提交这些栏目。`);
     for (const item of receipt.rejected) {
         if (item.path === 'host' || item.path === 'sql')
             continue;
@@ -142160,6 +142434,10 @@ function renderWriteSqlRepair_ACU(receipt) {
             lines.push(`${item.path} 已有记录，用 UPDATE，不要再 INSERT。`);
         else if (item.reason.includes('SET 不得指定'))
             lines.push('UPDATE 的 SET 里不要写 id 或 expected_revision，这两项只放在 WHERE。');
+        else if (item.reason.includes('字段数与值数量不一致'))
+            lines.push('列名与 VALUES 必须逐项对应；检查是否把正文误放进列名列表或漏写值，不要盲目添加 id / expected_revision。只有失败语句未写入，其他语句按 accepted / alreadySaved 确认，不重发。');
+        else if (item.reason.includes('字符串字面量未闭合'))
+            lines.push('检查字符串的英文单引号是否成对，正文里的单引号写成两个单引号。');
     }
     if ((receipt.partials ?? []).some(item => item.promotionError?.includes('active') || item.promotionError?.includes('sustainingThreads'))) {
         lines.push('同一时刻只能有一条 volume 的 status 为 active，其余用 planned。scope=story 不要带卷级栏目。');
@@ -152583,7 +152861,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261005-11";
+        const stamp = "20261005-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
