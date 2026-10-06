@@ -6,6 +6,7 @@
  */
 
 import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { logAutoFillSkip_ACU, logAutoFillStage_ACU } from '../../shared/trigger-diagnostics';
 import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performance';
 import { getSortedSheetKeys_ACU } from '../template/chat-scope';
 import { getLatestV2FullCheckpointMessageIndex_ACU, resolveTableHistoryStatesFromChat_ACU } from './table-history';
@@ -311,6 +312,8 @@ export async function executeAutoUpdatePlan_ACU(
     const maxConcurrentGroups = Math.max(1, settings.maxConcurrentGroups || 1);
     const failedGroupKeys: string[] = [];
     const failedGroupErrors: string[] = [];
+    // 执行阶段跟踪：execute 段失败与 refresh 段失败记不同诊断码（移植上游 ece65f80）。
+    let executionStage = 'execute';
     const pushGroupError_ACU = (groupKey: string, error: unknown): void => {
         const message = error instanceof Error ? error.message : String(error || '').trim();
         if (!message) return;
@@ -422,12 +425,17 @@ export async function executeAutoUpdatePlan_ACU(
     }
 
     if (failedGroupKeys.length > 0) {
-        const errorSummary = failedGroupErrors.length > 0 ? `原因：${failedGroupErrors.slice(0, 3).join('；')}` : '未返回具体原因。';
-        logWarn_ACU(`并发分组更新失败 ${failedGroupKeys.length}/${totalGroups} 组。${errorSummary}`);
+        const runnerUnavailableGroupKeys = stagingGroupKeys.filter(key => failedGroupKeys.includes(key));
+        logAutoFillSkip_ACU(runnerUnavailableGroupKeys.length ? 'staging_runner_unavailable' : 'execution_failed', {
+            runId: performanceContext?.runId, stage: 'execute', groupCount: totalGroups,
+            failedGroupCount: failedGroupKeys.length,
+        });
     }
 
     // 并发更新完成后统一刷新数据链条（P5：仅保留一次刷新，消除重复 refreshData 与固定 500ms 等待后的二次刷新）
     logDebug_ACU(`All group updates completed. Forcing data refresh...`);
+    executionStage = 'refresh';
+    logAutoFillStage_ACU('refresh', { runId: performanceContext?.runId });
     await ops.loadAllChatMessages();
     setAutoUpdating(false);
     await ops.refreshData();
@@ -489,6 +497,9 @@ export async function executeAutoUpdatePlan_ACU(
     performanceSpan.end({ success: result.success, failedGroupCount: result.failedGroups });
     return result;
     } catch (error) {
+      logAutoFillSkip_ACU(executionStage === 'refresh' ? 'refresh_failed' : 'execution_failed', {
+          runId: performanceContext?.runId, stage: executionStage,
+      });
       performanceSpan.end({ success: false });
       setAutoUpdating(false);
       throw error;

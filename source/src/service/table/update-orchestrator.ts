@@ -15,6 +15,7 @@ import { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMerg
 import { ensureStableRowIdsForSheetContent_ACU, filterSheetKeysByTemplateScope_ACU, getChatSheetGuideDataForIsolationKey_ACU, getCurrentChatTemplateScopeState_ACU, getEffectiveSeedRowsForSheet_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, resolveTemplateScope_ACU, sanitizeTemplateSnapshotForChat_ACU, shouldUseInitialSeedRows_ACU } from '../template/chat-scope';
 import type { TemplateScope_ACU } from '../template/chat-scope';
 import { loadAllChatMessages_ACU, updateReadableLorebookEntry_ACU } from '../worldbook/pipeline';
+import { logAutoFillSkip_ACU, logAutoFillStage_ACU } from '../../shared/trigger-diagnostics';
 import { enqueueSummaryVectorIndexFlush_ACU } from '../vector/summary-vector-index-flush-queue';
 import {
   ensureSummaryVectorMirrorAfterTableFill_ACU,
@@ -1336,11 +1337,22 @@ export async function collectGroupFillResponse_ACU(
     const effectiveAbortController = abortController || new AbortController();
     const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && wasStoppedByUser_ACU);
     const maxRetries = options.maxRetriesOverride || settings_ACU.tableMaxRetries || 3;
-    if (isStopped()) return { job, success: false, attempt: 0, aborted: true };
+    // 准备期诊断（移植上游 ece65f80）：仅自动填表链路开启时留痕，不记业务载荷。
+    const diagnoseInput = (diagnosticCode: string, attempt = 0): void => {
+        if (job.requestOptions?.autoFillDiagnostics) logAutoFillSkip_ACU('input_preparation_failed', {
+            runId: job.performanceRunId || job.requestOptions.performanceRunId,
+            batchNumber: job.batchNumber, stage: 'prepare', diagnosticCode, attempt,
+        });
+    };
+    if (isStopped()) {
+        diagnoseInput('user_aborted');
+        return { job, success: false, attempt: 0, aborted: true };
+    }
     // 请求前冻结 runtime schema 失败 = 本地基础设施失败：模型无法通过重试修复。
     // 必须在 AI 调用前 fail-closed，避免消耗 token 后在提交阶段才失败。
     const runtimeSchemaFailure = job.sqlApplyScope?.runtimeSchemaFailure;
     if (runtimeSchemaFailure) {
+        diagnoseInput('runtime_schema_unavailable');
         const error = `SQLite runtime schema 冻结失败（${runtimeSchemaFailure.code}）：${runtimeSchemaFailure.message}`;
         return {
             job,
@@ -1376,12 +1388,17 @@ export async function collectGroupFillResponse_ACU(
         });
     } catch (error: any) {
         prepareSpan.end({ success: false });
-        if (error?.name === 'AbortError' || isStopped()) return { job, success: false, attempt: 0, aborted: true };
+        if (error?.name === 'AbortError' || isStopped()) {
+            diagnoseInput('user_aborted');
+            return { job, success: false, attempt: 0, aborted: true };
+        }
+        diagnoseInput('prepare_input_exception');
         throw error;
     }
     prepareSpan.end({ success: Boolean(dynamicContent) });
     if (dynamicContent && typeof dynamicContent === 'object' && dynamicContent.ok === false) {
         const failure = dynamicContent as { failureCode?: string; message?: string };
+        diagnoseInput(failure.failureCode || 'provider_load_failed');
         const error = `无法准备AI输入（${failure.failureCode || 'provider_load_failed'}）：${failure.message || 'SQLite 运行时未就绪。'}`;
         return {
             job,
@@ -1394,6 +1411,7 @@ export async function collectGroupFillResponse_ACU(
     }
 
     if (!dynamicContent) {
+        diagnoseInput('table_data_unavailable');
         return {
             job,
             success: false,
@@ -1405,9 +1423,17 @@ export async function collectGroupFillResponse_ACU(
     }
     let lastErrorMessage = 'AI响应中未找到完整有效的 <tableEdit> 标签';
     let lastErrorCategory: TableUpdateCommitErrorCategory_ACU = 'model';
+    // 响应期诊断（移植上游 ece65f80）：仅自动填表链路开启时留痕。
+    const diagnoseResponse = (diagnosticCode: string, attempt: number): void => {
+        if (job.requestOptions?.autoFillDiagnostics) logAutoFillSkip_ACU('execution_failed', {
+            runId: job.performanceRunId || job.requestOptions.performanceRunId,
+            batchNumber: job.batchNumber, stage: 'response', attempt, diagnosticCode,
+        });
+    };
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         if (isStopped()) {
+            diagnoseResponse('user_aborted', attempt);
             return { job, success: false, attempt, aborted: true };
         }
 
@@ -1448,15 +1474,18 @@ export async function collectGroupFillResponse_ACU(
                 throw error;
             }
             if (isStopped()) {
+                diagnoseResponse('user_aborted', attempt);
                 return { job, success: false, attempt, aborted: true };
             }
 
             const minReplyLength = settings_ACU.autoUpdateTokenThreshold || 0;
             if (aiResponse && minReplyLength > 0 && aiResponse.length < minReplyLength) {
+                diagnoseResponse('response_below_threshold', attempt);
                 throw new ModelOutputRetryError_ACU(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);
             }
             let tableEditText = '';
             if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
+                diagnoseResponse('table_edit_block_missing', attempt);
                 throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
             }
             tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
@@ -1469,6 +1498,7 @@ export async function collectGroupFillResponse_ACU(
                         job.sqlApplyScope?.runtimeData ? job.sqlApplyScope.runtimeData as any : job.baseSnapshot,
                     );
                 } catch (error: any) {
+                    diagnoseResponse('sql_column_mutation_rejected', attempt);
                     throw new ModelOutputRetryError_ACU(error?.message || 'SQLite 填表 SQL 无效。');
                 }
             }
@@ -1483,9 +1513,11 @@ export async function collectGroupFillResponse_ACU(
             const warnMessage = sanitizeRetryFeedback_ACU(lastErrorMessage, MAX_WARN_ERROR_LENGTH_ACU);
             logWarn_ACU(`[${formatGroupAttemptLabel_ACU(job)}] 第 ${attempt} 次尝试失败: ${warnMessage}`);
             if (error?.name === 'AbortError' || String(lastErrorMessage).toLowerCase().includes('aborted') || isStopped()) {
+                diagnoseResponse('user_aborted', attempt);
                 return { job, success: false, attempt, aborted: true };
             }
             if (lastErrorCategory !== 'model') {
+                diagnoseResponse('request_failed', attempt);
                 const safeError = sanitizeRetryFeedback_ACU(lastErrorMessage, MAX_WARN_ERROR_LENGTH_ACU);
                 return {
                     job,
@@ -2285,14 +2317,27 @@ export function applyUnifiedGroupFillResponses_ACU(
             targetMessageIndex: options.saveTargetIndex,
         },
     });
+    // 提交期诊断（移植上游 ece65f80）：仅诊断任务留痕。
+    const autoFill = responses?.some(response => response?.job?.requestOptions?.autoFillDiagnostics === true);
+    if (autoFill) logAutoFillStage_ACU('commit_started', { runId: options.performanceRunId, groupCount: responses.length });
     return applyUnifiedGroupFillResponsesCore_ACU(args[0], args[1], {
         ...options,
         performanceParentSpanId: performanceSpan.id,
     }).then(result => {
         performanceSpan.end({ success: result.success, changedSheetCount: result.modifiedKeys.length });
+        if (autoFill) {
+            logAutoFillStage_ACU('commit_result', { runId: options.performanceRunId, success: result.success, sheetCount: result.modifiedKeys.length });
+            if (!result.success) logAutoFillSkip_ACU('commit_failed', {
+                runId: options.performanceRunId, stage: 'commit',
+                diagnosticCode: result.diagnosticCode, errorCategory: result.errorCategory,
+            });
+        }
         return result;
     }, error => {
         performanceSpan.end({ success: false });
+        if (autoFill) logAutoFillSkip_ACU('commit_failed', {
+            runId: options.performanceRunId, stage: 'commit', diagnosticCode: 'commit_exception',
+        });
         throw error;
     });
 }
@@ -2586,6 +2631,10 @@ async function processGroupedRuntimeChunkCore_ACU(
                 const lastAiMessageLength = lastAiMessageContent.length;
                 const minReplyLength = settings_ACU.autoUpdateTokenThreshold || 0;
                 if (isAutoUpdateMode && lastAiMessageLength < minReplyLength) {
+                    logAutoFillSkip_ACU('reply_below_threshold', {
+                        runId: options.performanceRunId, stage: 'batch', batchNumber: plannedJob.batchNumber,
+                        replyLength: lastAiMessageLength, threshold: minReplyLength,
+                    });
                     continue;
                 }
 
@@ -2595,13 +2644,18 @@ async function processGroupedRuntimeChunkCore_ACU(
                 }
                 const messagesForContext = chatHistory.slice(sliceStartIndex, plannedJob.lastMessageIndexOfBatch + 1);
                 let effectiveRequestOptions = plannedJob.group.requestOptions || null;
-                if (!effectiveRequestOptions?.tableApiPreset && Array.isArray(plannedJob.group.sheetKeys) && plannedJob.group.sheetKeys.length > 0) {
+                if (effectiveRequestOptions?.tableApiPreset === undefined && Array.isArray(plannedJob.group.sheetKeys) && plannedJob.group.sheetKeys.length > 0) {
                     const firstTableName = templateForLookup?.[plannedJob.group.sheetKeys[0]]?.name || '';
                     const resolvedPreset = resolveTableApiPresetOverride_ACU(firstTableName);
                     if (resolvedPreset) {
                         effectiveRequestOptions = { ...(effectiveRequestOptions || {}), tableApiPreset: resolvedPreset };
                     }
                 }
+                // 自动模式默认开启诊断：runId/批次随任务透传，准备/响应/提交三段可用同一 runId 串联。
+                if (isAutoUpdateMode) effectiveRequestOptions = {
+                    ...(effectiveRequestOptions || {}), autoFillDiagnostics: true,
+                    performanceRunId: options.performanceRunId, batchNumber: plannedJob.batchNumber,
+                };
 
                 jobs.push({
                     groupKey: plannedJob.group.key,

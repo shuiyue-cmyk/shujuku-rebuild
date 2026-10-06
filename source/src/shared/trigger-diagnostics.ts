@@ -21,6 +21,13 @@ export type AutoFillSkipReason_ACU =
   | 'auto_update_coalesced'
   | 'preconditions_failed'
   | 'no_tables_due'
+  | 'reply_below_threshold'
+  | 'execution_failed'
+  | 'request_failed'
+  | 'input_preparation_failed'
+  | 'commit_failed'
+  | 'staging_runner_unavailable'
+  | 'refresh_failed'
   /** 同一楼已成功自动填表后，宿主又派发了一条 GENERATION_ENDED（外部插件回声）→ 自动填表入口短路 */
   | 'duplicate_auto_fill_ended'
   /** 无配对上下文的 GENERATION_ENDED，且自上次门控放行以来 AI 楼零产出（外部插件假事件 / 查看器中途停止）→ 门控源头丢弃 */
@@ -56,6 +63,26 @@ export interface AutoFillSkipContext_ACU {
   inFlight?: boolean;
   /** 前置检查失败分支的稳定原因码（来自 checkAutoUpdatePreConditions_ACU） */
   preconditionReason?: string;
+  runId?: string;
+  queueId?: number;
+  stage?: string;
+  groupCount?: number;
+  sheetCount?: number;
+  failedGroupCount?: number;
+  batchNumber?: number;
+  attempt?: number;
+  replyLength?: number;
+  threshold?: number;
+  diagnosticCode?: string;
+  errorCategory?: string;
+  apiMode?: string;
+  apiSource?: 'current' | 'fixed' | 'snapshot';
+  success?: boolean;
+}
+
+/** 详细过程遵从 Debug 开关；仅挑选诊断字段，不序列化业务载荷。 */
+export function logAutoFillStage_ACU(stage: string, context: AutoFillSkipContext_ACU = {}): void {
+  logDebug_ACU('[AutoFill] Stage', { ...pickTriggerContext_ACU(context), stage });
 }
 
 export function logAutoFillSkip_ACU(
@@ -84,6 +111,12 @@ export function logAutoFillSkip_ACU(
   const log = AUTO_FILL_SKIP_WARN_REASONS_ACU.has(reason) ? logWarn_ACU : logDebug_ACU;
   log('[AutoFill] Trigger skipped', {
     reason,
+    ...pickTriggerContext_ACU(context),
+  });
+}
+
+function pickTriggerContext_ACU(context: AutoFillSkipContext_ACU): AutoFillSkipContext_ACU {
+  const {
     eventType,
     messageId,
     eventMessageId,
@@ -101,5 +134,54 @@ export function logAutoFillSkip_ACU(
     inFlight,
     preconditionReason,
     latestAiMessageId,
-  });
+    runId,
+    queueId,
+    stage,
+    groupCount,
+    sheetCount,
+    failedGroupCount,
+    batchNumber,
+    attempt,
+    replyLength,
+    threshold,
+    diagnosticCode,
+    errorCategory,
+    apiMode,
+    apiSource,
+    success,
+  } = context;
+  return {
+    eventType,
+    messageId,
+    eventMessageId,
+    chatKey,
+    isolationKey,
+    liveIsolationKey,
+    lastGenerationType,
+    aiFloorCount,
+    capturedChatLength,
+    capturedAiFloorCount,
+    liveChatLength,
+    liveAiFloorCount,
+    resolvedMessageIndex,
+    candidateIndexes,
+    inFlight,
+    preconditionReason,
+    latestAiMessageId,
+    runId,
+    queueId,
+    stage,
+    groupCount,
+    sheetCount,
+    failedGroupCount,
+    batchNumber,
+    attempt,
+    replyLength,
+    threshold,
+    diagnosticCode,
+    errorCategory,
+    apiMode,
+    apiSource,
+    success,
+  };
 }

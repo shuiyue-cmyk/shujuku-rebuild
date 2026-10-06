@@ -5478,11 +5478,21 @@ const AUTO_FILL_SKIP_WARN_REASONS_ACU = new Set([
     'generated_ai_message_not_materialized',
     'resolved_message_not_ai',
 ]);
+/** 详细过程遵从 Debug 开关；仅挑选诊断字段，不序列化业务载荷。 */
+function logAutoFillStage_ACU(stage, context = {}) {
+    logDebug_ACU('[AutoFill] Stage', { ...pickTriggerContext_ACU(context), stage });
+}
 function logAutoFillSkip_ACU(reason, context = {}) {
     const { eventType, messageId, eventMessageId, chatKey, isolationKey, liveIsolationKey, lastGenerationType, aiFloorCount, capturedChatLength, capturedAiFloorCount, liveChatLength, liveAiFloorCount, resolvedMessageIndex, candidateIndexes, inFlight, preconditionReason, latestAiMessageId, } = context;
     const log = AUTO_FILL_SKIP_WARN_REASONS_ACU.has(reason) ? logWarn_ACU : logDebug_ACU;
     log('[AutoFill] Trigger skipped', {
         reason,
+        ...pickTriggerContext_ACU(context),
+    });
+}
+function pickTriggerContext_ACU(context) {
+    const { eventType, messageId, eventMessageId, chatKey, isolationKey, liveIsolationKey, lastGenerationType, aiFloorCount, capturedChatLength, capturedAiFloorCount, liveChatLength, liveAiFloorCount, resolvedMessageIndex, candidateIndexes, inFlight, preconditionReason, latestAiMessageId, runId, queueId, stage, groupCount, sheetCount, failedGroupCount, batchNumber, attempt, replyLength, threshold, diagnosticCode, errorCategory, apiMode, apiSource, success, } = context;
+    return {
         eventType,
         messageId,
         eventMessageId,
@@ -5500,7 +5510,22 @@ function logAutoFillSkip_ACU(reason, context = {}) {
         inFlight,
         preconditionReason,
         latestAiMessageId,
-    });
+        runId,
+        queueId,
+        stage,
+        groupCount,
+        sheetCount,
+        failedGroupCount,
+        batchNumber,
+        attempt,
+        replyLength,
+        threshold,
+        diagnosticCode,
+        errorCategory,
+        apiMode,
+        apiSource,
+        success,
+    };
 }
 
 /**
@@ -86435,7 +86460,8 @@ async function postChatCompletionTurn_ACU(body, signal, onUsage) {
  * 调用优先级：presetName 参数 > 全局 plotApiPreset > 当前 API 配置
  */
 async function callApiWithPlotPreset_ACU(messages, presetName, abortSignal = null) {
-    const effectivePresetName = presetName || settings_ACU.plotApiPreset || '';
+    // undefined 继承功能选择；显式空名跟随当前配置，不再被固定预设覆盖。
+    const effectivePresetName = String(presetName !== undefined ? presetName : (settings_ACU.plotApiPreset || '')).trim();
     const apiPresetConfig = getApiConfigByPreset_ACU(effectivePresetName);
     const effectiveApiMode = apiPresetConfig.apiMode ?? settings_ACU.apiMode;
     const effectiveApiConfig = apiPresetConfig.apiConfig || settings_ACU.apiConfig || {};
@@ -91870,7 +91896,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261006-10"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261006-12"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91889,7 +91915,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261006-10";
+        const stamp = "20261006-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -97953,6 +97979,12 @@ async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, i
  * service/worldbook/injection-engine-custom.ts — 自定义表格导出
  * 从 injection-engine.ts 拆出
  */
+// 仅记录当前运行期成功导出的来源行身份，用于区分真实删除与无数据变化的楼层刷新。
+// 世界书正文仍由交火负责；不同聊天、隔离环境和目标世界书不共享删除基线。
+const summaryIndexSourceRowsByScope_ACU = new Map();
+function __resetCustomTableExportStateForTests_ACU() {
+    summaryIndexSourceRowsByScope_ACU.clear();
+}
 // [新增] 处理自定义表格导出逻辑
 // [修复] 当 mergedData 为空/null 时，仍需执行"清理旧自定义导出条目"逻辑，
 // 避免删除楼层回溯到空数据时旧条目残留在世界书中。
@@ -97999,26 +98031,13 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
     const summaryVectorIndexModeEnabled = worldbookConfig?.summaryVectorIndexModeEnabled === true;
     const extraIndexEntryEnabled = !zeroTkOccupyMode;
     logDebug_ACU(`[CustomExport] 0TK模式=${zeroTkOccupyMode}, 交火纪要索引=${summaryVectorIndexModeEnabled}, 纪要索引条目enabled=${extraIndexEntryEnabled}`);
-    // [spv3.6.4] 计算交火索引是否已达门槛：未达门槛时内容保护补丁不生效，让普通填表正常更新纪要索引条目
-    let crossfireThresholdMet = false;
-    if (summaryVectorIndexModeEnabled) {
-        try {
-            const snapshot = getLatestSummaryVectorIndexSnapshotState_ACU();
-            const state = snapshot?.summaryVectorIndexState || null;
-            if (state) {
-                const activeRowKeys = new Set(state.manifest?.snapshot?.activeRowKeys || []);
-                const indexedRowCount = Array.isArray(state.rows)
-                    ? state.rows.filter((row) => row.status !== 'removed' && (activeRowKeys.size === 0 || activeRowKeys.has(row.rowKey))).length
-                    : 0;
-                const config = getEffectiveSummaryVectorIndexConfig_ACU();
-                crossfireThresholdMet = indexedRowCount >= config.summaryIndexKeywordMinRows;
-            }
-        }
-        catch (e) {
-            logWarn_ACU('[CustomExport] 无法获取交火索引状态，默认不保护纪要索引条目内容:', e);
-        }
-    }
-    logDebug_ACU(`[CustomExport] 交火门槛已达标=${crossfireThresholdMet}`);
+    // [spv3.6.4 后续] 交火正文独占改为来源行身份判定：门槛与召回状态不可靠，
+    // 普通刷新（删建同行）不得覆盖交火正文，只有来源行真实减少才重建。
+    const summaryIndexComment = `${isoPrefix}TavernDB-ACU-CustomExport-纪要索引`;
+    const summaryIndexScope = JSON.stringify([
+        currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU(), primaryLorebookName,
+    ]);
+    const summaryIndexSourceRows = new Set();
     try {
         const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
         const usedOrders = buildUsedOrderSet_ACU(allEntries);
@@ -98029,7 +98048,7 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
         let knownNames = settings_ACU.knownCustomEntryNames || [];
         if (!Array.isArray(knownNames))
             knownNames = [];
-        const uidsToDelete = allEntries
+        let uidsToDelete = allEntries
             .filter(e => {
             const comment = typeof e?.comment === 'string' ? e.comment : '';
             if (!comment)
@@ -98050,13 +98069,7 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
             return false;
         })
             .map(e => e.uid);
-        // [新增] 还需要把当前配置会生成的名字也加入到"待删除"列表中，以防它们是新生成的但同名
-        // 这一步会在后续生成 entriesToCreate 时自然覆盖，但显式删除更干净。
-        // 由于我们下面会重新生成并添加到 knownNames，这里先删除所有已知的"本插件生成条目"是安全的。
-        if (uidsToDelete.length > 0) {
-            await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
-            logDebug_ACU(`Deleted ${uidsToDelete.length} custom export entries (Legacy + Known).`);
-        }
+        // 先计算目标条目，再执行清理，避免普通刷新通过删建绕过交火正文独占。
         // 每次更新时，我们重置 knownNames 列表（仅非外部导入模式）
         // 外部导入模式不维护 knownNames，避免影响第三方世界书
         if (!isImport) {
@@ -98067,9 +98080,13 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
         }
         // [修复] 如果 mergedData 为空，清理完旧条目后直接返回，不再尝试创建新条目
         if (!mergedData) {
+            if (uidsToDelete.length > 0) {
+                await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
+            }
             logDebug_ACU('[CustomExport] mergedData 为空，已清理旧条目，跳过创建。');
             // 保存清理后的 knownNames
             if (!isImport) {
+                summaryIndexSourceRowsByScope_ACU.delete(summaryIndexScope);
                 settings_ACU.knownCustomEntryNames = knownNames;
                 saveSettings_ACU();
             }
@@ -98202,17 +98219,19 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
             // [修复] 外部导入时只使用"外部导入-"前缀
             const mainComment = getImportEntryName(extraIndexSpec.entryName, marker ? { ...marker, role: 'index' } : undefined);
             const isCrossfireSummaryEntry = extraIndexSpec.entryName === '纪要索引';
-            let mainContent = buildEntryContent(extraIndexSpec.entryName, fullTable, templateStr, false, fallbackTemplate);
-            if (!isImport && isCrossfireSummaryEntry && summaryVectorIndexModeEnabled && crossfireThresholdMet) {
-                const existingEntry = allEntries.find(e => e.comment === mainComment);
-                if (existingEntry?.content) {
-                    mainContent = existingEntry.content;
-                    logDebug_ACU('[CustomExport] 交火模式已启用且已达门槛，保留现有纪要索引召回内容，避免覆盖发送前召回结果。');
+            if (!isImport && isCrossfireSummaryEntry && marker) {
+                const table = mergedData[marker.sheetKey];
+                const columns = getSheetColumnProjection_ACU(table).visibleColumns
+                    .filter(column => column.sourceIndex > 0);
+                for (const row of table.content.slice(1)) {
+                    const rowId = String(row[0] ?? '').trim();
+                    const hasData = columns.some(column => String(row[column.sourceIndex] ?? '').trim() !== '');
+                    if (rowId && hasData) {
+                        summaryIndexSourceRows.add(JSON.stringify([marker.sheetKey, rowId]));
+                    }
                 }
             }
-            else if (!isImport && isCrossfireSummaryEntry && summaryVectorIndexModeEnabled && !crossfireThresholdMet) {
-                logDebug_ACU('[CustomExport] 交火模式已启用但未达门槛，纪要索引条目使用普通填表数据，不保护现有内容。');
-            }
+            const mainContent = buildEntryContent(extraIndexSpec.entryName, fullTable, templateStr, false, fallbackTemplate);
             names.push(mainComment);
             const normalizedPlacement = normalizePlacementConfig_ACU(placement, DEFAULT_EXTRA_INDEX_PLACEMENT_ACU);
             plans.push({ comment: mainComment, order: cursor, placement: normalizedPlacement });
@@ -98600,6 +98619,30 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
             entriesToCreate.push(...blockEntries);
             nextCustomExportOrder = cursor + CUSTOM_EXPORT_ORDER_GAP;
         });
+        const summaryIndexPlan = entriesToCreate.find(entry => entry.comment === summaryIndexComment);
+        const previousSourceRows = summaryIndexSourceRowsByScope_ACU.get(summaryIndexScope);
+        const sourceRowsRemoved = !!previousSourceRows
+            && [...previousSourceRows].some(rowId => !summaryIndexSourceRows.has(rowId));
+        const existingSummaryIndex = allEntries.find(entry => entry.comment === summaryIndexComment);
+        const protectSummaryIndex = !isImport && summaryVectorIndexModeEnabled && !!summaryIndexPlan
+            && existingSummaryIndex?.uid != null && !sourceRowsRemoved;
+        if (protectSummaryIndex) {
+            uidsToDelete = uidsToDelete.filter(uid => uid !== existingSummaryIndex.uid);
+            entriesToCreate.splice(entriesToCreate.indexOf(summaryIndexPlan), 1);
+        }
+        if (uidsToDelete.length > 0) {
+            await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
+            logDebug_ACU(`Deleted ${uidsToDelete.length} custom export entries (Legacy + Known).`);
+        }
+        if (protectSummaryIndex) {
+            // 只同步配置属性，不回写旧正文，避免覆盖交火在读取后产生的新结果。
+            const { content: _content, ...attributes } = summaryIndexPlan;
+            await setLorebookEntries_ACU(primaryLorebookName, [{ ...attributes, uid: existingSummaryIndex.uid }]);
+            logDebug_ACU('[CustomExport] 交火独占纪要索引正文，保留现有条目，仅同步配置属性。');
+        }
+        else if (!isImport && sourceRowsRemoved && summaryIndexPlan) {
+            logDebug_ACU('[CustomExport] 纪要来源行已删除或回溯，清理旧索引并按剩余数据创建。');
+        }
         if (entriesToCreate.length > 0) {
             await createLorebookEntries_ACU(primaryLorebookName, entriesToCreate);
             logDebug_ACU(`Successfully created ${entriesToCreate.length} new custom export entries.`);
@@ -98629,6 +98672,12 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
         }
         // [新增] 更新并保存 knownCustomEntryNames（外部导入模式不写入，避免绑定第三方世界书）
         if (!isImport) {
+            if (summaryIndexPlan) {
+                summaryIndexSourceRowsByScope_ACU.set(summaryIndexScope, summaryIndexSourceRows);
+            }
+            else {
+                summaryIndexSourceRowsByScope_ACU.delete(summaryIndexScope);
+            }
             settings_ACU.knownCustomEntryNames = [...knownNames, ...newGeneratedNames];
             settings_ACU.knownCustomEntryNames = [...new Set(settings_ACU.knownCustomEntryNames)];
             saveSettings_ACU();
@@ -111344,6 +111393,8 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
     const maxConcurrentGroups = Math.max(1, settings.maxConcurrentGroups || 1);
     const failedGroupKeys = [];
     const failedGroupErrors = [];
+    // 执行阶段跟踪：execute 段失败与 refresh 段失败记不同诊断码（移植上游 ece65f80）。
+    let executionStage = 'execute';
     const pushGroupError_ACU = (groupKey, error) => {
         const message = error instanceof Error ? error.message : String(error || '').trim();
         if (!message)
@@ -111448,11 +111499,16 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
             }
         }
         if (failedGroupKeys.length > 0) {
-            const errorSummary = failedGroupErrors.length > 0 ? `原因：${failedGroupErrors.slice(0, 3).join('；')}` : '未返回具体原因。';
-            logWarn_ACU(`并发分组更新失败 ${failedGroupKeys.length}/${totalGroups} 组。${errorSummary}`);
+            const runnerUnavailableGroupKeys = stagingGroupKeys.filter(key => failedGroupKeys.includes(key));
+            logAutoFillSkip_ACU(runnerUnavailableGroupKeys.length ? 'staging_runner_unavailable' : 'execution_failed', {
+                runId: performanceContext?.runId, stage: 'execute', groupCount: totalGroups,
+                failedGroupCount: failedGroupKeys.length,
+            });
         }
         // 并发更新完成后统一刷新数据链条（P5：仅保留一次刷新，消除重复 refreshData 与固定 500ms 等待后的二次刷新）
         logDebug_ACU(`All group updates completed. Forcing data refresh...`);
+        executionStage = 'refresh';
+        logAutoFillStage_ACU('refresh', { runId: performanceContext?.runId });
         await ops.loadAllChatMessages();
         setAutoUpdating(false);
         await ops.refreshData();
@@ -111515,6 +111571,9 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
         return result;
     }
     catch (error) {
+        logAutoFillSkip_ACU(executionStage === 'refresh' ? 'refresh_failed' : 'execution_failed', {
+            runId: performanceContext?.runId, stage: executionStage,
+        });
         performanceSpan.end({ success: false });
         setAutoUpdating(false);
         throw error;
@@ -114657,12 +114716,23 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
     const effectiveAbortController = abortController || new AbortController();
     const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && wasStoppedByUser_ACU);
     const maxRetries = options.maxRetriesOverride || settings_ACU.tableMaxRetries || 3;
-    if (isStopped())
+    // 准备期诊断（移植上游 ece65f80）：仅自动填表链路开启时留痕，不记业务载荷。
+    const diagnoseInput = (diagnosticCode, attempt = 0) => {
+        if (job.requestOptions?.autoFillDiagnostics)
+            logAutoFillSkip_ACU('input_preparation_failed', {
+                runId: job.performanceRunId || job.requestOptions.performanceRunId,
+                batchNumber: job.batchNumber, stage: 'prepare', diagnosticCode, attempt,
+            });
+    };
+    if (isStopped()) {
+        diagnoseInput('user_aborted');
         return { job, success: false, attempt: 0, aborted: true };
+    }
     // 请求前冻结 runtime schema 失败 = 本地基础设施失败：模型无法通过重试修复。
     // 必须在 AI 调用前 fail-closed，避免消耗 token 后在提交阶段才失败。
     const runtimeSchemaFailure = job.sqlApplyScope?.runtimeSchemaFailure;
     if (runtimeSchemaFailure) {
+        diagnoseInput('runtime_schema_unavailable');
         const error = `SQLite runtime schema 冻结失败（${runtimeSchemaFailure.code}）：${runtimeSchemaFailure.message}`;
         return {
             job,
@@ -114699,13 +114769,17 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
     }
     catch (error) {
         prepareSpan.end({ success: false });
-        if (error?.name === 'AbortError' || isStopped())
+        if (error?.name === 'AbortError' || isStopped()) {
+            diagnoseInput('user_aborted');
             return { job, success: false, attempt: 0, aborted: true };
+        }
+        diagnoseInput('prepare_input_exception');
         throw error;
     }
     prepareSpan.end({ success: Boolean(dynamicContent) });
     if (dynamicContent && typeof dynamicContent === 'object' && dynamicContent.ok === false) {
         const failure = dynamicContent;
+        diagnoseInput(failure.failureCode || 'provider_load_failed');
         const error = `无法准备AI输入（${failure.failureCode || 'provider_load_failed'}）：${failure.message || 'SQLite 运行时未就绪。'}`;
         return {
             job,
@@ -114717,6 +114791,7 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
         };
     }
     if (!dynamicContent) {
+        diagnoseInput('table_data_unavailable');
         return {
             job,
             success: false,
@@ -114728,8 +114803,17 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
     }
     let lastErrorMessage = 'AI响应中未找到完整有效的 <tableEdit> 标签';
     let lastErrorCategory = 'model';
+    // 响应期诊断（移植上游 ece65f80）：仅自动填表链路开启时留痕。
+    const diagnoseResponse = (diagnosticCode, attempt) => {
+        if (job.requestOptions?.autoFillDiagnostics)
+            logAutoFillSkip_ACU('execution_failed', {
+                runId: job.performanceRunId || job.requestOptions.performanceRunId,
+                batchNumber: job.batchNumber, stage: 'response', attempt, diagnosticCode,
+            });
+    };
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         if (isStopped()) {
+            diagnoseResponse('user_aborted', attempt);
             return { job, success: false, attempt, aborted: true };
         }
         options.onProgress?.({ phase: 'calling_ai', attempt, maxRetries });
@@ -114768,14 +114852,17 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
                 throw error;
             }
             if (isStopped()) {
+                diagnoseResponse('user_aborted', attempt);
                 return { job, success: false, attempt, aborted: true };
             }
             const minReplyLength = settings_ACU.autoUpdateTokenThreshold || 0;
             if (aiResponse && minReplyLength > 0 && aiResponse.length < minReplyLength) {
+                diagnoseResponse('response_below_threshold', attempt);
                 throw new ModelOutputRetryError_ACU(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);
             }
             let tableEditText = '';
             if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
+                diagnoseResponse('table_edit_block_missing', attempt);
                 throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
             }
             tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
@@ -114786,6 +114873,7 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
                     assertNoHiddenPhysicalColumnMutations_ACU(splitSqlStatements(tableEditText), job.sqlApplyScope?.runtimeData ? job.sqlApplyScope.runtimeData : job.baseSnapshot);
                 }
                 catch (error) {
+                    diagnoseResponse('sql_column_mutation_rejected', attempt);
                     throw new ModelOutputRetryError_ACU(error?.message || 'SQLite 填表 SQL 无效。');
                 }
             }
@@ -114800,9 +114888,11 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
             const warnMessage = sanitizeRetryFeedback_ACU(lastErrorMessage, MAX_WARN_ERROR_LENGTH_ACU);
             logWarn_ACU(`[${formatGroupAttemptLabel_ACU(job)}] 第 ${attempt} 次尝试失败: ${warnMessage}`);
             if (error?.name === 'AbortError' || String(lastErrorMessage).toLowerCase().includes('aborted') || isStopped()) {
+                diagnoseResponse('user_aborted', attempt);
                 return { job, success: false, attempt, aborted: true };
             }
             if (lastErrorCategory !== 'model') {
+                diagnoseResponse('request_failed', attempt);
                 const safeError = sanitizeRetryFeedback_ACU(lastErrorMessage, MAX_WARN_ERROR_LENGTH_ACU);
                 return {
                     job,
@@ -115541,14 +115631,30 @@ function applyUnifiedGroupFillResponses_ACU(...args) {
             targetMessageIndex: options.saveTargetIndex,
         },
     });
+    // 提交期诊断（移植上游 ece65f80）：仅诊断任务留痕。
+    const autoFill = responses?.some(response => response?.job?.requestOptions?.autoFillDiagnostics === true);
+    if (autoFill)
+        logAutoFillStage_ACU('commit_started', { runId: options.performanceRunId, groupCount: responses.length });
     return applyUnifiedGroupFillResponsesCore_ACU(args[0], args[1], {
         ...options,
         performanceParentSpanId: performanceSpan.id,
     }).then(result => {
         performanceSpan.end({ success: result.success, changedSheetCount: result.modifiedKeys.length });
+        if (autoFill) {
+            logAutoFillStage_ACU('commit_result', { runId: options.performanceRunId, success: result.success, sheetCount: result.modifiedKeys.length });
+            if (!result.success)
+                logAutoFillSkip_ACU('commit_failed', {
+                    runId: options.performanceRunId, stage: 'commit',
+                    diagnosticCode: result.diagnosticCode, errorCategory: result.errorCategory,
+                });
+        }
         return result;
     }, error => {
         performanceSpan.end({ success: false });
+        if (autoFill)
+            logAutoFillSkip_ACU('commit_failed', {
+                runId: options.performanceRunId, stage: 'commit', diagnosticCode: 'commit_exception',
+            });
         throw error;
     });
 }
@@ -115774,6 +115880,10 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                 const lastAiMessageLength = lastAiMessageContent.length;
                 const minReplyLength = settings_ACU.autoUpdateTokenThreshold || 0;
                 if (isAutoUpdateMode && lastAiMessageLength < minReplyLength) {
+                    logAutoFillSkip_ACU('reply_below_threshold', {
+                        runId: options.performanceRunId, stage: 'batch', batchNumber: plannedJob.batchNumber,
+                        replyLength: lastAiMessageLength, threshold: minReplyLength,
+                    });
                     continue;
                 }
                 let sliceStartIndex = plannedJob.firstMessageIndexOfBatch;
@@ -115782,13 +115892,19 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                 }
                 const messagesForContext = chatHistory.slice(sliceStartIndex, plannedJob.lastMessageIndexOfBatch + 1);
                 let effectiveRequestOptions = plannedJob.group.requestOptions || null;
-                if (!effectiveRequestOptions?.tableApiPreset && Array.isArray(plannedJob.group.sheetKeys) && plannedJob.group.sheetKeys.length > 0) {
+                if (effectiveRequestOptions?.tableApiPreset === undefined && Array.isArray(plannedJob.group.sheetKeys) && plannedJob.group.sheetKeys.length > 0) {
                     const firstTableName = templateForLookup?.[plannedJob.group.sheetKeys[0]]?.name || '';
                     const resolvedPreset = resolveTableApiPresetOverride_ACU(firstTableName);
                     if (resolvedPreset) {
                         effectiveRequestOptions = { ...(effectiveRequestOptions || {}), tableApiPreset: resolvedPreset };
                     }
                 }
+                // 自动模式默认开启诊断：runId/批次随任务透传，准备/响应/提交三段可用同一 runId 串联。
+                if (isAutoUpdateMode)
+                    effectiveRequestOptions = {
+                        ...(effectiveRequestOptions || {}), autoFillDiagnostics: true,
+                        performanceRunId: options.performanceRunId, batchNumber: plannedJob.batchNumber,
+                    };
                 jobs.push({
                     groupKey: plannedJob.group.key,
                     groupId: plannedJob.group.groupId,
@@ -153421,7 +153537,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261006-10";
+        const stamp = "20261006-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

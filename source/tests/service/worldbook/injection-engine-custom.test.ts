@@ -19,9 +19,8 @@ const {
   mockBuildUsedOrderSet, mockAllocOrder, mockAllocConsecutiveOrderBlock,
   mockGetInjectionTargetLorebook, mockGetIsolationPrefix,
   mockSplitKeywordsByComma,
-  mockGetLatestSummaryVectorIndexSnapshotState,
-  mockGetEffectiveSummaryVectorIndexConfig,
   mockGetCurrentFlightModeState,
+  mockRuntimeScope,
 } = vi.hoisted(() => ({
   mockSettings: {
     dataIsolationEnabled: false,
@@ -73,11 +72,8 @@ const {
     if (!raw) return [];
     return raw.split(/[,，]/).map((k: string) => k.trim()).filter(Boolean);
   }),
-  mockGetLatestSummaryVectorIndexSnapshotState: vi.fn(() => null),
-  mockGetEffectiveSummaryVectorIndexConfig: vi.fn(() => ({
-    summaryIndexKeywordMinRows: 3,
-  })),
   mockGetCurrentFlightModeState: vi.fn(() => ({ enabled: false, hiddenRowIds: [], bigSummarySheetKey: '' })),
+  mockRuntimeScope: { chatKey: 'chat-1', isolationKey: 'iso-1' },
 }));
 
 vi.mock('../../../src/service/settings/settings-readers', () => ({
@@ -86,6 +82,8 @@ vi.mock('../../../src/service/settings/settings-readers', () => ({
 
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   get settings_ACU() { return mockSettings; },
+  get currentChatFileIdentifier_ACU() { return mockRuntimeScope.chatKey; },
+  getCurrentIsolationKey_ACU: () => mockRuntimeScope.isolationKey,
 }));
 
 vi.mock('../../../src/data/gateways/worldbook-gateway', () => ({
@@ -138,22 +136,17 @@ vi.mock('../../../src/service/worldbook/injection-engine-entries', () => ({
   splitKeywordsByComma_ACU: mockSplitKeywordsByComma,
 }));
 
-vi.mock('../../../src/service/vector/summary-vector-index-state-service', () => ({
-  getLatestSummaryVectorIndexSnapshotState_ACU: mockGetLatestSummaryVectorIndexSnapshotState,
-}));
-
-vi.mock('../../../src/service/vector/vector-memory-config', () => ({
-  getEffectiveSummaryVectorIndexConfig_ACU: mockGetEffectiveSummaryVectorIndexConfig,
-}));
-
 vi.mock('../../../src/service/flight-mode/flight-mode-state', () => ({
   getCurrentFlightModeState_ACU: (...args: any[]) => mockGetCurrentFlightModeState(...args),
 }));
 
-import { updateCustomTableExports_ACU } from '../../../src/service/worldbook/injection-engine-custom';
+import { updateCustomTableExports_ACU, __resetCustomTableExportStateForTests_ACU } from '../../../src/service/worldbook/injection-engine-custom';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetCustomTableExportStateForTests_ACU();
+  mockRuntimeScope.chatKey = 'chat-1';
+  mockRuntimeScope.isolationKey = 'iso-1';
   mockSettings.dataIsolationEnabled = false;
   mockSettings.dataIsolationCode = '';
   mockSettings.knownCustomEntryNames = [];
@@ -761,5 +754,106 @@ describe('updateCustomTableExports_ACU', () => {
         expect(hasIndexEntry).toBe(true);
       }
     });
+  });
+});
+
+// ═══ 交火纪要索引正文独占（移植上游 2b4ea865）═══
+describe('交火纪要索引正文独占', () => {
+  const summaryData = () => ({
+    sheet_chronicle: {
+      name: '纪要表',
+      content: [['row_id', '内容'], ['1', '纪要A'], ['2', '纪要B']],
+      exportConfig: {
+        enabled: true,
+        entryName: '纪要表',
+        entryType: 'constant',
+        extraIndexEnabled: true,
+        extraIndexEntryName: '纪要索引',
+        extraIndexColumns: ['内容'],
+        extraIndexColumnModes: {},
+      },
+    },
+  });
+  const useCrossfire = () => {
+    mockGetCurrentWorldbookConfig.mockReturnValue({ zeroTkOccupyMode: false, summaryVectorIndexModeEnabled: true });
+    mockGetSortedSheetKeys.mockReturnValue(['sheet_chronicle']);
+    // 恢复默认合并语义，避免此前用例的 mockReturnValue 残留污染。
+    mockEnsureExportConfigDefaults.mockImplementation((cfg: any, name: string) => ({
+      enabled: false,
+      splitByRow: false,
+      entryName: name || '',
+      entryType: 'constant',
+      keywords: '',
+      preventRecursion: true,
+      injectionTemplate: '',
+      extraIndexEnabled: false,
+      extraIndexEntryName: `${name || '表格'}-索引`,
+      extraIndexColumns: [],
+      extraIndexColumnModes: {},
+      extraIndexInjectionTemplate: '',
+      entryPlacement: { position: 'at_depth_as_system', depth: 2, order: 10000 },
+      extraIndexPlacement: { position: 'at_depth_as_system', depth: 2, order: 10010 },
+      ...cfg,
+    }));
+  };
+  // 内存世界书：create 分配 uid，delete 按 uid 删，set 按 uid 更新。
+  const memoryBook = () => {
+    const entries: any[] = [];
+    let uid = 1;
+    mockGetLorebookEntries.mockImplementation(async () => entries.map(entry => ({ ...entry })));
+    mockCreateLorebookEntries.mockImplementation(async (_book: string, list: any[]) => {
+      for (const entry of list) entries.push({ ...entry, uid: uid++ });
+    });
+    mockDeleteLorebookEntries.mockImplementation(async (_book: string, uids: number[]) => {
+      for (const id of uids) {
+        const index = entries.findIndex(entry => entry.uid === id);
+        if (index >= 0) entries.splice(index, 1);
+      }
+    });
+    mockSetLorebookEntries.mockImplementation(async (_book: string, list: any[]) => {
+      for (const patch of list) {
+        const target = entries.find(entry => entry.uid === patch.uid);
+        if (target) Object.assign(target, patch);
+      }
+    });
+    return entries;
+  };
+  const readIndex = (entries: any[]) => entries.find(entry => entry.comment === 'TavernDB-ACU-CustomExport-纪要索引');
+
+  it('来源行未变时保留已有正文：不删不建，只同步属性（移植上游 2b4ea865）', async () => {
+    useCrossfire();
+    const entries = memoryBook();
+    await updateCustomTableExports_ACU(summaryData());
+    expect(readIndex(entries)).toBeDefined();
+    const firstUid = readIndex(entries).uid;
+    // 模拟交火在读取后写入筛选正文。
+    readIndex(entries).content = '交火筛选正文';
+    mockDeleteLorebookEntries.mockClear();
+    mockCreateLorebookEntries.mockClear();
+    mockSetLorebookEntries.mockClear();
+    await updateCustomTableExports_ACU(summaryData());
+    expect(readIndex(entries)).toMatchObject({ uid: firstUid, content: '交火筛选正文' });
+    const deleted: number[] = mockDeleteLorebookEntries.mock.calls.flatMap(call => call[1] || []);
+    expect(deleted).not.toContain(firstUid);
+    const created: any[] = mockCreateLorebookEntries.mock.calls.flatMap(call => call[1] || []);
+    expect(created.some(entry => entry.comment === 'TavernDB-ACU-CustomExport-纪要索引')).toBe(false);
+    const updated: any[] = mockSetLorebookEntries.mock.calls.flatMap(call => call[1] || []);
+    expect(updated.some(entry => entry.uid === firstUid)).toBe(true);
+    expect(updated.filter(entry => entry.uid === firstUid).every(entry => !('content' in entry))).toBe(true);
+  });
+
+  it('来源行真实删除后清理旧索引并按剩余数据重建（移植上游 2b4ea865）', async () => {
+    useCrossfire();
+    const entries = memoryBook();
+    await updateCustomTableExports_ACU(summaryData());
+    const firstUid = readIndex(entries).uid;
+    readIndex(entries).content = '交火筛选正文';
+    const reduced: any = summaryData();
+    reduced.sheet_chronicle.content = [['row_id', '内容'], ['1', '纪要A']];
+    await updateCustomTableExports_ACU(reduced);
+    const deleted: number[] = mockDeleteLorebookEntries.mock.calls.flatMap(call => call[1] || []);
+    expect(deleted).toContain(firstUid);
+    expect(readIndex(entries).uid).not.toBe(firstUid);
+    expect(readIndex(entries).content).not.toBe('交火筛选正文');
   });
 });

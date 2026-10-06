@@ -5114,6 +5114,52 @@ describe('collectGroupFillResponse_ACU', () => {
     expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
   });
 
+  it('诊断开启时 AI 调用基础设施失败记 request_failed（移植上游 ece65f80）', async () => {
+    const { logDebug_ACU } = await import('../../../src/shared/utils');
+    const job = { ...createJob(), requestOptions: { autoFillDiagnostics: true }, performanceRunId: 'run-9' };
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockRejectedValue(new Error('net down'));
+
+    const result = await collectGroupFillResponse_ACU(job);
+
+    expect(result).toMatchObject({ success: false, errorCategory: 'infrastructure' });
+    expect(logDebug_ACU).toHaveBeenCalledWith(
+      '[AutoFill] Trigger skipped',
+      expect.objectContaining({
+        reason: 'execution_failed', runId: 'run-9', stage: 'response', diagnosticCode: 'request_failed',
+      }),
+    );
+  });
+
+  it('诊断开启时准备失败记 input_preparation_failed（含 runId 与原因码）；关闭时不记（移植上游 ece65f80）', async () => {
+    const { logDebug_ACU } = await import('../../../src/shared/utils');
+    mockPrepareAIInput.mockResolvedValue({
+      ok: false,
+      failureCode: 'provider_fallback',
+      message: 'SQLite 运行时加载失败。',
+      retryable: false,
+    });
+    const diagnosed = { ...createJob(), requestOptions: { autoFillDiagnostics: true }, performanceRunId: 'run-9' };
+    const failed = await collectGroupFillResponse_ACU(diagnosed);
+    expect(failed.success).toBe(false);
+    expect(logDebug_ACU).toHaveBeenCalledWith(
+      '[AutoFill] Trigger skipped',
+      expect.objectContaining({
+        reason: 'input_preparation_failed', runId: 'run-9', stage: 'prepare', diagnosticCode: 'provider_fallback',
+      }),
+    );
+    vi.clearAllMocks();
+    mockPrepareAIInput.mockResolvedValue({
+      ok: false,
+      failureCode: 'provider_fallback',
+      message: 'SQLite 运行时加载失败。',
+      retryable: false,
+    });
+    const silent = await collectGroupFillResponse_ACU(createJob());
+    expect(silent.success).toBe(false);
+    expect(logDebug_ACU).not.toHaveBeenCalledWith('[AutoFill] Trigger skipped', expect.anything());
+  });
+
   it('作者 DDL 名冲突返回结构化失败时不调用 AI', async () => {
     const job = createJob();
     mockPrepareAIInput.mockResolvedValue({
@@ -5506,6 +5552,43 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
 
     expect(result.success).toBe(false);
     expect(result.errorCategory).toBe('model');
+  });
+
+  it('诊断任务提交失败记 commit_failed（含 runId 与原因码）；未标记任务静默（移植上游 ece65f80）', async () => {
+    const { logDebug_ACU } = await import('../../../src/shared/utils');
+    const baseSnapshot = {
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+    };
+    const diagnosed = [{
+      success: true, attempt: 1,
+      aiResponse: '<tableEdit>updateRow(0, 99, {"0": "x"})</tableEdit>',
+      tableEditText: 'updateRow(0, 99, {"0": "x"})',
+      job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: { autoFillDiagnostics: true }, messagesForContext: [], baseSnapshot, isImportMode: false },
+    }];
+    mockParseAndApplyTableEditsToData.mockImplementationOnce(() => ({
+      success: false, modifiedKeys: [], appliedEdits: 0, failedEdits: 0, totalCommands: 1,
+      error: '解析或应用失败：1 条指令中成功 0 条，失败 0 条。',
+    }));
+    const failed = await applyUnifiedGroupFillResponses_ACU(diagnosed as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false, performanceRunId: 'run-7' } as any);
+    expect(failed.success).toBe(false);
+    expect(logDebug_ACU).toHaveBeenCalledWith(
+      '[AutoFill] Trigger skipped',
+      expect.objectContaining({ reason: 'commit_failed', runId: 'run-7', stage: 'commit' }),
+    );
+    vi.clearAllMocks();
+    const silent = [{
+      success: true, attempt: 1,
+      aiResponse: '<tableEdit>updateRow(0, 99, {"0": "x"})</tableEdit>',
+      tableEditText: 'updateRow(0, 99, {"0": "x"})',
+      job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false },
+    }];
+    mockParseAndApplyTableEditsToData.mockImplementationOnce(() => ({
+      success: false, modifiedKeys: [], appliedEdits: 0, failedEdits: 0, totalCommands: 1,
+      error: '解析或应用失败：1 条指令中成功 0 条，失败 0 条。',
+    }));
+    const failedSilent = await applyUnifiedGroupFillResponses_ACU(silent as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false, performanceRunId: 'run-7' } as any);
+    expect(failedSilent.success).toBe(false);
+    expect(logDebug_ACU).not.toHaveBeenCalledWith('[AutoFill] Trigger skipped', expect.anything());
   });
 
   it('按稳定顺序基于 baseSnapshot 合并响应，仅显式保存一次；非纪要表填表不触发向量 flush', async () => {
@@ -6755,6 +6838,44 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     expect(result).toEqual({ success: true, failedGroups: [], committedBucketCount: 0, committedDataBucketCount: 0 });
     expect(mockPrepareAIInput).not.toHaveBeenCalled();
     expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
+  });
+
+  it('自动模式短回复跳过该批并记 reply_below_threshold；自动任务带诊断标记（移植上游 ece65f80）', async () => {
+    const { logDebug_ACU } = await import('../../../src/shared/utils');
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: true, mes: '问' }, { is_user: false, mes: '短' }]);
+    mockSettings.autoUpdateTokenThreshold = 1000;
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+
+    const result = await processGroupedRuntimeChunk_ACU([
+      { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
+    ], 'auto_independent', { performanceRunId: 'run-3' });
+
+    expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
+    expect(logDebug_ACU).toHaveBeenCalledWith(
+      '[AutoFill] Trigger skipped',
+      expect.objectContaining({ reason: 'reply_below_threshold', runId: 'run-3', stage: 'batch' }),
+    );
+    expect(result.failedGroups).toEqual([]);
+    mockSettings.autoUpdateTokenThreshold = 0;
+  });
+
+  it('自动模式任务自动带诊断标记，透传进 AI 调用选项（移植上游 ece65f80）', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: true, mes: '问' }, { is_user: false, mes: '足够长的 AI 回复正文' }]);
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+
+    const result = await processGroupedRuntimeChunk_ACU([
+      { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
+    ], 'auto_independent', { performanceRunId: 'run-4' });
+
+    expect(result.success).toBe(true);
+    expect(mockCallCustomOpenAI).toHaveBeenCalled();
+    expect(mockCallCustomOpenAI.mock.calls[0][2]).toEqual(expect.objectContaining({
+      autoFillDiagnostics: true, performanceRunId: 'run-4', batchNumber: expect.any(Number),
+    }));
   });
 
   // 上游 issue #18 第三条：计数若只按「bucket 是否提交」统计，会把零 operation 的伪提交

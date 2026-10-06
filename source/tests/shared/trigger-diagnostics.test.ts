@@ -10,7 +10,7 @@ vi.mock('../../src/shared/utils', () => ({
   logWarn_ACU: mockLogWarn,
 }));
 
-import { logAutoFillSkip_ACU } from '../../src/shared/trigger-diagnostics';
+import { logAutoFillSkip_ACU, logAutoFillStage_ACU } from '../../src/shared/trigger-diagnostics';
 
 describe('logAutoFillSkip_ACU', () => {
   beforeEach(() => {
@@ -51,6 +51,36 @@ describe('logAutoFillSkip_ACU', () => {
         reason: 'quiet_or_background_generation',
         lastGenerationType: 'quiet',
       }),
+    );
+  });
+
+  it('执行期失败带运行诊断字段透传（移植上游 ece65f80）', () => {
+    logAutoFillSkip_ACU('execution_failed', {
+      runId: 'run-1',
+      stage: 'execute',
+      groupCount: 4,
+      failedGroupCount: 2,
+    });
+
+    expect(mockLogWarn).not.toHaveBeenCalled();
+    expect(mockLogDebug).toHaveBeenCalledWith(
+      '[AutoFill] Trigger skipped',
+      expect.objectContaining({
+        reason: 'execution_failed',
+        runId: 'run-1',
+        stage: 'execute',
+        groupCount: 4,
+        failedGroupCount: 2,
+      }),
+    );
+  });
+
+  it('阶段流水日志只带诊断字段（移植上游 ece65f80）', () => {
+    logAutoFillStage_ACU('refresh', { runId: 'run-1' });
+
+    expect(mockLogDebug).toHaveBeenCalledWith(
+      '[AutoFill] Stage',
+      expect.objectContaining({ stage: 'refresh', runId: 'run-1' }),
     );
   });
 });

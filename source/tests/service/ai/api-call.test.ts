@@ -887,6 +887,22 @@ describe('callApiWithPlotPreset_ACU 温度透传', () => {
     expect(fetchBody.temperature).toBe(0.2);
     expect(fetchBody.top_p).toBe(0.6);
   });
+
+  it('显式空名跟随当前配置、不被全局固定预设覆盖；undefined 才继承；名称去空格（移植上游 ece65f80）', async () => {
+    mockSettings.plotApiPreset = '预设C';
+    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', temperature: 0.5 };
+    mockSettings.apiPresets = [
+      { name: '预设C', apiMode: 'custom', apiConfig: { url: 'https://api.example.com', model: 'gpt-4', temperature: 0.2 }, tavernProfile: '' },
+    ];
+    mockFetch.mockResolvedValue({ ok: true });
+    mockHandleApiResponse.mockResolvedValue('AI 回复');
+    await callApiWithPlotPreset_ACU([{ role: 'user', content: '你好' }], '');
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body).temperature).toBe(0.5);
+    await callApiWithPlotPreset_ACU([{ role: 'user', content: '你好' }], undefined as any);
+    expect(JSON.parse(mockFetch.mock.calls[1][1].body).temperature).toBe(0.2);
+    await callApiWithPlotPreset_ACU([{ role: 'user', content: '你好' }], '  预设C  ');
+    expect(JSON.parse(mockFetch.mock.calls[2][1].body).temperature).toBe(0.2);
+  });
 });
 
 // ═══ callAIWithPreset_ACU 参数透传 ═══

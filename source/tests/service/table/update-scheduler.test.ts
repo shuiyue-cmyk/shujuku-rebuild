@@ -9,13 +9,14 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// ═══════════════════════════════════════════════════════════════
-// Mock 设置
-// ═══════════════════════════════════════════════════════════════
+const { mockLogDebug, mockLogWarn } = vi.hoisted(() => ({
+  mockLogDebug: vi.fn(),
+  mockLogWarn: vi.fn(),
+}));
 
 vi.mock('../../../src/shared/utils', () => ({
-  logDebug_ACU: vi.fn(),
-  logWarn_ACU: vi.fn(),
+  logDebug_ACU: mockLogDebug,
+  logWarn_ACU: mockLogWarn,
   logError_ACU: vi.fn(),
   isSummaryOrOutlineTable_ACU: vi.fn(() => false),
 }));
@@ -736,6 +737,34 @@ describe('executeAutoUpdatePlan_ACU', () => {
     expect(result.failedGroups).toBe(1);
     expect(result.totalGroups).toBe(2);
     expect(mockProcess).not.toHaveBeenCalled();
+  });
+
+  it('分组失败带 runId 时记结构化诊断（含阶段与失败数），刷新异常记 refresh_failed（移植上游 ece65f80）', async () => {
+    const plan = {
+      tablesToUpdate: [],
+      updateGroups: {
+        'group_a': { indices: [1], batchSize: 2, groupId: 0, sheetKeys: ['sheet_0'], sheetNames: ['表A'] },
+        'group_b': { indices: [2], batchSize: 2, groupId: 1, sheetKeys: ['sheet_1'], sheetNames: ['表B'] },
+      },
+    };
+    const mockGrouped = vi.fn().mockResolvedValue({ success: false, failedGroups: ['group_a'] });
+    const ops = makeOps({ processGroupedUpdates: mockGrouped });
+    const result = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, ops, { runId: 'run-1' });
+    expect(result.success).toBe(false);
+    expect(mockLogDebug).toHaveBeenCalledWith(
+      '[AutoFill] Trigger skipped',
+      expect.objectContaining({ reason: 'execution_failed', runId: 'run-1', stage: 'execute', failedGroupCount: 1 }),
+    );
+    const failingRefresh = makeOps({
+      processGroupedUpdates: vi.fn().mockResolvedValue({ success: true, failedGroups: [] }),
+      refreshData: vi.fn().mockRejectedValue(new Error('refresh boom')),
+    });
+    await expect(executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, failingRefresh, { runId: 'run-2' }))
+      .rejects.toThrow('refresh boom');
+    expect(mockLogDebug).toHaveBeenCalledWith(
+      '[AutoFill] Trigger skipped',
+      expect.objectContaining({ reason: 'refresh_failed', runId: 'run-2', stage: 'refresh' }),
+    );
   });
 
   it('多组部分失败', async () => {
