@@ -206,10 +206,11 @@ describe('AgentSubagentRuntime_ACU usage 累计', () => {
     // 预填充恒为最后一条消息，运行时注入（卷数计划/预算状态）都落在它之前。
     expect(last.role).toBe('user');
     expect(last.content).toBe(USER_PREFILL_CONTENT_ACU);
-    // 读取预算状态是运行时信息，紧贴预填充注入，是模型看到的最后一条 user 消息。
-    expect(messages[messages.length - 2].role).toBe('user');
+    // 读取预算状态与卷数计划是运行时状态块，走 system 通道（移植上游 e1876435），
+    // 紧贴尾部 user 预填充注入；预填充恒为最后一条消息。
+    expect(messages[messages.length - 2].role).toBe('system');
     expect(messages[messages.length - 2].content).toContain('【读取预算状态】');
-    expect(messages[messages.length - 3].role).toBe('user');
+    expect(messages[messages.length - 3].role).toBe('system');
     expect(messages[messages.length - 3].content).toContain('【总纲卷数计划】');
     // 任务段（含全部固定资料注入）必须在卷数计划之前、预填充之前完整送达。
     expect(messages[messages.length - 4].content).toContain('【本次任务】\n立总纲');
@@ -532,5 +533,34 @@ describe('尾部预填充识别（user-prefill 形态，移植上游 ce867f86）
     const plain = [{ role: 'user', content: '普通收尾（非预填充）' }];
     const outPlain = insertBeforeTrailingPrefill_ACU(plain, { role: 'user', content: '注入' });
     expect(outPlain.map(item => item.content)).toEqual(['普通收尾（非预填充）', '注入']);
+  });
+});
+
+describe('状态块走 system 通道（移植上游 e1876435）', () => {
+  it('读取预算注记以 system 发出，不占用 user 对话轮', async () => {
+    const calls: Array<Array<{ role: string; content: string }>> = [];
+    const runtime = new AgentSubagentRuntime_ACU({
+      resolveApiPreset: (() => preset_ACU) as any,
+      callInternalAi: async messages => { calls.push(messages); return finalReply_ACU; },
+    });
+    await runtime.run(input_ACU());
+    expect(calls.length).toBeGreaterThan(0);
+    const budgets = calls[0].filter(message => message.content.includes('【读取预算状态】'));
+    expect(budgets.length).toBeGreaterThan(0);
+    expect(budgets.every(message => message.role === 'system')).toBe(true);
+  });
+
+  it('模板尾预填充被删时出站仍以 user 预填充收尾', async () => {
+    const calls: Array<Array<{ role: string; content: string }>> = [];
+    const runtime = new AgentSubagentRuntime_ACU({
+      resolveApiPreset: (() => preset_ACU) as any,
+      callInternalAi: async messages => { calls.push(messages); return finalReply_ACU; },
+    });
+    const input = input_ACU();
+    input.settings.agentPrompts.maintainer = input.settings.agentPrompts.maintainer.slice(0, -1);
+    await runtime.run(input);
+    expect(calls.length).toBeGreaterThan(0);
+    const last = calls[0][calls[0].length - 1];
+    expect(last).toEqual({ role: 'user', content: USER_PREFILL_CONTENT_ACU });
   });
 });

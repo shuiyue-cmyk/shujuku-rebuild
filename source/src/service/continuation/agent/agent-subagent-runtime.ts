@@ -320,6 +320,18 @@ interface SubagentMaterial_ACU {
 }
 
 /**
+ * 确保出站消息以 user 预填充收尾。模板尾段被用户删掉时补上，否则续写引导失效、
+ * 模型另起一段回复而不是续写 JSON（移植上游 e1876435：末尾始终追加）。
+ */
+export function ensureTrailingUserPrefill_ACU(
+  messages: ReadonlyArray<{ role: string; content: string }>,
+): Array<{ role: string; content: string }> {
+  const last = messages[messages.length - 1];
+  if (last && last.role === 'user' && last.content === USER_PREFILL_CONTENT_ACU) return messages as Array<{ role: string; content: string }>;
+  return [...messages, { role: 'user', content: USER_PREFILL_CONTENT_ACU }];
+}
+
+/**
  * 把一条运行时消息插到尾部预填充之前。渲染后的消息序列若以尾部预填充收尾——
  * assistant 旧形态（role==='assistant'）或 user + USER_PREFILL 新形态（V36 起）——
  * 追加内容必须放在它前面，否则预填充不再是最后一条消息、失去续写引导作用。
@@ -596,10 +608,10 @@ export class AgentSubagentRuntime_ACU {
     // 总纲卷数计划是随设置变化的运行时指令，不进提示词模板；但它必须落在尾部预填充之前——
     // 追加在预填充之后会让对话以一条 user 消息收尾，预填充失效，模型会另起一段回复而不是续写 JSON。
     const baseMessagesInitial = definition.promptKey === 'arcArchitect'
-      ? insertBeforeTrailingPrefill_ACU(rendered.messages, { role: 'user', content: renderStoryArcVolumePlanInstruction_ACU(input.settings) })
+      ? insertBeforeTrailingPrefill_ACU(rendered.messages, { role: 'system', content: renderStoryArcVolumePlanInstruction_ACU(input.settings) })
       : rendered.messages;
     // 预算状态同样是运行时信息；首轮先给上限，之后随每个工具批次刷新剩余轮次与遥测。
-    const baseMessages = insertBeforeTrailingPrefill_ACU(baseMessagesInitial, { role: 'user', content: renderReadBudgetNote(0) });
+    const baseMessages = insertBeforeTrailingPrefill_ACU(baseMessagesInitial, { role: 'system', content: renderReadBudgetNote(0) });
     // S11-TT Mode F：可写角色经受控端口逐栏即时提交；只读角色与终审不提示该工具。
     const fieldWritable = !!input.writeSql && writes.length > 0 && !isRequirementsMaintainer;
     const baseMessagesWithFieldHint = fieldWritable
@@ -756,9 +768,9 @@ export class AgentSubagentRuntime_ACU {
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '子代理请求已失效', false));
       }
       // 传输错误（502/网络抖动）按设置延时重试；协议/契约拒绝仍走小循环内的对话级立即重试。
-      const outgoingMessages = pendingResearchEvidence
-        ? insertBeforeTrailingPrefill_ACU([...baseMessagesWithFieldHint, ...transcript], { role: 'user', content: pendingResearchEvidence })
-        : [...baseMessagesWithFieldHint, ...transcript];
+      const outgoingMessages = ensureTrailingUserPrefill_ACU(pendingResearchEvidence
+        ? insertBeforeTrailingPrefill_ACU([...baseMessagesWithFieldHint, ...transcript], { role: 'system', content: pendingResearchEvidence })
+        : [...baseMessagesWithFieldHint, ...transcript]);
       await assertOutgoingWithinBudget_ACU(outgoingMessages);
       const raw = await callContinuationInternalAiWithRetry_ACU(
         () => this.dependencies.callInternalAi(
@@ -1104,7 +1116,7 @@ export class AgentSubagentRuntime_ACU {
       grantedTokens: gate.state.grantedTokens,
     });
     // 终审与普通派工同一预算语义：首轮给出上限，每个工具批次后刷新剩余轮次与遥测；注入点必须在尾部预填充之前。
-    const baseMessages = insertBeforeTrailingPrefill_ACU(rendered.messages, { role: 'user', content: renderReadBudgetNote(0) });
+    const baseMessages = insertBeforeTrailingPrefill_ACU(rendered.messages, { role: 'system', content: renderReadBudgetNote(0) });
     const transcript: Array<{ role: string; content: string }> = [];
     const expandedReads: string[] = [];
     let toolRoundsUsed = 0;
@@ -1150,7 +1162,7 @@ export class AgentSubagentRuntime_ACU {
       if (!input.isCurrent(identity)) {
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '终审请求已失效', false));
       }
-      const outgoingMessages = [...baseMessages, ...transcript];
+      const outgoingMessages = ensureTrailingUserPrefill_ACU([...baseMessages, ...transcript]);
       await assertFinalOutgoingWithinBudget_ACU(outgoingMessages);
       const raw = await callContinuationInternalAiWithRetry_ACU(
         () => this.dependencies.callInternalAi(outgoingMessages, preset, identity, input.signal, callOptions),

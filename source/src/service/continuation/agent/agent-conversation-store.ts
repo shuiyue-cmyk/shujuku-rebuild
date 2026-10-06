@@ -510,13 +510,14 @@ export async function appendAgentConversationToChat_ACU(appends: readonly AgentC
  *
  * 渲染严格使用每条消息自身的持久化文本；向尾部追加消息不得反向改写既有渲染前缀。
  * @param snapshot 当前会话视图
- * @returns `{ role, content }` 数组；主 Agent 自己的输出是 assistant，其余一律 user
+ * @returns `{ role, content }` 数组；主 Agent 自己的输出是 assistant，
+ *   运行时快照是 system（状态板块，不占对话轮），其余一律 user
  */
 export function renderAgentConversationMessages_ACU(snapshot: AgentConversationSnapshot_ACU): Array<{ role: string; content: string }> {
   return snapshot.messages.map((message) => {
     const prefix = KIND_PREFIXES_ACU[message.kind];
     return {
-      role: message.kind === 'agent' ? 'assistant' : 'user',
+      role: message.kind === 'agent' ? 'assistant' : message.kind === 'runtime' ? 'system' : 'user',
       content: prefix ? `${prefix}\n${message.text}` : message.text,
     };
   });

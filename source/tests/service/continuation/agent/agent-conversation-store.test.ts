@@ -367,7 +367,7 @@ describe('会话追加与渲染', () => {
     expect(next.messages[0].text).not.toContain('已截断');
   });
 
-  it('渲染时只有主 Agent 自己的输出是 assistant，其余带来源前缀走 user', () => {
+  it('渲染时主 Agent 输出是 assistant、运行时快照是 system，其余带来源前缀走 user', () => {
     const snapshot = appendAgentConversation_ACU(buildEmptyAgentConversation_ACU(), [
       { kind: 'user', text: '别揭穿', digest: '', turnKey: 't1' },
       { kind: 'turn', text: '开始新的一轮', digest: '', turnKey: 't1' },
@@ -381,7 +381,7 @@ describe('会话追加与渲染', () => {
       { role: 'user', content: '【新的一轮】\n开始新的一轮' },
       { role: 'assistant', content: '{"action":"finalize"}' },
       { role: 'user', content: '【工具结果】\n派工成功' },
-      { role: 'user', content: '【运行时快照】\n【本回合运行时数据】\n预算充足' },
+      { role: 'system', content: '【运行时快照】\n【本回合运行时数据】\n预算充足' },
       { role: 'user', content: '【早期会话交接报告】\n早期浓缩' },
     ]);
   });

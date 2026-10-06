@@ -88,7 +88,7 @@ import {
   type AgentReadGateConfig_ACU,
   type AgentReadGateState_ACU,
 } from './agent-read-gate';
-import { AgentSubagentRuntime_ACU, type AgentSubagentRunResult_ACU } from './agent-subagent-runtime';
+import { AgentSubagentRuntime_ACU, ensureTrailingUserPrefill_ACU, type AgentSubagentRunResult_ACU } from './agent-subagent-runtime';
 import {
   assertFieldWriteSettleable_ACU,
   continuationBeatObligation_ACU,
@@ -1322,7 +1322,8 @@ export class ContinuationAgentTurnPlanner_ACU {
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '主 Agent 请求已失效', false));
       }
       const rendered = await this.renderMainPrompt_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig, lifecycle);
-      const messages = this.spliceHistory_ACU(rendered, session.history());
+      // 尾部预填充被用户删掉时补上，否则续写引导失效（移植上游 e1876435）。
+      const messages = ensureTrailingUserPrefill_ACU(this.spliceHistory_ACU(rendered, session.history()));
       // 最终完整请求预检：压缩候选未提交（写入失败/回读不一致）或压缩后仍超限时，
       // 绝不能把未经确认的超长上下文发出去——那只会换来一次网关侧的截断或报错。
       if (request.settings.agentHistoryTokenBudget > 0 && await measureAgentPromptTokens_ACU(messages, counter) > request.settings.agentHistoryTokenBudget) {

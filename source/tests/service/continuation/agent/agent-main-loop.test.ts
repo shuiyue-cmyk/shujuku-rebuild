@@ -650,6 +650,28 @@ describe('主 Agent 提示词装配', () => {
     expect(second.filter(message => message.content.includes('【本回合运行时数据】')).length).toBeGreaterThanOrEqual(2);
   });
 
+  it('运行时快照以 system 发出，不占用 user 对话轮（移植上游 e1876435）', async () => {
+    const h = harness_ACU({
+      mainReplies: [
+        '{"action":"read","reads":["$OUTLINE_WINDOW"]}',
+        '{"action":"finalize","instruction":"本轮指导"}',
+      ],
+    });
+    await h.planner.plan(h.request);
+    const snapshots = h.mainCalls.flat().filter(message => message.content.includes('【本回合运行时数据】'));
+    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots.every(message => message.role === 'system')).toBe(true);
+  });
+
+  it('主提示词尾预填充被删时出站仍以 user 预填充收尾（移植上游 e1876435）', async () => {
+    const h = harness_ACU({ mainReplies: ['{"action":"finalize","instruction":"本轮指导"}'] });
+    h.request.settings.agentPrompts.main = h.request.settings.agentPrompts.main.slice(0, -1);
+    await h.planner.plan(h.request);
+    expect(h.mainCalls.length).toBeGreaterThan(0);
+    const last = h.mainCalls[0][h.mainCalls[0].length - 1];
+    expect(last).toEqual({ role: 'user', content: USER_PREFILL_CONTENT_ACU });
+  });
+
   it('运行时证据带上未结算区间、子代理目录与资料模块目录', async () => {
     const h = harness_ACU({ mainReplies: ['{"action":"finalize","instruction":"本轮指导"}'] });
     await h.planner.plan(h.request);
