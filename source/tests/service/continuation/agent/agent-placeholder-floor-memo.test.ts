@@ -359,6 +359,19 @@ function naiveStoryText(chat: any[]): string {
 }
 
 describe('未结算窗口选择（移植上游 5f8afe3a）', () => {
+  it('千楼窗口只注入窗口内正文并注明省略（移植上游 5f8afe3a）', () => {
+    const chat = Array.from({ length: 1000 }, (_, index) => ({ mes: `正文标记-${index}-结束`, is_user: index % 2 === 0 }));
+    const context = { ...resolveContext(chat), settledThroughIndex: -1, storyWindowFloors: 2 };
+    const selection = resolveAgentUnsettledStoryWindow_ACU(context);
+    expect(selection.floors.map(floor => floor.index)).toEqual([997, 999]);
+    expect(selection.hiddenCount).toBe(498);
+    const text = renderAgentUnsettledHistory_ACU(context);
+    expect(text).toContain('正文标记-997-结束');
+    expect(text).toContain('正文标记-999-结束');
+    expect(text).not.toContain('正文标记-995-结束');
+    expect(text).toContain('498 个未结算 AI 楼层');
+  });
+
   it('只选窗口内未结算楼层，窗口外计数为 hiddenCount', () => {
     // 60 楼交替：AI 楼 30 个（奇数下标），settled=5 → 未结算 27 个；窗口 8 → 选 8 个。
     const chat = buildChat();

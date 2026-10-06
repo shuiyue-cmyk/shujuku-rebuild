@@ -739,7 +739,25 @@ export interface AgentCorrectMaterialsAction_ACU {
   userMessageId?: number;
 }
 
-export type AgentMainAction_ACU = AgentFinalizeAction_ACU | AgentDelegateAction_ACU | AgentBlockAction_ACU | AgentToolsAction_ACU | AgentOpenRoundAction_ACU | AgentCorrectMaterialsAction_ACU;
+/** 选择已有阶段和下一轮，或修改阶段完结状态。大纲内容由对应修改入口处理。 */
+export interface AgentAdjustProgressAction_ACU {
+  kind: 'adjust_progress';
+  thought: string;
+  reason: string;
+  stageId: string;
+  revision: number;
+  nextTurnId?: string;
+  completeStage?: boolean;
+}
+
+export interface AgentAdjustProgressReceipt_ACU {
+  status: 'committed' | 'rejected';
+  message: string;
+  stageId?: string;
+  completedTurns?: number;
+}
+
+export type AgentMainAction_ACU = AgentFinalizeAction_ACU | AgentDelegateAction_ACU | AgentBlockAction_ACU | AgentToolsAction_ACU | AgentOpenRoundAction_ACU | AgentCorrectMaterialsAction_ACU | AgentAdjustProgressAction_ACU;
 
 /** instruction-composer 的产出。instruction 非空；constraints 走容错登记。 */
 export interface AgentComposerOutput_ACU {
@@ -1026,6 +1044,8 @@ export interface ContinuationAgentTurnPlanRequest_ACU {
   isInternalRequestCurrent: (identity: ContinuationInternalAiRequestIdentity_ACU) => boolean;
   /** 大纲操作回调，由编排器在租约内执行。正文重试轮不注入，此时大纲派工被拒绝回灌。 */
   applyOutline?: (instruction: string) => Promise<AgentOutlineOpResult_ACU>;
+  /** 主会话受限进度校准；正文重试不注入，保存成功才返回 committed。 */
+  adjustProgress?: (action: AgentAdjustProgressAction_ACU) => Promise<AgentAdjustProgressReceipt_ACU>;
   signal?: AbortSignal | null;
 }
 

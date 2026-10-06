@@ -95,6 +95,15 @@ function completionSurvives_ACU(
 export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chatLength: number, chat?: readonly unknown[]): ContinuationTask_ACU {
   const effectiveLength = Array.isArray(chat) ? chat.length : chatLength;
   if (!Number.isInteger(effectiveLength) || effectiveLength < 0) return task;
+  // 阶段交接随新阶段一起保存选择；恢复时只采用仍有聊天依据的最新选择。
+  const selection = [...(task.progressSelections ?? [])].reverse().find(item => item.messageIndex < effectiveLength);
+  const selectedStageId = selection?.stageId ?? null;
+  // 各阶段校准基线：退到依据楼层之前时不再采用。
+  const adjustmentByStage = new Map<string, { completedTurns: number; timelineOffset: number }>();
+  for (const stage of task.stages) {
+    const adjustment = [...(stage.progressAdjustments ?? [])].reverse().find(item => item.messageIndex < effectiveLength);
+    if (adjustment) adjustmentByStage.set(stage.stageId, { completedTurns: adjustment.completedTurns, timelineOffset: adjustment.timelineOffset });
+  }
   const completions = task.timeline.filter(entry => entry.kind === 'turn_completed' && entry.stageId);
   // 逐楼身份只建一次：旧实现是「每条完成记录从 0 楼扫全聊天、每楼每条都重算整段 mes 指纹」，
   // 成本 O(完成数×楼层)。这里预计算一遍身份表（O(楼层)），指纹按需算、messageId 命中即短路。
@@ -113,20 +122,27 @@ export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chat
   const stages = task.stages.map((stage, index) => {
     const revision = stage.revisions.find(item => item.revision === stage.activeRevision) ?? null;
     const totalTurns = revision?.outline.totalTurns ?? 0;
-    const hasAnchor = hasAnchorByStage.get(stage.stageId) === true;
+    // 大纲重规划保护已完成前缀，校准基线在后续修订中仍然有效。
+    const adjustment = adjustmentByStage.get(stage.stageId);
+    const stageCompletions = task.timeline.slice(adjustment?.timelineOffset ?? 0)
+      .filter(entry => entry.kind === 'turn_completed' && entry.stageId === stage.stageId);
+    // 校准是进度基线，不是伪造的宿主完成记录；基线之后仍按真实楼层恢复。
+    const hasAnchor = hasAnchorByStage.get(stage.stageId) === true || adjustment !== undefined;
+    if (hasAnchor) hasAnchorByStage.set(stage.stageId, true);
     if (!hasAnchor) {
       if (stage.status !== 'completed' && stage.status !== 'abandoned' && stage.status !== 'failed' && firstOpenIndex < 0) firstOpenIndex = index;
       return stage;
     }
-    const recorded = completions.filter(entry => entry.stageId === stage.stageId).length;
+    const baseline = adjustment?.completedTurns ?? 0;
+    const recorded = baseline + stageCompletions.length;
     const used = new Set<number>();
-    let surviving = 0;
-    for (const entry of completions) {
-      if (entry.stageId !== stage.stageId) continue;
+    let surviving = baseline;
+    for (const entry of stageCompletions) {
       if (!completionSurvives_ACU(entry, chat, effectiveLength, identities, used)) break;
       surviving += 1;
     }
     surviving = Math.min(surviving, recorded, totalTurns);
+    survivingByStage.set(stage.stageId, surviving);
     const cursor = cursorFromCompletedTurns_ACU(revision, surviving);
     const fullyDone = totalTurns > 0 && surviving >= totalTurns;
     let nextStatus: ContinuationStage_ACU['status'] = stage.status;
@@ -141,7 +157,7 @@ export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chat
     return { ...stage, completedTurns: surviving, activeNodeIndex: cursor.nodeIndex, activeTurnIndex: cursor.turnIndex, status: nextStatus };
   });
 
-  if (firstOpenIndex >= 0) {
+  if (firstOpenIndex >= 0 && !selectedStageId) {
     for (let index = firstOpenIndex + 1; index < stages.length; index += 1) {
       const stage = stages[index];
       const hasAnchor = hasAnchorByStage.get(stage.stageId) === true;
@@ -154,7 +170,13 @@ export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chat
   }
 
   const firstOpen = stages.find(stage => stage.status !== 'completed' && stage.status !== 'abandoned' && stage.status !== 'failed') ?? null;
-  const activeStageId = firstOpen?.stageId ?? task.activeStageId;
+  const selectedIndex = stages.findIndex(stage => stage.stageId === selectedStageId);
+  const selected = stages[selectedIndex];
+  const nextSelected = selected?.status === 'completed'
+    ? stages.slice(selectedIndex + 1).find(stage => stage.status !== 'completed' && stage.status !== 'abandoned' && stage.status !== 'failed')
+    : null;
+  const activeStageId = selected && (selected.status === 'running' || selected.status === 'completed')
+    ? nextSelected?.stageId ?? selected.stageId : firstOpen?.stageId ?? task.activeStageId;
   if (activeStageId !== task.activeStageId) changed = true;
   if (!changed) return task;
   return { ...task, activeStageId, stages };

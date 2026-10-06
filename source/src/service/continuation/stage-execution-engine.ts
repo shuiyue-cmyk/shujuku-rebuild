@@ -1,5 +1,5 @@
 import { ContinuationValidationError_ACU, createContinuationError_ACU, type ContinuationEnvelope_ACU, type ContinuationInternalAiRequestIdentity_ACU, type ContinuationStage_ACU, type ContinuationTask_ACU, type StageNode_ACU, type StageRevision_ACU, type StageTurn_ACU, type TurnAttemptIdentity_ACU } from './model';
-import type { AgentModuleSnapshot_ACU, AgentOutlineOpResult_ACU, AgentWritableModule_ACU, ContinuationAgentTurnPlanResult_ACU } from './agent/agent-model';
+import type { AgentAdjustProgressAction_ACU, AgentAdjustProgressReceipt_ACU, AgentModuleSnapshot_ACU, AgentOutlineOpResult_ACU, AgentWritableModule_ACU, ContinuationAgentTurnPlanResult_ACU } from './agent/agent-model';
 import type { ContinuationMaterialRepairResult_ACU } from './agent/agent-workflow';
 import type { ContinuationAgentTurnPlanner_ACU } from './agent/agent-main-loop';
 
@@ -119,6 +119,7 @@ export class StageExecutionEngine_ACU {
     existingAttempt?: TurnAttemptIdentity_ACU,
     applyOutline?: (instruction: string) => Promise<AgentOutlineOpResult_ACU>,
     signal?: AbortSignal | null,
+    adjustProgress?: (action: AgentAdjustProgressAction_ACU) => Promise<AgentAdjustProgressReceipt_ACU>,
   ): Promise<ContinuationPreparedTurnInstruction_ACU> {
     const chatIdentity = this.dependencies.getChatIdentity();
     const initial = currentAgentContext_ACU(this.dependencies.readEnvelope());
@@ -153,6 +154,7 @@ export class StageExecutionEngine_ACU {
       },
       isInternalRequestCurrent: isCurrent,
       applyOutline: existingAttempt ? undefined : applyOutline,
+      adjustProgress: existingAttempt ? undefined : adjustProgress,
       signal,
     });
 

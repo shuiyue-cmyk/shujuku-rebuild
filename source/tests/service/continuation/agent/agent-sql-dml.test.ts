@@ -118,10 +118,10 @@ describe('SQL 写集运行时修订守卫', () => {
 
 describe('SQL 提示词与版本迁移', () => {
   it('默认提示词切换为受限 SQL 写集且版本推进到当前版本组（V33 信息边界纪律与 V34 SQL 对齐保持，V35 只收窄快照资料边界）', async () => {
-    const { buildDefaultContinuationSettings_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU } = await import('../../../../src/service/continuation/defaults');
+    const { buildDefaultContinuationSettings_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU } = await import('../../../../src/service/continuation/defaults');
     const { buildDefaultContinuationAgentPrompts_ACU, findAgentPromptSlot_ACU } = await import('../../../../src/service/continuation/agent/agent-defaults');
     const settings = buildDefaultContinuationSettings_ACU();
-    expect(settings.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU);
+    expect(settings.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU);
     const prompts = buildDefaultContinuationAgentPrompts_ACU();
     for (const role of ['arcArchitect', 'maintainer', 'webResearcher'] as const) {
       const contract = findAgentPromptSlot_ACU((prompts as any)[role], 'outputContract')?.content ?? '';

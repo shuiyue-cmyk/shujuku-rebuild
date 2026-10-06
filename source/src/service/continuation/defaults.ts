@@ -198,6 +198,8 @@ export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V35_ACU = 'spv4.3-continu
 export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V36_ACU = 'spv4.4-continuation-user-prefill-v36';
 /** V37（TT 移植上游 255dfd62）：V36 漏掉独立存放的 outlinePrompt，只对它补一次默认预填充尾段。 */
 export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU = 'spv4.5-continuation-outline-user-prefill-v37';
+/** V38（TT 移植上游 e35f758d）：主会话进度校准 adjust_progress，谱系迁移只动冻结 V36 默认全文逐字相同的段。 */
+export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU = 'spv5.0-continuation-progress-adjustment-v38';
 
 /**
  * 连续高压轮上限的默认值。8 轮约等于 8000 字全程没有喘息——这才是病态；
@@ -295,7 +297,7 @@ export function buildDefaultContinuationSettings_ACU(): ContinuationSettings_ACU
     agentApiPresets: buildDefaultContinuationAgentApiPresets_ACU(),
     outlinePrompt: buildDefaultContinuationOutlinePrompt_ACU(),
     agentPrompts: buildDefaultContinuationAgentPrompts_ACU(),
-    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU,
+    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU,
   };
 }
 

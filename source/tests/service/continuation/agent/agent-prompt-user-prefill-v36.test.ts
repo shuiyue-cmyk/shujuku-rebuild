@@ -17,6 +17,7 @@ import {
   buildDefaultContinuationAgentPrompts_ACU,
   buildV35ContinuationAgentPrompts_ACU,
   buildV36ContinuationAgentPrompts_ACU,
+  buildV37ContinuationAgentPrompts_ACU,
   currentDefaultMainAgentLayoutAnswer_ACU,
   hashAgentPromptContent_ACU,
 } from '../../../../src/service/continuation/agent/agent-defaults';
@@ -68,8 +69,8 @@ describe('V36 构建：尾段 user-prefill 切换 + 协议段并发追加', () =
     }
   });
 
-  it('buildDefaultContinuationAgentPrompts_ACU 即当前 V36 默认组', () => {
-    expect(buildDefaultContinuationAgentPrompts_ACU()).toEqual(buildV36ContinuationAgentPrompts_ACU());
+  it('buildDefaultContinuationAgentPrompts_ACU 即当前 V37 默认组', () => {
+    expect(buildDefaultContinuationAgentPrompts_ACU()).toEqual(buildV37ContinuationAgentPrompts_ACU());
   });
 });
 

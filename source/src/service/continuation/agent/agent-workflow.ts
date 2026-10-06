@@ -557,6 +557,9 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
   // 否则写出的 materialCompletion 会出现 rangeStart>rangeEnd 的非法区间。
   const rawSettlementStart = pendingRangeStarts.length ? Math.min(...pendingRangeStarts) : Math.max(0, snapshot.settledThroughIndex + 1);
   const settlementStartIndex = Math.min(input.settlementStartIndex ?? rawSettlementStart, settlementEndIndex);
+  // 本轮窗口外的缺口不受本轮清账与水位影响；完成区间与上轮连续时合并（移植上游 5f8afe3a）。
+  const outsidePending = snapshot.pendingFixes.filter(item => !pendingWithinSettlement_ACU(item, settlementStartIndex, settlementEndIndex));
+  const previousCompletion = input.snapshot.materialCompletion;
 
   const runSafe_ACU = async (call: ContinuationWorkflowAgentCall_ACU): Promise<ContinuationWorkflowAgentPayload_ACU> => {
     try {
@@ -606,7 +609,8 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
 
   const maintainerPending = snapshot.pendingFixes.some(item =>
     (MAINTAINER_MODULES_ACU as readonly string[]).includes(item.module)
-    && item.attempts < input.settings.workflow.autoFixMaxAttempts);
+    && item.attempts < input.settings.workflow.autoFixMaxAttempts
+    && pendingWithinSettlement_ACU(item, settlementStartIndex, settlementEndIndex));
   if (!input.hasUnsettledHistory && !maintainerPending) {
     steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'no_change', summary: '没有未结算正文，也没有待修复的结算模块' });
   } else {
@@ -614,7 +618,8 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       agentName: MAINTAINER_NAME_ACU,
       billing: 'pipeline',
       repair: false,
-      prompt: maintainerPrompt_ACU(input.opening.focus, snapshot, false),
+      prompt: maintainerPrompt_ACU(input.opening.focus, { ...snapshot,
+        pendingFixes: snapshot.pendingFixes.filter(item => pendingWithinSettlement_ACU(item, settlementStartIndex, settlementEndIndex)) }, false),
     });
     // 结算块内定向修正（移植上游 333cae77 TT 子集）：首派后仍有 pendingFixes 即立即
     // 定向重派，最多 reviseLimit 次。billing 保持 pipeline（不占用并行 repair 通道），
@@ -662,12 +667,13 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       const completed = new Set(Object.entries(modules)
         .filter(([, state]) => state === 'complete_changed' || state === 'complete_no_change')
         .map(([module]) => module));
-      const unresolvedModules = new Set(issues.map(item => item.module));
+      const unresolvedModules = new Set<string>(issues.map(item => item.module));
       snapshot = { ...snapshot, pendingFixes: snapshot.pendingFixes.filter(item => item.source !== 'invoke_failed'
         || !completed.has(item.module) || unresolvedModules.has(item.module)
         || !pendingWithinSettlement_ACU(item, settlementStartIndex, settlementEndIndex)) };
     }
-    const transactionPending = snapshot.pendingFixes.filter(item => writes.includes(item.module));
+    const transactionPending = snapshot.pendingFixes.filter(item => writes.includes(item.module)
+      && pendingWithinSettlement_ACU(item, settlementStartIndex, settlementEndIndex));
     if (transactionPending.length) {
       for (const fix of transactionPending) {
         const moduleAccepted = appliedModules.includes(fix.module) || acceptedKeysForModule_ACU(maintainer.acceptedKeys, fix.module).length > 0;
@@ -675,7 +681,10 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       }
       completion = appliedModules.length ? 'partial' : 'failed';
     } else {
-      snapshot = clearCompletedPending_ACU(snapshot, modules, settlementStartIndex, settlementEndIndex);
+      // 本轮新问题的模块不参与清账：刚记的缺口不能同一轮清掉。
+      const unresolvedModules = new Set<string>(issues.map(item => item.module));
+      snapshot = clearCompletedPending_ACU(snapshot, Object.fromEntries(Object.entries(modules)
+        .filter(([module]) => !unresolvedModules.has(module))) as typeof modules, settlementStartIndex, settlementEndIndex);
     }
     const now = Date.now();
     snapshot = {
@@ -691,8 +700,20 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     };
     if (completion === 'complete_changed' || completion === 'complete_no_change') {
       // 窗口外仍有未处理正文时不得推进连续结算水位：只结算窗口内已确认的部分。
-      if (input.canAdvanceSettlement !== false) {
+      // 最近窗口可以完成，但这不等于此前所有正文都已处理。
+      const outsideMaintainerPending = outsidePending.some(item =>
+        (MAINTAINER_MODULES_ACU as readonly string[]).includes(item.module));
+      if (input.canAdvanceSettlement !== false && !outsideMaintainerPending) {
         snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
+      }
+      if (previousCompletion && (previousCompletion.state === 'complete_changed' || previousCompletion.state === 'complete_no_change')
+        && previousCompletion.rangeStartIndex >= 0
+        && previousCompletion.rangeEndIndex >= previousCompletion.rangeStartIndex
+        && previousCompletion.rangeEndIndex + 1 >= settlementStartIndex
+        && previousCompletion.rangeStartIndex <= settlementEndIndex + 1) {
+        snapshot = { ...snapshot, materialCompletion: { ...snapshot.materialCompletion,
+          rangeStartIndex: Math.min(previousCompletion.rangeStartIndex, settlementStartIndex),
+          rangeEndIndex: Math.max(previousCompletion.rangeEndIndex, settlementEndIndex) } };
       }
     }
     if (!maintainer.ok || completion === 'failed') {
@@ -706,6 +727,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     }
         const repairPending = snapshot.pendingFixes.filter(item =>
         (MAINTAINER_MODULES_ACU as readonly string[]).includes(item.module)
+        && pendingWithinSettlement_ACU(item, settlementStartIndex, settlementEndIndex)
         && item.source !== 'truncated');
       if (!repairPending.length || repairAttempts >= maxRepairAttempts) break;
       repairAttempts += 1;

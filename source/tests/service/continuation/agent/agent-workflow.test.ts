@@ -47,7 +47,7 @@ function harness_ACU(patch: Partial<ContinuationWorkflowInput_ACU> = {}) {
             delta: delta_ACU({ hooks: [{ action: 'upsert', id: 'H1', summary: '断裂的封印', status: 'planted', importance: 'mid', plantedIndex: 2, plannedPayoff: '后文回收', reason: '' }] }),
           },
           writes: ['hooks'],
-          readRevisions: snapshot_ACU().revisions,
+          readRevisions: input.snapshot.revisions,
         } satisfies ContinuationWorkflowAgentPayload_ACU;
       }
       return {
@@ -100,6 +100,51 @@ describe('续写固定工作流（TT）', () => {
     const { run } = harness_ACU({ canAdvanceSettlement: false });
     const result = await run();
     expect(result.snapshot.settledThroughIndex).toBe(4);
+  });
+
+  it('窗口结算只记录实际窗口：水位不动、完成区间如实记（移植上游 5f8afe3a）', async () => {
+    const { run } = harness_ACU({
+      snapshot: snapshot_ACU({ settledThroughIndex: -1 }),
+      settledIndex: 999,
+      settlementStartIndex: 997,
+      canAdvanceSettlement: false,
+    });
+    const result = await run();
+    expect(result.outcome).toBe('deliver');
+    expect(result.snapshot.settledThroughIndex).toBe(-1);
+    expect(result.snapshot.materialCompletion).toMatchObject({
+      state: 'complete_changed', rangeStartIndex: 997, rangeEndIndex: 999,
+    });
+  });
+
+  it('连续窗口结算合并完成区间；空隙后重新起算（移植上游 5f8afe3a）', async () => {
+    const first = harness_ACU({
+      snapshot: snapshot_ACU({ settledThroughIndex: -1 }),
+      settledIndex: 999,
+      settlementStartIndex: 997,
+      canAdvanceSettlement: false,
+    });
+    const firstResult = await first.run();
+    expect(firstResult.snapshot.materialCompletion).toMatchObject({ rangeStartIndex: 997, rangeEndIndex: 999 });
+    const resumed = harness_ACU({
+      snapshot: firstResult.snapshot,
+      settledIndex: 1001,
+      settlementStartIndex: 1000,
+      canAdvanceSettlement: false,
+    });
+    const resumedResult = await resumed.run();
+    expect(resumedResult.snapshot.settledThroughIndex).toBe(-1);
+    expect(resumedResult.snapshot.materialCompletion).toMatchObject({ rangeStartIndex: 997, rangeEndIndex: 1001 });
+    const afterGap = harness_ACU({
+      snapshot: resumedResult.snapshot,
+      settledIndex: 1009,
+      settlementStartIndex: 1007,
+      canAdvanceSettlement: false,
+    });
+    const afterGapResult = await afterGap.run();
+    expect(afterGapResult.outcome).toBe('deliver');
+    expect(afterGapResult.snapshot.settledThroughIndex).toBe(-1);
+    expect(afterGapResult.snapshot.materialCompletion).toMatchObject({ rangeStartIndex: 1007, rangeEndIndex: 1009 });
   });
 
   it('无变化交付同样清除同范围旧 invoke_failed（移植上游 365dd863）', async () => {    const stale = {

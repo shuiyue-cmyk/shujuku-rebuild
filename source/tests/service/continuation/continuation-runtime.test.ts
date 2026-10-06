@@ -220,7 +220,7 @@ describe('全局续写设置副本', () => {
 });
 
 describe('持久版本≠当前版本即重校验（TT 移植上游 ce867f86 continuation-runtime else 分支）', () => {
-  it('首楼已存 V35 标记信封：initialize 走校验链推进到 V37 并原子落盘', async () => {
+  it('首楼已存 V35 标记信封：initialize 走校验链推进到 V38 并原子落盘', async () => {
     const h = await createHarness();
     const { buildDefaultContinuationSettings_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V35_ACU } = await import('../../../src/service/continuation/defaults');
     const { buildV35ContinuationAgentPrompts_ACU } = await import('../../../src/service/continuation/agent/agent-defaults');
@@ -241,7 +241,7 @@ describe('持久版本≠当前版本即重校验（TT 移植上游 ce867f86 con
     await runtime.initialize();
 
     const persisted = h.chat[0]._qrf_continuation;
-    expect(persisted.settings.promptForceDefaultVersion).toBe('spv4.5-continuation-outline-user-prefill-v37');
+    expect(persisted.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
     expect(persisted.settings.agentPrompts.main[persisted.settings.agentPrompts.main.length - 1]).toMatchObject({
       role: 'user',
       content: USER_PREFILL_CONTENT_ACU,

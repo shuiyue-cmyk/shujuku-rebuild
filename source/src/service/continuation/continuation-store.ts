@@ -1,9 +1,9 @@
 import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
 import { getActiveChatStorageIdentity_ACU } from '../../data/storage/chat-history';
 import { USER_PREFILL_CONTENT_ACU } from '../../shared/user-prefill.js';
-import { buildDefaultContinuationSettings_ACU, buildDefaultContinuationOutlinePrompt_ACU, buildDefaultContinuationAgentApiPresets_ACU, buildDefaultContinuationWebResearchSettings_ACU, buildDefaultContinuationWorkflowSettings_ACU, CONTINUATION_FINAL_REVIEW_MAX_EXTRA_READS_DEFAULT_ACU, CONTINUATION_FINAL_REVIEW_READ_TOKEN_BUDGET_DEFAULT_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_DEFAULT_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU, CONTINUATION_MIN_GENERATION_TOKENS_DEFAULT_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V17_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V18_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V19_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V21_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V24_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V25_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V26_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V29_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V30_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V31_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V32_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V33_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V34_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V35_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V36_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU, V23_DEFAULT_OUTLINE_ACK_SEGMENT_ACU, V23_DEFAULT_OUTLINE_METHOD_ACK_SEGMENT_ACU, V23_DEFAULT_OUTLINE_PACING_SEGMENT_ACU, V23_DEFAULT_OUTLINE_SYSTEM_SEGMENT_ACU, V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU, V26_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU, V27_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU, V31_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU } from './defaults';
+import { buildDefaultContinuationSettings_ACU, buildDefaultContinuationOutlinePrompt_ACU, buildDefaultContinuationAgentApiPresets_ACU, buildDefaultContinuationWebResearchSettings_ACU, buildDefaultContinuationWorkflowSettings_ACU, CONTINUATION_FINAL_REVIEW_MAX_EXTRA_READS_DEFAULT_ACU, CONTINUATION_FINAL_REVIEW_READ_TOKEN_BUDGET_DEFAULT_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_DEFAULT_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU, CONTINUATION_MIN_GENERATION_TOKENS_DEFAULT_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V17_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V18_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V19_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V21_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V24_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V25_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V26_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V29_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V30_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V31_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V32_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V33_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V34_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V35_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V36_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU, V23_DEFAULT_OUTLINE_ACK_SEGMENT_ACU, V23_DEFAULT_OUTLINE_METHOD_ACK_SEGMENT_ACU, V23_DEFAULT_OUTLINE_PACING_SEGMENT_ACU, V23_DEFAULT_OUTLINE_SYSTEM_SEGMENT_ACU, V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU, V26_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU, V27_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU, V31_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU } from './defaults';
 import { reconcileContinuationEnvelopeCursor_ACU } from './stage-cursor';
-import { AGENT_FINAL_INSTRUCTION_TEMPLATE_ACU, AGENT_HISTORY_READ_RULE_V17_ACU, AGENT_HISTORY_READ_RULE_V18_ACU, AGENT_PROMPT_DEFAULT_LINEAGE_ACU, CONTINUATION_CURRENT_COMPOSER_RULES_ACU, CONTINUATION_CURRENT_FINAL_REVIEW_RULES_ACU, CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU, CONTINUATION_V33_DEFAULT_LINEAGE_ACU, CONTINUATION_V34_DEFAULT_LINEAGE_ACU, CONTINUATION_V35_DEFAULT_LINEAGE_ACU, buildV33ContinuationAgentPrompts_ACU, buildV34ContinuationAgentPrompts_ACU, buildV35ContinuationAgentPrompts_ACU, buildV36ContinuationAgentPrompts_ACU, buildDefaultAgentArcArchitectPrompt_ACU, buildDefaultContinuationAgentPrompts_ACU, currentDefaultMainAgentHistoryGuide_ACU, currentDefaultMainAgentLayoutAnswer_ACU, findAgentPromptSlot_ACU, hashAgentPromptContent_ACU, isV18DefaultMainAgentNonRootSystemSegment_ACU, isV19DefaultMainAgentHistoryGuide_ACU, isV19DefaultMainAgentLayoutAnswer_ACU, isV19DefaultMainAgentRuntimeSegment_ACU, migrateV29DefaultMainAgentContentToV30_ACU, V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU, V20_DEFAULT_ARC_ARCHITECT_EPISTEMOLOGY_ACU, V20_DEFAULT_ARC_ARCHITECT_PURPOSE_ACU, V20_DEFAULT_ARC_ARCHITECT_SYSTEM_ACU, V20_DEFAULT_ARC_ARCHITECT_TASK_ACU, V23_MAIN_AGENT_PACING_RULE_ACU, V24_MAIN_AGENT_PACING_RULE_ACU, V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU, V26_FINAL_REVIEWER_CHRONOLOGY_RULES_ACU, V26_MAIN_AGENT_CHRONOLOGY_RULE_ACU, V26_MAINTAINER_CHRONOLOGY_CONTRACT_ACU, type AgentPromptSlotKey_ACU } from './agent/agent-defaults';
+import { AGENT_FINAL_INSTRUCTION_TEMPLATE_ACU, AGENT_HISTORY_READ_RULE_V17_ACU, AGENT_HISTORY_READ_RULE_V18_ACU, AGENT_PROMPT_DEFAULT_LINEAGE_ACU, CONTINUATION_CURRENT_COMPOSER_RULES_ACU, CONTINUATION_CURRENT_FINAL_REVIEW_RULES_ACU, CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU, CONTINUATION_V33_DEFAULT_LINEAGE_ACU, CONTINUATION_V34_DEFAULT_LINEAGE_ACU, CONTINUATION_V35_DEFAULT_LINEAGE_ACU, CONTINUATION_V36_DEFAULT_LINEAGE_ACU, buildV33ContinuationAgentPrompts_ACU, buildV34ContinuationAgentPrompts_ACU, buildV35ContinuationAgentPrompts_ACU, buildV36ContinuationAgentPrompts_ACU, buildV37ContinuationAgentPrompts_ACU, buildDefaultAgentArcArchitectPrompt_ACU, buildDefaultContinuationAgentPrompts_ACU, currentDefaultMainAgentHistoryGuide_ACU, currentDefaultMainAgentLayoutAnswer_ACU, findAgentPromptSlot_ACU, hashAgentPromptContent_ACU, isV18DefaultMainAgentNonRootSystemSegment_ACU, isV19DefaultMainAgentHistoryGuide_ACU, isV19DefaultMainAgentLayoutAnswer_ACU, isV19DefaultMainAgentRuntimeSegment_ACU, migrateV29DefaultMainAgentContentToV30_ACU, V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU, V20_DEFAULT_ARC_ARCHITECT_EPISTEMOLOGY_ACU, V20_DEFAULT_ARC_ARCHITECT_PURPOSE_ACU, V20_DEFAULT_ARC_ARCHITECT_SYSTEM_ACU, V20_DEFAULT_ARC_ARCHITECT_TASK_ACU, V23_MAIN_AGENT_PACING_RULE_ACU, V24_MAIN_AGENT_PACING_RULE_ACU, V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU, V26_FINAL_REVIEWER_CHRONOLOGY_RULES_ACU, V26_MAIN_AGENT_CHRONOLOGY_RULE_ACU, V26_MAINTAINER_CHRONOLOGY_CONTRACT_ACU, type AgentPromptSlotKey_ACU } from './agent/agent-defaults';
 import {
   AGENT_HISTORY_TOKEN_BUDGET_DEFAULT_ACU,
   AGENT_READ_FALLBACK_TOKENS_DEFAULT_ACU,
@@ -734,6 +734,33 @@ function migrateV35AgentPromptsToV36_ACU(raw: unknown): unknown {
 }
 
 /**
+ * V36 → V37-agent（TT 移植上游 e35f758d 进度校准批）：主会话动作枚举、我能做的、
+ * 文本协议与规则段追加按谱系同步。只命中与冻结的 V36 默认全文逐字相同的段
+ * （角色 + 长度 + 哈希 + 原文四重校验）；用户改写段原样保留。再跑一遍不再命中，幂等。
+ */
+function migrateV36AgentPromptsToV37_ACU(raw: unknown): unknown {
+  if (!isRecord_ACU(raw)) return raw;
+  const previous = buildV36ContinuationAgentPrompts_ACU();
+  const current = buildV37ContinuationAgentPrompts_ACU();
+  let changed = false;
+  const next = { ...raw };
+  for (const role of Object.keys(CONTINUATION_V36_DEFAULT_LINEAGE_ACU) as (keyof typeof previous)[]) {
+    if (!Array.isArray(raw[role])) continue;
+    next[role] = raw[role].map(segment => {
+      if (!isRecord_ACU(segment) || typeof segment.content !== 'string') return segment;
+      const content = segment.content;
+      const entry = CONTINUATION_V36_DEFAULT_LINEAGE_ACU[role].find(item => item.role === segment.role
+        && item.length === content.length && item.hash === hashAgentPromptContent_ACU(content)
+        && content === previous[role][item.index].content);
+      if (!entry) return segment;
+      changed = true;
+      return { ...segment, content: current[role][entry.index].content };
+    });
+  }
+  return changed ? next : raw;
+}
+
+/**
  * V36 → V37（TT 移植上游 255dfd62）：outlinePrompt 独立存放，V36 漏掉了它。
  * 仅当尾段恰为冻结的 V36 默认上下文注入段（V31 全文逐字）时追加 user 预填充尾段；
  * 用户定制收尾不强刷。已带预填充尾段的组再跑不命中，幂等。
@@ -1022,7 +1049,8 @@ function validateSettings_ACU(raw: unknown): ContinuationSettings_ACU {
     && promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V34_ACU
     && promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V35_ACU
     && promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V36_ACU
-    && promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU) {
+    && promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU
+    && promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU) {
     outlinePrompt = buildDefaultContinuationOutlinePrompt_ACU();
     agentPrompts = buildDefaultContinuationAgentPrompts_ACU();
     promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU;
@@ -1088,6 +1116,10 @@ function validateSettings_ACU(raw: unknown): ContinuationSettings_ACU {
   if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V36_ACU) {
     outlinePrompt = migrateV36OutlinePromptToV37_ACU(outlinePrompt);
     promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU;
+  }
+  if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU) {
+    agentPrompts = migrateV36AgentPromptsToV37_ACU(agentPrompts);
+    promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU;
   }
   
   return {
@@ -1188,7 +1220,7 @@ function validatePendingHostTurn_ACU(raw: unknown): ContinuationEnvelope_ACU['ac
 function validateTask_ACU(raw: unknown, settings: ContinuationSettings_ACU): ContinuationEnvelope_ACU['activeTask'] {
   if (!isRecord_ACU(raw)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', 'activeTask 必须是对象或 null');
   const requiredKeys = ['taskId', 'originInstruction', 'status', 'createdAt', 'updatedAt', 'runStartedAt', 'deadlineAt', 'runStageCount', 'activeStageId', 'stages', 'timeline', 'stopReason', 'lastError'];
-  const allowedKeys = [...requiredKeys, 'pendingHostTurn', 'stageBudgetBaseCount'];
+  const allowedKeys = [...requiredKeys, 'pendingHostTurn', 'stageBudgetBaseCount', 'progressSelections'];
   for (const key of requiredKeys) if (!Object.prototype.hasOwnProperty.call(raw, key)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', `缺少持久化字段：activeTask.${key}`, { path: `activeTask.${key}` });
   for (const key of Object.keys(raw)) if (!allowedKeys.includes(key)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', `存在未知持久化字段：activeTask.${key}`, { path: `activeTask.${key}` });
   const runStageCount = requireInteger_ACU(raw.runStageCount, 'activeTask.runStageCount', 0);
@@ -1207,7 +1239,7 @@ function validateTask_ACU(raw: unknown, settings: ContinuationSettings_ACU): Con
       if (Object.prototype.hasOwnProperty.call(stage, legacyKey)) delete stage[legacyKey];
     }
     const stageKeys = ['stageId', 'stageNumber', 'status', 'activeRevision', 'revisions', 'activeNodeIndex', 'activeTurnIndex', 'completedTurns'];
-    requireKeys_ACU(stage, stageKeys, path);
+    requireKeys_ACU(stage, stageKeys, path, ['progressAdjustments']);
     const stageId = requireString_ACU(stage.stageId, `${path}.stageId`);
     if (stageIds.has(stageId)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', `阶段 ID 重复：${stageId}`);
     stageIds.add(stageId);
@@ -1225,7 +1257,30 @@ function validateTask_ACU(raw: unknown, settings: ContinuationSettings_ACU): Con
     });
     const activeRevision = requireInteger_ACU(stage.activeRevision, `${path}.activeRevision`, 1);
     if (!revisionNumbers.has(activeRevision)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', `activeRevision 未指向现有 revision：${path}`);
-    return { stageId, stageNumber: requireInteger_ACU(stage.stageNumber, `${path}.stageNumber`, 1), status: stageStatus, activeRevision, revisions, activeNodeIndex: requireInteger_ACU(stage.activeNodeIndex, `${path}.activeNodeIndex`, 0), activeTurnIndex: requireInteger_ACU(stage.activeTurnIndex, `${path}.activeTurnIndex`, 0), completedTurns: requireInteger_ACU(stage.completedTurns, `${path}.completedTurns`, 0) };
+    // 进度校准基线：引用必须指向现有 revision，总轮不能超纲，时间线偏移不能超出现有长度。
+    const timelineLength = Array.isArray(raw.timeline) ? raw.timeline.length : 0;
+    const progressAdjustments = (() => {
+      if (!('progressAdjustments' in stage)) return {};
+      if (!Array.isArray(stage.progressAdjustments)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', `进度校准必须是数组：${path}.progressAdjustments`);
+      const records = (stage.progressAdjustments as unknown[]).map((item, adjustmentIndex) => {
+        const itemPath = `${path}.progressAdjustments[${adjustmentIndex}]`;
+        if (!isRecord_ACU(item)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', `进度校准必须是对象：${itemPath}`);
+        requireKeys_ACU(item, ['revision', 'completedTurns', 'timelineOffset', 'messageIndex', 'reason'], itemPath);
+        const revision = requireInteger_ACU((item as Record<string, unknown>).revision, `${itemPath}.revision`, 1);
+        const outline = revisions.find(entry => entry.revision === revision)?.outline;
+        const completedTurns = requireInteger_ACU((item as Record<string, unknown>).completedTurns, `${itemPath}.completedTurns`, 0);
+        const timelineOffset = requireInteger_ACU((item as Record<string, unknown>).timelineOffset, `${itemPath}.timelineOffset`, 0);
+        if (!outline || completedTurns > outline.totalTurns || timelineOffset > timelineLength) {
+          fail_ACU('CONTINUATION_ENVELOPE_INVALID', `进度校准引用或范围无效：${itemPath}`);
+        }
+        return { revision, completedTurns, timelineOffset,
+          messageIndex: requireInteger_ACU((item as Record<string, unknown>).messageIndex, `${itemPath}.messageIndex`, 0),
+          reason: requireString_ACU((item as Record<string, unknown>).reason, `${itemPath}.reason`),
+        };
+      });
+      return { progressAdjustments: records };
+    })();
+    return { stageId, stageNumber: requireInteger_ACU(stage.stageNumber, `${path}.stageNumber`, 1), status: stageStatus, activeRevision, revisions, activeNodeIndex: requireInteger_ACU(stage.activeNodeIndex, `${path}.activeNodeIndex`, 0), activeTurnIndex: requireInteger_ACU(stage.activeTurnIndex, `${path}.activeTurnIndex`, 0), completedTurns: requireInteger_ACU(stage.completedTurns, `${path}.completedTurns`, 0), ...progressAdjustments };
   });
   const activeStageId = raw.activeStageId === null ? null : requireString_ACU(raw.activeStageId, 'activeTask.activeStageId');
   if (activeStageId !== null && !stageIds.has(activeStageId)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', 'activeStageId 未指向现有阶段');
@@ -1244,7 +1299,23 @@ function validateTask_ACU(raw: unknown, settings: ContinuationSettings_ACU): Con
     if ('details' in raw.lastError) { if (!isRecord_ACU(raw.lastError.details)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', 'lastError.details 必须是对象'); error.details = { ...raw.lastError.details }; }
     return error;
   })();
-  return { taskId: requireString_ACU(raw.taskId, 'activeTask.taskId'), originInstruction: requireString_ACU(raw.originInstruction, 'activeTask.originInstruction'), status, createdAt: requireInteger_ACU(raw.createdAt, 'activeTask.createdAt', 0), updatedAt: requireInteger_ACU(raw.updatedAt, 'activeTask.updatedAt', 0), runStartedAt: raw.runStartedAt === null ? null : requireInteger_ACU(raw.runStartedAt, 'activeTask.runStartedAt', 0), deadlineAt: raw.deadlineAt === null ? null : requireInteger_ACU(raw.deadlineAt, 'activeTask.deadlineAt', 0), runStageCount, stageBudgetBaseCount, activeStageId, stages, timeline: validateTimeline_ACU(raw.timeline), stopReason, lastError: lastError as any, ...('pendingHostTurn' in raw ? { pendingHostTurn: validatePendingHostTurn_ACU(raw.pendingHostTurn) } : {}) } as ContinuationEnvelope_ACU['activeTask'];
+  const progressSelections = (() => {
+    if (!('progressSelections' in raw)) return {};
+    if (!Array.isArray(raw.progressSelections)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', '阶段选择必须是数组');
+    return { progressSelections: (raw.progressSelections as unknown[]).map((item, index) => {
+      const path = `activeTask.progressSelections[${index}]`;
+      if (!isRecord_ACU(item)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', `阶段选择必须是对象：${path}`);
+      requireKeys_ACU(item, ['stageId', 'messageIndex', 'timelineOffset'], path);
+      const record = item as Record<string, unknown>;
+      const stageId = requireString_ACU(record.stageId, `${path}.stageId`);
+      const timelineOffset = requireInteger_ACU(record.timelineOffset, `${path}.timelineOffset`, 0);
+      if (!stageIds.has(stageId) || !Array.isArray(raw.timeline) || timelineOffset > raw.timeline.length) {
+        fail_ACU('CONTINUATION_ENVELOPE_INVALID', `阶段选择引用或范围无效：${path}`);
+      }
+      return { stageId, timelineOffset, messageIndex: requireInteger_ACU(record.messageIndex, `${path}.messageIndex`, 0) };
+    }) };
+  })();
+  return { taskId: requireString_ACU(raw.taskId, 'activeTask.taskId'), originInstruction: requireString_ACU(raw.originInstruction, 'activeTask.originInstruction'), status, createdAt: requireInteger_ACU(raw.createdAt, 'activeTask.createdAt', 0), updatedAt: requireInteger_ACU(raw.updatedAt, 'activeTask.updatedAt', 0), runStartedAt: raw.runStartedAt === null ? null : requireInteger_ACU(raw.runStartedAt, 'activeTask.runStartedAt', 0), deadlineAt: raw.deadlineAt === null ? null : requireInteger_ACU(raw.deadlineAt, 'activeTask.deadlineAt', 0), runStageCount, stageBudgetBaseCount, activeStageId, stages, timeline: validateTimeline_ACU(raw.timeline), stopReason, lastError: lastError as any, ...progressSelections, ...('pendingHostTurn' in raw ? { pendingHostTurn: validatePendingHostTurn_ACU(raw.pendingHostTurn) } : {}) } as ContinuationEnvelope_ACU['activeTask'];
 }
 
 /** 仅供测试：清空信封深校验记忆化（测试隔离 hygiene，非计数）。 */

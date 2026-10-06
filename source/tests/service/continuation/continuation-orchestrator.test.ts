@@ -1144,4 +1144,26 @@ describe('ContinuationOrchestrator_ACU', () => {
     await orchestrator.sendAgentMessage({ text: '从这里重新规划' });
     expect(store.readPersisted()!.activeTask).toMatchObject({ originInstruction: '从这里重新规划' });
   });
+
+  it('主会话经生产回调校准进度：坏版本号拒绝，好定位提交并记基线（移植上游 e35f758d）', async () => {
+    const { orchestrator, store, executionEngine } = createOrchestrator();
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    await orchestrator.continueTask();
+    executionEngine.prepareCurrentTurnInstruction.mockImplementationOnce(async (
+      _isLeaseCurrent: unknown, _retryAttempt: unknown, _applyOutline: unknown, _signal: unknown,
+      adjustProgress: (action: Record<string, unknown>) => Promise<{ status: string }>,
+    ) => {
+      const first = store.readPersisted()!.activeTask!.stages[0];
+      const action = { kind: 'adjust_progress' as const, thought: '', reason: '用户自行演绎后的剧情定位', stageId: first.stageId, revision: first.activeRevision };
+      expect((await adjustProgress({ ...action, revision: 999, nextTurnId: 'turn-4' })).status).toBe('rejected');
+      const committed = await adjustProgress({ ...action, nextTurnId: 'turn-4' });
+      expect(committed.status).toBe('committed');
+      expect(store.readPersisted()!.activeTask!.stages[0]).toMatchObject({ completedTurns: 3, activeTurnIndex: 3 });
+      return { identity: {}, instruction: { instruction: '按校准接续', attempts: 1 } };
+    });
+    await orchestrator.continueTask();
+    const stage = store.readPersisted()!.activeTask!.stages[0];
+    expect(stage.progressAdjustments).toHaveLength(1);
+    expect(store.readPersisted()!.activeTask!.progressSelections).toHaveLength(1);
+  });
 });

@@ -664,6 +664,26 @@ describe('主 Agent 提示词装配', () => {
 });
 
 describe('主 Agent 循环收敛', () => {
+  it('open_round 派工前先落盘启动锚点：重载后不把已启动当未执行（移植上游 5f8afe3a）', async () => {
+    const h = harness_ACU({
+      mainReplies: ['{"action":"open_round","focus":"接住守门人的回避"}'],
+      subReplies: [
+        JSON.stringify({
+          summary: '结算了黑色晶屑',
+          delta: { hooks: [{ action: 'upsert', id: 'H1', summary: '守门人手中的黑色晶屑', status: 'planted', importance: 'high', plantedIndex: 3 }] },
+        }),
+        JSON.stringify({ summary: '主线建议', recommendation: '安静地问一句', mustPreserve: [], risks: [] }),
+        JSON.stringify({ summary: '本轮无节拍操作', recommendation: 'no_change', mustPreserve: [], risks: [] }),
+        JSON.stringify({ instruction: '从守门人的回避写起', summary: '试探' }),
+      ],
+    });
+    const result = await h.planner.plan(h.request);
+    expect(result.instruction).toBe('从守门人的回避写起');
+    const anchors = h.conversation().messages.filter(message => message.digest === '固定工作流启动');
+    expect(anchors).toHaveLength(1);
+    expect(anchors[0].text).toContain('started');
+  });
+
   it('finalize 直接交付指导并回报尝试次数', async () => {
     const h = harness_ACU({ mainReplies: ['{"action":"finalize","instruction":"从守门人的回避写起","summary":"试探"}'] });
     const result = await h.planner.plan(h.request);
@@ -681,6 +701,31 @@ describe('主 Agent 循环收敛', () => {
     const result = await h.planner.plan(h.request);
     expect(result.instruction).toBe('纠正后交付');
     const receipts = h.conversation().messages.filter(message => message.kind === 'tool' && message.digest === '主会话纠正回执');
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].text).toContain('rejected');
+  });
+
+  it('adjust_progress 校准成功后循环继续：回执进会话，随后 finalize 照常交付（移植上游 e35f758d）', async () => {
+    const h = harness_ACU({ mainReplies: [
+      '{"action":"adjust_progress","thought":"对准实际剧情","reason":"正文已演到第二阶段","stageId":"stage-1","revision":1,"nextTurnId":"turn-3"}',
+      '{"action":"finalize","instruction":"校准后交付","summary":"要点"}',
+    ] });
+    h.request.adjustProgress = async action => ({ status: 'committed', message: '已切换到 turn-3', stageId: action.stageId, completedTurns: 2 });
+    const result = await h.planner.plan(h.request);
+    expect(result.instruction).toBe('校准后交付');
+    const receipts = h.conversation().messages.filter(message => message.kind === 'tool' && message.digest === '进度校准回执');
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].text).toContain('committed');
+  });
+
+  it('adjust_progress 无执行器时明确拒绝，不掉进派工通道（移植上游 e35f758d）', async () => {
+    const h = harness_ACU({ mainReplies: [
+      '{"action":"adjust_progress","thought":"对准","reason":"r","stageId":"stage-1","revision":1,"completeStage":true}',
+      '{"action":"finalize","instruction":"兜底交付","summary":"要点"}',
+    ] });
+    const result = await h.planner.plan(h.request);
+    expect(result.instruction).toBe('兜底交付');
+    const receipts = h.conversation().messages.filter(message => message.kind === 'tool' && message.digest === '进度校准回执');
     expect(receipts).toHaveLength(1);
     expect(receipts[0].text).toContain('rejected');
   });
@@ -1072,24 +1117,26 @@ describe('open_round 固定结构工作流', () => {
     expect(h.subCalls).toHaveLength(4);
   });
 
-  it('主 Agent 直接派工总纲、大纲和指令编排内部角色时全部拒绝，且不消耗子代理调用', async () => {
+  it('主 Agent 依次委派总纲与阶段大纲修改，写作指令编排仍由工作流调用（移植上游 e35f758d）', async () => {
     const h = harness_ACU({
+      snapshot: buildEmptyAgentModuleSnapshot_ACU(),
       mainReplies: [
-        '{"action":"delegate","delegations":[{"agentName":"arc-architect","prompt":"立总纲"},{"agentName":"outline-architect","prompt":"改大纲"},{"agentName":"instruction-composer","prompt":"写指令"}]}',
+        '{"action":"delegate","delegations":[{"agentName":"arc-architect","prompt":"按实际剧情建立总纲"}]}',
+        '{"action":"delegate","delegations":[{"agentName":"outline-architect","prompt":"按新总纲改写阶段大纲"}]}',
+        '{"action":"delegate","delegations":[{"agentName":"instruction-composer","prompt":"写指令"}]}',
         '{"action":"finalize","instruction":"保持现有大纲推进"}',
       ],
+      subReplies: [arcReply_ACU],
+      applyOutline: () => ({ op: 'revise', requiresReview: false, stopped: null, summary: '已按实际剧情改写阶段大纲' }),
     });
 
     const result = await h.planner.plan(h.request);
-    const feedback = h.mainCalls[1].map(message => message.content).join('\n');
-
     expect(result.instruction).toBe('保持现有大纲推进');
-    expect(h.subCalls).toHaveLength(0);
-    expect(h.outlineCalls).toHaveLength(0);
-    expect(feedback).toContain('arc-architect 已由固定工作流内部调度');
-    expect(feedback).toContain('outline-architect 已由固定工作流内部调度');
-    expect(feedback).toContain('该角色由固定工作流调用，主 Agent 不能 delegate');
-    expect(feedback).toContain('本次未消耗派工额度');
+    expect(h.subCalls).toHaveLength(1);
+    expect(h.outlineCalls).toEqual(['按新总纲改写阶段大纲']);
+    expect(h.written.some(write => write.snapshot.storyArc.some(entry => entry.id === 'ARC-STORY'))).toBe(true);
+    const feedback = h.mainCalls[3].map(message => message.content).join('\n');
+    expect(feedback).toContain('该角色由固定工作流调用');
   });
 });
 
@@ -1133,6 +1180,8 @@ describe('派工与写集落盘', () => {
     expect(h.written[0].snapshot.infoGap).toHaveLength(1);
     expect(h.written[0].snapshot.revisions).toMatchObject({ hooks: 1, infoGap: 1 });
     expect(h.written[0].snapshot.settledThroughIndex).toBe(3);
+    // B6（移植上游 5f8afe3a）：兼容派工只记录实际结算窗口，不丢完成区间。
+    expect(h.written[0].snapshot.materialCompletion).toMatchObject({ state: 'complete_changed', rangeStartIndex: 0, rangeEndIndex: 3 });
 
     const feedback = h.mainCalls[1][findIndex_ACU(h.mainCalls[1], '结果 1')].content;
     expect(feedback).toContain('hook-cognition-maintainer｜成功');
@@ -1664,5 +1713,20 @@ describe('未结算区间文案', () => {
     expect(renderUnsettledRangeText_ACU(chat, 0)).toBe(
       '未结算楼层区间：1 到 3（共 3 楼）。输出 open_round 后，固定工作流会自动派 hook-cognition-maintainer 结算这些楼层。不要 delegate 结算、策划或审查角色。这些楼层的正文默认没有注入，需要核对时 read $HISTORY_UNSETTLED。',
     );
+  });
+
+  it('窗口外另有未结算时注明不逐楼结算（移植上游 5f8afe3a）', () => {
+    const text = renderUnsettledRangeText_ACU(chat, 0, { floors: [{ index: 1 }], hiddenCount: 2, startIndex: 1 });
+    expect(text).toContain('2 个未结算 AI 楼层在正文可读窗口外');
+    expect(text).toContain('结算本次窗口内正文');
+    expect(text).toContain('未结算楼层区间：1 到 3');
+  });
+
+  it('千楼窗口只报窗口内区间并注明不推水位（移植上游 5f8afe3a）', () => {
+    const big = Array.from({ length: 1000 }, (_, index) => ({ mes: `正文标记-${index}-结束`, is_user: index % 2 === 0 }));
+    const text = renderUnsettledRangeText_ACU(big, -1, { floors: [{ index: 997 }, { index: 999 }], hiddenCount: 498, startIndex: 997 });
+    expect(text).toContain('未结算楼层区间：997 到 999');
+    expect(text).toContain('不推进连续结算水位');
+    expect(text).toContain('窗口内 2 个 AI 正文楼层');
   });
 });

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { renderAgentModuleCatalog_ACU, renderAgentReadCatalog_ACU, renderAgentSubagentCatalog_ACU, findAgentSubagentDefinition_ACU } from '../../../../src/service/continuation/agent/agent-catalog';
 import { renderAgentTableByAliases_ACU, renderAgentTableByName_ACU, renderAgentTableCatalog_ACU } from '../../../../src/service/continuation/agent/agent-tables';
 import {
+  renderAgentOutlineState_ACU,
   renderAgentReadMaterials_ACU,
   renderAgentStoryCatalog_ACU,
   renderAgentStoryOverview_ACU,
@@ -63,8 +64,9 @@ describe('Agent 目录渲染', () => {
     expect(catalog).not.toContain('continuity-reviewer');
     expect(catalog).toContain('无（只返回建议）');
     expect(catalog).not.toContain('你只输出一个 JSON 对象');
-    expect(catalog).not.toContain('arc-architect');
-    expect(catalog).not.toContain('outline-architect');
+    // 总纲可由主会话按剧情维护（e35f758d 开口）；大纲走单独委派条目。
+    expect(catalog).toContain('arc-architect');
+    expect(catalog).toContain('单独 delegate');
     expect(catalog).not.toContain('instruction-composer');
     expect(catalog).not.toContain('requirements-maintainer');
   });
@@ -142,6 +144,22 @@ describe('Agent 读写集解析', () => {
     expect(renderAgentUnsettledHistory_ACU({ ...context_ACU(), settledThroughIndex: 2 })).toContain('没有尚未结算的真实历史');
   });
 
+  it('大纲窗口标题带阶段 ID 与修订号，状态行附阶段进度目录（移植上游 e35f758d）', () => {
+    const context = context_ACU();
+    (context.execution as any).stage = { ...(context.execution as any).stage, stageId: 'stage-2', activeRevision: 3, status: 'running', completedTurns: 2 };
+    (context.execution as any).task = { ...(context.execution as any).task, stages: [
+      { stageNumber: 1, stageId: 'stage-1', activeRevision: 1, status: 'completed', completedTurns: 6 },
+      { stageNumber: 2, stageId: 'stage-2', activeRevision: 3, status: 'running', completedTurns: 2 },
+    ] };
+    const windowText = resolveAgentReadToken_ACU('$OUTLINE_WINDOW', context).text;
+    expect(windowText).toContain('[stage-2]');
+    expect(windowText).toContain('revision=3');
+    const stateText = renderAgentOutlineState_ACU(context);
+    expect(stateText).toContain('阶段进度目录');
+    expect(stateText).toContain('stage-2');
+    expect(stateText).toContain('adjust_progress');
+  });
+
   it('大纲窗口标出本轮位置并声明大纲只是计划', () => {
     const text = resolveAgentReadToken_ACU('$OUTLINE_WINDOW', context_ACU()).text;
     expect(text).toContain('← 本轮');
@@ -187,8 +205,8 @@ describe('Agent 读写集解析', () => {
     const noOutline = context_ACU();
     noOutline.execution = { ...noOutline.execution, stage: null, revision: null, node: null, turn: null, turnNumber: null, nodeTurnNumber: null } as any;
     expect(resolveAgentReadToken_ACU('$OUTLINE_WINDOW', noOutline).text).toContain('还没有阶段大纲');
-    expect(resolveAgentReadToken_ACU('$OUTLINE_WINDOW', noOutline).text).toContain('输出 open_round');
-    expect(resolveAgentReadToken_ACU('$OUTLINE_WINDOW', noOutline).text).toContain('主 Agent 不直接派工 outline-architect');
+    expect(resolveAgentReadToken_ACU('$OUTLINE_WINDOW', noOutline).text).toContain('open_round 固定工作流');
+    expect(resolveAgentReadToken_ACU('$OUTLINE_WINDOW', noOutline).text).toContain('可单独 delegate outline-architect 创建');
     expect(resolveAgentReadToken_ACU('$CURRENT_TURN_GOAL', noOutline).text).toContain('尚无可执行的大纲轮次');
 
     const completed = context_ACU();

@@ -384,6 +384,8 @@ export interface ContinuationTask_ACU {
   stopReason: ContinuationStopReason_ACU | null;
   lastError: ContinuationError_ACU | null;
   pendingHostTurn?: ContinuationPendingHostTurn_ACU | null;
+  /** 主会话选择的执行阶段；与各阶段完成数分开保存，选择不等于其它阶段已完结。 */
+  progressSelections?: { stageId: string; messageIndex: number; timelineOffset: number }[];
 }
 
 export interface ContinuationStage_ACU {
@@ -395,6 +397,19 @@ export interface ContinuationStage_ACU {
   activeNodeIndex: number;
   activeTurnIndex: number;
   completedTurns: number;
+  /** 主会话依据现有剧情校准的进度基线；不改大纲，也不冒充宿主生成记录。 */
+  progressAdjustments?: ContinuationProgressAdjustment_ACU[];
+}
+
+/** 一次进度校准基线：校准时的时间线长度之后，真实完成记录从该位置继续累计。 */
+export interface ContinuationProgressAdjustment_ACU {
+  revision: number;
+  completedTurns: number;
+  /** 校准时的时间线长度；之后的真实完成记录从该位置继续累计。 */
+  timelineOffset: number;
+  /** 校准依据所在的聊天楼层，退到该楼之前时不再采用此基线。 */
+  messageIndex: number;
+  reason: string;
 }
 
 export interface StageRevision_ACU {

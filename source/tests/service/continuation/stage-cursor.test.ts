@@ -70,6 +70,25 @@ function completedWithIdentity(stageId: string, turnId: string, messageIndex: nu
 }
 
 describe('reconcileTaskCursorFromChat_ACU', () => {
+  it('进度校准基线计入已完成轮数：基线之后仍按真实楼层恢复（移植上游 e35f758d）', () => {
+    const stage = {
+      ...stageOf(1, 6, 0, 'running'),
+      progressAdjustments: [{ revision: 1, completedTurns: 3, timelineOffset: 0, messageIndex: 5, reason: '用户自行演绎后校准' }],
+    };
+    const task = taskOf([stage], [], 'stage-1');
+    const next = reconcileTaskCursorFromChat_ACU(task, 10);
+    expect(next.stages[0]).toMatchObject({ completedTurns: 3, activeTurnIndex: 3, status: 'running' });
+  });
+
+  it('阶段选择决定当前阶段：退楼后仍有依据的选择才有效（移植上游 e35f758d）', () => {
+    const first = stageOf(1, 4, 1, 'running');
+    const second = stageOf(2, 6, 0, 'running');
+    const task = taskOf([first, second], [], 'stage-1');
+    (task as any).progressSelections = [{ stageId: 'stage-2', messageIndex: 2, timelineOffset: 0 }];
+    expect(reconcileTaskCursorFromChat_ACU(task, 10).activeStageId).toBe('stage-2');
+    // 退到选择依据之前：选择失效，回落到首个未完成阶段。
+    expect(reconcileTaskCursorFromChat_ACU(task, 2).activeStageId).toBe('stage-1');
+  });
   it('把已确认楼层被删掉的轮次回退，并保持硬游标与存活楼层对齐', () => {
     const stage = stageOf(1, 6, 3, 'running');
     const task = taskOf(

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { validateContinuationSettings_ACU } from '../../../src/service/continuation/continuation-store';
-import { buildDefaultContinuationSettings_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V30_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU } from '../../../src/service/continuation/defaults';
+import { buildDefaultContinuationSettings_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V30_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU } from '../../../src/service/continuation/defaults';
 import {
   AGENT_PROMPT_DEFAULT_LINEAGE_ACU,
   buildV33ContinuationAgentPrompts_ACU,
@@ -84,7 +84,7 @@ describe('默认提示词谱系迁移', () => {
   it.each(labels)('%s 的默认组迁移后与当前默认组逐段一致', label => {
     const loaded = validateContinuationSettings_ACU(historicalSettings_ACU(label));
     const defaults = buildDefaultContinuationSettings_ACU();
-    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU);
+    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU);
     expect(loaded.outlinePrompt).toEqual(defaults.outlinePrompt);
     for (const role of Object.keys(defaults.agentPrompts) as (keyof typeof defaults.agentPrompts)[]) {
       expect(loaded.agentPrompts[role], `agentPrompts.${role}`).toEqual(defaults.agentPrompts[role]);
@@ -144,7 +144,7 @@ describe('默认提示词谱系迁移', () => {
 
     const loaded = validateContinuationSettings_ACU(settings);
 
-    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU);
+    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU);
     expect(loaded.agentPrompts.arcArchitect).toEqual(defaults.arcArchitect);
   });
 
@@ -177,7 +177,7 @@ describe('默认提示词谱系迁移', () => {
 
     const loaded = validateContinuationSettings_ACU(settings);
 
-    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU);
+    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU);
     expect(loaded.agentPrompts.instructionComposer).toEqual(defaults.instructionComposer);
   });
 

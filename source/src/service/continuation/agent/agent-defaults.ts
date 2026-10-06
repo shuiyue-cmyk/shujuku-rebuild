@@ -1137,9 +1137,60 @@ export function buildV36ContinuationAgentPrompts_ACU(): ContinuationAgentPrompts
   return current;
 }
 
-/** 当前默认组：V36（user 预填充尾段 + 同回复并发协议）。 */
+/**
+ * V37（TT 移植上游 e35f758d 进度校准批）：主会话动作枚举加 adjust_progress，
+ * 我能做的加校准职责，文本协议段追加 adjust_progress/delegate 写法，
+ * 子代理规则段与行动规则段追加剧情衔接规则。只动主 Agent 段；替换全部带
+ * 已应用保护（重复跑不再命中），自定义段原样保留。
+ */
+const V37_PROGRESS_RULE_ACU = '【剧情衔接与结构维护】用户可能在两次续写之间自行演绎。续写前我先对照真实正文、用户要求、总纲和阶段大纲，重新判断当前阶段与下一轮，不把旧游标或新增楼数当成剧情进度。总纲需要调整时，我可用 correct_materials 的 story_arc SQL 提交最小修正，或 delegate arc-architect，写清依据与修改方向；阶段大纲需要修改时，单独 delegate outline-architect 重规划，保留已发生的事实前缀。总纲与阶段大纲有依赖时先改总纲，收到保存回执后再改阶段大纲。位置或完结状态不符时用 adjust_progress：stageId、revision 从阶段目录复制；nextTurnId 选择该阶段接下来执行的轮次并切换当前阶段，其前面的规划轮次视为完成；或 completeStage=true 标记该阶段完结，false 重新开启该阶段。nextTurnId 与 completeStage 只给一项，reason 写清依据。选择阶段不自动完结其他阶段，进度调整也不等于资料已结算。收到成功保存回执后，我再 open_round，以最新正文与用户意图确定焦点；正文已偏离旧规划时先修改结构或定位，不硬按旧轮目标续写。正文重试保持原轮次身份；证据不足先补读，只有确需用户裁决才 block。';
+
+function v37Content_ACU(role: keyof ContinuationAgentPrompts_ACU, content: string): string {
+  if (role !== 'main') return content;
+  let next = content;
+  if (next.includes('read|search|open_round|correct_materials|delegate|finalize|block')) {
+    next = next.replace('read|search|open_round|correct_materials|delegate|finalize|block', 'read|search|open_round|correct_materials|adjust_progress|delegate|finalize|block');
+  }
+  if (next.includes('用 open_round 把本轮交给固定工作流、按需派工 arc-architect / web-researcher / outline-architect、确认工作流交出的写作指令、必要时阻断。')) {
+    next = next.replace('用 open_round 把本轮交给固定工作流、按需派工 arc-architect / web-researcher / outline-architect、确认工作流交出的写作指令、必要时阻断。', '用 open_round 把本轮交给固定工作流、用 adjust_progress 对照真实剧情校准阶段与轮次、按需派工 arc-architect / web-researcher / outline-architect、确认工作流交出的写作指令、必要时阻断。');
+  }
+  if (next.startsWith('【文本协议规范】') && !next.includes('action = adjust_progress')) {
+    next += '\n\naction = adjust_progress：选择当前阶段与下一轮，或修改阶段完结状态。reason、stageId、revision 必填；nextTurnId 与 completeStage 必须且只能给一项。completeStage=true 标记完结，false 重新开启。stageId、revision、轮次 ID 从阶段目录及大纲窗口复制。\naction = delegate：总纲修改派 arc-architect；阶段大纲修改单独派 outline-architect，prompt 写清真实剧情依据、修改方向和保留内容。先收到结构或进度的保存回执，再 open_round；正文重试保持原轮次身份。';
+  }
+  if ((next.startsWith('【子代理使用规则】') || next.startsWith('我的行动规则：')) && !next.includes('【剧情衔接与结构维护】')) {
+    next += `\n${V37_PROGRESS_RULE_ACU}`;
+  }
+  return next;
+}
+
+export function buildV37ContinuationAgentPrompts_ACU(): ContinuationAgentPrompts_ACU {
+  const previous = buildV36ContinuationAgentPrompts_ACU();
+  const current: ContinuationAgentPrompts_ACU = { ...previous };
+  for (const role of Object.keys(previous) as Array<keyof ContinuationAgentPrompts_ACU>) {
+    current[role] = previous[role].map(segment => ({ ...segment, content: v37Content_ACU(role, segment.content) }));
+  }
+  return current;
+}
+
+/**
+ * 冻结 V36 装配结果的谱系表（同 V34/V35，模块求值顺序不可调换）。只收录 V37 会改写
+ * 的段；迁移替换不同步 role（V37 只改正文不换角色）。
+ */
+const V36_FOR_V37_ACU = buildV36ContinuationAgentPrompts_ACU();
+export const CONTINUATION_V36_DEFAULT_LINEAGE_ACU = Object.fromEntries(
+  (Object.keys(V36_FOR_V37_ACU) as Array<keyof ContinuationAgentPrompts_ACU>).map(role => {
+    const segments = V36_FOR_V37_ACU[role];
+    const current = buildV37ContinuationAgentPrompts_ACU()[role];
+    return [role,
+    segments.map((segment, index) => ({
+      index, role: segment.role, hash: hashAgentPromptContent_ACU(segment.content), length: segment.content.length,
+    })).filter(({ index }) => current[index]?.content !== segments[index].content)];
+  }),
+) as Record<keyof ContinuationAgentPrompts_ACU, Array<{ index: number; role: string; hash: string; length: number }>>;
+
+/** 当前默认组：V37（主会话进度校准 adjust_progress，TT 移植上游 e35f758d）。 */
 export function buildDefaultContinuationAgentPrompts_ACU(): ContinuationAgentPrompts_ACU {
-  return buildV36ContinuationAgentPrompts_ACU();
+  return buildV37ContinuationAgentPrompts_ACU();
 }
 
 /**
