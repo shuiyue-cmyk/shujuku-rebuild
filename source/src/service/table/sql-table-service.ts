@@ -1912,16 +1912,19 @@ export class SqlTableService implements ITableStorageProvider {
     this._ensureInitialized();
     this._ensureTablesFromTemplate(scope);
 
+    const lookupData = (scope?.runtimeData || this._readCanonicalView_ACU() || { mate: DEFAULT_MATE_ACU }) as TableDataObject_ACU;
     const normalizedGroups = (Array.isArray(sqlTexts) ? sqlTexts : []).map(sqlText => {
       const normalizedStatements = normalizeSqlStatementsForRuntimeLog_ACU(sqlText);
       return rebindSqlMutationIdentifiers_ACU(
         normalizedStatements,
-        (scope?.runtimeData || this._readCanonicalView_ACU() || { mate: DEFAULT_MATE_ACU }) as TableDataObject_ACU,
+        lookupData,
         scope?.templateData,
         { requireKnownTables: Boolean(scope?.templateData), requireKnownInsertColumns: true },
       );
     });
     const userStatements = normalizedGroups.flat();
+    // 隐藏列守卫的唯一安全边界：对去 HTML 注释标记、重绑后的最终语句校验（collect 阶段看的是原文，可被绕过）。
+    assertNoHiddenPhysicalColumnMutations_ACU(userStatements, lookupData);
     if (userStatements.length === 0) {
       return {
         success: true,

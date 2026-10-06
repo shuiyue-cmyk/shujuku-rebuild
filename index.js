@@ -44456,7 +44456,8 @@ function chatIdentityToken_ACU(chat) {
     return String(chatIdentitySeq_ACU);
 }
 function buildInflightReplayKey_ACU(chat, isolationKey, options, structureMappingDigest = '') {
-    if (options.updateRuntimeState)
+    // 与 core 口径一致：只有显式 false 才是纯只读；默认（undefined）有副作用，不得去重。
+    if (options.updateRuntimeState !== false)
         return null;
     if (Array.isArray(options.captureBoundaries) && options.captureBoundaries.length > 0)
         return null;
@@ -46818,9 +46819,10 @@ async function loadTableStateFromFramesV2Detailed_ACU(chatArg, isolationKeyArg, 
                     sheetCount: Object.keys(shared.data || {}).filter(key => key.startsWith('sheet_')).length,
                     replayShareCount: 1,
                 });
+                // 返回完整结果（兼容诊断字段是写门闸的判断依据，不能只给 data/baseKind）。
+                const { metrics: _starterMetrics, ...sharedResult } = shared;
                 return {
-                    data: deepClone_ACU(shared.data),
-                    baseKind: shared.baseKind,
+                    ...deepClone_ACU(sharedResult),
                     metrics: sharedMetrics,
                 };
             }
@@ -70324,11 +70326,14 @@ class SqlTableService {
         this._assertRuntimeSchemaCurrent(scope);
         this._ensureInitialized();
         this._ensureTablesFromTemplate(scope);
+        const lookupData = (scope?.runtimeData || this._readCanonicalView_ACU() || { mate: DEFAULT_MATE_ACU });
         const normalizedGroups = (Array.isArray(sqlTexts) ? sqlTexts : []).map(sqlText => {
             const normalizedStatements = normalizeSqlStatementsForRuntimeLog_ACU(sqlText);
-            return rebindSqlMutationIdentifiers_ACU(normalizedStatements, (scope?.runtimeData || this._readCanonicalView_ACU() || { mate: DEFAULT_MATE_ACU }), scope?.templateData, { requireKnownTables: Boolean(scope?.templateData), requireKnownInsertColumns: true });
+            return rebindSqlMutationIdentifiers_ACU(normalizedStatements, lookupData, scope?.templateData, { requireKnownTables: Boolean(scope?.templateData), requireKnownInsertColumns: true });
         });
         const userStatements = normalizedGroups.flat();
+        // 隐藏列守卫的唯一安全边界：对去 HTML 注释标记、重绑后的最终语句校验（collect 阶段看的是原文，可被绕过）。
+        assertNoHiddenPhysicalColumnMutations_ACU(userStatements, lookupData);
         if (userStatements.length === 0) {
             return {
                 success: true,
@@ -91953,7 +91958,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261006-21"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261006-22"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91972,7 +91977,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261006-21";
+        const stamp = "20261006-22";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -103731,10 +103736,16 @@ async function runTableUpdateCommit_ACU(options, apply) {
                         : options.initialData
                             ? cloneTableData_ACU(options.initialData)
                             : null;
+                    const reloadOnFailure = options.applyMutatesRuntime !== false && !options.skipChatSave;
                     const applied = await apply({ transactionContext, workingData });
                     if (!applied.success || !applied.tableData) {
+                        if (applied.runtimeMutated && reloadOnFailure)
+                            requiresRuntimeReload = true;
                         throw new TableUpdateCommitError_ACU(applied.error || `${options.reason}: update apply failed`, applied.errorCategory || 'infrastructure');
                     }
+                    // 运行时已变更、尚未落盘：此后任何失败（含抛异常）都要重载收敛。
+                    if (reloadOnFailure)
+                        requiresRuntimeReload = true;
                     let saved = true;
                     let messageIndex;
                     const persistOptions = applied.persist || {};
@@ -103775,14 +103786,14 @@ async function runTableUpdateCommit_ACU(options, apply) {
                         saved = saveResult.saved;
                         messageIndex = saveResult.messageIndex;
                         if (!saveResult.saved) {
-                            logWarn_ACU(`[TableUpdateCommit] persist failed after runtime update; reload after releasing transaction locks: ${saveResult.error || 'unknown error'}`);
-                            requiresRuntimeReload = true;
+                            logWarn_ACU(`[TableUpdateCommit] persist failed after runtime update${reloadOnFailure ? '; reload after releasing transaction locks' : ''}: ${saveResult.error || 'unknown error'}`);
                             throw new TableUpdateCommitError_ACU(saveResult.error || `${options.reason}: persist failed`, classifyPersistRejection_ACU(saveResult.error));
                         }
                     }
                     else {
                         markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, applied.tableData, preApplyData);
                     }
+                    requiresRuntimeReload = false;
                     _set_currentJsonTableData_ACU(cloneTableData_ACU(applied.tableData));
                     return {
                         success: true,
@@ -112996,6 +113007,7 @@ async function flushRuntimeOnlyPendingChanges_ACU(reason) {
         trackingSheetKeys: [],
         trackAsUpdate: false,
         skipRuntimeOnlyPendingFlush: true,
+        applyMutatesRuntime: false,
     }, async () => {
         let freshData;
         try {
@@ -114448,6 +114460,33 @@ function buildSqlSheetBatchOperationsFromText_ACU(sqlText, tableData, targetShee
     }
     return { success: true, operations: buildResult.operations };
 }
+const NONDETERMINISTIC_SQL_PATTERN_ACU = /\b(?:random|randomblob)\s*\(|\bcurrent_(?:timestamp|date|time)\b|['"](?:now|localtime)['"]/i;
+/**
+ * 回放会原样重新执行 SQL：含随机数/当前时间的语句每次载入都会算出不同的值。
+ * 涉及这类语句（或 DDL 带此类 DEFAULT）的表改为以执行后的表快照（sheet_replace）落盘，
+ * 其 SQL 操作整体移除。快照取自 afterData；自动编号前后调用均可（编号表另有 sheet_replace 追加在后）。
+ */
+function stabilizeNondeterministicSqlOperations_ACU(operations, afterData) {
+    // 无法按表归属的旧式多表 sql_batch 存在时不改写，避免拆散跨表语句的回放顺序。
+    if (operations.some(operation => operation.kind === 'sql_batch'))
+        return operations;
+    const unstableSheetKeys = new Set();
+    for (const operation of operations) {
+        if (operation.kind !== 'sql_sheet_batch')
+            continue;
+        const ddl = String(afterData?.[operation.sheetKey]?.sourceData?.ddl || '');
+        if (NONDETERMINISTIC_SQL_PATTERN_ACU.test(ddl)
+            || operation.statements.some(statement => NONDETERMINISTIC_SQL_PATTERN_ACU.test(statement))) {
+            unstableSheetKeys.add(operation.sheetKey);
+        }
+    }
+    if (unstableSheetKeys.size === 0)
+        return operations;
+    return [
+        ...operations.filter(operation => !(operation.kind === 'sql_sheet_batch' && unstableSheetKeys.has(operation.sheetKey))),
+        ...buildSheetReplaceOperationsFromData_ACU(afterData, [...unstableSheetKeys], 'system'),
+    ];
+}
 function buildSheetReplaceOperationsFromData_ACU(afterData, sheetKeys, reason) {
     if (!afterData || typeof afterData !== 'object' || !Array.isArray(sheetKeys) || sheetKeys.length === 0)
         return [];
@@ -115468,10 +115507,13 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
                             success: false,
                             error: `统一提交失败：${formatResponseGroupReference_ACU(response)} ${sanitizeRetryFeedback_ACU(operationBuild.error)}`,
                             errorCategory: 'model',
+                            // SQL 已在 live 引擎提交：让提交方重载运行时，避免孤儿行。
+                            runtimeMutated: true,
                         };
                     }
                     operations.push(...operationBuild.operations);
                 }
+                operations.splice(0, operations.length, ...stabilizeNondeterministicSqlOperations_ACU(operations, runtimeData));
                 // sql_sheet_batch 回放不应用自动编号：对编号实际变化的表追加 sheet_replace
                 // 覆盖，保证回放结果与 afterData（含编号）逐字节一致。
                 operations.push(...buildSheetReplaceOperationsFromData_ACU(runtimeData, renumberedSheetKeys, 'system'));
@@ -116658,12 +116700,14 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                             return { success: false, error: sanitizeRetryFeedback_ACU(parseResult?.error || '解析或应用AI更新时出错'), errorCategory: 'model' };
                         }
                         const runtimeSqlText = parseResult.materializedSqlTexts[0] || '';
-                        const runtimeData = parseResult.tableData;
+                        // provider 返回的是共享 canonical 视图：后续编号/首次初始化会改写它，先克隆。
+                        const runtimeData = JSON.parse(JSON.stringify(parseResult.tableData));
                         const operationBuild = buildSqlSheetBatchOperationsFromText_ACU(runtimeSqlText, runtimeData, targetSheetKeys);
                         if (operationBuild.success === false) {
-                            return { success: false, error: sanitizeRetryFeedback_ACU(operationBuild.error), errorCategory: 'model' };
+                            // SQL 已在 live 引擎提交：失败必须让提交方重载运行时，否则留下未落盘的孤儿行。
+                            return { success: false, error: sanitizeRetryFeedback_ACU(operationBuild.error), errorCategory: 'model', runtimeMutated: true };
                         }
-                        const operations = operationBuild.operations;
+                        const operations = stabilizeNondeterministicSqlOperations_ACU(operationBuild.operations, runtimeData);
                         if (isImportMode) {
                             // import 不写聊天帧、无回放操作，编号可全量应用（无漂移风险）。
                             applySpecialIndexSequenceToSummaryTables_ACU(runtimeData);
@@ -116694,12 +116738,14 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                             const fullTemplate = executionScope.sqlApplyScope?.templateDataWithRows || parseTableTemplateJson_ACU({ stripSeedRows: false });
                             if (fullTemplate) {
                                 allSheetKeys.forEach(sheetKey => {
-                                    if (!keysToPersist.includes(sheetKey) && fullTemplate[sheetKey]) {
+                                    // live 运行时已有该表（含 loadFromData 物化的种子行与运行时写入）时以运行时为准，
+                                    // 仅缺表时才用模板补齐，避免运行时已有行进不了首个 full checkpoint。
+                                    if (!keysToPersist.includes(sheetKey) && fullTemplate[sheetKey] && !Array.isArray(runtimeData[sheetKey]?.content)) {
                                         const templateSheet = JSON.parse(JSON.stringify(fullTemplate[sheetKey]));
                                         if (Array.isArray(templateSheet.content))
                                             templateSheet.content = ensureStableRowIdsForSheetContent_ACU(templateSheet.content);
                                         runtimeData[sheetKey] = templateSheet;
-                                        logDebug_ACU(`[Init] Table ${sheetKey} not modified by AI, using template data (may include seed rows).`);
+                                        logDebug_ACU(`[Init] Table ${sheetKey} missing from runtime, using template data (may include seed rows).`);
                                     }
                                 });
                             }
@@ -153693,7 +153739,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261006-21";
+        const stamp = "20261006-22";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

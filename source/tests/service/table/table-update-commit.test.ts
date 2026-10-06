@@ -589,3 +589,56 @@ describe('runTableUpdateCommit_ACU stage_only 判别联合（计划 5.3）', () 
     expect(mocks.setCurrentData).not.toHaveBeenCalled();
   });
 });
+
+describe('runTableUpdateCommit_ACU 运行时已变更但未落盘时的收敛', () => {
+  const data: any = {
+    mate: { type: 'acu', version: 1 },
+    sheet_target: { uid: 'sheet_target', name: '目标表', content: [['row_id'], ['r1']] },
+  };
+
+  beforeEach(() => {
+    mocks.currentChatKey = 'chat-a';
+    mocks.currentIsolationKey = 'scope-a';
+    mocks.migration.mockReset().mockResolvedValue({ success: true, migrated: false });
+    mocks.reload.mockReset();
+    mocks.persist.mockReset();
+    mocks.setCurrentData.mockReset();
+    mocks.transaction.mockReset().mockImplementation(async (_options: any, task: any) => task({
+      runCommit: async (commitTask: any) => commitTask(),
+    }, null));
+  });
+
+  it('apply 已改动运行时、随后持久化抛异常：重载运行时，不留下未落盘的孤儿行', async () => {
+    // 曾只在 persist 返回 saved:false 时重载；抛异常（如基线过期）时引擎保留整批行。
+    mocks.persist.mockRejectedValueOnce(new Error('runtime revision conflict: simulated'));
+
+    const result = await runTableUpdateCommit_ACU({ ...options('test_persist_throw'), targetSheetKeys: ['sheet_target'] }, async () => ({ success: true, tableData: data }));
+
+    expect(result.success).toBe(false);
+    expect(mocks.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('apply 声明运行时已改动但返回失败：同样重载运行时', async () => {
+    const result = await runTableUpdateCommit_ACU(options('test_apply_failed_after_mutation'), async () => ({
+      success: false, error: '构建回放操作失败', errorCategory: 'model' as const, runtimeMutated: true,
+    }));
+
+    expect(result.success).toBe(false);
+    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(mocks.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('apply 未改动运行时（如 runtime-only 写回聊天）持久化失败：不得重载，否则冲掉待写回的行', async () => {
+    mocks.persist.mockResolvedValueOnce({ saved: false, error: 'compat readonly gate' });
+
+    const result = await runTableUpdateCommit_ACU({
+      ...options('test_flush_persist_failed'),
+      targetSheetKeys: ['sheet_target'],
+      skipRuntimeOnlyPendingFlush: true,
+      applyMutatesRuntime: false,
+    }, async () => ({ success: true, tableData: data }));
+
+    expect(result.success).toBe(false);
+    expect(mocks.reload).not.toHaveBeenCalled();
+  });
+});

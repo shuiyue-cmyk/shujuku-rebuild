@@ -937,6 +937,35 @@ function buildSqlSheetBatchOperationsFromText_ACU(
     return { success: true, operations: buildResult.operations };
 }
 
+const NONDETERMINISTIC_SQL_PATTERN_ACU = /\b(?:random|randomblob)\s*\(|\bcurrent_(?:timestamp|date|time)\b|['"](?:now|localtime)['"]/i;
+
+/**
+ * 回放会原样重新执行 SQL：含随机数/当前时间的语句每次载入都会算出不同的值。
+ * 涉及这类语句（或 DDL 带此类 DEFAULT）的表改为以执行后的表快照（sheet_replace）落盘，
+ * 其 SQL 操作整体移除。快照取自 afterData；自动编号前后调用均可（编号表另有 sheet_replace 追加在后）。
+ */
+function stabilizeNondeterministicSqlOperations_ACU(
+    operations: TableMutationOperationV2_ACU[],
+    afterData: Record<string, any>,
+): TableMutationOperationV2_ACU[] {
+    // 无法按表归属的旧式多表 sql_batch 存在时不改写，避免拆散跨表语句的回放顺序。
+    if (operations.some(operation => operation.kind === 'sql_batch')) return operations;
+    const unstableSheetKeys = new Set<string>();
+    for (const operation of operations) {
+        if (operation.kind !== 'sql_sheet_batch') continue;
+        const ddl = String(afterData?.[operation.sheetKey]?.sourceData?.ddl || '');
+        if (NONDETERMINISTIC_SQL_PATTERN_ACU.test(ddl)
+            || operation.statements.some(statement => NONDETERMINISTIC_SQL_PATTERN_ACU.test(statement))) {
+            unstableSheetKeys.add(operation.sheetKey);
+        }
+    }
+    if (unstableSheetKeys.size === 0) return operations;
+    return [
+        ...operations.filter(operation => !(operation.kind === 'sql_sheet_batch' && unstableSheetKeys.has(operation.sheetKey))),
+        ...buildSheetReplaceOperationsFromData_ACU(afterData, [...unstableSheetKeys], 'system'),
+    ];
+}
+
 function buildSheetReplaceOperationsFromData_ACU(
     afterData: Record<string, any> | null | undefined,
     sheetKeys: string[] | null | undefined,
@@ -2042,10 +2071,13 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
                             success: false,
                             error: `统一提交失败：${formatResponseGroupReference_ACU(response)} ${sanitizeRetryFeedback_ACU(operationBuild.error)}`,
                             errorCategory: 'model' as const,
+                            // SQL 已在 live 引擎提交：让提交方重载运行时，避免孤儿行。
+                            runtimeMutated: true,
                         };
                     }
                     operations.push(...operationBuild.operations);
                 }
+                operations.splice(0, operations.length, ...stabilizeNondeterministicSqlOperations_ACU(operations, runtimeData));
                 // sql_sheet_batch 回放不应用自动编号：对编号实际变化的表追加 sheet_replace
                 // 覆盖，保证回放结果与 afterData（含编号）逐字节一致。
                 operations.push(...buildSheetReplaceOperationsFromData_ACU(runtimeData, renumberedSheetKeys, 'system'));
@@ -3407,12 +3439,14 @@ export async function executeCardUpdateCore_ACU(
                         }
 
                         const runtimeSqlText = parseResult.materializedSqlTexts[0] || '';
-                        const runtimeData = parseResult.tableData as Record<string, any>;
+                        // provider 返回的是共享 canonical 视图：后续编号/首次初始化会改写它，先克隆。
+                        const runtimeData = JSON.parse(JSON.stringify(parseResult.tableData)) as Record<string, any>;
                         const operationBuild = buildSqlSheetBatchOperationsFromText_ACU(runtimeSqlText, runtimeData, targetSheetKeys);
                         if (operationBuild.success === false) {
-                            return { success: false, error: sanitizeRetryFeedback_ACU(operationBuild.error), errorCategory: 'model' as const };
+                            // SQL 已在 live 引擎提交：失败必须让提交方重载运行时，否则留下未落盘的孤儿行。
+                            return { success: false, error: sanitizeRetryFeedback_ACU(operationBuild.error), errorCategory: 'model' as const, runtimeMutated: true };
                         }
-                        const operations = operationBuild.operations;
+                        const operations = stabilizeNondeterministicSqlOperations_ACU(operationBuild.operations, runtimeData);
 
                         if (isImportMode) {
                             // import 不写聊天帧、无回放操作，编号可全量应用（无漂移风险）。
@@ -3446,11 +3480,13 @@ export async function executeCardUpdateCore_ACU(
                             const fullTemplate = executionScope.sqlApplyScope?.templateDataWithRows || parseTableTemplateJson_ACU({ stripSeedRows: false });
                             if (fullTemplate) {
                                 allSheetKeys.forEach(sheetKey => {
-                                    if (!keysToPersist.includes(sheetKey) && fullTemplate[sheetKey]) {
+                                    // live 运行时已有该表（含 loadFromData 物化的种子行与运行时写入）时以运行时为准，
+                                    // 仅缺表时才用模板补齐，避免运行时已有行进不了首个 full checkpoint。
+                                    if (!keysToPersist.includes(sheetKey) && fullTemplate[sheetKey] && !Array.isArray(runtimeData[sheetKey]?.content)) {
                                         const templateSheet = JSON.parse(JSON.stringify(fullTemplate[sheetKey]));
                                         if (Array.isArray(templateSheet.content)) templateSheet.content = ensureStableRowIdsForSheetContent_ACU(templateSheet.content);
                                         runtimeData[sheetKey] = templateSheet;
-                                        logDebug_ACU(`[Init] Table ${sheetKey} not modified by AI, using template data (may include seed rows).`);
+                                        logDebug_ACU(`[Init] Table ${sheetKey} missing from runtime, using template data (may include seed rows).`);
                                     }
                                 });
                             }

@@ -9572,4 +9572,52 @@ describe('executeCardUpdateCore_ACU legacy SQL 目标表授权', () => {
     const persistedSheetKeys = (mockPersistTablesToChatMessage.mock.calls[0]?.[0]?.operations || []).map((operation: any) => operation.sheetKey);
     expect(persistedSheetKeys).not.toContain('sheet_1');
   });
+
+  it('首次初始化：AI 未改动的表按 live 运行时内容落盘，不被模板覆盖、不改写 provider 共享视图', async () => {
+    // 曾用模板覆盖 runtimeData（即 provider 的 canonical 视图对象）：运行时已有的行进不了首个 full checkpoint。
+    mockCheckIfFirstTimeInit.mockResolvedValue(true);
+    mockCallCustomOpenAI.mockResolvedValue("<tableEdit>INSERT INTO test (v) VALUES ('目标行');</tableEdit>");
+
+    const result = await runTargetingSheet0();
+
+    expect(result.success).toBe(true);
+    const persisted = mockPersistTablesToChatMessage.mock.calls[0]?.[0];
+    expect(persisted?.targetSheetKeys).toEqual(expect.arrayContaining(['sheet_0', 'sheet_1']));
+    expect(persisted?.tableData?.sheet_1?.content).toEqual([['row_id', 'v'], ['1', '原值']]);
+    expect(sharedProvider.exportLiveRuntimeDataStrict_ACU()?.sheet_1?.content).toEqual([['row_id', 'v'], ['1', '原值']]);
+  });
+
+  it('含随机/当前时间函数的 SQL 以执行后的表快照落盘，回放与写入时一致', async () => {
+    // 曾原样落盘 random()/datetime('now')：每次载入聊天回放出不同的值。
+    mockCallCustomOpenAI.mockResolvedValue("<tableEdit>INSERT INTO test (v) VALUES (abs(random()) % 1000000);</tableEdit>");
+
+    const result = await runTargetingSheet0();
+
+    expect(result.success).toBe(true);
+    const operations = mockPersistTablesToChatMessage.mock.calls[0]?.[0]?.operations || [];
+    const sheet0Operations = operations.filter((operation: any) => operation.sheetKey === 'sheet_0');
+    expect(sheet0Operations.map((operation: any) => operation.kind)).toEqual(['sheet_replace']);
+    expect(sheet0Operations[0].sheet.content).toEqual(sharedProvider.exportLiveRuntimeDataStrict_ACU()?.sheet_0?.content);
+  });
+
+  it('隐藏物理列守卫作用于执行前的最终语句：<!-- 包裹的隐藏列赋值不得写入', async () => {
+    // collect 阶段守卫看的是未去 HTML 注释标记的原文（<!-- 里的 -- 被当成行注释跳过），
+    // 执行的却是去标记后的文本，隐藏列 secret 曾被改写。
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    const data: any = twoSheetData();
+    data.sheet_0.sourceData = { ddl: 'CREATE TABLE test (row_id INTEGER PRIMARY KEY, v TEXT, secret TEXT);', hiddenPhysicalColumns: ['secret'] };
+    data.sheet_0.content = [['row_id', 'v', 'secret'], ['1', 'a', '机密']];
+    mockCurrentJsonTableData = data;
+    const template = JSON.parse(JSON.stringify(data));
+    template.sheet_0.content = [['row_id', 'v', 'secret']];
+    template.sheet_1.content = [['row_id', 'v']];
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue(template);
+    mockCallCustomOpenAI.mockResolvedValue("<tableEdit>UPDATE test SET v = 'b', <!-- secret = '被改'\n WHERE row_id = 1</tableEdit>");
+
+    const result = await runTargetingSheet0();
+
+    expect(result.success).toBe(false);
+    expect(sharedProvider.exportLiveRuntimeDataStrict_ACU()?.sheet_0?.content).toEqual([['row_id', 'v', 'secret'], ['1', 'a', '机密']]);
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+  });
 });

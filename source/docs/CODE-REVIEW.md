@@ -82,6 +82,14 @@
 | R2B-01 V2 恢复整体替换聊天 | P1 | 已修：只回写目标楼层当前隔离槽，失败逐字段回滚 | table-v2-recovery-service.test「等锁期间宿主追加消息」 |
 | R2A-01 legacy SQL 路径不校验目标表授权 | P1 | 已修：执行前重绑+授权，统一路径与 legacy 共用 authorizeSqlStatementsForTargets_ACU | update-orchestrator.test「legacy SQL 目标表授权」 |
 | R2A-02 边界汇合/临时桥整体替换聊天 | P1 | 已修：boundary 只回写原根楼层隔离槽；bridge 三处按「表格字段有变化的楼层」回写并校验窗口内未变，资料随迁改在 live 上做并可回滚 | boundary-staging.integration「宿主追加消息」、provisional-bridge.integration「窗口内宿主」 |
+| R2A-05 legacy 路径绕过隐藏列守卫 | P2 | 已修：守卫移入 applyEditsWithSystemRowIds，对去标记+重绑后的最终语句校验 | update-orchestrator.test「隐藏物理列守卫」 |
+| R2A-03 SQL 已入引擎后抛异常留孤儿行 | P2 | 已修：apply 成功后至落盘成功前任何失败都重载；apply 返回 runtimeMutated 时也重载 | table-update-commit.test「收敛」×2 |
+| R2A-04 flush 失败重载冲掉待写回行 | P2 | 部分修：flush 提交声明 applyMutatesRuntime:false，不再重载。普通提交失败重载仍会冲掉未 flush 的行（未修） | table-update-commit.test「不得重载」 |
+| R2A-06 legacy 首次初始化用模板覆盖运行时 | P2 | 已修：先克隆共享视图；仅运行时缺表时用模板补 | update-orchestrator.test「首次初始化：AI 未改动」 |
+| R2B-02 in-flight 等待方丢兼容诊断字段 | P2 | 已修：等待方返回完整结果深拷贝；去重 key 改为仅显式 updateRuntimeState:false | replay.test「等待方拿到」「未显式声明」 |
+| R2B-03 回放重算 random()/now | P2 | 已修：涉及非确定性函数（含 DDL DEFAULT）的表改以执行后快照 sheet_replace 落盘 | update-orchestrator.test「随机/当前时间」 |
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
 R2B-08/09（迁移、混合提交、batch 写入的整聊天克隆替换）与上面同一模式但无 await 窗口，未改，留作 P3。
+
+待修：R2A-07（多 staging 组汇合后丢 pre 段）、R2A-08（并发组提前清全局填表标志）、R2B-04/05/06（待坐实）、各块 P3。

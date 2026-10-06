@@ -51,6 +51,8 @@ export interface TableUpdateCommitApplyResult_ACU<T> {
   persist?: TableUpdateCommitPersistOverride_ACU;
   error?: string;
   errorCategory?: TableUpdateCommitErrorCategory_ACU;
+  /** apply 失败但已改动 live 运行时（如 SQL 已提交后构建回放操作失败）：提交方须重载收敛。 */
+  runtimeMutated?: boolean;
 }
 
 export interface RunTableUpdateCommitOptions_ACU {
@@ -85,6 +87,12 @@ export interface RunTableUpdateCommitOptions_ACU {
   skipChatSave?: boolean;
   /** 仅供 runtime-only flush 自身使用：flush 提交不得再触发一次 flush。 */
   skipRuntimeOnlyPendingFlush?: boolean;
+  /**
+   * apply 是否改动 live 运行时（默认 true）。为 true 时，apply 成功后到落盘成功前的任何失败
+   * 都会重载运行时，避免留下未落盘的孤儿行；runtime-only flush 只把运行时写回聊天，
+   * 必须传 false——重载会冲掉它正要写回的行。
+   */
+  applyMutatesRuntime?: boolean;
   /**
    * 提交语义判别联合（计划 5.3）。
    *
@@ -352,10 +360,14 @@ export async function runTableUpdateCommit_ACU<T>(
             : options.initialData
               ? cloneTableData_ACU(options.initialData)
               : null;
+          const reloadOnFailure = options.applyMutatesRuntime !== false && !options.skipChatSave;
           const applied = await apply({ transactionContext, workingData });
           if (!applied.success || !applied.tableData) {
+            if (applied.runtimeMutated && reloadOnFailure) requiresRuntimeReload = true;
             throw new TableUpdateCommitError_ACU(applied.error || `${options.reason}: update apply failed`, applied.errorCategory || 'infrastructure');
           }
+          // 运行时已变更、尚未落盘：此后任何失败（含抛异常）都要重载收敛。
+          if (reloadOnFailure) requiresRuntimeReload = true;
 
           let saved = true;
           let messageIndex: number | undefined;
@@ -397,8 +409,7 @@ export async function runTableUpdateCommit_ACU<T>(
             saved = saveResult.saved;
             messageIndex = saveResult.messageIndex;
             if (!saveResult.saved) {
-              logWarn_ACU(`[TableUpdateCommit] persist failed after runtime update; reload after releasing transaction locks: ${saveResult.error || 'unknown error'}`);
-              requiresRuntimeReload = true;
+              logWarn_ACU(`[TableUpdateCommit] persist failed after runtime update${reloadOnFailure ? '; reload after releasing transaction locks' : ''}: ${saveResult.error || 'unknown error'}`);
               throw new TableUpdateCommitError_ACU(
                 saveResult.error || `${options.reason}: persist failed`,
                 classifyPersistRejection_ACU(saveResult.error),
@@ -408,6 +419,7 @@ export async function runTableUpdateCommit_ACU<T>(
             markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, applied.tableData, preApplyData);
           }
 
+          requiresRuntimeReload = false;
           _set_currentJsonTableData_ACU(cloneTableData_ACU(applied.tableData));
           return {
             success: true,

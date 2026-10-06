@@ -186,6 +186,7 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
     trackingSheetKeys: [],
     trackAsUpdate: false,
     skipRuntimeOnlyPendingFlush: true,
+    applyMutatesRuntime: false,
   }, async () => {
     let freshData: TableDataObject_ACU | null;
     try {

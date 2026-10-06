@@ -6096,6 +6096,58 @@ describe('deriveSheetLifecycleFromFramesV2_ACU', () => {
     expect(latest?.metrics?.frameCount).toBe(62);
   });
 
+  it('阶段 G2：in-flight 等待方拿到与启动方相同的兼容诊断字段（不得被写门闸当成干净回放）', async () => {
+    // 曾只返回 {data, baseKind, metrics}：等待方丢失 requiresCheckpointConvergence 等字段。
+    const data: any = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        uid: 'inventory', name: 'inventory', content: [['row_id', 'name'], ['1', '铁剑']],
+        sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT);' },
+        updateConfig: {}, exportConfig: {}, orderNo: 0,
+      },
+    };
+    const duplicateSheet = structuredClone(data.sheet_0);
+    duplicateSheet.content.push([' 1 ', '重复行']);
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: {
+        version: 2,
+        checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data },
+        logEntries: [{
+          seq: 1, entryId: 'e1', createdAt: 2, source: 'auto_fill', targetMessageIndex: 0, aiFloor: 1,
+          filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+          operations: [
+            { kind: 'sheet_replace', sheetKey: 'sheet_0', sheet: duplicateSheet, reason: 'system' },
+            { kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'inventory', reason: 'system', statements: ["UPDATE inventory SET name = 'x' WHERE row_id = 1"] },
+          ],
+        }],
+      } } },
+    }];
+
+    const [starter, waiter] = await Promise.all([
+      loadTableStateFromFramesV2Detailed_ACU(chat, '', { updateRuntimeState: false }),
+      loadTableStateFromFramesV2Detailed_ACU(chat, '', { updateRuntimeState: false }),
+    ]);
+
+    expect(waiter?.metrics?.replayShareCount).toBe(1);
+    expect(starter?.requiresCheckpointConvergence).toBe(true);
+    expect(waiter?.requiresCheckpointConvergence).toBe(starter?.requiresCheckpointConvergence);
+    expect(waiter?.compatibilityRepairs).toEqual(starter?.compatibilityRepairs);
+    expect(!!waiter?.legacyToleranceDiagnosis).toBe(!!starter?.legacyToleranceDiagnosis);
+  });
+
+  it('阶段 G2：未显式声明 updateRuntimeState（默认有副作用）不参与 in-flight 去重', async () => {
+    const { chat } = buildLongHistoryFixture_ACU();
+
+    const [a, b] = await Promise.all([
+      loadTableStateFromFramesV2Detailed_ACU(chat, '', {}),
+      loadTableStateFromFramesV2Detailed_ACU(chat, '', {}),
+    ]);
+
+    expect(a?.metrics?.replayShareCount).toBe(0);
+    expect(b?.metrics?.replayShareCount).toBe(0);
+  });
+
   it('阶段 G2：副作用路径（updateRuntimeState:true）不参与 in-flight 去重', async () => {
     const { chat } = buildLongHistoryFixture_ACU();
 

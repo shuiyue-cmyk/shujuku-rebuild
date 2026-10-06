@@ -82,7 +82,8 @@ function buildInflightReplayKey_ACU(
   options: LoadTableStateFromFramesV2Options_ACU,
   structureMappingDigest = '',
 ): string | null {
-  if (options.updateRuntimeState) return null;
+  // 与 core 口径一致：只有显式 false 才是纯只读；默认（undefined）有副作用，不得去重。
+  if (options.updateRuntimeState !== false) return null;
   if (Array.isArray(options.captureBoundaries) && options.captureBoundaries.length > 0) return null;
   // entry 观察回调是调用方私有副作用：共享 core 只会触发启动方的回调，不得去重。
   if (typeof options.onEntryApplied === 'function') return null;
@@ -2940,9 +2941,10 @@ export async function loadTableStateFromFramesV2Detailed_ACU(
           sheetCount: Object.keys(shared.data || {}).filter(key => key.startsWith('sheet_')).length,
           replayShareCount: 1,
         });
+        // 返回完整结果（兼容诊断字段是写门闸的判断依据，不能只给 data/baseKind）。
+        const { metrics: _starterMetrics, ...sharedResult } = shared;
         return {
-          data: deepClone_ACU(shared.data),
-          baseKind: shared.baseKind,
+          ...deepClone_ACU(sharedResult),
           metrics: sharedMetrics,
         };
       } finally {
