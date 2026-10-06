@@ -21,3 +21,6 @@ tsc.log
 # 系统
 .DS_Store
 Thumbs.db
+
+# 本地协作协议（只留本地，不进仓库）
+agent.md
