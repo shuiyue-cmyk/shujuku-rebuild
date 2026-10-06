@@ -35829,16 +35829,23 @@ function valueToString(val) {
 }
 /**
  * 将 content 中的值转为 SQL 字面量
- * null/undefined → NULL, 数字字符串 → 数字, 其他 → 带引号的字符串
+ * null/undefined → NULL, 规范整数串 → 数字, 其他 → 带引号的字符串
+ *
+ * 只有「数值再转回文本仍逐字相同」的安全整数才输出裸数字：TEXT 列存的是数字的规范文本，
+ * "08"/"1.50"/超长数字作裸字面量会被改写成 "8"/"1.5"/科学计数法。
+ * 带引号的数字串进 INTEGER/REAL 列时仍由 SQLite 列亲和性转成数值。
  */
 function escapeValue(val) {
     if (val === null || val === undefined)
         return 'NULL';
-    // 纯数字（整数或浮点数）直接输出
-    if (/^-?\d+(\.\d+)?$/.test(val))
-        return val;
+    // 运行时 content 单元格也可能是真数值（非字符串），按数值原样输出。
+    if (typeof val === 'number' && Number.isFinite(val))
+        return String(val);
+    const text = String(val);
+    if (/^-?\d+$/.test(text) && Number.isSafeInteger(Number(text)) && String(Number(text)) === text)
+        return text;
     // 字符串：单引号转义
-    return `'${val.replace(/'/g, "''")}'`;
+    return `'${text.replace(/'/g, "''")}'`;
 }
 /**
  * 清理 SQL 标识符（防止注入）
@@ -58003,6 +58010,72 @@ async function restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU() {
  *  - 零猜测恢复：runId/原根指纹/聊天标识/隔离键/frame 拓扑不匹配时 fail-closed；
  *  - 终态：complete/stopped/failed/sync_pending 只在 session finalize/rollback 后写入。
  */
+function isolatedFieldText_ACU(message) {
+    return JSON.stringify(message?.TavernDB_ACU_IsolatedData ?? null);
+}
+function cloneChatForCandidate_ACU(chat) {
+    const candidateChat = JSON.parse(JSON.stringify(chat));
+    return {
+        candidateChat,
+        baseline: { messages: chat.slice(), isolatedFieldTexts: candidateChat.map(isolatedFieldText_ACU) },
+    };
+}
+/**
+ * 把候选中表格字段有变化的楼层回写 live 消息，写身份字段，并让续写资料随迁到 anchor 楼层。
+ * 候选克隆于 replay 与等锁之前，期间宿主可能追加或编辑消息：只回写这些字段，绝不整体替换聊天。
+ * 目标楼层在窗口内被替换或其表格字段被改动时拒绝。返回逐字段回滚函数。
+ */
+function applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat, baseline, anchorIndex, identityMessageIndex) {
+    const changes = [];
+    candidateChat.forEach((candidateMessage, index) => {
+        if (isolatedFieldText_ACU(candidateMessage) === baseline.isolatedFieldTexts[index])
+            return;
+        const liveMessage = chat[index];
+        if (liveMessage !== baseline.messages[index] || isolatedFieldText_ACU(liveMessage) !== baseline.isolatedFieldTexts[index]) {
+            throw new Error(`楼层 ${index} 在提交校验期间已变化，拒绝覆盖。`);
+        }
+        changes.push({
+            message: liveMessage,
+            hadField: Object.prototype.hasOwnProperty.call(liveMessage, 'TavernDB_ACU_IsolatedData'),
+            field: liveMessage.TavernDB_ACU_IsolatedData,
+            next: candidateMessage?.TavernDB_ACU_IsolatedData,
+        });
+    });
+    const identityMessage = identityMessageIndex === null ? null : chat[identityMessageIndex];
+    if (identityMessageIndex !== null && identityMessage !== baseline.messages[identityMessageIndex]) {
+        throw new Error(`楼层 ${identityMessageIndex} 在提交校验期间已变化，拒绝覆盖。`);
+    }
+    const hadIdentity = !!identityMessage && Object.prototype.hasOwnProperty.call(identityMessage, 'TavernDB_ACU_Identity');
+    const previousIdentity = identityMessage?.TavernDB_ACU_Identity;
+    changes.forEach(change => {
+        if (change.next === undefined)
+            delete change.message.TavernDB_ACU_IsolatedData;
+        else
+            change.message.TavernDB_ACU_IsolatedData = change.next;
+    });
+    if (identityMessage) {
+        writeMessageIdentity_ACU(identityMessage, {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+        });
+    }
+    const restoreMaterial = beginMaterialCheckpointSync_ACU(chat, anchorIndex);
+    return () => {
+        restoreMaterial();
+        if (identityMessage) {
+            if (hadIdentity)
+                identityMessage.TavernDB_ACU_Identity = previousIdentity;
+            else
+                delete identityMessage.TavernDB_ACU_Identity;
+        }
+        changes.forEach(change => {
+            if (change.hadField)
+                change.message.TavernDB_ACU_IsolatedData = change.field;
+            else
+                delete change.message.TavernDB_ACU_IsolatedData;
+        });
+    };
+}
 /** bridge 元数据所在 isolation tag 上的非 replay 字段名。 */
 const MANUAL_CATCH_UP_BRIDGE_FIELD_ACU = 'manualCatchUpProvisionalBridge';
 /**
@@ -58421,7 +58494,7 @@ async function establishProvisionalBridge_ACU(runId, selectedSheetKeys, rangeSta
         }
         // 4. 在原 full 位置暂存：完整备份原 full frame，并从原位置移除 replay full。
         //    原位置不得留下会在 provisional 基线上重复执行的未知 artifact。
-        const candidateChat = JSON.parse(JSON.stringify(chat));
+        const { candidateChat, baseline: candidateBaseline } = cloneChatForCandidate_ACU(chat);
         const provisionalMessage = candidateChat[rangeStartMessageIndex];
         if (!provisionalMessage || provisionalMessage.is_user) {
             return { ok: false, error: `追平起始楼层 ${rangeStartMessageIndex} 不是有效 AI 楼层。` };
@@ -58504,15 +58577,8 @@ async function establishProvisionalBridge_ACU(runId, selectedSheetKeys, rangeSta
         try {
             committed = await ctx.runCommit(async () => {
                 ctx.assertFresh('bridge direct chat mutation after commit lock');
-                const before = JSON.parse(JSON.stringify(chat));
-                notifyMaterialCheckpointFloor_ACU(candidateChat, rangeStartMessageIndex);
+                const rollback = applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat, candidateBaseline, rangeStartMessageIndex, rangeStartMessageIndex);
                 try {
-                    chat.length = 0;
-                    chat.push(...candidateChat);
-                    writeMessageIdentity_ACU(provisionalMessage, {
-                        enabled: settings_ACU.dataIsolationEnabled,
-                        code: settings_ACU.dataIsolationCode,
-                    });
                     await saveChatToHostStrict_ACU();
                     return {
                         ok: true,
@@ -58521,8 +58587,7 @@ async function establishProvisionalBridge_ACU(runId, selectedSheetKeys, rangeSta
                     };
                 }
                 catch (error) {
-                    chat.length = 0;
-                    chat.push(...before);
+                    rollback();
                     throw error;
                 }
             }, [{ kind: 'all' }]);
@@ -58609,7 +58674,7 @@ async function finalizeProvisionalBridge_ACU(runId, options) {
             provisionalSnapshotByKey[sheetKey] = JSON.parse(JSON.stringify(sheetData));
         }
         // 2. 候选聊天：恢复原 full frame 完整备份。
-        const candidateChat = JSON.parse(JSON.stringify(chat));
+        const { candidateChat, baseline: candidateBaseline } = cloneChatForCandidate_ACU(chat);
         const originalMessage = candidateChat[bridge.originalFullCheckpointIndex];
         if (!originalMessage) {
             return { ok: false, error: `原 full checkpoint 楼层 ${bridge.originalFullCheckpointIndex} 不存在，无法恢复原根。` };
@@ -58714,15 +58779,8 @@ async function finalizeProvisionalBridge_ACU(runId, options) {
         try {
             committed = await ctx.runCommit(async () => {
                 ctx.assertFresh('bridge direct chat mutation after commit lock');
-                const before = JSON.parse(JSON.stringify(chat));
-                notifyMaterialCheckpointFloor_ACU(candidateChat, bridge.originalFullCheckpointIndex);
+                const rollback = applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat, candidateBaseline, bridge.originalFullCheckpointIndex, bridge.originalFullCheckpointIndex);
                 try {
-                    chat.length = 0;
-                    chat.push(...candidateChat);
-                    writeMessageIdentity_ACU(originalMessage, {
-                        enabled: settings_ACU.dataIsolationEnabled,
-                        code: settings_ACU.dataIsolationCode,
-                    });
                     await saveChatToHostStrict_ACU();
                     return {
                         ok: true,
@@ -58733,8 +58791,7 @@ async function finalizeProvisionalBridge_ACU(runId, options) {
                     };
                 }
                 catch (error) {
-                    chat.length = 0;
-                    chat.push(...before);
+                    rollback();
                     throw error;
                 }
             }, [{ kind: 'all' }]);
@@ -58781,7 +58838,7 @@ async function rollbackProvisionalBridge_ACU(runId, options = {}) {
         if (!scopeCheck.ok) {
             return { ok: false, error: scopeCheck.error };
         }
-        const candidateChat = JSON.parse(JSON.stringify(chat));
+        const { candidateChat, baseline: candidateBaseline } = cloneChatForCandidate_ACU(chat);
         // 恢复原 full frame。
         const originalMessage = candidateChat[bridge.originalFullCheckpointIndex];
         if (!originalMessage)
@@ -58815,17 +58872,13 @@ async function rollbackProvisionalBridge_ACU(runId, options = {}) {
         try {
             committed = await ctx.runCommit(async () => {
                 ctx.assertFresh('bridge direct chat mutation after commit lock');
-                const before = JSON.parse(JSON.stringify(chat));
-                notifyMaterialCheckpointFloor_ACU(candidateChat, bridge.originalFullCheckpointIndex);
+                const rollback = applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat, candidateBaseline, bridge.originalFullCheckpointIndex, null);
                 try {
-                    chat.length = 0;
-                    chat.push(...candidateChat);
                     await saveChatToHostStrict_ACU();
                     return { ok: true };
                 }
                 catch (error) {
-                    chat.length = 0;
-                    chat.push(...before);
+                    rollback();
                     throw error;
                 }
             }, [{ kind: 'all' }]);
@@ -106946,11 +106999,13 @@ async function clearTableDataAtFloorsCore_ACU(targetMessageIndices, targetSheetK
         // 只处理 AI 消息（跳过用户消息）
         if (!msg || msg.is_user)
             continue;
+        // 整槽清空会连同向量指针一起删掉，必须在清之前取槽收集 manifest。
+        const tagDataBeforeClear = readIsolatedTagData_ACU(msg, isolationKey);
         const changed = targetAliases
             ? purgeTargetSheetKeysFromMessage_ACU(msg, targetAliases.sheetKeys, idx)
             : clearTableFieldsForIsolation_ACU(msg, isolationKey, isolationConfig);
         if (clearsSummaryOrOutline) {
-            const tagData = readIsolatedTagData_ACU(msg, isolationKey);
+            const tagData = readIsolatedTagData_ACU(msg, isolationKey) ?? tagDataBeforeClear;
             // 只剥离 tagData 上的引用并收集 manifest，聊天保存成功后才物理删除外置文件。
             if (await deleteVectorIndexManifestFromTagData_ACU(tagData, { deleteExternal: false, onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest) })) {
                 logDebug_ACU(`[清空楼层] 已标记消息索引 ${idx} 上的交火向量索引外置文件引用待删除。`);
@@ -112587,11 +112642,25 @@ async function commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, options) {
         try {
             commitResult = await ctx.runCommit(async () => {
                 ctx.assertFresh('boundary commit after commit lock');
-                const before = JSON.parse(JSON.stringify(chat));
+                // 候选克隆于两次 replay 与等锁之前；期间宿主可能追加/编辑消息。写入面已校验为
+                // 「仅原根楼层的当前隔离槽」，故只回写该槽，绝不整体替换聊天数组。
+                const liveRootMessage = chat[options.originalFullIndex];
+                const liveRootTagData = readIsolatedDataContainer_ACU(liveRootMessage)?.[isolationKey];
+                if (liveRootMessage !== originalMessage
+                    || !liveRootTagData?.storageFrame
+                    || getOriginalFullFrameFingerprint_ACU(liveRootTagData.storageFrame) !== liveFingerprint) {
+                    throw new Error(`原 full 楼层 ${options.originalFullIndex} 在汇合校验期间已变化，拒绝覆盖。`);
+                }
+                const hadIsolatedField = Object.prototype.hasOwnProperty.call(liveRootMessage, 'TavernDB_ACU_IsolatedData');
+                const previousIsolatedField = liveRootMessage.TavernDB_ACU_IsolatedData;
+                const hadIdentityField = Object.prototype.hasOwnProperty.call(liveRootMessage, 'TavernDB_ACU_Identity');
+                const previousIdentityField = liveRootMessage.TavernDB_ACU_Identity;
                 try {
-                    chat.length = 0;
-                    chat.push(...candidateChat);
-                    writeMessageIdentity_ACU(candidateOriginalMessage, {
+                    liveRootMessage.TavernDB_ACU_IsolatedData = {
+                        ...(readIsolatedDataContainer_ACU(liveRootMessage) || {}),
+                        [isolationKey]: originalTagData,
+                    };
+                    writeMessageIdentity_ACU(liveRootMessage, {
                         enabled: settings_ACU.dataIsolationEnabled,
                         code: settings_ACU.dataIsolationCode,
                     });
@@ -112606,8 +112675,14 @@ async function commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, options) {
                     };
                 }
                 catch (error) {
-                    chat.length = 0;
-                    chat.push(...before);
+                    if (hadIsolatedField)
+                        liveRootMessage.TavernDB_ACU_IsolatedData = previousIsolatedField;
+                    else
+                        delete liveRootMessage.TavernDB_ACU_IsolatedData;
+                    if (hadIdentityField)
+                        liveRootMessage.TavernDB_ACU_Identity = previousIdentityField;
+                    else
+                        delete liveRootMessage.TavernDB_ACU_Identity;
                     throw error;
                 }
             }, targetSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey })));
@@ -113220,6 +113295,34 @@ function planAffectedFramesUnchanged_ACU(plan) {
     }
     return null;
 }
+/** 恢复候选只改写这些消息的当前隔离槽；提交时据此只回写这些槽，不触碰聊天其余部分。 */
+function getRecoveryTargetMessageIndices_ACU(plan) {
+    return plan.kind === 'redundant_full_checkpoint_convergence'
+        ? (plan.redundantFullIndices || []).map(Number)
+        : [plan.sourceMessageIndex];
+}
+/**
+ * 把候选中目标消息的当前隔离槽写回 live 消息（保留消息对象、正文与其他隔离槽）。
+ * 返回逐字段回滚函数：宿主保存失败时只恢复被改写的字段。
+ */
+function applyRecoveredTagDataToLiveChat_ACU(plan, candidateChat) {
+    const previous = getRecoveryTargetMessageIndices_ACU(plan).map(messageIndex => {
+        const message = plan.chat[messageIndex];
+        const candidateTagData = readIsolatedTagData_ACU(candidateChat[messageIndex], plan.isolationKey);
+        if (!message || !candidateTagData)
+            throw new Error(`恢复目标消息缺失：messageIndex=${messageIndex}。`);
+        const hadField = Object.prototype.hasOwnProperty.call(message, 'TavernDB_ACU_IsolatedData');
+        const field = message.TavernDB_ACU_IsolatedData;
+        return { message, hadField, field, nextField: { ...cloneIsolatedData_ACU(message), [plan.isolationKey]: candidateTagData } };
+    });
+    previous.forEach(item => { item.message.TavernDB_ACU_IsolatedData = item.nextField; });
+    return () => previous.forEach(item => {
+        if (item.hadField)
+            item.message.TavernDB_ACU_IsolatedData = item.field;
+        else
+            delete item.message.TavernDB_ACU_IsolatedData;
+    });
+}
 function buildRecoveredCandidateChat_ACU(plan) {
     const sourceMessageIndex = plan.sourceMessageIndex;
     if (!Number.isInteger(sourceMessageIndex))
@@ -113695,13 +113798,13 @@ async function commitPreparedV2Recovery_ACU(planId, options = {}) {
                     plans_ACU.delete(planId);
                     return failure(affectedChanged);
                 }
-                const beforeChat = clone_ACU$3(plan.chat);
-                plan.chat.splice(0, plan.chat.length, ...candidateChat);
+                // 候选克隆于锁外；等锁期间宿主可能追加或编辑消息，只回写目标隔离槽，绝不整体替换聊天。
+                const rollback = applyRecoveredTagDataToLiveChat_ACU(plan, candidateChat);
                 try {
                     await saveChatToHostStrict_ACU();
                 }
                 catch (error) {
-                    plan.chat.splice(0, plan.chat.length, ...beforeChat);
+                    rollback();
                     return failure(`宿主保存失败，已恢复内存聊天：${getErrorMessage_ACU$1(error)}`);
                 }
                 plans_ACU.delete(planId);
@@ -114400,6 +114503,31 @@ function getTouchedSheetKeysFromSqlText_ACU(sqlText, tableData) {
 }
 function shouldDiscardUnauthorizedTableEdits_ACU() {
     return settings_ACU.discardUnauthorizedTableEditsEnabled !== false;
+}
+/**
+ * SQL 执行前的目标表授权（统一路径与 legacy 路径共用，必须在 live 引擎执行之前调用）。
+ * 只触及非目标表的语句在允许丢弃时剔除；同时触及目标与非目标表的语句一律拒绝。
+ */
+function authorizeSqlStatementsForTargets_ACU(statements, allowedSheetKeys, lookupData) {
+    const allowed = new Set(allowedSheetKeys);
+    const retained = [];
+    const discardedKeys = new Set();
+    for (const statement of statements) {
+        const touchedKeys = getTouchedSheetKeysFromSqlText_ACU(statement, lookupData);
+        const unauthorizedKeys = touchedKeys.filter(sheetKey => !allowed.has(sheetKey));
+        if (unauthorizedKeys.length === 0) {
+            retained.push(statement);
+            continue;
+        }
+        const touchesAuthorized = touchedKeys.some(sheetKey => allowed.has(sheetKey));
+        if (!shouldDiscardUnauthorizedTableEdits_ACU() || touchesAuthorized) {
+            return { ok: false, reason: 'unauthorized', unauthorizedKeys };
+        }
+        unauthorizedKeys.forEach(sheetKey => discardedKeys.add(sheetKey));
+    }
+    if (retained.length === 0)
+        return { ok: false, reason: 'all_discarded' };
+    return { ok: true, statements: retained, discardedKeys: [...discardedKeys].sort() };
 }
 /**
  * 填表基底来自聊天回放，而 SQL 却在 live runtime 上执行。外部脚本用 skipChatSave /
@@ -115195,44 +115323,23 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
             if (Array.isArray(response.job.targetSheetKeys) && response.job.targetSheetKeys.length > 0) {
                 // 授权集合必须与"已按 TemplateScope 过滤的目标"一致：隐藏表已从 scope 移除，
                 // 即使 AI 仍把它写进 targetSheetKeys，也不得授权写入（阶段3：统一 allowed）。
-                const allowedSheetKeys = new Set(scopedTargets);
-                const retainedStatements = [];
-                const discardedKeys = new Set();
-                for (const statement of reboundStatements) {
-                    // 表名归属同样以冻结 runtime 视图为准：baseSnapshot 可能是旧 schema/空表头，
-                    // 用它反查会让真实表被误判为"未授权"或"范围外"。
-                    const touchedKeys = getTouchedSheetKeysFromSqlText_ACU(statement, capturedSqlApplyScope?.runtimeData ? capturedSqlApplyScope.runtimeData : baseSnapshot);
-                    const unauthorizedKeys = touchedKeys.filter(sheetKey => !allowedSheetKeys.has(sheetKey));
-                    if (unauthorizedKeys.length === 0) {
-                        retainedStatements.push(statement);
-                        continue;
-                    }
-                    const authorizedKeys = touchedKeys.filter(sheetKey => allowedSheetKeys.has(sheetKey));
-                    const mayDiscardStatement = shouldDiscardUnauthorizedTableEdits_ACU()
-                        && authorizedKeys.length === 0
-                        && touchedKeys.length > 0;
-                    if (!mayDiscardStatement) {
-                        return {
-                            success: false,
-                            modifiedKeys: [],
-                            error: `统一提交失败：${formatResponseGroupReference_ACU(response)} 越权修改了非目标表 (${unauthorizedKeys.join(', ')})。允许写入表：${formatAllowedSheetKeys_ACU(scopedTargets)}。`,
-                            errorCategory: 'model',
-                        };
-                    }
-                    unauthorizedKeys.forEach(sheetKey => discardedKeys.add(sheetKey));
-                }
-                if (discardedKeys.size > 0) {
-                    logWarn_ACU(`[TargetScope] ${formatResponseGroupReference_ACU(response)} 已丢弃仅影响非目标表的 SQL statement: ${[...discardedKeys].sort().join(', ')}`);
-                }
-                reboundStatements = retainedStatements;
-                if (reboundStatements.length === 0) {
+                // 表名归属以冻结 runtime 视图为准：baseSnapshot 可能是旧 schema/空表头，
+                // 用它反查会让真实表被误判为"未授权"或"范围外"。
+                const authorization = authorizeSqlStatementsForTargets_ACU(reboundStatements, scopedTargets, capturedSqlApplyScope?.runtimeData ? capturedSqlApplyScope.runtimeData : baseSnapshot);
+                if (authorization.ok === false) {
                     return {
                         success: false,
                         modifiedKeys: [],
-                        error: `统一提交失败：${formatResponseGroupReference_ACU(response)} 的 SQL 仅修改非目标表，已全部丢弃。允许写入表：${formatAllowedSheetKeys_ACU(scopedTargets)}。请仅生成允许表的写入。`,
+                        error: authorization.reason === 'unauthorized'
+                            ? `统一提交失败：${formatResponseGroupReference_ACU(response)} 越权修改了非目标表 (${authorization.unauthorizedKeys.join(', ')})。允许写入表：${formatAllowedSheetKeys_ACU(scopedTargets)}。`
+                            : `统一提交失败：${formatResponseGroupReference_ACU(response)} 的 SQL 仅修改非目标表，已全部丢弃。允许写入表：${formatAllowedSheetKeys_ACU(scopedTargets)}。请仅生成允许表的写入。`,
                         errorCategory: 'model',
                     };
                 }
+                if (authorization.discardedKeys.length > 0) {
+                    logWarn_ACU(`[TargetScope] ${formatResponseGroupReference_ACU(response)} 已丢弃仅影响非目标表的 SQL statement: ${authorization.discardedKeys.join(', ')}`);
+                }
+                reboundStatements = authorization.statements;
             }
             const sqlText = reboundStatements.join(';\n');
             sqlTexts.push(sqlText);
@@ -116492,9 +116599,42 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                                 errorCategory: 'infrastructure',
                             };
                         }
+                        let tableEditSqlText = collectResult.tableEditText || '';
+                        if (Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0) {
+                            // live 引擎执行即生效，授权必须在执行前完成（与统一路径同一判定）。
+                            const sqlApplyScope = executionScope.sqlApplyScope;
+                            const lookupData = (sqlApplyScope?.runtimeData || rawBaseSnapshot);
+                            let reboundStatements = null;
+                            try {
+                                reboundStatements = rebindSqlMutationIdentifiers_ACU(normalizeSqlStatementsForRuntimeLog_ACU(tableEditSqlText), lookupData, sqlApplyScope?.templateData, {
+                                    requireKnownTables: true,
+                                    targetSheetKeys: sqlApplyScope?.activeSheetKeys ? new Set(sqlApplyScope.activeSheetKeys) : undefined,
+                                    requireKnownInsertColumns: true,
+                                });
+                            }
+                            catch {
+                                // 重绑失败交给 provider 原样报错（它内部做同一重绑），此处不改变错误分类。
+                            }
+                            if (reboundStatements) {
+                                const authorization = authorizeSqlStatementsForTargets_ACU(reboundStatements, targetSheetKeys, lookupData);
+                                if (authorization.ok === false) {
+                                    return {
+                                        success: false,
+                                        error: authorization.reason === 'unauthorized'
+                                            ? `填表越权修改了非目标表：${authorization.unauthorizedKeys.join('、')}。允许写入表：${formatAllowedSheetKeys_ACU(targetSheetKeys)}。`
+                                            : `填表 SQL 仅修改非目标表，已全部丢弃。允许写入表：${formatAllowedSheetKeys_ACU(targetSheetKeys)}。`,
+                                        errorCategory: 'model',
+                                    };
+                                }
+                                if (authorization.discardedKeys.length > 0) {
+                                    logWarn_ACU(`[TargetScope] 已丢弃仅影响非目标表的 SQL statement: ${authorization.discardedKeys.join(', ')}`);
+                                }
+                                tableEditSqlText = authorization.statements.join(';\n');
+                            }
+                        }
                         let parseResult;
                         try {
-                            parseResult = provider.applyEditsWithSystemRowIds([collectResult.tableEditText || ''], updateMode, executionScope.sqlApplyScope);
+                            parseResult = provider.applyEditsWithSystemRowIds([tableEditSqlText], updateMode, executionScope.sqlApplyScope);
                         }
                         catch (error) {
                             const isRuntimeSchemaError = error instanceof SqlRuntimeSnapshotError_ACU

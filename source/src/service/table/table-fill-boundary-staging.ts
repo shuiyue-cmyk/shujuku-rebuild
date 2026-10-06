@@ -915,11 +915,25 @@ export async function commitStagedSheetsAtFullBoundaryAtomic_ACU(
     try {
       commitResult = await ctx.runCommit(async () => {
         ctx.assertFresh('boundary commit after commit lock');
-        const before = JSON.parse(JSON.stringify(chat));
+        // 候选克隆于两次 replay 与等锁之前；期间宿主可能追加/编辑消息。写入面已校验为
+        // 「仅原根楼层的当前隔离槽」，故只回写该槽，绝不整体替换聊天数组。
+        const liveRootMessage = chat[options.originalFullIndex];
+        const liveRootTagData = readIsolatedDataContainer_ACU(liveRootMessage)?.[isolationKey] as any;
+        if (liveRootMessage !== originalMessage
+          || !liveRootTagData?.storageFrame
+          || getOriginalFullFrameFingerprint_ACU(liveRootTagData.storageFrame) !== liveFingerprint) {
+          throw new Error(`原 full 楼层 ${options.originalFullIndex} 在汇合校验期间已变化，拒绝覆盖。`);
+        }
+        const hadIsolatedField = Object.prototype.hasOwnProperty.call(liveRootMessage, 'TavernDB_ACU_IsolatedData');
+        const previousIsolatedField = liveRootMessage.TavernDB_ACU_IsolatedData;
+        const hadIdentityField = Object.prototype.hasOwnProperty.call(liveRootMessage, 'TavernDB_ACU_Identity');
+        const previousIdentityField = liveRootMessage.TavernDB_ACU_Identity;
         try {
-          chat.length = 0;
-          chat.push(...candidateChat);
-          writeMessageIdentity_ACU(candidateOriginalMessage, {
+          liveRootMessage.TavernDB_ACU_IsolatedData = {
+            ...(readIsolatedDataContainer_ACU(liveRootMessage) || {}),
+            [isolationKey]: originalTagData,
+          };
+          writeMessageIdentity_ACU(liveRootMessage, {
             enabled: settings_ACU.dataIsolationEnabled,
             code: settings_ACU.dataIsolationCode,
           });
@@ -933,8 +947,10 @@ export async function commitStagedSheetsAtFullBoundaryAtomic_ACU(
             verifiedHeadSnapshot: candidateHeadData ? JSON.parse(JSON.stringify(candidateHeadData)) : {},
           };
         } catch (error: any) {
-          chat.length = 0;
-          chat.push(...before);
+          if (hadIsolatedField) liveRootMessage.TavernDB_ACU_IsolatedData = previousIsolatedField;
+          else delete liveRootMessage.TavernDB_ACU_IsolatedData;
+          if (hadIdentityField) liveRootMessage.TavernDB_ACU_Identity = previousIdentityField;
+          else delete liveRootMessage.TavernDB_ACU_Identity;
           throw error;
         }
       }, targetSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey })));

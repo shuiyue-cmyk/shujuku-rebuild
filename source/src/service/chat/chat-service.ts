@@ -2293,11 +2293,13 @@ async function clearTableDataAtFloorsCore_ACU(targetMessageIndices: number[], ta
         // 只处理 AI 消息（跳过用户消息）
         if (!msg || msg.is_user) continue;
 
+        // 整槽清空会连同向量指针一起删掉，必须在清之前取槽收集 manifest。
+        const tagDataBeforeClear = readIsolatedTagData_ACU(msg, isolationKey);
         const changed = targetAliases
             ? purgeTargetSheetKeysFromMessage_ACU(msg, targetAliases.sheetKeys, idx)
             : clearTableFieldsForIsolation_ACU(msg, isolationKey, isolationConfig);
         if (clearsSummaryOrOutline) {
-            const tagData = readIsolatedTagData_ACU(msg, isolationKey);
+            const tagData = readIsolatedTagData_ACU(msg, isolationKey) ?? tagDataBeforeClear;
             // 只剥离 tagData 上的引用并收集 manifest，聊天保存成功后才物理删除外置文件。
             if (await deleteVectorIndexManifestFromTagData_ACU(tagData, { deleteExternal: false, onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest) })) {
                 logDebug_ACU(`[清空楼层] 已标记消息索引 ${idx} 上的交火向量索引外置文件引用待删除。`);

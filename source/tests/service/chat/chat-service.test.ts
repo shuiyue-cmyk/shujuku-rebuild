@@ -4689,6 +4689,22 @@ describe('向量外置文件删除必须晚于聊天保存', () => {
     expect(tagData.summaryVectorIndexState).toBeUndefined();
   });
 
+  it('clearTableDataAtFloors 整槽模式：先收集向量 manifest 再清槽，保存成功后删除外置文件', async () => {
+    // 曾先删整个隔离槽再读槽收集 manifest，读到的恒为 null，外置文件只能等 GC 兜底。
+    const manifest = makeVectorManifest('idx-clear-floors-whole-slot');
+    const chat = [makeMessageWithVectorManifest(manifest)];
+    mockGetChatArray.mockReturnValue(chat);
+
+    const count = await clearTableDataAtFloors_ACU([0]);
+
+    expect(count).toBe(1);
+    expect(chat[0].TavernDB_ACU_IsolatedData).toBeUndefined();
+    expect(mockDeleteSummaryVectorIndexExternal).toHaveBeenCalledWith(manifest);
+    expect(mockSaveChatToHost.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDeleteSummaryVectorIndexExternal.mock.invocationCallOrder[0],
+    );
+  });
+
   it('clearManualRefillIncrementalDataInRange：宿主保存失败时不删除外置向量文件', async () => {
     const manifest = makeVectorManifest('idx-refill-incremental-save-fail');
     const chat = [makeMessageWithVectorManifest(manifest)];

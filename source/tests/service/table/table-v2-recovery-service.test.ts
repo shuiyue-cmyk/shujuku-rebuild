@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   storageMode: 'native' as 'native' | 'sqlite',
   reload: vi.fn().mockResolvedValue(undefined),
   didFallback: vi.fn(() => false),
+  onTransactionStart: null as null | (() => void),
 }));
 vi.mock('../../../src/service/table/storage-mode', () => ({
   getCurrentStorageMode: () => h.storageMode,
@@ -24,7 +25,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   getCurrentIsolationKey_ACU: () => h.scope.isolationKey,
 }));
 vi.mock('../../../src/service/table/table-write-transaction', () => ({
-  runTableWriteTransaction_ACU: async (_options: any, task: any) => task({ runCommit: async (commit: any) => commit() }),
+  runTableWriteTransaction_ACU: async (_options: any, task: any) => (h.onTransactionStart?.(), task({ runCommit: async (commit: any) => commit() })),
 }));
 
 import { commitPreparedV2Recovery_ACU, prepareV2Recovery_ACU, scanV2IsolationDiagnostics_ACU } from '../../../src/service/table/table-v2-recovery-service';
@@ -55,6 +56,7 @@ describe('table-v2-recovery-service', () => {
     h.reload.mockResolvedValue(undefined);
     h.didFallback.mockReset();
     h.didFallback.mockReturnValue(false);
+    h.onTransactionStart = null;
   });
 
   it('扫描全部 V2 isolationKey 只返回诊断，不创建恢复计划或触发持久化副作用', async () => {
@@ -322,6 +324,28 @@ describe('table-v2-recovery-service', () => {
     await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({ status: 'commit_failed_rolled_back', error: expect.stringContaining('必须显式确认') });
     expect(h.chat).toEqual(before);
     expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it('等锁期间宿主追加消息或编辑正文：提交只改目标消息的表格字段，不回滚聊天', async () => {
+    // 曾用锁外克隆的旧聊天整体替换 live chat：窗口内的新消息与编辑被静默丢弃并严格落盘。
+    const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
+    h.chat = [...chatWithFrame(source), { is_user: true, mes: 'u1' }, { is_user: false, mes: 'a2' }];
+    const prepared = await prepareV2Recovery_ACU();
+    const sourceMessage = h.chat[0];
+    const editedMessage = h.chat[2];
+    h.onTransactionStart = () => {
+      h.chat.push({ is_user: true, mes: '等锁期间的新消息' });
+      editedMessage.mes = 'a2 已被宿主编辑';
+    };
+
+    const result = await commitPreparedV2Recovery_ACU(prepared.planId!);
+
+    expect(result).toEqual({ status: 'committed', planId: prepared.planId });
+    expect(h.chat.map(message => message.mes)).toEqual([undefined, 'u1', 'a2 已被宿主编辑', '等锁期间的新消息']);
+    expect(h.chat[0]).toBe(sourceMessage);
+    expect(h.chat[2]).toBe(editedMessage);
+    expect(h.chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.reason).toBe('integrity_repair');
+    expect(h.save).toHaveBeenCalledTimes(1);
   });
 
   it('宿主严格保存失败时恢复 live chat', async () => {

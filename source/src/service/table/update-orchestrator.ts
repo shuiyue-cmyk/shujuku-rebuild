@@ -993,6 +993,40 @@ function shouldDiscardUnauthorizedTableEdits_ACU(): boolean {
     return settings_ACU.discardUnauthorizedTableEditsEnabled !== false;
 }
 
+type SqlTargetAuthorization_ACU =
+    | { ok: true; statements: string[]; discardedKeys: string[] }
+    | { ok: false; reason: 'unauthorized'; unauthorizedKeys: string[] }
+    | { ok: false; reason: 'all_discarded' };
+
+/**
+ * SQL 执行前的目标表授权（统一路径与 legacy 路径共用，必须在 live 引擎执行之前调用）。
+ * 只触及非目标表的语句在允许丢弃时剔除；同时触及目标与非目标表的语句一律拒绝。
+ */
+function authorizeSqlStatementsForTargets_ACU(
+    statements: readonly string[],
+    allowedSheetKeys: readonly string[],
+    lookupData: Record<string, any>,
+): SqlTargetAuthorization_ACU {
+    const allowed = new Set(allowedSheetKeys);
+    const retained: string[] = [];
+    const discardedKeys = new Set<string>();
+    for (const statement of statements) {
+        const touchedKeys = getTouchedSheetKeysFromSqlText_ACU(statement, lookupData);
+        const unauthorizedKeys = touchedKeys.filter(sheetKey => !allowed.has(sheetKey));
+        if (unauthorizedKeys.length === 0) {
+            retained.push(statement);
+            continue;
+        }
+        const touchesAuthorized = touchedKeys.some(sheetKey => allowed.has(sheetKey));
+        if (!shouldDiscardUnauthorizedTableEdits_ACU() || touchesAuthorized) {
+            return { ok: false, reason: 'unauthorized', unauthorizedKeys };
+        }
+        unauthorizedKeys.forEach(sheetKey => discardedKeys.add(sheetKey));
+    }
+    if (retained.length === 0) return { ok: false, reason: 'all_discarded' };
+    return { ok: true, statements: retained, discardedKeys: [...discardedKeys].sort() };
+}
+
 /**
  * 填表基底来自聊天回放，而 SQL 却在 live runtime 上执行。外部脚本用 skipChatSave /
  * isImportMode 写入的行只存在于 runtime，必须在构建任何基底前先写回聊天，
@@ -1852,44 +1886,27 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
             if (Array.isArray(response.job.targetSheetKeys) && response.job.targetSheetKeys.length > 0) {
                 // 授权集合必须与"已按 TemplateScope 过滤的目标"一致：隐藏表已从 scope 移除，
                 // 即使 AI 仍把它写进 targetSheetKeys，也不得授权写入（阶段3：统一 allowed）。
-                const allowedSheetKeys = new Set(scopedTargets);
-                const retainedStatements: string[] = [];
-                const discardedKeys = new Set<string>();
-                for (const statement of reboundStatements) {
-                    // 表名归属同样以冻结 runtime 视图为准：baseSnapshot 可能是旧 schema/空表头，
-                    // 用它反查会让真实表被误判为"未授权"或"范围外"。
-                    const touchedKeys = getTouchedSheetKeysFromSqlText_ACU(statement, capturedSqlApplyScope?.runtimeData ? capturedSqlApplyScope.runtimeData as any : baseSnapshot);
-                    const unauthorizedKeys = touchedKeys.filter(sheetKey => !allowedSheetKeys.has(sheetKey));
-                    if (unauthorizedKeys.length === 0) {
-                        retainedStatements.push(statement);
-                        continue;
-                    }
-                    const authorizedKeys = touchedKeys.filter(sheetKey => allowedSheetKeys.has(sheetKey));
-                    const mayDiscardStatement = shouldDiscardUnauthorizedTableEdits_ACU()
-                        && authorizedKeys.length === 0
-                        && touchedKeys.length > 0;
-                    if (!mayDiscardStatement) {
-                        return {
-                            success: false,
-                            modifiedKeys: [],
-                            error: `统一提交失败：${formatResponseGroupReference_ACU(response)} 越权修改了非目标表 (${unauthorizedKeys.join(', ')})。允许写入表：${formatAllowedSheetKeys_ACU(scopedTargets)}。`,
-                            errorCategory: 'model',
-                        };
-                    }
-                    unauthorizedKeys.forEach(sheetKey => discardedKeys.add(sheetKey));
-                }
-                if (discardedKeys.size > 0) {
-                    logWarn_ACU(`[TargetScope] ${formatResponseGroupReference_ACU(response)} 已丢弃仅影响非目标表的 SQL statement: ${[...discardedKeys].sort().join(', ')}`);
-                }
-                reboundStatements = retainedStatements;
-                if (reboundStatements.length === 0) {
+                // 表名归属以冻结 runtime 视图为准：baseSnapshot 可能是旧 schema/空表头，
+                // 用它反查会让真实表被误判为"未授权"或"范围外"。
+                const authorization = authorizeSqlStatementsForTargets_ACU(
+                    reboundStatements,
+                    scopedTargets,
+                    capturedSqlApplyScope?.runtimeData ? capturedSqlApplyScope.runtimeData as any : baseSnapshot,
+                );
+                if (authorization.ok === false) {
                     return {
                         success: false,
                         modifiedKeys: [],
-                        error: `统一提交失败：${formatResponseGroupReference_ACU(response)} 的 SQL 仅修改非目标表，已全部丢弃。允许写入表：${formatAllowedSheetKeys_ACU(scopedTargets)}。请仅生成允许表的写入。`,
+                        error: authorization.reason === 'unauthorized'
+                            ? `统一提交失败：${formatResponseGroupReference_ACU(response)} 越权修改了非目标表 (${authorization.unauthorizedKeys.join(', ')})。允许写入表：${formatAllowedSheetKeys_ACU(scopedTargets)}。`
+                            : `统一提交失败：${formatResponseGroupReference_ACU(response)} 的 SQL 仅修改非目标表，已全部丢弃。允许写入表：${formatAllowedSheetKeys_ACU(scopedTargets)}。请仅生成允许表的写入。`,
                         errorCategory: 'model',
                     };
                 }
+                if (authorization.discardedKeys.length > 0) {
+                    logWarn_ACU(`[TargetScope] ${formatResponseGroupReference_ACU(response)} 已丢弃仅影响非目标表的 SQL statement: ${authorization.discardedKeys.join(', ')}`);
+                }
+                reboundStatements = authorization.statements;
             }
             const sqlText = reboundStatements.join(';\n');
             sqlTexts.push(sqlText);
@@ -3323,10 +3340,47 @@ export async function executeCardUpdateCore_ACU(
                                 errorCategory: 'infrastructure' as const,
                             };
                         }
+                        let tableEditSqlText = collectResult.tableEditText || '';
+                        if (Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0) {
+                            // live 引擎执行即生效，授权必须在执行前完成（与统一路径同一判定）。
+                            const sqlApplyScope = executionScope.sqlApplyScope;
+                            const lookupData = (sqlApplyScope?.runtimeData || rawBaseSnapshot) as any;
+                            let reboundStatements: string[] | null = null;
+                            try {
+                                reboundStatements = rebindSqlMutationIdentifiers_ACU(
+                                    normalizeSqlStatementsForRuntimeLog_ACU(tableEditSqlText),
+                                    lookupData,
+                                    sqlApplyScope?.templateData,
+                                    {
+                                        requireKnownTables: true,
+                                        targetSheetKeys: sqlApplyScope?.activeSheetKeys ? new Set(sqlApplyScope.activeSheetKeys) : undefined,
+                                        requireKnownInsertColumns: true,
+                                    },
+                                );
+                            } catch {
+                                // 重绑失败交给 provider 原样报错（它内部做同一重绑），此处不改变错误分类。
+                            }
+                            if (reboundStatements) {
+                                const authorization = authorizeSqlStatementsForTargets_ACU(reboundStatements, targetSheetKeys, lookupData);
+                                if (authorization.ok === false) {
+                                    return {
+                                        success: false,
+                                        error: authorization.reason === 'unauthorized'
+                                            ? `填表越权修改了非目标表：${authorization.unauthorizedKeys.join('、')}。允许写入表：${formatAllowedSheetKeys_ACU(targetSheetKeys)}。`
+                                            : `填表 SQL 仅修改非目标表，已全部丢弃。允许写入表：${formatAllowedSheetKeys_ACU(targetSheetKeys)}。`,
+                                        errorCategory: 'model' as const,
+                                    };
+                                }
+                                if (authorization.discardedKeys.length > 0) {
+                                    logWarn_ACU(`[TargetScope] 已丢弃仅影响非目标表的 SQL statement: ${authorization.discardedKeys.join(', ')}`);
+                                }
+                                tableEditSqlText = authorization.statements.join(';\n');
+                            }
+                        }
                         let parseResult: any;
                         try {
                             parseResult = provider.applyEditsWithSystemRowIds(
-                                [collectResult.tableEditText || ''],
+                                [tableEditSqlText],
                                 updateMode,
                                 executionScope.sqlApplyScope,
                             );

@@ -9496,3 +9496,80 @@ describe('orchestrateManualUpdate_ACU — 手动重填纪要向量镜像 wiring'
     expect(mockRebuildCurrentSummaryVectorIndexNow).toHaveBeenCalledWith({ reason: 'rebuild_repair' });
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// legacy SQL 路径（SQLite 自动填表普通组）目标表授权
+// ═══════════════════════════════════════════════════════════════
+describe('executeCardUpdateCore_ACU legacy SQL 目标表授权', () => {
+  const twoSheetData = () => ({
+    mate: { type: 'acu', version: 1 },
+    sheet_0: { uid: 'test', name: '目标表', sourceData: { ddl: 'CREATE TABLE test (row_id INTEGER PRIMARY KEY, v TEXT);' }, content: [['row_id', 'v']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
+    sheet_1: { uid: 'other', name: '非目标表', sourceData: { ddl: 'CREATE TABLE other (row_id INTEGER PRIMARY KEY, v TEXT);' }, content: [['row_id', 'v'], ['1', '原值']], updateConfig: {}, exportConfig: {}, orderNo: 1 },
+  });
+  let sharedProvider: any = null;
+  let setTimeoutSpy: any;
+  let savedSettings: any;
+
+  beforeEach(async () => {
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+    setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((cb: any) => { cb(); return 0 as any; });
+    savedSettings = mockSettings;
+    mockSettings = { ...mockSettings, tableMaxRetries: 1, autoUpdateTokenThreshold: 0 };
+    mockCurrentJsonTableData = twoSheetData();
+    const template: any = twoSheetData();
+    template.sheet_1.content = [['row_id', 'v']];
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue(template);
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: 'x' });
+    mockCheckIfFirstTimeInit.mockResolvedValue(false);
+    mockPersistTablesToChatMessage.mockReset().mockResolvedValue({ saved: true, messageIndex: 0 });
+    sharedProvider = null;
+    mockEnsureStorageProviderReady.mockImplementation(async () => {
+      if (sharedProvider) return sharedProvider;
+      const { SqlTableService } = await vi.importActual<any>('../../../src/service/table/sql-table-service');
+      sharedProvider = new SqlTableService();
+      const loaded = await sharedProvider.loadFromData(JSON.parse(JSON.stringify(mockCurrentJsonTableData)));
+      if (loaded.error) throw new Error(loaded.error);
+      return sharedProvider;
+    });
+  });
+
+  afterEach(async () => {
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(isSqliteMode).mockReturnValue(false);
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({ mate: { type: 'acu' }, sheet_0: { name: '测试表', updateConfig: { groupId: 0 } } } as any);
+    setTimeoutSpy.mockRestore();
+    mockSettings = savedSettings;
+    mockCurrentJsonTableData = null;
+  });
+
+  const runTargetingSheet0 = () => executeCardUpdateCore_ACU(
+    [{ is_user: false, mes: 'AI' }], 0, false, 'manual_independent', false, ['sheet_0'], null, new AbortController(),
+  );
+
+  it('只改非目标表的 SQL 不得在 live 引擎执行、不得持久化', async () => {
+    // 曾直接执行：非目标表被改写进 live SQLite，并作为 sql_sheet_batch 落盘，结果报成功。
+    mockCallCustomOpenAI.mockResolvedValue("<tableEdit>UPDATE other SET v = '越权' WHERE row_id = 1;</tableEdit>");
+
+    const result = await runTargetingSheet0();
+
+    expect(result.success).toBe(false);
+    expect(sharedProvider.exportLiveRuntimeDataStrict_ACU()?.sheet_1?.content).toEqual([['row_id', 'v'], ['1', '原值']]);
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('目标表与非目标表混写时只执行并持久化目标表语句', async () => {
+    mockCallCustomOpenAI.mockResolvedValue("<tableEdit>INSERT INTO test (v) VALUES ('目标行');\nUPDATE other SET v = '越权' WHERE row_id = 1;</tableEdit>");
+
+    const result = await runTargetingSheet0();
+
+    expect(result.success).toBe(true);
+    const live = sharedProvider.exportLiveRuntimeDataStrict_ACU();
+    expect(live?.sheet_1?.content).toEqual([['row_id', 'v'], ['1', '原值']]);
+    expect(live?.sheet_0?.content.slice(1).map((row: any[]) => row[1])).toEqual(['目标行']);
+    const persistedSheetKeys = (mockPersistTablesToChatMessage.mock.calls[0]?.[0]?.operations || []).map((operation: any) => operation.sheetKey);
+    expect(persistedSheetKeys).not.toContain('sheet_1');
+  });
+});

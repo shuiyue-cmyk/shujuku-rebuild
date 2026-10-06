@@ -454,14 +454,20 @@ function valueToString(val: SqlJsValueType): string | null {
 
 /**
  * 将 content 中的值转为 SQL 字面量
- * null/undefined → NULL, 数字字符串 → 数字, 其他 → 带引号的字符串
+ * null/undefined → NULL, 规范整数串 → 数字, 其他 → 带引号的字符串
+ *
+ * 只有「数值再转回文本仍逐字相同」的安全整数才输出裸数字：TEXT 列存的是数字的规范文本，
+ * "08"/"1.50"/超长数字作裸字面量会被改写成 "8"/"1.5"/科学计数法。
+ * 带引号的数字串进 INTEGER/REAL 列时仍由 SQLite 列亲和性转成数值。
  */
-function escapeValue(val: string | null | undefined): string {
+function escapeValue(val: string | number | null | undefined): string {
   if (val === null || val === undefined) return 'NULL';
-  // 纯数字（整数或浮点数）直接输出
-  if (/^-?\d+(\.\d+)?$/.test(val)) return val;
+  // 运行时 content 单元格也可能是真数值（非字符串），按数值原样输出。
+  if (typeof val === 'number' && Number.isFinite(val)) return String(val);
+  const text = String(val);
+  if (/^-?\d+$/.test(text) && Number.isSafeInteger(Number(text)) && String(Number(text)) === text) return text;
   // 字符串：单引号转义
-  return `'${val.replace(/'/g, "''")}'`;
+  return `'${text.replace(/'/g, "''")}'`;
 }
 
 /**

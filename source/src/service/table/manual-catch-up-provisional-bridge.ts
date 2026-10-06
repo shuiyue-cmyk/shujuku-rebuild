@@ -19,7 +19,7 @@ import {
   getChatArray_ACU,
   saveChatToHostStrict_ACU
 } from '../../data/gateways/chat-gateway';
-import { notifyMaterialCheckpointFloor_ACU } from '../chat/material-checkpoint-sync';
+import { beginMaterialCheckpointSync_ACU } from '../chat/material-checkpoint-sync';
 import {
   readIsolatedDataContainer_ACU,
   readIsolatedTagData_ACU,
@@ -58,6 +58,81 @@ import {
   runTableWriteTransaction_ACU
 } from './table-write-transaction';
 import { scheduleSummaryVectorMirrorFlushAfterPersist_ACU } from '../vector/summary-vector-index-flush-queue';
+
+/** 候选聊天克隆时的 live 基线：消息对象与各楼表格字段原文。 */
+interface CandidateChatBaseline_ACU {
+  messages: any[];
+  isolatedFieldTexts: string[];
+}
+
+function isolatedFieldText_ACU(message: any): string {
+  return JSON.stringify(message?.TavernDB_ACU_IsolatedData ?? null);
+}
+
+function cloneChatForCandidate_ACU(chat: any[]): { candidateChat: any[]; baseline: CandidateChatBaseline_ACU } {
+  const candidateChat = JSON.parse(JSON.stringify(chat)) as any[];
+  return {
+    candidateChat,
+    baseline: { messages: chat.slice(), isolatedFieldTexts: candidateChat.map(isolatedFieldText_ACU) },
+  };
+}
+
+/**
+ * 把候选中表格字段有变化的楼层回写 live 消息，写身份字段，并让续写资料随迁到 anchor 楼层。
+ * 候选克隆于 replay 与等锁之前，期间宿主可能追加或编辑消息：只回写这些字段，绝不整体替换聊天。
+ * 目标楼层在窗口内被替换或其表格字段被改动时拒绝。返回逐字段回滚函数。
+ */
+function applyCandidateTableFieldsToLiveChat_ACU(
+  chat: any[],
+  candidateChat: any[],
+  baseline: CandidateChatBaseline_ACU,
+  anchorIndex: number,
+  identityMessageIndex: number | null,
+): () => void {
+  const changes: Array<{ message: any; hadField: boolean; field: unknown; next: unknown }> = [];
+  candidateChat.forEach((candidateMessage, index) => {
+    if (isolatedFieldText_ACU(candidateMessage) === baseline.isolatedFieldTexts[index]) return;
+    const liveMessage = chat[index];
+    if (liveMessage !== baseline.messages[index] || isolatedFieldText_ACU(liveMessage) !== baseline.isolatedFieldTexts[index]) {
+      throw new Error(`楼层 ${index} 在提交校验期间已变化，拒绝覆盖。`);
+    }
+    changes.push({
+      message: liveMessage,
+      hadField: Object.prototype.hasOwnProperty.call(liveMessage, 'TavernDB_ACU_IsolatedData'),
+      field: liveMessage.TavernDB_ACU_IsolatedData,
+      next: candidateMessage?.TavernDB_ACU_IsolatedData,
+    });
+  });
+  const identityMessage = identityMessageIndex === null ? null : chat[identityMessageIndex];
+  if (identityMessageIndex !== null && identityMessage !== baseline.messages[identityMessageIndex]) {
+    throw new Error(`楼层 ${identityMessageIndex} 在提交校验期间已变化，拒绝覆盖。`);
+  }
+  const hadIdentity = !!identityMessage && Object.prototype.hasOwnProperty.call(identityMessage, 'TavernDB_ACU_Identity');
+  const previousIdentity = identityMessage?.TavernDB_ACU_Identity;
+
+  changes.forEach(change => {
+    if (change.next === undefined) delete change.message.TavernDB_ACU_IsolatedData;
+    else change.message.TavernDB_ACU_IsolatedData = change.next;
+  });
+  if (identityMessage) {
+    writeMessageIdentity_ACU(identityMessage, {
+      enabled: settings_ACU.dataIsolationEnabled,
+      code: settings_ACU.dataIsolationCode,
+    });
+  }
+  const restoreMaterial = beginMaterialCheckpointSync_ACU(chat, anchorIndex);
+  return () => {
+    restoreMaterial();
+    if (identityMessage) {
+      if (hadIdentity) identityMessage.TavernDB_ACU_Identity = previousIdentity;
+      else delete identityMessage.TavernDB_ACU_Identity;
+    }
+    changes.forEach(change => {
+      if (change.hadField) change.message.TavernDB_ACU_IsolatedData = change.field;
+      else delete change.message.TavernDB_ACU_IsolatedData;
+    });
+  };
+}
 
 /** bridge 元数据所在 isolation tag 上的非 replay 字段名。 */
 export const MANUAL_CATCH_UP_BRIDGE_FIELD_ACU = 'manualCatchUpProvisionalBridge';
@@ -534,7 +609,7 @@ export async function establishProvisionalBridge_ACU(
 
     // 4. 在原 full 位置暂存：完整备份原 full frame，并从原位置移除 replay full。
     //    原位置不得留下会在 provisional 基线上重复执行的未知 artifact。
-    const candidateChat = JSON.parse(JSON.stringify(chat)) as any[];
+    const { candidateChat, baseline: candidateBaseline } = cloneChatForCandidate_ACU(chat);
     const provisionalMessage = candidateChat[rangeStartMessageIndex];
     if (!provisionalMessage || provisionalMessage.is_user) {
       return { ok: false, error: `追平起始楼层 ${rangeStartMessageIndex} 不是有效 AI 楼层。` };
@@ -621,15 +696,8 @@ export async function establishProvisionalBridge_ACU(
     try {
       committed = await ctx.runCommit(async () => {
         ctx.assertFresh('bridge direct chat mutation after commit lock');
-        const before = JSON.parse(JSON.stringify(chat));
-        notifyMaterialCheckpointFloor_ACU(candidateChat, rangeStartMessageIndex);
+        const rollback = applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat, candidateBaseline, rangeStartMessageIndex, rangeStartMessageIndex);
         try {
-          chat.length = 0;
-          chat.push(...candidateChat);
-          writeMessageIdentity_ACU(provisionalMessage, {
-            enabled: settings_ACU.dataIsolationEnabled,
-            code: settings_ACU.dataIsolationCode,
-          });
           await saveChatToHostStrict_ACU();
           return {
             ok: true as const,
@@ -637,8 +705,7 @@ export async function establishProvisionalBridge_ACU(
             provisionalRootIndex: rangeStartMessageIndex,
           };
         } catch (error: any) {
-          chat.length = 0;
-          chat.push(...before);
+          rollback();
           throw error;
         }
       }, [{ kind: 'all' }]);
@@ -739,7 +806,7 @@ export async function finalizeProvisionalBridge_ACU(
     }
 
     // 2. 候选聊天：恢复原 full frame 完整备份。
-    const candidateChat = JSON.parse(JSON.stringify(chat)) as any[];
+    const { candidateChat, baseline: candidateBaseline } = cloneChatForCandidate_ACU(chat);
     const originalMessage = candidateChat[bridge.originalFullCheckpointIndex];
     if (!originalMessage) {
       return { ok: false, error: `原 full checkpoint 楼层 ${bridge.originalFullCheckpointIndex} 不存在，无法恢复原根。` };
@@ -849,15 +916,8 @@ export async function finalizeProvisionalBridge_ACU(
     try {
       committed = await ctx.runCommit(async () => {
         ctx.assertFresh('bridge direct chat mutation after commit lock');
-        const before = JSON.parse(JSON.stringify(chat));
-        notifyMaterialCheckpointFloor_ACU(candidateChat, bridge.originalFullCheckpointIndex);
+        const rollback = applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat, candidateBaseline, bridge.originalFullCheckpointIndex, bridge.originalFullCheckpointIndex);
         try {
-          chat.length = 0;
-          chat.push(...candidateChat);
-          writeMessageIdentity_ACU(originalMessage, {
-            enabled: settings_ACU.dataIsolationEnabled,
-            code: settings_ACU.dataIsolationCode,
-          });
           await saveChatToHostStrict_ACU();
           return {
             ok: true as const,
@@ -867,8 +927,7 @@ export async function finalizeProvisionalBridge_ACU(
             },
           };
         } catch (error: any) {
-          chat.length = 0;
-          chat.push(...before);
+          rollback();
           throw error;
         }
       }, [{ kind: 'all' }]);
@@ -923,7 +982,7 @@ export async function rollbackProvisionalBridge_ACU(
       return { ok: false, error: (scopeCheck as { ok: false; error: string }).error };
     }
 
-    const candidateChat = JSON.parse(JSON.stringify(chat)) as any[];
+    const { candidateChat, baseline: candidateBaseline } = cloneChatForCandidate_ACU(chat);
     // 恢复原 full frame。
     const originalMessage = candidateChat[bridge.originalFullCheckpointIndex];
     if (!originalMessage) return { ok: false, error: 'rollback 未找到原 full 楼层。' };
@@ -957,16 +1016,12 @@ export async function rollbackProvisionalBridge_ACU(
     try {
       committed = await ctx.runCommit(async () => {
         ctx.assertFresh('bridge direct chat mutation after commit lock');
-        const before = JSON.parse(JSON.stringify(chat));
-        notifyMaterialCheckpointFloor_ACU(candidateChat, bridge.originalFullCheckpointIndex);
+        const rollback = applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat, candidateBaseline, bridge.originalFullCheckpointIndex, null);
         try {
-          chat.length = 0;
-          chat.push(...candidateChat);
           await saveChatToHostStrict_ACU();
           return { ok: true as const };
         } catch (error: any) {
-          chat.length = 0;
-          chat.push(...before);
+          rollback();
           throw error;
         }
       }, [{ kind: 'all' }]);

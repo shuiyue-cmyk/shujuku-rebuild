@@ -683,6 +683,41 @@ describe('SyncBridge', () => {
   // ═══════════════════════════════════════════════════════════════
   // syncToJson
   // ═══════════════════════════════════════════════════════════════
+  describe('数字样文本往返', () => {
+    /**
+     * hydrate 曾把纯数字文本拼成裸数字字面量：TEXT 列存的是数字的规范文本，
+     * "08"→"8"、"007"→"7"、"1.50"→"1.5"，下一次导出落盘即永久改写用户数据。
+     */
+    it('TEXT 列与无类型列的数字样文本载入再导出逐字不变；INTEGER 列仍按数值比较', () => {
+      const values = ['08', '007', '1.50', '-0', '12345678901234567890', '0.30000000000000004', '5', '-12'];
+      const sheet = makeSheet({
+        sourceData: {
+          note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '',
+          ddl: `CREATE TABLE inventory ( -- 背包物品表
+  row_id INTEGER PRIMARY KEY, -- 行号
+  item_name TEXT NOT NULL, -- 物品名称
+  quantity INTEGER DEFAULT 1, -- 数量
+  description -- 描述
+);`,
+        },
+        content: [
+          ['row_id', '物品名称', '数量', '描述'],
+          ...values.map((value, index) => [String(index + 1), value, String(index + 1), value]),
+        ],
+      });
+      const data = makeTableData({ sheet_0: sheet });
+      bridge.loadFromTableData(data, { strict: true });
+
+      const exported = bridge.exportToTableData(makeMate(), { strict: true }).sheet_0 as Sheet_ACU;
+      expect(exported.content.slice(1).map(row => row[1])).toEqual(values);
+      expect(exported.content.slice(1).map(row => row[3])).toEqual(values);
+
+      const tableName = getRuntimeTableName(data, 'sheet_0');
+      const numeric = engine.query(`SELECT COUNT(*) FROM ${tableName} WHERE quantity > 3;`);
+      expect(numeric.values[0][0]).toBe(values.length - 3);
+    });
+  });
+
   describe('syncToJson', () => {
     it('同步 SQLite 数据到 JSON 视图', () => {
       const originalData = makeTableData({ sheet_0: makeSheet() });

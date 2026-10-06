@@ -381,6 +381,37 @@ describe('commitStagedSheetsAtFullBoundaryAtomic_ACU 边界汇合（计划 5.4�
     expect(originalTag?.storageFrame?.perSheetCheckpoints?.sheet_a).toBeUndefined();
   });
 
+  it('候选校验期间宿主追加消息或编辑正文：汇合只改原根楼层的隔离槽，不回滚聊天', async () => {
+    // 曾在提交时用旧快照整体替换 chat：校验窗口内的新消息与编辑被静默丢弃并严格落盘。
+    mocks.chat.push(...buildV2ChatWithFormalFull());
+    const originalRootMessage = mocks.chat[6];
+    const editedMessage = mocks.chat[1];
+    // 第 1 次回调是 live replay（快照克隆之前），第 2 次是候选 replay（克隆之后、提交之前）。
+    let replayCount = 0;
+    replayHooks.afterBoundaryReplay = () => {
+      replayCount += 1;
+      if (replayCount !== 2) return;
+      mocks.chat.push({ is_user: true, mes: '校验期间的新消息' });
+      editedMessage.mes = '校验期间被编辑';
+    };
+
+    const result = await commitStagedSheetsAtFullBoundaryAtomic_ACU('run-host-append', {
+      originalFullIndex: 6,
+      stagedSnapshot: { mate: { type: 'acu' }, sheet_a: sheet('表A', [['row_id', '值'], ['1', 'a1'], ['2', 'a2'], ['3', 'a3']]) },
+      targetSheetKeys: ['sheet_a'],
+      chatKey: mocks.chatIdentifier,
+      isolationKey: mocks.isolationKey,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mocks.chat[mocks.chat.length - 1]).toEqual({ is_user: true, mes: '校验期间的新消息' });
+    expect(mocks.chat[1]).toBe(editedMessage);
+    expect(editedMessage.mes).toBe('校验期间被编辑');
+    expect(mocks.chat[6]).toBe(originalRootMessage);
+    expect(originalRootMessage.TavernDB_ACU_IsolatedData[mocks.isolationKey].storageFrame.perSheetCheckpoints.sheet_a.timeline.kind).toBe('sheet_rebase');
+    expect(mocks.saveChatStrict).toHaveBeenCalledTimes(1);
+  });
+
   it('候选校验期间才切聊时，落盘前二次复检同样 fail-closed（本库 T18 双重复检）', async () => {
     mocks.chat.push(...buildV2ChatWithFormalFull());
     const before = JSON.parse(JSON.stringify(mocks.chat));

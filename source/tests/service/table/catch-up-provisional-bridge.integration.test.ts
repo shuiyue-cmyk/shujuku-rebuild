@@ -78,6 +78,20 @@ vi.mock('../../../src/data/storage/chat-history', async importOriginal => {
   };
 });
 
+// 候选批量 replay 完成后回调：模拟「校验窗口内宿主追加/编辑消息」。
+const replayHooks = vi.hoisted(() => ({ afterBoundaryReplay: null as null | (() => void) }));
+vi.mock('../../../src/service/table/storage-frame-v2-replay', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../src/service/table/storage-frame-v2-replay')>();
+  return {
+    ...actual,
+    loadTableStatesAtBoundariesFromFramesV2Detailed_ACU: vi.fn(async (...args: any[]) => {
+      const result = await (actual as any).loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(...args);
+      replayHooks.afterBoundaryReplay?.();
+      return result;
+    }),
+  };
+});
+
 import { ensureLegacyStorageMigratedBeforeWrite_ACU } from '../../../src/service/table/table-service';
 import {
   _resetTableWriteTransactionLocksForTest_ACU,
@@ -303,6 +317,41 @@ describe('manual catch-up provisional bridge 状态机（t4）', () => {
     mocks.settings.dataIsolationCode = '';
     mocks.chatIdentifier = 'catch-up-bridge-test-chat';
     mocks.isolationKey = '';
+  });
+
+  it('establish/finalize 候选校验窗口内宿主追加或编辑消息：只回写表格字段，不回滚聊天', async () => {
+    // 曾在提交时用旧快照整体替换 chat：校验窗口内的新消息与编辑被静默丢弃并严格落盘。
+    mocks.chat.push(...buildV2ChatWithFormalFull());
+    const isolationKey = mocks.isolationKey;
+    const runId = 'run-bridge-host-append';
+    const editedMessage = mocks.chat[1];
+    const injectOnce = (mes: string, edit: string) => {
+      replayHooks.afterBoundaryReplay = () => {
+        replayHooks.afterBoundaryReplay = null;
+        mocks.chat.push({ is_user: true, mes });
+        editedMessage.mes = edit;
+      };
+    };
+
+    injectOnce('establish 窗口新消息', 'establish 窗口编辑');
+    const establish = await establishProvisionalBridge_ACU(runId, ['sheet_a'], 0, 6, {
+      selectedSheetBaselines: { sheet_a: { lastCompletedAiFloor: 0, headerOnly: true } },
+      templateData: { sheet_a: sheet('表A', [['row_id', '值']]) },
+      chatKey: mocks.chatIdentifier,
+      isolationKey,
+    });
+    expect(establish.ok).toBe(true);
+    expect(mocks.chat[mocks.chat.length - 1]).toEqual({ is_user: true, mes: 'establish 窗口新消息' });
+    expect(mocks.chat[1]).toBe(editedMessage);
+    expect(editedMessage.mes).toBe('establish 窗口编辑');
+
+    injectOnce('finalize 窗口新消息', 'finalize 窗口编辑');
+    const finalize = await finalizeProvisionalBridge_ACU(runId, { chatKey: mocks.chatIdentifier, isolationKey, nextSaveTargetIndex: 6 });
+    expect(finalize.ok ? '' : (finalize as any).error).toBe('');
+    expect(mocks.chat.slice(-2).map((message: any) => message.mes)).toEqual(['establish 窗口新消息', 'finalize 窗口新消息']);
+    expect(editedMessage.mes).toBe('finalize 窗口编辑');
+    expect(mocks.chat[6]?.TavernDB_ACU_IsolatedData?.[isolationKey]?.storageFrame?.checkpoint?.kind).toBe('full');
+    replayHooks.afterBoundaryReplay = null;
   });
 
   it('建立 provisional bridge：唯一 active full + 原根完整备份 + 临时根落在追平起点', async () => {

@@ -260,6 +260,33 @@ function planAffectedFramesUnchanged_ACU(plan: RecoveryPlan_ACU): string | null 
   }
   return null;
 }
+/** 恢复候选只改写这些消息的当前隔离槽；提交时据此只回写这些槽，不触碰聊天其余部分。 */
+function getRecoveryTargetMessageIndices_ACU(plan: RecoveryPlan_ACU): number[] {
+  return plan.kind === 'redundant_full_checkpoint_convergence'
+    ? (plan.redundantFullIndices || []).map(Number)
+    : [plan.sourceMessageIndex as number];
+}
+
+/**
+ * 把候选中目标消息的当前隔离槽写回 live 消息（保留消息对象、正文与其他隔离槽）。
+ * 返回逐字段回滚函数：宿主保存失败时只恢复被改写的字段。
+ */
+function applyRecoveredTagDataToLiveChat_ACU(plan: RecoveryPlan_ACU, candidateChat: any[]): () => void {
+  const previous = getRecoveryTargetMessageIndices_ACU(plan).map(messageIndex => {
+    const message = plan.chat[messageIndex];
+    const candidateTagData = readIsolatedTagData_ACU(candidateChat[messageIndex], plan.isolationKey);
+    if (!message || !candidateTagData) throw new Error(`恢复目标消息缺失：messageIndex=${messageIndex}。`);
+    const hadField = Object.prototype.hasOwnProperty.call(message, 'TavernDB_ACU_IsolatedData');
+    const field = message.TavernDB_ACU_IsolatedData;
+    return { message, hadField, field, nextField: { ...cloneIsolatedData_ACU(message), [plan.isolationKey]: candidateTagData } };
+  });
+  previous.forEach(item => { item.message.TavernDB_ACU_IsolatedData = item.nextField; });
+  return () => previous.forEach(item => {
+    if (item.hadField) item.message.TavernDB_ACU_IsolatedData = item.field;
+    else delete item.message.TavernDB_ACU_IsolatedData;
+  });
+}
+
 function buildRecoveredCandidateChat_ACU(plan: RecoveryPlan_ACU): any[] {
   const sourceMessageIndex = plan.sourceMessageIndex;
   if (!Number.isInteger(sourceMessageIndex)) throw new Error('恢复计划缺少 sourceMessageIndex。');
@@ -725,12 +752,12 @@ export async function commitPreparedV2Recovery_ACU(
           return failure(affectedChanged);
         }
 
-        const beforeChat = clone_ACU(plan.chat);
-        plan.chat.splice(0, plan.chat.length, ...candidateChat);
+        // 候选克隆于锁外；等锁期间宿主可能追加或编辑消息，只回写目标隔离槽，绝不整体替换聊天。
+        const rollback = applyRecoveredTagDataToLiveChat_ACU(plan, candidateChat);
         try {
           await saveChatToHostStrict_ACU();
         } catch (error) {
-          plan.chat.splice(0, plan.chat.length, ...beforeChat);
+          rollback();
           return failure(`宿主保存失败，已恢复内存聊天：${getErrorMessage_ACU(error)}`);
         }
 
