@@ -46,13 +46,21 @@ async function mountAdvancedToolsLogPanel(seedLogs = true, warnLogEnabled = seed
 }
 
 function getPage(): HTMLElement {
-  const page = document.querySelector<HTMLElement>('.acu-v2-advanced-tools-page');
+  const page = document.querySelector<HTMLElement>('[data-ub-main]');
   expect(page).not.toBeNull();
   return page!;
 }
 
+function logSection(): HTMLElement {
+  return getPage().querySelector<HTMLElement>('#at-logs')!;
+}
+
+function logList(): HTMLElement {
+  return logSection().querySelector<HTMLElement>('.ub-at__loglist')!;
+}
+
 function findButton(label: string): HTMLButtonElement {
-  const button = Array.from(document.querySelectorAll<HTMLButtonElement>('.acu-v2-advanced-tools-page__log-panel button'))
+  const button = Array.from(logSection().querySelectorAll<HTMLButtonElement>('button'))
     .find(el => el.textContent?.includes(label));
   expect(button).not.toBeUndefined();
   return button!;
@@ -65,47 +73,23 @@ beforeEach(() => {
 });
 
 describe('AdvancedToolsPage log panel', () => {
-  it('渲染高级工具页内运行日志面板，状态徽章留在面板标题区', async () => {
+  it('渲染运行日志分节：筛选、搜索、自动滚动、状态徽章与当前显示计数', async () => {
     const { mount } = await mountAdvancedToolsLogPanel();
 
-    const page = getPage();
-    const text = page.textContent || '';
+    const section = logSection();
+    expect(section).not.toBeNull();
+    const text = section.textContent || '';
     expect(text).toContain('运行日志');
     expect(text).toContain('全部级别');
     expect(text).toContain('全部模块');
-    expect(text).toContain('SQL 控制台');
-    expect(page.querySelector<HTMLInputElement>('.acu-v2-advanced-tools-page input')?.placeholder).toBe('搜索日志内容');
-    expect(text).toContain('自动滚动');
+    expect(section.querySelector<HTMLInputElement>('input[aria-label="搜索日志内容"]')?.placeholder).toBe('搜索日志内容');
+    expect(section.querySelector('[role="switch"][aria-label="自动滚动"]')).not.toBeNull();
     expect(text).toContain('错误日志');
     expect(text).toContain('警告日志');
+    expect(text).toContain('实时更新中');
+    expect(text).toContain('当前显示');
     expect(text).not.toContain('缓冲区状态');
-
-    const panels = document.querySelectorAll('.acu-v2-advanced-tools-page .acu-panel');
-    expect(panels.length).toBe(3);
-    panels.forEach(panel => {
-      expect(panel.querySelector('.acu-panel__description-region .acu-info-banner')).not.toBeNull();
-      expect(panel.querySelector('.acu-panel__header .acu-info-banner')).toBeNull();
-    });
-
-    const mobileNavItems = Array.from(page.querySelectorAll('.acu-mobile-panel-nav__item'))
-      .map(item => item.textContent?.trim());
-    expect(mobileNavItems).toEqual(['SQL 控制台', '运行日志', 'Debug']);
-    expect(document.querySelector('.acu-v2-app__page-title')?.textContent?.trim()).toBe('高级工具');
-    expect(page.querySelector('.acu-page-header')).toBeNull();
-    expect(page.querySelector('.acu-v2-advanced-tools-page__log-panel .acu-panel__header')?.textContent || '').toContain('实时更新中');
-
-    const controlRow = page.querySelector<HTMLElement>('.acu-v2-advanced-tools-page__log-control-row');
-    expect(controlRow).not.toBeNull();
-    const [controlMain, hint] = Array.from(controlRow!.children) as HTMLElement[];
-    expect(controlMain.classList.contains('acu-v2-advanced-tools-page__log-control-main')).toBe(true);
-    expect(hint.classList.contains('acu-v2-advanced-tools-page__hint')).toBe(true);
-    const [actions, toggles] = Array.from(controlMain.children) as HTMLElement[];
-    expect(actions.classList.contains('acu-v2-advanced-tools-page__log-actions')).toBe(true);
-    expect(toggles.classList.contains('acu-v2-advanced-tools-page__toggles')).toBe(true);
-    const toggleLabels = Array.from(toggles.querySelectorAll<HTMLButtonElement>('.acu-toggle'))
-      .map(toggle => toggle.textContent?.trim());
-    expect(toggleLabels).toEqual(['自动滚动']);
-    expect(hint.textContent || '').toContain('当前显示');
+    expect(document.querySelector('.ub-top__title')?.textContent?.trim()).toBe('高级工具');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -117,20 +101,20 @@ describe('AdvancedToolsPage log panel', () => {
     logBuffer.pushLog('warn', ['[ACU]', '[SQL] 一条警告']);
     await waitForUi(30);
 
-    const rows = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-advanced-tools-page__log-row'));
+    const rows = Array.from(logList().querySelectorAll<HTMLElement>('.ub-at__log'));
     expect(rows.length).toBe(2);
-    const errorRow = rows.find(row => row.classList.contains('acu-v2-advanced-tools-page__log-row--error'))!;
-    const warnRow = rows.find(row => row.classList.contains('acu-v2-advanced-tools-page__log-row--warn'))!;
+    const errorRow = rows.find(row => row.classList.contains('is-error'))!;
+    const warnRow = rows.find(row => row.classList.contains('is-warn'))!;
 
-    const hint = errorRow.querySelector<HTMLDetailsElement>('.acu-v2-advanced-tools-page__log-hint');
+    const hint = errorRow.querySelector<HTMLDetailsElement>('.ub-at__log-hint');
     expect(hint).not.toBeNull();
     expect(hint!.dataset.hintId).toBe('http-429');
     expect(hint!.open).toBe(false);
     expect(hint!.textContent).toContain('限流');
     expect(hint!.textContent).toContain('怎么处理');
-    expect(hint!.querySelectorAll('.acu-v2-advanced-tools-page__log-hint-steps li').length).toBeGreaterThan(0);
+    expect(hint!.querySelectorAll('ol li').length).toBeGreaterThan(0);
 
-    expect(warnRow.querySelector('.acu-v2-advanced-tools-page__log-hint')).toBeNull();
+    expect(warnRow.querySelector('.ub-at__log-hint')).toBeNull();
 
     mount.__resetAcuV2MountForTests();
   });
@@ -138,33 +122,28 @@ describe('AdvancedToolsPage log panel', () => {
   it('按级别和关键词筛选日志列表', async () => {
     const { mount } = await mountAdvancedToolsLogPanel();
 
-    const levelSelect = document.querySelector<HTMLElement>('.acu-v2-advanced-tools-page .acu-select');
+    const levelSelect = logSection().querySelector<HTMLSelectElement>('select[aria-label="日志级别"]');
     expect(levelSelect).not.toBeNull();
-    levelSelect!.querySelector<HTMLButtonElement>('.acu-select__trigger')!.click();
-    await waitForUi();
-    const errorItem = Array.from(levelSelect!.querySelectorAll<HTMLElement>('.acu-select__item'))
-      .find(item => item.textContent?.trim() === 'Error');
-    expect(errorItem).not.toBeUndefined();
-    errorItem!.click();
+    levelSelect!.value = 'error';
+    levelSelect!.dispatchEvent(new Event('change', { bubbles: true }));
     await waitForUi();
 
-    let text = document.querySelector('.acu-v2-advanced-tools-page__log-list')?.textContent || '';
+    let text = logList().textContent || '';
     expect(text).toContain('错误日志');
     expect(text).not.toContain('警告日志');
 
-    const search = document.querySelector<HTMLInputElement>('.acu-v2-advanced-tools-page input');
-    expect(search).not.toBeNull();
-    search!.value = '不存在的关键词';
-    search!.dispatchEvent(new Event('input', { bubbles: true }));
+    const search = logSection().querySelector<HTMLInputElement>('input[aria-label="搜索日志内容"]')!;
+    search.value = '不存在的关键词';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
     await waitForUi();
 
-    text = document.querySelector('.acu-v2-advanced-tools-page__log-list')?.textContent || '';
+    text = logList().textContent || '';
     expect(text).toContain('暂无匹配日志');
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('Debug 卡片「开始 Debug」开启全部采集（debug+warn），日志进入缓冲区', async () => {
+  it('Debug 分节「开始 Debug」开启全部采集（debug+warn），日志进入缓冲区', async () => {
     const { mount, logBuffer } = await mountAdvancedToolsLogPanel(false, false);
 
     expect(logBuffer.isDebugLogEnabled()).toBe(false);
@@ -172,8 +151,7 @@ describe('AdvancedToolsPage log panel', () => {
     await waitForUi(30);
     expect(getPage().textContent || '').not.toContain('未开启不应出现');
 
-    // Debug 卡片一键开启采集（统一管理 debug+warn，替代旧的运行日志开关）
-    const debugStartButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.acu-v2-advanced-tools-page button'))
+    const debugStartButton = Array.from(getPage().querySelectorAll<HTMLButtonElement>('button'))
       .find(el => el.textContent?.includes('开始 Debug'));
     expect(debugStartButton).not.toBeUndefined();
     debugStartButton!.click();
@@ -186,7 +164,7 @@ describe('AdvancedToolsPage log panel', () => {
     logBuffer.pushLog('warn', ['[ACU]', '[SQL] Warn 已采集']);
     await waitForUi(30);
 
-    const text = getPage().textContent || '';
+    const text = logList().textContent || '';
     expect(text).toContain('Debug 已采集');
     expect(text).toContain('Warn 已采集');
 
@@ -201,21 +179,19 @@ describe('AdvancedToolsPage log panel', () => {
     logBuffer.pushLog('warn', ['[ACU]', '[暂停测试] 暂停期间新增']);
     await waitForUi(30);
 
-    let pageText = getPage().textContent || '';
-    expect(pageText).toContain('1 条暂停期间新增日志等待显示');
-    expect(document.querySelector('.acu-v2-advanced-tools-page__log-list')?.textContent || '').not.toContain('暂停期间新增');
+    expect(logSection().textContent || '').toContain('1 条暂停期间新增日志等待显示');
+    expect(logList().textContent || '').not.toContain('暂停期间新增');
 
-    findButton('暂停').click();
+    findButton('继续').click();
     await waitForUi();
 
-    pageText = getPage().textContent || '';
-    expect(pageText).toContain('暂停期间新增');
-    expect(pageText).toContain('实时更新中');
+    expect(logList().textContent || '').toContain('暂停期间新增');
+    expect(logSection().textContent || '').toContain('实时更新中');
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('清空与导出使用当前筛选后的日志数据', async () => {
+  it('导出走下载，结果走通知不占页面；清空后列表为空', async () => {
     const { mount, logBuffer } = await mountAdvancedToolsLogPanel(false, true);
     logBuffer.clearLogs();
     logBuffer.setDebugLogEnabled(true);
@@ -233,9 +209,8 @@ describe('AdvancedToolsPage log panel', () => {
 
     findButton('清空').click();
     await waitForUi();
-    const text = getPage().textContent || '';
-    expect(text).not.toContain('日志缓冲区已清空');
-    expect(text).toContain('暂无匹配日志');
+    expect(getPage().textContent || '').not.toContain('日志缓冲区已清空');
+    expect(logList().textContent || '').toContain('暂无匹配日志');
 
     mount.__resetAcuV2MountForTests();
   });

@@ -16,47 +16,41 @@
  * 必须写成 `var(--tt-base-viewport-height, <原回退>)`。纯相对值（`100%`）不管——它们相对的是
  * 父层而非视口，换变量是错的；`width` 上的单位也不管（宽度不受 IME 高度契约影响）。
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-/** 高度声明检查点：选择器可能在 @media 里出现多次（如对话框紧凑形态），必须每处都查。 */
-const viewportHeightDeclarations = [
-  { file: 'App.vue', selector: '.acu-v2-app__shell' },
-  { file: 'App.vue', selector: '.acu-v2-app__mobile-nav-layer' },
-  { file: 'components/_lib/AcuDrawer.vue', selector: '.acu-v2-drawer-layer' },
-  { file: 'components/_lib/AcuDialogHost.vue', selector: '.acu-dialog-layer' },
-  { file: 'components/_lib/AcuDialogHost.vue', selector: '.acu-dialog' },
-  { file: 'surfaces/visualizer/VisualizerSurface.vue', selector: '.acu-visualizer-surface__mobile-nav-layer' },
-];
+const UI_ROOT = join(process.cwd(), 'src/presentation-v3');
 
-function readComponent(relativePath: string): string {
-  return readFileSync(join(process.cwd(), 'src/presentation-v2', relativePath), 'utf8');
+/** 界面目录下全部 SFC：清单从目录派生，新增组件漏写基线变量会直接红灯。 */
+function listVueFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return listVueFiles(full);
+    return entry.name.endsWith('.vue') ? [full] : [];
+  });
 }
 
-/** 取某个选择器的全部规则体（含 @media 嵌套内的），并剥掉 CSS 注释（防“删声明留注释”假绿）。 */
-function ruleBodies(source: string, selector: string): string[] {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 'g');
-  const bodies: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(source)) !== null) {
-    bodies.push(match[1].replace(/\/\*[\s\S]*?\*\//g, ''));
-  }
-  return bodies;
+/** 取 <style> 内含视口单位的高度声明，剥掉 CSS 注释（防"删声明留注释"假绿）。 */
+function viewportHeightDecls(source: string): string[] {
+  const styles = Array.from(source.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)).map(m => m[1].replace(/\/\*[\s\S]*?\*\//g, ''));
+  return styles.flatMap(css => css.match(/(?:min-|max-)?height\s*:[^;]+/g) ?? [])
+    .filter(decl => /\d(?:d|s|l)?vh(?![a-z])/.test(decl));
 }
 
 describe('TT viewport 高度基线：视口高度声明首选 --tt-base-viewport-height', () => {
-  it.each(viewportHeightDeclarations)('$file 的 $selector 含 vh/dvh 的高度声明走宿主基线变量', ({ file, selector }) => {
-    const bodies = ruleBodies(readComponent(file), selector);
-    expect(bodies.length, `${selector} 规则必须存在（选择器改名会让本约定静默失效）`).toBeGreaterThan(0);
+  const files = listVueFiles(UI_ROOT);
+  const withDecls = files
+    .map(file => ({ file: relative(UI_ROOT, file), decls: viewportHeightDecls(readFileSync(file, 'utf8')) }))
+    .filter(item => item.decls.length > 0);
 
-    // 只查含 vh/dvh 单位的 height/min-height/max-height：纯 100% 是相对父层的，不管。
-    const viewportDecls = bodies.flatMap(body => body.match(/(?:min-|max-)?height\s*:[^;]+/g) ?? [])
-      .filter(decl => /v[hw]/.test(decl));
-    expect(viewportDecls.length, `${selector} 应有含视口单位的高度声明（否则本用例测不到东西）`).toBeGreaterThan(0);
-    for (const decl of viewportDecls) {
-      expect(decl, `${selector} 的“${decl.trim()}”必须首选 var(--tt-base-viewport-height, …)，否则 Android 键盘场景下高度抖动`)
+  it('能扫到含视口单位的高度声明（外壳本身就有一处），否则本约定测不到东西', () => {
+    expect(withDecls.map(item => item.file.replace(/\\/g, '/'))).toContain('App.vue');
+  });
+
+  it.each(withDecls)('$file 的视口高度声明都走宿主基线变量', ({ file, decls }) => {
+    for (const decl of decls) {
+      expect(decl, `${file} 的"${decl.trim()}"必须首选 var(--tt-base-viewport-height, …)，否则 Android 键盘场景下高度抖动`)
         .toMatch(/var\(--tt-base-viewport-height,/);
     }
   });

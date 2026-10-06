@@ -10,7 +10,11 @@ export type AcuV2BuiltinThemeId =
   | 'default-light'
   | 'default-dark'
   | 'creamy-minimal'
-  | 'jirai-kei';
+  | 'jirai-kei'
+  | 'claude'
+  | 'claude-night'
+  | 'mist-blue'
+  | 'midnight';
 
 export type AcuV2CustomThemeId = `custom:${string}`;
 

@@ -1,5 +1,5 @@
 /**
- * 新版界面外壳：挂载、逐页渲染无异常、切换经典界面往返。
+ * 新版界面外壳：挂载、逐页渲染无异常、关闭重开保留路由。
  *
  * @vitest-environment jsdom
  */
@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 describe('v3 外壳', () => {
-  it('注册新版后默认挂载新版界面，所有可见页面渲染无异常', { timeout: 90000 }, async () => {
+  it('挂载新版界面，所有可见页面渲染无异常', { timeout: 90000 }, async () => {
     const { mount, errors, router } = await mountV3({
       settings: allFeaturesSettings(),
       uiState: { devOptions: { developerOptionsEnabled: true } },
@@ -56,23 +56,21 @@ describe('v3 外壳', () => {
     expect(errors).toEqual([]);
   });
 
-  it('切回经典界面再切回新版，路由状态保留', async () => {
+  it('关闭再打开回到原页；外观面板里不再有切换旧界面的入口', async () => {
     const { mount, router } = await mountV3();
     cleanup = () => mount.__resetAcuV2MountForTests();
     router.setActivePage('api');
     await flush();
 
-    mount.switchAcuUiGeneration('classic');
+    mount.closeAcuV2App();
     await flush();
-    expect(document.querySelector('.acu-v2-app')).not.toBeNull();
-    expect(document.querySelector('.ub-app')).toBeNull();
-    expect(document.querySelector('.acu-v2-app__page-title')?.textContent).toContain('API');
-
-    const back = document.querySelector<HTMLButtonElement>('button[title="切换到新版界面"]');
-    expect(back).not.toBeNull();
-    back!.click();
+    await mount.openAcuV2App();
     await flush();
-    expect(document.querySelector('.ub-app')).not.toBeNull();
     expect(document.querySelector('.ub-top__title')?.textContent).toContain('API');
+
+    document.querySelector<HTMLButtonElement>('.ub-top button[title="外观与界面"]')!.click();
+    await flush();
+    expect(document.body.textContent).toContain('界面缩放');
+    expect(document.body.textContent).not.toContain('经典');
   });
 });

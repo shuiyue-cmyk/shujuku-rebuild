@@ -43,6 +43,8 @@ export function createV3Settings(): any {
 export interface V3MountOptions {
   settings?: any;
   uiState?: Record<string, unknown>;
+  /** 当前聊天的表格数据（数据库编辑器载入用）；缺省为空。 */
+  tableData?: any;
 }
 
 export async function mountV3(options: V3MountOptions = {}) {
@@ -58,23 +60,27 @@ export async function mountV3(options: V3MountOptions = {}) {
   const saveSettings = vi.fn(() => ({ saved: true, storageType: 'memory' }));
   vi.doMock('../../src/service/runtime/state-manager', async () => {
     const actual = await vi.importActual<any>('../../src/service/runtime/state-manager');
+    // 循环依赖会让部分服务在 mock 生效前绑定到真实模块（如 API 预设服务），
+    // 所以真实模块里的设置与聊天标识也要指向同一份。
+    actual._set_settings_ACU(settings);
+    actual._set_currentChatFileIdentifier_ACU('chat-v3');
     return {
       ...actual,
       settings_ACU: settings,
       currentChatFileIdentifier_ACU: 'chat-v3',
-      currentJsonTableData_ACU: null,
+      currentJsonTableData_ACU: options.tableData ?? null,
       coreApisAreReady_ACU: true,
       getCurrentIsolationKey_ACU: () => '',
     };
   });
   vi.doMock('../../src/service/settings/settings-service', async () => {
     const actual = await vi.importActual<any>('../../src/service/settings/settings-service');
+    // 同上：被循环依赖提前绑定到真实保存函数的服务（API 预设）走真实保存，放开"存储未就绪"门控。
+    actual._set_settingsStorageReadyForSave_ACU(true);
     return { ...actual, saveSettings_ACU: saveSettings };
   });
 
-  const install = await import('../../src/presentation-v3/bootstrap/install');
   const mount = await import('../../src/presentation-v2/bootstrap/mount');
-  install.installAcuV3();
   const errors: string[] = [];
   await mount.openAcuV2App();
   const app = mount.__getAcuV2AppForTests()!;

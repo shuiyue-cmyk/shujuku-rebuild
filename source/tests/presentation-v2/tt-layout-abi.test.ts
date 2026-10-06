@@ -14,23 +14,19 @@ function readSource(relativePath: string): string {
 }
 
 describe('TT Layout ABI — App.vue safe-area 变量绑定', () => {
-  const appSource = readSource('src/presentation-v2/App.vue');
+  const appSource = readSource('src/presentation-v3/App.vue');
 
-  it('--acu-native-safe-* 四项全部绑到宿主 --tt-inset-*，缺失时回退 0', () => {
-    expect(appSource).toContain('--acu-native-safe-top: max(var(--tt-inset-top, 0px), 0px);');
-    expect(appSource).toContain('--acu-native-safe-right: max(var(--tt-inset-right, 0px), 0px);');
-    expect(appSource).toContain('--acu-native-safe-left: max(var(--tt-inset-left, 0px), 0px);');
-    // bottom 额外并入 surface-local 键盘 inset（宿主把 --tt-ime-bottom 注入 fullscreen-window root）
+  it('--ub-safe-* 四项全部绑到宿主 --tt-inset-*（bottom 并入键盘 inset），缺失时回退 0', () => {
+    expect(appSource).toContain('--ub-safe-top: max(env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));');
+    expect(appSource).toContain('--ub-safe-right: max(env(safe-area-inset-right, 0px), var(--tt-inset-right, 0px));');
+    expect(appSource).toContain('--ub-safe-left: max(env(safe-area-inset-left, 0px), var(--tt-inset-left, 0px));');
     expect(appSource).toContain(
-      '--acu-native-safe-bottom: max(var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px), 0px);',
+      '--ub-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px));',
     );
   });
 
   it('为 TT firewall 强制 fixed 的 root 预置 shell 同级 z-index', () => {
-    const rootBlock = appSource.slice(
-      appSource.indexOf(':global(#acu-app-v2)'),
-      appSource.indexOf('box-sizing: border-box;'),
-    );
+    const rootBlock = appSource.slice(appSource.indexOf('#acu-app-v2 {'), appSource.indexOf('#acu-app-v2 button {'));
     expect(rootBlock).toContain('z-index: 9000;');
   });
 });
@@ -43,15 +39,14 @@ describe('TT Layout ABI — 浮层 surface 声明', () => {
     );
   });
 
-  it('VisualizerSurface 移动端导航遮罩层声明为 backdrop', () => {
-    const surfaceSource = readSource(
-      'src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue',
-    );
-    const layerBlock = surfaceSource.slice(
-      surfaceSource.indexOf('class="acu-visualizer-surface__mobile-nav-layer"'),
-      surfaceSource.indexOf('@click.self="closeMobileNav"'),
+  it('侧边面板（含数据库编辑器的表格切换）遮罩层声明为 backdrop', () => {
+    const sheetSource = readSource('src/presentation-v3/ui/UbSheet.vue');
+    const layerBlock = sheetSource.slice(
+      sheetSource.indexOf('class="ub-sheet-layer"'),
+      sheetSource.indexOf('@click.self="requestClose"'),
     );
     expect(layerBlock).toContain('data-tt-mobile-surface="backdrop"');
+    expect(readSource('src/presentation-v3/surfaces/VisualizerSurface.vue')).toContain('<UbSheet');
   });
 
   it('optimization-ui-exec 重优化对话框声明 free-window，配套遮罩声明 backdrop', () => {

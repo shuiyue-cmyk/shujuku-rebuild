@@ -53,7 +53,7 @@ const emit = defineEmits<{
 
 const displayValue = computed(() => (props.modelValue == null ? '' : String(props.modelValue)));
 
-/** 与经典界面一致：数字框返回 number，中间态（空串 / 单个负号 / 非法值）原样返回由业务层兜底。 */
+/** 数字框返回 number，中间态（空串 / 单个负号 / 非法值）原样返回由业务层兜底。 */
 function parseValue(raw: string): string | number {
   if (props.type !== 'number') return raw;
   if (raw === '' || raw === '-') return raw;

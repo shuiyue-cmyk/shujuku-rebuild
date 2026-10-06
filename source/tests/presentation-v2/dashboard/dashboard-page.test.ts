@@ -315,7 +315,7 @@ describe("DashboardPage", () => {
   it("默认渲染运行概览和基础开关；header 不再有 subtitle / 刷新按钮 / API 三件套", async () => {
     const { mount } = await mountDashboardPage();
 
-    const page = document.querySelector(".acu-v2-dashboard-page");
+    const page = document.querySelector("[data-ub-main]");
     expect(page).not.toBeNull();
     const text = page!.textContent || "";
 
@@ -324,15 +324,9 @@ describe("DashboardPage", () => {
     expect(text).not.toContain("当前使用 table-fast");
     expect(text).not.toContain("默认预设（全局）");
     expect(text).not.toContain("存储模式原生SQL");
-    expect(
-      page!.querySelector(".acu-v2-dashboard-page__setup-item"),
-    ).toBeNull();
-    expect(
-      page!.querySelector(".acu-v2-dashboard-page__status-table"),
-    ).toBeNull();
     expect(text).not.toContain("下一次");
     expect(text).not.toContain("[ERROR]");
-    expect(text).toContain("运行概览");
+    expect(page!.querySelector('section[aria-label="运行概览"]')).not.toBeNull();
     expect(text).toContain("API");
     expect(text).toContain("表格更新");
     expect(text).toContain("SQL 模式");
@@ -341,29 +335,29 @@ describe("DashboardPage", () => {
 
     const vectorHealth = Array.from(
       page!.querySelectorAll<HTMLElement>(
-        ".acu-v2-dashboard-page__health-item",
+        ".ub-health",
       ),
     ).find((item) => (item.textContent || "").includes("交火向量"));
     expect(vectorHealth).toBeDefined();
     expect(vectorHealth!.textContent || "").toContain("未启用");
     expect(
       vectorHealth!.classList.contains(
-        "acu-v2-dashboard-page__health-item--info",
+        "is-info",
       ),
     ).toBe(true);
-    expect(vectorHealth!.querySelector(".acu-badge--neutral")).not.toBeNull();
+    expect(vectorHealth!.querySelector(".ub-badge--neutral")).not.toBeNull();
 
-    // 基础设置默认呈现
-    expect(text).toContain("基础设置");
+    // 常用开关与功能进阶两节常显
+    expect(text).toContain("常用开关");
     expect(text).not.toContain("功能开关");
-    expect(text).toContain("高级设置");
+    expect(text).toContain("功能与进阶");
     expect(text).toContain("自动更新");
     expect(text).toContain("静默提示框");
     expect(text).not.toContain("开启流式输出"); // 已移至 API 页
 
     const visibleToggleKeys = Array.from(
       document.querySelectorAll<HTMLButtonElement>(
-        "button[data-acu-toggle-key]",
+        "#dash-basic-toggles button[data-acu-toggle-key]",
       ),
     ).map((button) => button.dataset.acuToggleKey);
     expect(visibleToggleKeys).toEqual([
@@ -372,13 +366,14 @@ describe("DashboardPage", () => {
       "toastMuteEnabled",
     ]);
 
-    // 默认在基础设置视图下，高级字段不可见
+    // 高级字段在「功能与进阶」节，不混进常用开关
     expect(
-      document.querySelector('button[data-acu-toggle-key="plotEnabled"]'),
+      document.querySelector('#dash-basic-toggles button[data-acu-toggle-key="plotEnabled"]'),
     ).toBeNull();
+    expect(
+      document.querySelector('#dash-advanced-toggles button[data-acu-toggle-key="plotEnabled"]'),
+    ).not.toBeNull();
     expect(text).not.toContain("启用条件模板功能");
-    expect(text).not.toContain("交火模式默认关闭");
-    expect(text).not.toContain("启用开发者选项");
     expect(text).not.toContain("启用SQL存储");
     // 旧存储模式 radio 不再由配置状态面板承载
     expect(text).not.toContain("决定表格数据如何持久化");
@@ -410,7 +405,7 @@ describe("DashboardPage", () => {
 
     const healthItems = Array.from(
       document.querySelectorAll<HTMLElement>(
-        ".acu-v2-dashboard-page__health-item",
+        ".ub-health",
       ),
     );
     const tableHealth = healthItems.find((item) =>
@@ -425,12 +420,12 @@ describe("DashboardPage", () => {
     for (const item of [tableHealth!, sqlHealth!]) {
       expect(item.textContent || "").toContain("未加载聊天");
       expect(
-        item.classList.contains("acu-v2-dashboard-page__health-item--info"),
+        item.classList.contains("is-info"),
       ).toBe(true);
       expect(
-        item.classList.contains("acu-v2-dashboard-page__health-item--warning"),
+        item.classList.contains("is-warning"),
       ).toBe(false);
-      expect(item.querySelector(".acu-badge--neutral")).not.toBeNull();
+      expect(item.querySelector(".ub-badge--neutral")).not.toBeNull();
       expect(item.querySelector("button")).toBeNull();
     }
     expect(tableHealth!.textContent || "").toContain("无法读取对应数据库表格");
@@ -448,7 +443,7 @@ describe("DashboardPage", () => {
 
     const sqlHealth = Array.from(
       document.querySelectorAll<HTMLElement>(
-        ".acu-v2-dashboard-page__health-item",
+        ".ub-health",
       ),
     ).find((item) => (item.textContent || "").includes("SQL 模式"));
 
@@ -471,7 +466,7 @@ describe("DashboardPage", () => {
 
     const sqlHealth = Array.from(
       document.querySelectorAll<HTMLElement>(
-        ".acu-v2-dashboard-page__health-item",
+        ".ub-health",
       ),
     ).find((item) => (item.textContent || "").includes("SQL 模式"));
 
@@ -498,7 +493,7 @@ describe("DashboardPage", () => {
 
     const healthItems = Array.from(
       document.querySelectorAll<HTMLElement>(
-        ".acu-v2-dashboard-page__health-item",
+        ".ub-health",
       ),
     );
     expect(healthItems.length).toBeGreaterThanOrEqual(4);
@@ -530,14 +525,14 @@ describe("DashboardPage", () => {
 
     const healthItems = Array.from(
       document.querySelectorAll<HTMLElement>(
-        ".acu-v2-dashboard-page__health-item",
+        ".ub-health",
       ),
     );
     const apiText = healthItems[0].textContent || "";
     expect(apiText).toContain('API 页当前预设 "table-fast" 已配置');
     expect(apiText).toContain("使用gpt-4");
     expect(
-      healthItems[0].querySelector(".acu-v2-dashboard-page__health-meta"),
+      healthItems[0].querySelector(".ub-health__meta"),
     ).toBeNull();
     expect(apiText).not.toContain("当前填表 API");
     expect(apiText).not.toContain("当前预设：");
@@ -556,7 +551,7 @@ describe("DashboardPage", () => {
     await Promise.resolve();
 
     const page = document.querySelector(
-      ".acu-v2-dashboard-page",
+      "[data-ub-main]",
     ) as HTMLElement;
     expect(page.textContent || "").toContain("最近日志指向 API 配置或连接问题");
     expect(page.textContent || "").toContain("查看运行日志");
@@ -583,9 +578,9 @@ describe("DashboardPage", () => {
     pushLog("error", ["[ACU]", "API请求失败: 500"]);
     await Promise.resolve();
     // 挂载页面的日志卡已更新（订阅生效），其余四卡不受影响
-    const text = document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
+    const text = document.querySelector("[data-ub-main]")?.textContent || "";
     expect(text).toContain("最近日志指向 API 配置或连接问题");
-    expect(document.querySelectorAll(".acu-v2-dashboard-page__health-item").length).toBe(5);
+    expect(document.querySelectorAll(".ub-health").length).toBe(5);
     expect(dashboard.healthItems.value.length).toBe(4);
 
     mount.__resetAcuV2MountForTests();
@@ -599,7 +594,7 @@ describe("DashboardPage", () => {
     await Promise.resolve();
 
     let pageText =
-      document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
+      document.querySelector("[data-ub-main]")?.textContent || "";
     expect(pageText).toContain("本次前端会话没有记录到 Error 级别日志。");
     expect(pageText).not.toContain("Warn");
 
@@ -614,7 +609,7 @@ describe("DashboardPage", () => {
     await Promise.resolve();
 
     pageText =
-      document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
+      document.querySelector("[data-ub-main]")?.textContent || "";
     expect(pageText).toContain("开发者模式下可见");
     expect(pageText).toContain("条 Warn");
 
@@ -627,7 +622,7 @@ describe("DashboardPage", () => {
     const { mount } = await mountDashboardPage(settings);
 
     const text =
-      document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
+      document.querySelector("[data-ub-main]")?.textContent || "";
     expect(text).toContain("交火向量");
     expect(text).toContain("配置不完整");
     expect(text).toContain("缺少“向量化URL”");
@@ -672,22 +667,13 @@ describe("DashboardPage", () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it("切换到高级设置后显示高级开关、存储模式（SQLite 固定）与开发者总开关", async () => {
+  it("功能与进阶节显示高级开关与开发者总开关，不再有存储模式开关（SQLite 固定）", async () => {
     const { mount } = await mountDashboardPage();
 
     // 找到 segmented control 的"高级设置"按钮
-    const segmentedButtons = Array.from(
-      document.querySelectorAll('button[role="radio"]'),
-    ) as HTMLButtonElement[];
-    const advancedBtn = segmentedButtons.find(
-      (b) => (b.textContent || "").trim() === "高级设置",
-    );
-    expect(advancedBtn).toBeDefined();
-    advancedBtn!.click();
-    await new Promise((r) => setTimeout(r, 0));
 
     const text =
-      document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
+      document.querySelector("[data-ub-main]")?.textContent || "";
     expect(text).toContain("剧情推进");
     expect(text).toContain("交火模式");
     expect(text).toContain("启用开发者选项");
@@ -696,7 +682,7 @@ describe("DashboardPage", () => {
 
     const visibleToggleKeys = Array.from(
       document.querySelectorAll<HTMLButtonElement>(
-        "button[data-acu-toggle-key]",
+        "#dash-advanced-toggles button[data-acu-toggle-key]",
       ),
     ).map((button) => button.dataset.acuToggleKey);
     expect(visibleToggleKeys).toEqual([
@@ -710,30 +696,21 @@ describe("DashboardPage", () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it("高级设置承载功能页开关，并控制对应一级页可见性", async () => {
+  it("功能与进阶节承载功能页开关，并控制对应一级页可见性", async () => {
     const { mount, settings } = await mountDashboardPage();
 
-    const segmentedButtons = Array.from(
-      document.querySelectorAll('button[role="radio"]'),
-    ) as HTMLButtonElement[];
-    const advancedBtn = segmentedButtons.find(
-      (b) => (b.textContent || "").trim() === "高级设置",
-    );
-    expect(advancedBtn).toBeDefined();
-    advancedBtn!.click();
-    await new Promise((r) => setTimeout(r, 0));
 
     let text =
-      document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
+      document.querySelector("[data-ub-main]")?.textContent || "";
     expect(text).toContain("剧情推进");
     expect(text).toContain("交火模式");
     expect(text).not.toContain("启用正文替换");
 
     expect(
-      document.querySelector(".acu-v2-sidebar")?.textContent || "",
+      document.querySelector(".ub-rail")?.textContent || "",
     ).not.toContain("剧情推进");
     expect(
-      document.querySelector(".acu-v2-sidebar")?.textContent || "",
+      document.querySelector(".ub-rail")?.textContent || "",
     ).not.toContain("交火模式");
 
     const plotToggle = document.querySelector(
@@ -751,7 +728,7 @@ describe("DashboardPage", () => {
 
     expect(settings.plotSettings.enabled).toBe(true);
     expect(settings.summaryVectorIndexModeDefault).toBe(true);
-    text = document.querySelector(".acu-v2-sidebar")?.textContent || "";
+    text = document.querySelector(".ub-rail")?.textContent || "";
     expect(text).toContain("剧情推进");
     expect(text).toContain("交火模式");
     expect(text).toContain("功能");
@@ -759,32 +736,24 @@ describe("DashboardPage", () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it("正文替换开关在高级设置中显示，开启后才显示页面并启用功能", async () => {
+  it("正文替换开关在功能与进阶节显示，开启后才显示页面并启用功能", async () => {
     const settings = createSettings();
     settings.contentOptimizationSettings.enabled = false;
     const { mount } = await mountDashboardPage(settings);
 
-    const segmentedButtons = Array.from(
-      document.querySelectorAll('button[role="radio"]'),
-    ) as HTMLButtonElement[];
-    const advancedBtn = segmentedButtons.find(
-      (b) => (b.textContent || "").trim() === "高级设置",
-    );
-    advancedBtn!.click();
-    await new Promise((r) => setTimeout(r, 0));
 
     const text =
-      document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
+      document.querySelector("[data-ub-main]")?.textContent || "";
     expect(text).not.toContain("功能开关");
     expect(text).toContain("正文替换");
     expect(
-      document.querySelector(".acu-v2-sidebar")?.textContent || "",
+      document.querySelector(".ub-rail")?.textContent || "",
     ).not.toContain("正文替换");
     expect(settings.contentOptimizationSettings.enabled).toBe(false);
 
     const visibleToggleKeys = Array.from(
       document.querySelectorAll<HTMLButtonElement>(
-        "button[data-acu-toggle-key]",
+        "#dash-advanced-toggles button[data-acu-toggle-key]",
       ),
     ).map((button) => button.dataset.acuToggleKey);
     expect(visibleToggleKeys).toEqual([
@@ -807,7 +776,7 @@ describe("DashboardPage", () => {
     expect(settings.contentOptimizationSettings.enabled).toBe(true);
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     expect(
-      document.querySelector(".acu-v2-sidebar")?.textContent || "",
+      document.querySelector(".ub-rail")?.textContent || "",
     ).toContain("正文替换");
 
     mount.__resetAcuV2MountForTests();
@@ -819,7 +788,7 @@ describe("DashboardPage", () => {
     const { mount, saveSettings } = await mountDashboardPage(settings);
 
     const text =
-      document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
+      document.querySelector("[data-ub-main]")?.textContent || "";
     expect(text).not.toContain("启用条件模板功能");
     expect(
       document.querySelector(
@@ -835,14 +804,6 @@ describe("DashboardPage", () => {
   it("开发者总开关会写入 dev-options 持久化", async () => {
     const { mount } = await mountDashboardPage();
 
-    const segmentedButtons = Array.from(
-      document.querySelectorAll('button[role="radio"]'),
-    ) as HTMLButtonElement[];
-    const advancedBtn = segmentedButtons.find(
-      (b) => (b.textContent || "").trim() === "高级设置",
-    );
-    advancedBtn!.click();
-    await new Promise((r) => setTimeout(r, 0));
 
     const devToggle = document.querySelector(
       'button[data-acu-toggle-key="developerOptionsEnabled"]',
@@ -864,7 +825,7 @@ describe("DashboardPage", () => {
 
     expect(dashboard.tableRows.value).toEqual([]);
     expect(dashboard.healthItems.value.length).toBeGreaterThanOrEqual(1);
-    expect(document.querySelector(".acu-v2-dashboard-page")).not.toBeNull();
+    expect(document.querySelector("[data-ub-main]")).not.toBeNull();
 
     mount.__resetAcuV2MountForTests();
   });
@@ -881,7 +842,7 @@ describe("DashboardPage", () => {
     // 装配错落在独立的 logHealthItem：其余四卡正常，日志卡降级
     expect(dashboard.healthItems.value.length).toBe(4);
     expect(dashboard.logHealthItem.value.key).toBe("dashboard-log-fallback");
-    const text = document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
+    const text = document.querySelector("[data-ub-main]")?.textContent || "";
     expect(text).toContain("运行日志卡暂不可用");
 
     mount.__resetAcuV2MountForTests();

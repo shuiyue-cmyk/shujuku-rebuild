@@ -1,7 +1,7 @@
 /**
  * page-catalog — 新版界面的页面目录
  *
- * 页面 id、标题、分组与可见性全部沿用经典界面的 router store（功能开关、基础/高手模式、
+ * 页面 id、标题、分组与可见性全部来自 router store（功能开关、基础/高手模式、
  * 开发者选项的显隐逻辑只有一份）；这里只补新版界面自己的组件、图标与一句话说明。
  */
 import { markRaw, type Component } from 'vue';

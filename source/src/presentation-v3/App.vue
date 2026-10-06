@@ -95,7 +95,7 @@
 <script setup lang="ts">
 /**
  * 新版界面外壳（v3）。
- * 状态全部复用经典界面的 Pinia store：路由、模式、主题、可视化编辑器、提示框、对话框。
+ * 状态全部放在 presentation-v2 的 Pinia store：路由、模式、主题、可视化编辑器、提示框、对话框。
  * 桌面：左侧导航栏；手机（≤760px）：顶栏＋全屏页面目录。
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
@@ -194,7 +194,25 @@ watch(() => rootShell.scrollResetTick, resetScroll);
 </script>
 
 <style>
-/* ── 设计令牌：颜色取自当前主题（主题系统与经典界面共用），尺寸随"界面缩放"等比变化 ── */
+/* ── 挂载根 ── TT 移动端 geometry firewall 会把 fullscreen-window root（本元素）强制 position:fixed
+   并形成层叠上下文；预置与 shell 同级的 z-index 保持整体层级不回退。非定位元素（桌面/原版 ST）忽略此声明。 */
+#acu-app-v2 {
+  z-index: 9000;
+  box-sizing: border-box;
+}
+
+#acu-app-v2 button {
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#acu-app-v2 button:focus:not(:focus-visible) {
+  outline: none;
+  box-shadow: none;
+}
+
+/* ── 设计令牌：颜色取自当前主题，尺寸随"界面缩放"等比变化 ── */
 .ub-app {
   --ub-u: calc(1px * var(--acu-ui-scale, 1));
 

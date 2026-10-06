@@ -328,7 +328,7 @@ beforeEach(() => {
 
 async function clickDialogButton(label: string): Promise<void> {
   await Promise.resolve();
-  const layer = document.querySelector<HTMLElement>('.acu-dialog-layer');
+  const layer = document.querySelector<HTMLElement>('.ub-dialog-layer');
   expect(layer).not.toBeNull();
   const button = Array.from(layer!.querySelectorAll<HTMLButtonElement>('button'))
     .find(item => item.textContent?.includes(label));
@@ -339,11 +339,11 @@ async function clickDialogButton(label: string): Promise<void> {
 
 async function clickDialogCheckbox(label: string): Promise<void> {
   await Promise.resolve();
-  const layer = document.querySelector<HTMLElement>('.acu-dialog-layer');
+  const layer = document.querySelector<HTMLElement>('.ub-dialog-layer');
   expect(layer).not.toBeNull();
-  const checkbox = Array.from(layer!.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]'))
-    .find(item => item.textContent?.includes(label));
-  expect(checkbox).not.toBeUndefined();
+  const checkbox = Array.from(layer!.querySelectorAll<HTMLElement>('label.ub-check'))
+    .find(item => item.textContent?.includes(label))?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+  expect(checkbox).toBeTruthy();
   checkbox!.click();
   await Promise.resolve();
 }
@@ -351,9 +351,9 @@ async function clickDialogCheckbox(label: string): Promise<void> {
 /** 导入 Checkpoint 的可选「覆盖到第几楼」步骤：留空 → 不声明，填值 → 声明该楼层。 */
 async function submitCheckpointFloorPrompt(value: string): Promise<void> {
   await Promise.resolve();
-  const layer = document.querySelector<HTMLElement>('.acu-dialog-layer');
+  const layer = document.querySelector<HTMLElement>('.ub-dialog-layer');
   expect(layer).not.toBeNull();
-  const input = layer!.querySelector<HTMLInputElement>('.acu-dialog__field input');
+  const input = layer!.querySelector<HTMLInputElement>('.ub-dialog__field input');
   expect(input).not.toBeNull();
   input!.value = value;
   input!.dispatchEvent(new Event('input', { bubbles: true }));
@@ -361,16 +361,17 @@ async function submitCheckpointFloorPrompt(value: string): Promise<void> {
 }
 
 describe('DataMgmtPage', () => {
-  it('隐藏旧数据管理入口，仅保留备份 Checkpoint 与删除清理面板', async () => {
+  it('隐藏旧数据管理入口，仅保留备份 Checkpoint、休眠数据与删除清理分节', async () => {
     const { mount } = await mountDataMgmtPage();
 
-    const page = document.querySelector('.acu-v2-data-mgmt-page');
+    const page = document.querySelector('[data-ub-main]');
     expect(page).not.toBeNull();
     const text = page!.textContent || '';
-    expect(document.querySelector('.acu-v2-app__page-title')?.textContent?.trim()).toBe('数据管理');
+    expect(document.querySelector('.ub-top__title')?.textContent?.trim()).toBe('数据管理');
     expect(text).toContain('备份与恢复');
     expect(text).toContain('删除与清理');
-    expect(text).toContain('当前聊天 Checkpoint');
+    expect(text).toContain('导出 Checkpoint');
+    expect(text).toContain('导入 Checkpoint');
     expect(text).not.toContain('数据隔离');
     expect(text).not.toContain('删除当前标识注入条目');
     expect(text).not.toContain('SQLite 运行时诊断');
@@ -383,76 +384,26 @@ describe('DataMgmtPage', () => {
     expect(text).not.toContain('删除当前交火索引');
     expect(text).not.toContain('清空临时缓存');
 
+    // 无混合存储决议 / 恢复诊断时只有三节，顺序：备份恢复 → 休眠数据 → 删除清理
+    const titles = Array.from(page!.querySelectorAll('.ub-section__title')).map(title => title.textContent?.trim());
+    expect(titles).toEqual(['备份与恢复', '休眠数据', '删除与清理']);
+
     mount.__resetAcuV2MountForTests();
   });
 
-
-
-
-
-
-  it('每个面板都渲染常驻说明信息条', async () => {
+  it('删除与清理分节分为自动清理与手动删除，含保留层数与恢复默认配置', async () => {
     const { mount } = await mountDataMgmtPage();
 
-    const panels = document.querySelectorAll('.acu-v2-data-mgmt-page .acu-panel');
-    expect(panels.length).toBe(3);
-    panels.forEach(panel => {
-      expect(panel.querySelector('.acu-panel__description-region .acu-info-banner')).not.toBeNull();
-      expect(panel.querySelector('.acu-panel__header .acu-info-banner')).toBeNull();
-    });
+    const cleanup = document.getElementById('dm-cleanup')!;
+    expect(cleanup.querySelector('.ub-section__desc')?.textContent?.trim()).toBeTruthy();
+    expect(cleanup.querySelector('[data-ub-row="保留数据层数"]')).not.toBeNull();
+    expect(cleanup.querySelector('.ub-dm__group')?.textContent).toContain('手动删除');
+    expect(cleanup.textContent || '').not.toContain('删除当前标识本地数据');
+    expect(cleanup.textContent || '').toContain('恢复默认配置');
+    expect(document.getElementById('dm-checkpoint')!.querySelector('.ub-section__desc')?.textContent?.trim()).toBeTruthy();
 
     mount.__resetAcuV2MountForTests();
   });
-
-  it('左列只保留备份恢复，右列保留删除清理', async () => {
-    const { mount } = await mountDataMgmtPage();
-
-    const columns = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__panel-stack'));
-    expect(columns).toHaveLength(2);
-
-    const leftTitles = Array.from(columns[0].querySelectorAll<HTMLElement>('.acu-panel__title'))
-      .map(title => title.textContent?.trim() || '');
-    const rightTitles = Array.from(columns[1].querySelectorAll<HTMLElement>('.acu-panel__title'))
-      .map(title => title.textContent?.trim() || '');
-
-    expect(leftTitles).toEqual(['备份与恢复']);
-    // S3-4：右列在删除清理面板上方新增常驻「休眠数据」面板。
-    expect(rightTitles).toEqual(['休眠数据', '删除与清理']);
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('删除与清理面板分为自动清理和手动删除', async () => {
-    const { mount } = await mountDataMgmtPage();
-
-    const cleanupPanel = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page .acu-panel'))
-      .find(el => el.querySelector('.acu-panel__title')?.textContent?.includes('删除与清理'))!;
-    const sectionTitles = Array.from(cleanupPanel.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__section-title'))
-      .map(title => title.textContent?.trim() || '');
-
-    expect(sectionTitles).toEqual(['自动清理', '手动删除']);
-    expect(cleanupPanel.textContent || '').toContain('保留数据层数');
-    expect(cleanupPanel.textContent || '').not.toContain('删除当前标识本地数据');
-    expect(cleanupPanel.textContent || '').toContain('恢复默认配置');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-
-  it('全局 header 展示当前页标题，页面内不再渲染重复 header', async () => {
-    const { mount } = await mountDataMgmtPage();
-
-    expect(document.querySelector('.acu-v2-data-mgmt-page .acu-page-header')).toBeNull();
-    const globalTitle = document.querySelector('.acu-v2-app__page-title');
-    expect(globalTitle?.textContent?.trim()).toBe('数据管理');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-
-
-
-
 
   it('T5 范围留空点删除所有本地数据 → 走 purge 分支（两级确认后 deleteLocalDataWithScope 收到 all/null/null/purge）', async () => {
     const { mount, deleteLocalDataWithScope } = await mountDataMgmtPage();
@@ -519,7 +470,7 @@ describe('DataMgmtPage', () => {
     await new Promise(r => setTimeout(r, 0));
     await new Promise(r => setTimeout(r, 0));
 
-    expect(document.querySelector('.acu-v2-toast--error')?.textContent).toContain('当前聊天记录为空');
+    expect(document.querySelector('.ub-toast--error')?.textContent).toContain('当前聊天记录为空');
     expect(document.body.textContent || '').not.toContain('已删除所有本地数据');
 
     mount.__resetAcuV2MountForTests();
@@ -540,7 +491,7 @@ describe('DataMgmtPage', () => {
     await new Promise(r => setTimeout(r, 0));
     await new Promise(r => setTimeout(r, 0));
 
-    expect(document.querySelector('.acu-v2-toast--warning')?.textContent).toContain('本地数据已全部硬清空');
+    expect(document.querySelector('.ub-toast--warning')?.textContent).toContain('本地数据已全部硬清空');
     expect(document.body.textContent || '').toContain('世界书清理失败');
 
     mount.__resetAcuV2MountForTests();
@@ -554,7 +505,7 @@ describe('DataMgmtPage', () => {
     button!.click();
     await clickDialogButton('删除所有本地数据');
     // 第二级点取消（关闭对话框）
-    const layer = document.querySelector<HTMLElement>('.acu-dialog-layer');
+    const layer = document.querySelector<HTMLElement>('.ub-dialog-layer');
     const cancelButton = Array.from(layer!.querySelectorAll<HTMLButtonElement>('button'))
       .find(item => item.textContent?.includes('取消'));
     expect(cancelButton).toBeDefined();
@@ -570,7 +521,7 @@ describe('DataMgmtPage', () => {
     const { mount, deleteLocalDataWithScope, loadOrCreate, cleanupWorldbook, reloadStorageProvider, refreshMerged } = await mountDataMgmtPage('chat-data', null, true);
     // 通过起始楼层输入框驱动 deleteRange.startFloor = 2 → 未覆盖第 1 层 → range
     const startFloorInput = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="number"]'))
-      .find(input => input.closest('.acu-form-row')?.textContent?.includes('起始楼层'))!;
+      .find(input => input.closest('.ub-row')?.textContent?.includes('起始楼层'))!;
     startFloorInput.value = '2';
     startFloorInput.dispatchEvent(new Event('input', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
@@ -597,7 +548,7 @@ describe('DataMgmtPage', () => {
     const { mount } = await mountDataMgmtPage();
     // 通过起始楼层输入框驱动 deleteRange.startFloor = 2 → 局部范围
     const startFloorInput = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="number"]'))
-      .find(input => input.closest('.acu-form-row')?.textContent?.includes('起始楼层'))!;
+      .find(input => input.closest('.ub-row')?.textContent?.includes('起始楼层'))!;
     startFloorInput.value = '2';
     startFloorInput.dispatchEvent(new Event('input', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
@@ -613,7 +564,7 @@ describe('DataMgmtPage', () => {
     expect(document.body.textContent || '').not.toContain('再次确认删除');
 
     // 关闭弹窗
-    const layer = document.querySelector<HTMLElement>('.acu-dialog-layer');
+    const layer = document.querySelector<HTMLElement>('.ub-dialog-layer');
     const cancelButton = Array.from(layer!.querySelectorAll<HTMLButtonElement>('button'))
       .find(item => item.textContent?.includes('取消'));
     cancelButton!.click();
@@ -625,7 +576,7 @@ describe('DataMgmtPage', () => {
   it('T12b 勾选表格后：按钮改为「删除所选 N 张表的数据」，全范围也走 range 单级确认，服务收到第 5 参 sheetKeys', async () => {
     const { mount, deleteLocalDataWithScope, loadOrCreate, reloadStorageProvider, cleanupWorldbook } = await mountDataMgmtPage('chat-data', null, true);
     // 运行时有 sheet_a(A) / sheet_b(B)：限定表格列表按表名展示。
-    const checkbox = document.querySelector<HTMLButtonElement>('.acu-v2-data-mgmt-page__sheet-filter [data-sheet-key="sheet_a"]');
+    const checkbox = document.querySelector<HTMLInputElement>('#dm-cleanup .ub-dm__sheets [data-sheet-key="sheet_a"] input[type="checkbox"]');
     expect(checkbox).toBeTruthy();
     expect(document.body.textContent || '').toContain('限定表格（可选）');
     checkbox!.click();
@@ -657,7 +608,7 @@ describe('DataMgmtPage', () => {
   it('T12c 未勾选任何表时整楼层删除调用形态不变（不带第 5 参）', async () => {
     const { mount, deleteLocalDataWithScope } = await mountDataMgmtPage('chat-data', null, true);
     const startFloorInput = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="number"]'))
-      .find(input => input.closest('.acu-form-row')?.textContent?.includes('起始楼层'))!;
+      .find(input => input.closest('.ub-row')?.textContent?.includes('起始楼层'))!;
     startFloorInput.value = '2';
     startFloorInput.dispatchEvent(new Event('input', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
@@ -687,21 +638,16 @@ describe('DataMgmtPage', () => {
     await new Promise(r => setTimeout(r, 0));
     await new Promise(r => setTimeout(r, 0));
 
-    expect(document.querySelector('.acu-v2-toast--warning')?.textContent).toContain('为避免误删已中止');
+    expect(document.querySelector('.ub-toast--warning')?.textContent).toContain('为避免误删已中止');
     expect(document.body.textContent || '').not.toContain('已删除所有本地数据');
 
     mount.__resetAcuV2MountForTests();
   });
 
-
-
   it('删除与清理面板可以保存自动保留本地数据层数', async () => {
     const { mount, settings, saveSettings } = await mountDataMgmtPage();
 
-    const cleanupPanel = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page .acu-panel'))
-      .find(el => el.querySelector('.acu-panel__title')?.textContent?.includes('删除与清理'))!;
-    const retentionRow = Array.from(cleanupPanel.querySelectorAll<HTMLElement>('.acu-form-row'))
-      .find(row => (row.textContent || '').includes('保留数据层数'))!;
+    const retentionRow = document.querySelector<HTMLElement>('#dm-cleanup [data-ub-row="保留数据层数"]')!;
     const input = retentionRow.querySelector<HTMLInputElement>('input[type="number"]')!;
     input.value = '30';
     input.dispatchEvent(new Event('change', { bubbles: true }));
@@ -732,7 +678,7 @@ describe('DataMgmtPage', () => {
     button!.click();
     await Promise.resolve();
 
-    const dialogText = document.querySelector('.acu-dialog-layer')?.textContent || '';
+    const dialogText = document.querySelector('.ub-dialog-layer')?.textContent || '';
     expect(dialogText).toContain('默认表格模板与提示词');
     expect(dialogText).toContain('合并总结提示词');
     expect(dialogText).toContain('当前聊天表格模板快照');
@@ -741,9 +687,9 @@ describe('DataMgmtPage', () => {
     expect(dialogText).not.toContain('表格选择状态');
     expect(dialogText).not.toContain('手动填表选择状态');
     // 只看恢复默认弹窗里的勾选项：页面「限定表格」勾选框默认未勾选，不属于本弹窗。
-    const dialogCheckboxes = Array.from(document.querySelectorAll<HTMLButtonElement>('.acu-dialog-layer button[role="checkbox"]'));
+    const dialogCheckboxes = Array.from(document.querySelectorAll<HTMLInputElement>('.ub-dialog-layer input[type="checkbox"]'));
     expect(dialogCheckboxes.length).toBeGreaterThan(0);
-    expect(dialogCheckboxes.every(item => item.getAttribute('aria-checked') === 'true')).toBe(true);
+    expect(dialogCheckboxes.every(item => item.checked)).toBe(true);
 
     await clickDialogButton('按所选项目恢复');
     await new Promise(r => setTimeout(r, 0));
@@ -828,17 +774,11 @@ describe('DataMgmtPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-
-
   it('导出 Checkpoint 文件名清洗非法字符并附加固定时间戳', async () => {
     const { mount, buildCheckpoint } = await mountDataMgmtPage('alpha/beta:*?gamma');
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 12, 21, 18, 41));
-    const panel = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page .acu-panel'))
-      .find(el => el.querySelector('.acu-panel__title')?.textContent?.includes('备份与恢复'));
-    const checkpointSection = panel!.querySelector('.acu-v2-data-mgmt-page__checkpoint-section');
-    const exportButton = Array.from(checkpointSection!.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('导出 Checkpoint'));
+    const exportButton = document.querySelector<HTMLButtonElement>('#dm-checkpoint [data-ub-row="导出 Checkpoint"] button');
 
     exportButton!.click();
 
@@ -853,7 +793,7 @@ describe('DataMgmtPage', () => {
 
   it('导入 Checkpoint 在危险确认前不会触发恢复', async () => {
     const { mount, parseCheckpoint, restoreCheckpoint } = await mountDataMgmtPage();
-    const input = Array.from(document.querySelectorAll<HTMLInputElement>('.acu-v2-data-mgmt-page__checkpoint-section input[type="file"]'))[0];
+    const input = Array.from(document.querySelectorAll<HTMLInputElement>('#dm-checkpoint input[type="file"]'))[0];
     expect(input).toBeDefined();
     const file = new File(['{}'], 'checkpoint.json', { type: 'application/json' });
     Object.defineProperty(input!, 'files', { configurable: true, value: [file] });
@@ -869,17 +809,17 @@ describe('DataMgmtPage', () => {
 
     expect(parseCheckpoint).toHaveBeenCalledWith('{}');
     // 第一步是可选覆盖楼层声明：不留空也可以继续，此阶段绝不触发恢复。
-    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('这份数据覆盖到第几楼');
+    expect(document.querySelector('.ub-dialog-layer')?.textContent).toContain('这份数据覆盖到第几楼');
     expect(restoreCheckpoint).not.toHaveBeenCalled();
 
     await submitCheckpointFloorPrompt('');
-    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('恢复当前聊天 Checkpoint');
-    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('来源模式：native；目标模式：native');
-    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('全部 AI 楼层、所有隔离标识');
-    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('当前激活隔离键的最新 AI 楼层');
-    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('后续更新将使用该模板');
-    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('全局模板和聊天正文不变');
-    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('未声明覆盖楼层');
+    expect(document.querySelector('.ub-dialog-layer')?.textContent).toContain('恢复当前聊天 Checkpoint');
+    expect(document.querySelector('.ub-dialog-layer')?.textContent).toContain('来源模式：native；目标模式：native');
+    expect(document.querySelector('.ub-dialog-layer')?.textContent).toContain('全部 AI 楼层、所有隔离标识');
+    expect(document.querySelector('.ub-dialog-layer')?.textContent).toContain('当前激活隔离键的最新 AI 楼层');
+    expect(document.querySelector('.ub-dialog-layer')?.textContent).toContain('后续更新将使用该模板');
+    expect(document.querySelector('.ub-dialog-layer')?.textContent).toContain('全局模板和聊天正文不变');
+    expect(document.querySelector('.ub-dialog-layer')?.textContent).toContain('未声明覆盖楼层');
     expect(restoreCheckpoint).not.toHaveBeenCalled();
 
     mount.__resetAcuV2MountForTests();
@@ -896,7 +836,7 @@ describe('DataMgmtPage', () => {
       },
     });
     const pickFile = async () => {
-      const input = Array.from(document.querySelectorAll<HTMLInputElement>('.acu-v2-data-mgmt-page__checkpoint-section input[type="file"]'))[0];
+      const input = Array.from(document.querySelectorAll<HTMLInputElement>('#dm-checkpoint input[type="file"]'))[0];
       Object.defineProperty(input!, 'files', { configurable: true, value: [file] });
       input!.dispatchEvent(new Event('change', { bubbles: true }));
       await new Promise(r => setTimeout(r, 0));
@@ -912,7 +852,7 @@ describe('DataMgmtPage', () => {
     restoreCheckpoint.mockClear();
     await pickFile();
     await submitCheckpointFloorPrompt('91');
-    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('已声明数据只覆盖到第 91 楼：恢复后追平会从第 92 楼开始规划');
+    expect(document.querySelector('.ub-dialog-layer')?.textContent).toContain('已声明数据只覆盖到第 91 楼：恢复后追平会从第 92 楼开始规划');
     await clickDialogButton('恢复 Checkpoint');
     expect(restoreCheckpoint).toHaveBeenLastCalledWith(expect.anything(), { restoredUpToAiFloor: 91 });
 
@@ -941,62 +881,62 @@ describe('DataMgmtPage', () => {
       success: true, restoredMessageIndex: 1,
       postCondition: { runtimeMatches: true, scopeIsChatOverride: true, templateMatches: true, guideMatches: true, providerMode: 'native' },
     });
-    const input = Array.from(document.querySelectorAll<HTMLInputElement>('.acu-v2-data-mgmt-page__checkpoint-section input[type="file"]'))[0];
+    const input = Array.from(document.querySelectorAll<HTMLInputElement>('#dm-checkpoint input[type="file"]'))[0];
     Object.defineProperty(input!, 'files', { configurable: true, value: [file] });
     input!.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
     await submitCheckpointFloorPrompt('');
     await clickDialogButton('恢复 Checkpoint');
-    expect(document.querySelector('.acu-v2-toast--success')?.textContent).toContain('实际存储：native');
+    expect(document.querySelector('.ub-toast--success')?.textContent).toContain('实际存储：native');
 
     restoreCheckpoint.mockResolvedValueOnce({
       success: true, restoredMessageIndex: 1, derivedRefreshWarnings: ['世界书刷新失败'], cleanupWarnings: ['向量 manifest 清理失败'],
       postCondition: { runtimeMatches: false, scopeIsChatOverride: true, templateMatches: false, guideMatches: true, providerMode: 'native' },
     });
-    const partialInput = Array.from(document.querySelectorAll<HTMLInputElement>('.acu-v2-data-mgmt-page__checkpoint-section input[type="file"]'))[0];
+    const partialInput = Array.from(document.querySelectorAll<HTMLInputElement>('#dm-checkpoint input[type="file"]'))[0];
     Object.defineProperty(partialInput!, 'files', { configurable: true, value: [file] });
     partialInput!.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
     await submitCheckpointFloorPrompt('');
     await clickDialogButton('恢复 Checkpoint');
-    expect(document.querySelector('.acu-v2-toast--warning')?.textContent).toContain('部分成功');
-    expect(document.querySelector('.acu-v2-toast--warning')?.textContent).toContain('运行时数据不一致');
-    expect(document.querySelector('.acu-v2-toast--warning')?.textContent).toContain('聊天模板快照不一致');
-    expect(document.querySelector('.acu-v2-toast--warning')?.textContent).toContain('派生刷新：世界书刷新失败');
-    expect(document.querySelector('.acu-v2-toast--warning')?.textContent).toContain('清理：向量 manifest 清理失败');
+    expect(document.querySelector('.ub-toast--warning')?.textContent).toContain('部分成功');
+    expect(document.querySelector('.ub-toast--warning')?.textContent).toContain('运行时数据不一致');
+    expect(document.querySelector('.ub-toast--warning')?.textContent).toContain('聊天模板快照不一致');
+    expect(document.querySelector('.ub-toast--warning')?.textContent).toContain('派生刷新：世界书刷新失败');
+    expect(document.querySelector('.ub-toast--warning')?.textContent).toContain('清理：向量 manifest 清理失败');
 
     settings.storageMode = 'sqlite';
     restoreCheckpoint.mockResolvedValueOnce({
       success: true, restoredMessageIndex: 1,
       postCondition: { runtimeMatches: true, scopeIsChatOverride: true, templateMatches: true, guideMatches: true, providerMode: 'native' },
     });
-    const fallbackInput = Array.from(document.querySelectorAll<HTMLInputElement>('.acu-v2-data-mgmt-page__checkpoint-section input[type="file"]'))[0];
+    const fallbackInput = Array.from(document.querySelectorAll<HTMLInputElement>('#dm-checkpoint input[type="file"]'))[0];
     Object.defineProperty(fallbackInput!, 'files', { configurable: true, value: [file] });
     fallbackInput!.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
     await submitCheckpointFloorPrompt('');
     await clickDialogButton('恢复 Checkpoint');
-    const warningToasts = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-toast--warning'));
+    const warningToasts = Array.from(document.querySelectorAll<HTMLElement>('.ub-toast--warning'));
     expect(warningToasts.at(-1)?.textContent).toContain('目标设置为 SQLite，实际存储 fallback 为 native');
 
     restoreCheckpoint.mockResolvedValueOnce({ success: true, restoredMessageIndex: 1 });
-    const missingConditionInput = Array.from(document.querySelectorAll<HTMLInputElement>('.acu-v2-data-mgmt-page__checkpoint-section input[type="file"]'))[0];
+    const missingConditionInput = Array.from(document.querySelectorAll<HTMLInputElement>('#dm-checkpoint input[type="file"]'))[0];
     Object.defineProperty(missingConditionInput!, 'files', { configurable: true, value: [file] });
     missingConditionInput!.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
     await submitCheckpointFloorPrompt('');
     await clickDialogButton('恢复 Checkpoint');
-    const finalWarningToasts = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-toast--warning'));
+    const finalWarningToasts = Array.from(document.querySelectorAll<HTMLElement>('.ub-toast--warning'));
     expect(finalWarningToasts.at(-1)?.textContent).toContain('恢复后置条件缺失');
 
     restoreCheckpoint.mockResolvedValueOnce({ success: false, error: 'strict failed' });
-    const failedInput = Array.from(document.querySelectorAll<HTMLInputElement>('.acu-v2-data-mgmt-page__checkpoint-section input[type="file"]'))[0];
+    const failedInput = Array.from(document.querySelectorAll<HTMLInputElement>('#dm-checkpoint input[type="file"]'))[0];
     Object.defineProperty(failedInput!, 'files', { configurable: true, value: [file] });
     failedInput!.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
     await submitCheckpointFloorPrompt('');
     await clickDialogButton('恢复 Checkpoint');
-    expect(document.querySelector('.acu-v2-toast--error')?.textContent).toContain('恢复 Checkpoint 失败：strict failed');
+    expect(document.querySelector('.ub-toast--error')?.textContent).toContain('恢复 Checkpoint 失败：strict failed');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -1010,8 +950,7 @@ describe('DataMgmtPage', () => {
       createdAt: 1,
     });
 
-    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
-      .find(item => item.textContent?.includes('混合存储决议'));
+    const section = [document.getElementById('dm-mixed')].find(item => item?.textContent?.includes('混合存储决议'));
     expect(section).toBeDefined();
     expect(section!.textContent).toContain('混合存储决议');
     expect(section?.textContent).toContain('conflict_requires_user_choice');
@@ -1038,8 +977,7 @@ describe('DataMgmtPage', () => {
       createdAt: 1,
     });
 
-    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
-      .find(item => item.textContent?.includes('混合存储决议'))!;
+    const section = [document.getElementById('dm-mixed')].find(item => item?.textContent?.includes('混合存储决议'))!;
 
     expect(section.textContent).toContain('blocked_checkpoint_convergence');
     expect(section.textContent).toContain('v2_requires_checkpoint_convergence');
@@ -1057,17 +995,16 @@ describe('DataMgmtPage', () => {
       allowedActions: ['noop', 'download_snapshots', 'commit_merge_candidate'],
       createdAt: 1,
     });
-    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
-      .find(item => item.textContent?.includes('混合存储决议'))!;
+    const section = [document.getElementById('dm-mixed')].find(item => item?.textContent?.includes('混合存储决议'))!;
     const commitButton = Array.from(section.querySelectorAll<HTMLButtonElement>('button'))
       .find(button => button.textContent?.includes('提交受限合并候选'))!;
 
     commitButton.click();
     await new Promise(r => setTimeout(r, 0));
-    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('提交混合存储合并候选');
+    expect(document.querySelector('.ub-dialog-layer')?.textContent).toContain('提交混合存储合并候选');
     expect(commitMixedDecision).not.toHaveBeenCalled();
     await clickDialogButton('继续提交候选');
-    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('再次确认合并候选');
+    expect(document.querySelector('.ub-dialog-layer')?.textContent).toContain('再次确认合并候选');
     expect(commitMixedDecision).not.toHaveBeenCalled();
     await clickDialogButton('确认提交候选');
 
@@ -1089,8 +1026,7 @@ describe('DataMgmtPage', () => {
       decisionId: 'decision-test',
       error: 'reload failed',
     });
-    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
-      .find(item => item.textContent?.includes('混合存储决议'))!;
+    const section = [document.getElementById('dm-mixed')].find(item => item?.textContent?.includes('混合存储决议'))!;
     const commitButton = Array.from(section.querySelectorAll<HTMLButtonElement>('button'))
       .find(button => button.textContent?.includes('保留 V2 并清理 legacy'))!;
 
@@ -1099,20 +1035,15 @@ describe('DataMgmtPage', () => {
     await clickDialogButton('保留 V2');
 
     expect(commitMixedDecision).toHaveBeenCalledWith('decision-test', 'keep_v2');
-    expect(document.querySelector('.acu-v2-toast--warning')?.textContent).toContain('数据已保存，但后置校验失败：reload failed');
+    expect(document.querySelector('.ub-toast--warning')?.textContent).toContain('数据已保存，但后置校验失败：reload failed');
     mount.__resetAcuV2MountForTests();
   });
 
-
-
-
-
-
-  it('全页只保留删除所有本地数据为红色危险按钮', async () => {
+  it('红色危险按钮只用于会清空数据的两个入口：导入 Checkpoint 与删除所有本地数据', async () => {
     const { mount } = await mountDataMgmtPage();
 
-    const dangerButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.acu-v2-data-mgmt-page button.acu-btn--danger'));
-    expect(dangerButtons.map(button => button.textContent?.trim())).toEqual(['删除所有本地数据']);
+    const dangerButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-ub-main] button.ub-btn--danger'));
+    expect(dangerButtons.map(button => button.textContent?.trim())).toEqual(['导入', '删除所有本地数据']);
 
     mount.__resetAcuV2MountForTests();
   });

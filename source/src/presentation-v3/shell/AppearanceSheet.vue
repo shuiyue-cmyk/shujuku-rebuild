@@ -1,6 +1,6 @@
 <template>
   <UbSheet :is-open="isOpen" title="外观与界面" subtitle="只影响本机显示，不改动任何数据" width="460px" @close="emit('close')">
-    <UbSection title="主题" description="点选即切换。主题文件可导入导出，与经典界面通用。" padded>
+    <UbSection title="主题" description="点选即切换。主题文件可导入导出。" padded>
       <div class="ub-themes">
         <div
           v-for="t in themeStore.themes"
@@ -59,17 +59,11 @@
       </UbRow>
     </UbSection>
 
-    <UbSection title="界面版本">
-      <UbRow label="切回经典界面" hint="随时可以再切回新版；两边的设置与数据完全共用。">
-        <UbButton size="sm" icon="fa-solid fa-clock-rotate-left" @click="switchToClassic">切回经典</UbButton>
-      </UbRow>
-    </UbSection>
   </UbSheet>
 </template>
 
 <script setup lang="ts">
 import { getAcuHostDocument } from '../../presentation-v2/bootstrap/host-document';
-import { switchAcuUiGeneration } from '../../presentation-v2/bootstrap/mount';
 import { ACU_UI_SCALE_OPTIONS, useAppearanceStore, type AcuUiScale } from '../../presentation-v2/stores/appearance-store';
 import { useDialogStore } from '../../presentation-v2/stores/dialog-store';
 import { useRouterStore } from '../../presentation-v2/stores/router-store';
@@ -78,7 +72,6 @@ import { useToastStore } from '../../presentation-v2/stores/toast-store';
 import { useUiModeStore, type AcuV2UiMode } from '../../presentation-v2/stores/ui-mode-store';
 import type { AcuV2ThemeId } from '../../presentation-v2/theme/theme-types';
 import UbBadge from '../ui/UbBadge.vue';
-import UbButton from '../ui/UbButton.vue';
 import UbFileButton from '../ui/UbFileButton.vue';
 import UbIconButton from '../ui/UbIconButton.vue';
 import UbRow from '../ui/UbRow.vue';
@@ -142,14 +135,6 @@ async function deleteTheme(id: AcuV2ThemeId): Promise<void> {
   if (confirmed) themeStore.deleteCustomTheme(id);
 }
 
-async function switchToClassic(): Promise<void> {
-  const confirmed = await dialogStore.confirm({
-    title: '切回经典界面',
-    message: '经典界面里也能随时切回新版（右上角的"新版界面"按钮）。设置与数据两边共用，不会丢失。',
-    confirmLabel: '切回经典',
-  });
-  if (confirmed) switchAcuUiGeneration('classic');
-}
 </script>
 
 <style scoped>

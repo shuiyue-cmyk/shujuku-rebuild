@@ -31,7 +31,41 @@ function setParent(parent: any): void {
   });
 }
 
-// 每个用例都会 resetModules 后冷启动完整 V2 模块图；仅放宽本夹具的初始化预算。
+type SheetMap = Record<string, { name: string; content: any[][]; [key: string]: unknown }>;
+
+const tick = (ms = 0) => new Promise(resolve => setTimeout(resolve, ms));
+
+const buttonByText = (root: ParentNode, text: string) =>
+  Array.from(root.querySelectorAll<HTMLButtonElement>('button')).find(button => button.textContent?.includes(text));
+
+const preview = (root: ParentNode, text: string) =>
+  Array.from(root.querySelectorAll<HTMLElement>('[data-ub-viz-field-preview]')).find(item => item.textContent?.trim() === text)!;
+
+function type(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+  el.value = value;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/** 写入当前聊天表格数据后，从外部入口打开数据库编辑器。 */
+async function openWith(sheets: SheetMap) {
+  persistAdvancedMode();
+  const state = await import('../../../src/service/runtime/state-manager');
+  const data: Record<string, unknown> = { mate: { type: 'chatSheets', version: 1 } };
+  Object.entries(sheets).forEach(([key, sheet], orderNo) => {
+    data[key] = { uid: key, orderNo, ...sheet };
+  });
+  state._set_currentJsonTableData_ACU(data);
+  const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
+  const mount = await import('../../../src/presentation-v2/bootstrap/mount');
+  const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+  await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
+  await tick();
+  const visualizer = useVisualizerStore(mount.getAcuV2PiniaForBridge()!);
+  const surface = document.querySelector<HTMLElement>('[data-ub-viz]')!;
+  return { mount, visualizer, surface };
+}
+
+// 每个用例都会 resetModules 后冷启动完整模块图；仅放宽本夹具的初始化预算。
 beforeEach(async () => {
   vi.resetModules();
   setParent(window);
@@ -44,7 +78,7 @@ beforeEach(async () => {
 }, 60_000);
 
 describe('openVisualizerSurface_ACU', () => {
-  it('外部调用会打开 v2 shell 并进入 visualizer surface，关闭后隐藏 shell', async () => {
+  it('外部调用会打开面板并进入数据库编辑器，关闭后隐藏面板', async () => {
     persistAdvancedMode();
     const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
 
@@ -53,35 +87,35 @@ describe('openVisualizerSurface_ACU', () => {
 
     expect(result).toBe(true);
     expect(document.getElementById('acu-app-v2')?.style.display).toBe('');
-    expect(document.querySelector('[data-acu-visualizer-surface]')).not.toBeNull();
-    expect(document.querySelector('[data-acu-visualizer-surface]')?.textContent).toContain('数据库编辑器');
-    expect(document.querySelector('[data-acu-visualizer-surface]')?.textContent).not.toContain('无法载入数据库');
-    expect(document.querySelector('[data-acu-visualizer-surface]')?.textContent).not.toContain('VZ-4');
+    const surface = document.querySelector('[data-ub-viz]');
+    expect(surface).not.toBeNull();
+    expect(surface?.textContent).toContain('数据库编辑器');
+    expect(surface?.textContent).not.toContain('无法载入数据库');
 
-    (document.querySelector('.acu-visualizer-surface__close') as HTMLButtonElement).click();
-    await new Promise(r => setTimeout(r, 0));
+    document.querySelector<HTMLButtonElement>('[data-ub-viz-close]')!.click();
+    await tick();
 
     expect(document.getElementById('acu-app-v2')?.style.display).toBe('none');
     await resetMountedApp();
   });
 
-  it('v2 已打开时进入 visualizer，关闭后恢复进入前页面', async () => {
+  it('面板已打开时进入编辑器，关闭后回到进入前的页面', async () => {
     persistAdvancedMode('dashboard');
     const mount = await import('../../../src/presentation-v2/bootstrap/mount');
     await mount.openAcuV2App();
     await Promise.resolve();
-    expect(document.querySelector('.acu-v2-app__page-title')?.textContent).toBe('仪表盘');
+    expect(document.querySelector('.ub-top__title')?.textContent).toContain('仪表盘');
 
     const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
     await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
     await Promise.resolve();
-    expect(document.querySelector('[data-acu-visualizer-surface]')?.textContent).toContain('数据库编辑器');
+    expect(document.querySelector('[data-ub-viz]')).not.toBeNull();
 
-    (document.querySelector('.acu-visualizer-surface__close') as HTMLButtonElement).click();
-    await new Promise(r => setTimeout(r, 0));
+    document.querySelector<HTMLButtonElement>('[data-ub-viz-close]')!.click();
+    await tick();
 
     expect(document.getElementById('acu-app-v2')?.style.display).toBe('');
-    expect(document.querySelector('.acu-v2-app__page-title')?.textContent).toBe('仪表盘');
+    expect(document.querySelector('.ub-top__title')?.textContent).toContain('仪表盘');
     mount.__resetAcuV2MountForTests();
   });
 
@@ -121,7 +155,7 @@ describe('openVisualizerSurface_ACU', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('全局 v2 open 接口只打开新 UI shell，不进入数据库编辑器', async () => {
+  it('全局 open 接口只打开面板，不进入数据库编辑器', async () => {
     persistAdvancedMode('api');
     await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
 
@@ -130,8 +164,8 @@ describe('openVisualizerSurface_ACU', () => {
 
     expect(result).toBe(true);
     expect(document.getElementById('acu-app-v2')?.style.display).toBe('');
-    expect(document.querySelector('.acu-v2-app__page-title')?.textContent).toBe('API');
-    expect(document.querySelector('[data-acu-visualizer-surface]')).toBeNull();
+    expect(document.querySelector('.ub-top__title')?.textContent).toContain('API');
+    expect(document.querySelector('[data-ub-viz]')).toBeNull();
     await resetMountedApp();
   });
 
@@ -160,760 +194,286 @@ describe('openVisualizerSurface_ACU', () => {
     }
   });
 
-  it('载入当前数据后可编辑卡片并拦截 dirty 关闭', async () => {
-    persistAdvancedMode();
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_currentJsonTableData_ACU({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_a: {
-        uid: 'sheet_a',
-        name: '角色状态',
-        orderNo: 0,
-        content: [[null, '姓名', '状态'], [null, 'A', '平静']],
-      },
+  it('载入当前数据后可编辑卡片，有未保存修改时关闭会被拦下', async () => {
+    const { mount, visualizer, surface } = await openWith({
+      sheet_a: { name: '角色状态', content: [[null, '姓名', '状态'], [null, 'A', '平静']] },
     });
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
-    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    expect(surface.querySelector('[data-ub-viz-nav]')!.textContent).toContain('1 行 · 2 列');
+    const head = surface.querySelector<HTMLElement>('[data-ub-viz-head]')!;
+    expect(head.textContent).toContain('模板');
+    expect(head.textContent).toContain('角色状态');
+    expect(head.textContent).not.toContain('已同步');
+    const cards = surface.querySelector('.ub-vdata__cards')!;
+    const addRow = buttonByText(surface, '新增一行')!;
+    expect(Boolean(cards.compareDocumentPosition(addRow) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
 
-    await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await new Promise(r => setTimeout(r, 0));
-
-    const surface = document.querySelector('[data-acu-visualizer-surface]') as HTMLElement;
-    expect(surface.textContent).toContain('角色状态');
-    expect(surface.textContent).toContain('1 行 · 2 列');
-    const topbarContext = surface.querySelector('.acu-visualizer-surface__topbar-context') as HTMLElement;
-    expect(topbarContext.textContent).toContain('当前模板');
-    expect(topbarContext.textContent).toContain('当前表');
-    expect(topbarContext.textContent).toContain('角色状态');
-    expect(topbarContext.textContent).not.toContain('已同步');
-    const dataToolbar = surface.querySelector('.acu-visualizer-surface__data-toolbar') as HTMLElement;
-    const dataAddButton = dataToolbar.querySelector('button') as HTMLButtonElement;
-    const cardGrid = surface.querySelector('.acu-visualizer-surface__card-grid') as HTMLElement;
-    expect(dataToolbar.textContent).toContain('新增行');
-    expect(dataAddButton.classList.contains('acu-btn--primary')).toBe(true);
-    expect(Boolean(cardGrid.compareDocumentPosition(dataToolbar) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
-    expect(dataToolbar.textContent).not.toContain('角色状态');
-    expect(dataToolbar.textContent).not.toContain('卡片视图会直接修改当前编辑草稿');
-
-    const statusPreview = Array.from(surface.querySelectorAll<HTMLElement>('[role="button"]'))
-      .find(item => item.textContent?.trim() === '平静')!;
-    statusPreview.click();
-    await new Promise(r => setTimeout(r, 0));
-
-    const textareas = Array.from(surface.querySelectorAll<HTMLTextAreaElement>('textarea'));
-    const statusTextarea = textareas.find(item => item.value === '平静')!;
-    statusTextarea.value = '紧张';
-    statusTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+    preview(surface, '平静').click();
+    await tick();
+    const textarea = Array.from(surface.querySelectorAll<HTMLTextAreaElement>('textarea')).find(item => item.value === '平静')!;
+    type(textarea, '紧张');
     await Promise.resolve();
-
-    const pinia = mount.getAcuV2PiniaForBridge();
-    const visualizer = useVisualizerStore(pinia!);
     expect(visualizer.dirty).toBe(true);
     expect(visualizer.currentSheet.content[1][2]).toBe('紧张');
 
-    (document.querySelector('.acu-visualizer-surface__close') as HTMLButtonElement).click();
-    await Promise.resolve();
-
+    document.querySelector<HTMLButtonElement>('[data-ub-viz-close]')!.click();
+    await tick();
     expect(document.body.textContent).toContain('关闭数据库编辑器');
-    const cancelButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('取消关闭'));
-    expect(cancelButton).not.toBeUndefined();
-    cancelButton!.click();
-    await Promise.resolve();
-
+    buttonByText(document, '取消关闭')!.click();
+    await tick();
     expect(document.getElementById('acu-app-v2')?.style.display).toBe('');
-    expect(document.querySelector('[data-acu-visualizer-surface]')).not.toBeNull();
+    expect(document.querySelector('[data-ub-viz]')).not.toBeNull();
     mount.__resetAcuV2MountForTests();
   });
 
-  it('新增行后保留数据工作区滚动位置', async () => {
-    persistAdvancedMode();
-    const rows = Array.from({ length: 20 }, (_, index) => [
-      null,
-      `角色 ${index + 1}`,
-      `状态 ${index + 1}`,
-    ]);
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_currentJsonTableData_ACU({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_a: {
-        uid: 'sheet_a',
-        name: '滚动验证',
-        orderNo: 0,
-        content: [[null, '姓名', '状态'], ...rows],
-      },
-    });
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
-    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+  it('新增行后跳到最后一页并把新卡片滚入视野', async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+    const rows = Array.from({ length: 30 }, (_, index) => [null, `角色 ${index + 1}`]);
+    const { mount, visualizer, surface } = await openWith({ sheet_a: { name: '滚动验证', content: [[null, '姓名'], ...rows] } });
+    scrollIntoView.mockClear();
 
-    await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await new Promise(r => setTimeout(r, 0));
+    buttonByText(surface, '新增一行')!.click();
+    await tick();
 
-    const workspace = document.querySelector<HTMLElement>('.acu-visualizer-surface__workspace')!;
-    workspace.scrollTop = 240;
-    workspace.scrollLeft = 12;
-
-    const addButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('新增行'))!;
-    addButton.click();
-    await new Promise(r => setTimeout(r, 0));
-
-    expect(workspace.scrollTop).toBe(240);
-    expect(workspace.scrollLeft).toBe(12);
-
-    const pinia = mount.getAcuV2PiniaForBridge();
-    const visualizer = useVisualizerStore(pinia!);
-    expect(visualizer.currentSheet.content).toHaveLength(22);
+    expect(visualizer.currentSheet.content).toHaveLength(32);
+    const cards = surface.querySelectorAll<HTMLElement>('[data-ub-viz-card]');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].textContent).toContain('#31');
+    expect(scrollIntoView).toHaveBeenCalled();
     mount.__resetAcuV2MountForTests();
   });
 
-  it('删除行确认弹层挂到 v2 根节点，确认后才修改草稿', async () => {
-    persistAdvancedMode();
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_currentJsonTableData_ACU({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_a: {
-        uid: 'sheet_a',
-        name: '角色状态',
-        orderNo: 0,
-        content: [[null, '姓名'], [null, 'A'], [null, 'B']],
-      },
+  it('删除行的确认框挂在编辑器外的浮层里，确认后才修改草稿', async () => {
+    const { mount, visualizer, surface } = await openWith({
+      sheet_a: { name: '角色状态', content: [[null, '姓名'], [null, 'A'], [null, 'B']] },
     });
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
-    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const firstDelete = surface.querySelector<HTMLButtonElement>('button[title="删除这一行"]')!;
+    firstDelete.click();
+    await tick();
 
-    await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await new Promise(r => setTimeout(r, 0));
-
-    const surface = document.querySelector('[data-acu-visualizer-surface]') as HTMLElement;
-    const firstDeleteButton = surface.querySelector<HTMLButtonElement>('button[title="删除这一行"]')!;
-    firstDeleteButton.click();
-    await Promise.resolve();
-
-    let layer = document.querySelector<HTMLElement>('.acu-dialog-layer')!;
+    let layer = document.querySelector<HTMLElement>('.ub-dialog-layer')!;
     expect(layer).not.toBeNull();
-    expect(layer.parentElement?.id).toBe('acu-app-v2');
+    expect(layer.closest('#ub-portal')).not.toBeNull();
     expect(surface.contains(layer)).toBe(false);
     expect(layer.textContent).toContain('删除数据行');
     expect(layer.textContent).toContain('确定要删除第 1 行吗？');
-
-    const cancelButton = Array.from(layer.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('取消'))!;
-    cancelButton.click();
-    await new Promise(r => setTimeout(r, 200));
-
-    const pinia = mount.getAcuV2PiniaForBridge();
-    const visualizer = useVisualizerStore(pinia!);
+    buttonByText(layer, '取消')!.click();
+    await tick(250);
     expect(visualizer.currentSheet.content).toHaveLength(3);
 
-    firstDeleteButton.click();
-    await Promise.resolve();
-    layer = document.querySelector<HTMLElement>('.acu-dialog-layer')!;
-    const confirmButton = Array.from(layer.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('删除这一行'))!;
-    confirmButton.click();
-    await new Promise(r => setTimeout(r, 0));
-
+    firstDelete.click();
+    await tick();
+    layer = document.querySelector<HTMLElement>('.ub-dialog-layer')!;
+    buttonByText(layer, '删除这一行')!.click();
+    await tick();
     expect(visualizer.currentSheet.content).toEqual([[null, '姓名'], [null, 'B']]);
     mount.__resetAcuV2MountForTests();
   });
 
-  it('数据卡片单元格输入跨布局阈值时保持 textarea 焦点', async () => {
-    persistAdvancedMode();
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_currentJsonTableData_ACU({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_a: {
-        uid: 'sheet_a',
-        name: '角色状态',
-        orderNo: 0,
-        content: [[null, '姓名', '状态'], [null, 'A', '平静']],
-      },
+  it('单元格输入跨过长短布局阈值时编辑框保持焦点', async () => {
+    const { mount, surface } = await openWith({
+      sheet_a: { name: '角色状态', content: [[null, '姓名', '状态'], [null, 'A', '平静']] },
     });
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
+    preview(surface, '平静').click();
+    await tick();
+    const textarea = Array.from(surface.querySelectorAll<HTMLTextAreaElement>('textarea')).find(item => item.value === '平静')!;
+    expect(document.activeElement).toBe(textarea);
 
-    await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await new Promise(r => setTimeout(r, 0));
-
-    const surface = document.querySelector('[data-acu-visualizer-surface]') as HTMLElement;
-    const statusPreview = Array.from(surface.querySelectorAll<HTMLElement>('[role="button"]'))
-      .find(item => item.textContent?.trim() === '平静')!;
-    statusPreview.click();
-    await new Promise(r => setTimeout(r, 0));
-
-    const statusTextarea = Array.from(surface.querySelectorAll<HTMLTextAreaElement>('textarea'))
-      .find(item => item.value === '平静')!;
-    expect(document.activeElement).toBe(statusTextarea);
-
-    statusTextarea.value = '这是一段超过二十四个字符的状态描述，用来触发布局切换';
-    statusTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+    type(textarea, '这是一段超过二十四个字符的状态描述，用来触发布局切换');
     await Promise.resolve();
-
-    expect(document.activeElement).toBe(statusTextarea);
-    expect(surface.contains(statusTextarea)).toBe(true);
+    expect(document.activeElement).toBe(textarea);
+    expect(surface.contains(textarea)).toBe(true);
     mount.__resetAcuV2MountForTests();
   });
 
-  it('大表数据区只渲染当前页，单元格点击后才挂载 textarea', async () => {
-    persistAdvancedMode();
+  it('大表只渲染当前页；可翻页、跳页，点单元格后才挂载编辑框', async () => {
     const pageSize = 30;
-    const totalRows = 120;
-    const rows = Array.from({ length: totalRows }, (_, index) => {
-      const rowNo = index + 1;
-      return [null, `A${rowNo}`, `状态 ${rowNo}`];
-    });
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_currentJsonTableData_ACU({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_a: {
-        uid: 'sheet_a',
-        name: '大表验证',
-        orderNo: 0,
-        content: [[null, '姓名', '状态'], ...rows],
-      },
-    });
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
-    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const total = 120;
+    const rows = Array.from({ length: total }, (_, index) => [null, `A${index + 1}`, `状态 ${index + 1}`]);
+    const { mount, visualizer, surface } = await openWith({ sheet_a: { name: '大表验证', content: [[null, '姓名', '状态'], ...rows] } });
+    const cards = () => Array.from(surface.querySelectorAll<HTMLElement>('[data-ub-viz-card]'));
 
-    await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await new Promise(r => setTimeout(r, 0));
-
-    const surface = document.querySelector('[data-acu-visualizer-surface]') as HTMLElement;
-    let cards = Array.from(surface.querySelectorAll<HTMLElement>('.acu-visualizer-surface__data-card'));
-    expect(cards).toHaveLength(pageSize);
-    expect(cards[0].textContent).toContain('#1');
-    expect(cards[pageSize - 1].textContent).toContain(`#${pageSize}`);
+    expect(cards()).toHaveLength(pageSize);
+    expect(cards()[0].textContent).toContain('#1');
+    expect(cards()[pageSize - 1].textContent).toContain(`#${pageSize}`);
     expect(surface.querySelectorAll('textarea')).toHaveLength(0);
-    expect(surface.textContent).toContain(`第 1-${pageSize} 行 / 共 ${totalRows} 行`);
-    expect(surface.textContent).not.toContain('上一页');
-    expect(surface.textContent).not.toContain('下一页');
+    expect(surface.textContent).toContain(`第 1–${pageSize} 行 · 共 ${total} 行`);
 
-    const secondPageButton = Array.from(surface.querySelectorAll<HTMLButtonElement>('.acu-visualizer-surface__page-button'))
-      .find(button => button.textContent?.trim() === '2')!;
-    secondPageButton.click();
-    await new Promise(r => setTimeout(r, 0));
+    surface.querySelector<HTMLButtonElement>('button[title="下一页"]')!.click();
+    await tick();
+    expect(cards()[0].textContent).toContain(`#${pageSize + 1}`);
+    expect(surface.textContent).toContain(`第 ${pageSize + 1}–${pageSize * 2} 行 · 共 ${total} 行`);
 
-    cards = Array.from(surface.querySelectorAll<HTMLElement>('.acu-visualizer-surface__data-card'));
-    expect(cards).toHaveLength(pageSize);
-    expect(cards[0].textContent).toContain(`#${pageSize + 1}`);
-    expect(cards[pageSize - 1].textContent).toContain(`#${pageSize * 2}`);
-    expect(surface.textContent).toContain(`第 ${pageSize + 1}-${pageSize * 2} 行 / 共 ${totalRows} 行`);
-    expect(surface.querySelectorAll('textarea')).toHaveLength(0);
+    const jump = surface.querySelector<HTMLInputElement>('input[aria-label="跳转到页码"]')!;
+    jump.value = '3';
+    jump.dispatchEvent(new Event('input', { bubbles: true }));
+    jump.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick();
+    expect(cards()).toHaveLength(pageSize);
+    expect(cards()[0].textContent).toContain(`#${pageSize * 2 + 1}`);
 
-    const jumpInput = surface.querySelector<HTMLInputElement>('.acu-visualizer-surface__page-jump input')!;
-    jumpInput.value = '3';
-    jumpInput.dispatchEvent(new Event('input', { bubbles: true }));
-    await new Promise(r => setTimeout(r, 0));
-
-    cards = Array.from(surface.querySelectorAll<HTMLElement>('.acu-visualizer-surface__data-card'));
-    expect(cards).toHaveLength(pageSize);
-    expect(cards[0].textContent).toContain(`#${pageSize * 2 + 1}`);
-    expect(cards[pageSize - 1].textContent).toContain(`#${pageSize * 3}`);
-    expect(surface.textContent).toContain(`第 ${pageSize * 2 + 1}-${pageSize * 3} 行 / 共 ${totalRows} 行`);
-
-    jumpInput.value = '2';
-    jumpInput.dispatchEvent(new Event('input', { bubbles: true }));
-    await new Promise(r => setTimeout(r, 0));
-
-    const statusPreview = Array.from(surface.querySelectorAll<HTMLElement>('[role="button"]'))
-      .find(item => item.textContent?.trim() === '状态 51')!;
-    statusPreview.click();
-    await new Promise(r => setTimeout(r, 0));
-
-    const statusTextarea = Array.from(surface.querySelectorAll<HTMLTextAreaElement>('textarea'))
-      .find(item => item.value === '状态 51')!;
-    expect(document.activeElement).toBe(statusTextarea);
-    statusTextarea.value = '已更新';
-    statusTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+    surface.querySelector<HTMLButtonElement>('button[title="上一页"]')!.click();
+    await tick();
+    preview(surface, '状态 51').click();
+    await tick();
+    const textarea = Array.from(surface.querySelectorAll<HTMLTextAreaElement>('textarea')).find(item => item.value === '状态 51')!;
+    expect(document.activeElement).toBe(textarea);
+    type(textarea, '已更新');
     await Promise.resolve();
-
-    const pinia = mount.getAcuV2PiniaForBridge();
-    const visualizer = useVisualizerStore(pinia!);
     expect(visualizer.currentSheet.content[51][2]).toBe('已更新');
     mount.__resetAcuV2MountForTests();
   });
 
-  it('窄宽度分页只显示当前页相邻一页，保留跳转输入框在同一组', async () => {
-    persistAdvancedMode();
-    const originalResizeObserver = globalThis.ResizeObserver;
-    class MockResizeObserver {
-      constructor(private callback: ResizeObserverCallback) {}
-      observe(target: Element) {
-        this.callback([
-          {
-            target,
-            contentRect: { width: 390 } as DOMRectReadOnly,
-          } as ResizeObserverEntry,
-        ], this as unknown as ResizeObserver);
-      }
-      unobserve() {}
-      disconnect() {}
-    }
-    Object.defineProperty(globalThis, 'ResizeObserver', {
-      configurable: true,
-      value: MockResizeObserver,
-    });
-
-    try {
-      const pageSize = 30;
-      const totalRows = 1050;
-      const lastPage = Math.ceil(totalRows / pageSize);
-      const rows = Array.from({ length: totalRows }, (_, index) => {
-        const rowNo = index + 1;
-        return [null, `A${rowNo}`, `状态 ${rowNo}`];
-      });
-      const state = await import('../../../src/service/runtime/state-manager');
-      state._set_currentJsonTableData_ACU({
-        mate: { type: 'chatSheets', version: 1 },
-        sheet_a: {
-          uid: 'sheet_a',
-          name: '窄分页验证',
-          orderNo: 0,
-          content: [[null, '姓名', '状态'], ...rows],
-        },
-      });
-      const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-      const mount = await import('../../../src/presentation-v2/bootstrap/mount');
-
-      await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-      await new Promise(r => setTimeout(r, 0));
-
-      const surface = document.querySelector('[data-acu-visualizer-surface]') as HTMLElement;
-      const jumpInput = surface.querySelector<HTMLInputElement>('.acu-visualizer-surface__page-jump input')!;
-      jumpInput.value = '5';
-      jumpInput.dispatchEvent(new Event('input', { bubbles: true }));
-      await new Promise(r => setTimeout(r, 0));
-
-      const buttonLabels = Array.from(surface.querySelectorAll<HTMLButtonElement>('.acu-visualizer-surface__page-button'))
-        .map(button => button.textContent?.trim());
-      expect(buttonLabels).toEqual(['1', '...', '4', '5', '6', '...', String(lastPage)]);
-      expect(jumpInput.value).toBe('5');
-
-      const ellipsisButtons = Array.from(surface.querySelectorAll<HTMLButtonElement>('.acu-visualizer-surface__page-button'))
-        .filter(button => button.textContent?.trim() === '...');
-      ellipsisButtons[1].click();
-      await new Promise(r => setTimeout(r, 0));
-
-      const nextGroupLabels = Array.from(surface.querySelectorAll<HTMLButtonElement>('.acu-visualizer-surface__page-button'))
-        .map(button => button.textContent?.trim());
-      expect(nextGroupLabels).toEqual(['1', '...', '7', '8', '9', '...', String(lastPage)]);
-      expect(jumpInput.value).toBe('8');
-
-      mount.__resetAcuV2MountForTests();
-    } finally {
-      Object.defineProperty(globalThis, 'ResizeObserver', {
-        configurable: true,
-        value: originalResizeObserver,
-      });
-    }
-  });
-
-  it('数据卡片按表格字段顺序布局，仅连续两个短字段双列显示', async () => {
-    persistAdvancedMode();
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_currentJsonTableData_ACU({
-      mate: { type: 'chatSheets', version: 1 },
+  it('字段按表格列顺序排布，只有相邻两个短字段才并排', async () => {
+    const { mount, surface } = await openWith({
       sheet_a: {
-        uid: 'sheet_a',
         name: '布局验证表',
-        orderNo: 0,
-        content: [[null, '短A', '短B', '长C', '短D', '短E', '短F'], [
-          null,
-          'A',
-          'B',
-          'C',
-          'D',
-          'E',
-          'F',
-        ], [
-          null,
-          'AA',
-          'BB',
-          '这是一段超过二十四个字符的长内容，用来验证整列会独占整行。',
-          'DD',
-          'EE',
-          'FF',
-        ]],
+        content: [
+          [null, '短A', '短B', '长C', '短D', '短E', '短F'],
+          [null, 'A', 'B', 'C', 'D', 'E', 'F'],
+          [null, 'AA', 'BB', '这是一段超过二十四个字符的长内容，用来验证整列会独占整行。', 'DD', 'EE', 'FF'],
+        ],
       },
     });
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
-
-    await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await new Promise(r => setTimeout(r, 0));
-
-    const firstCard = document.querySelector<HTMLElement>('.acu-visualizer-surface__data-card')!;
-    const fields = Array.from(firstCard.querySelectorAll<HTMLElement>(
-      '.acu-visualizer-surface__field[data-acu-visualizer-field-layout]',
-    ));
-    expect(fields.map(field => field.querySelector('.acu-visualizer-surface__field-label')?.textContent?.trim()))
+    const card = surface.querySelector<HTMLElement>('[data-ub-viz-card]')!;
+    const fields = Array.from(card.querySelectorAll<HTMLElement>('[data-ub-viz-field]'));
+    expect(fields.map(field => field.querySelector('.ub-vfield__name')?.textContent?.trim()))
       .toEqual(['短A', '短B', '长C', '短D', '短E', '短F']);
-    expect(fields.map(field => field.dataset.acuVisualizerFieldLayout))
-      .toEqual(['half', 'half', 'wide', 'half', 'half', 'wide']);
-    expect(Array.from(firstCard.querySelectorAll<HTMLElement>('[data-acu-visualizer-field-row-layout]'))
-      .map(row => row.dataset.acuVisualizerFieldRowLayout))
+    expect(fields.map(field => field.dataset.ubVizFieldLayout)).toEqual(['half', 'half', 'wide', 'half', 'half', 'wide']);
+    expect(Array.from(card.querySelectorAll<HTMLElement>('[data-ub-viz-line]')).map(line => line.dataset.ubVizLine))
       .toEqual(['half', 'wide', 'half', 'wide']);
     mount.__resetAcuV2MountForTests();
   });
 
-  it('可进入结构参数和数据库管理面板', async () => {
-    persistAdvancedMode();
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_currentJsonTableData_ACU({
-      mate: { type: 'chatSheets', version: 1 },
+  it('结构视图可改参数、开独立导出、改列名不丢焦点；数据库管理可见表格与全局注入', async () => {
+    const { mount, visualizer, surface } = await openWith({
       sheet_a: {
-        uid: 'sheet_a',
         name: '角色状态',
-        orderNo: 0,
         content: [[null, '姓名', '状态'], [null, 'A', '平静']],
         sourceData: { note: '角色状态说明' },
         updateConfig: {},
         exportConfig: {},
       },
     });
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
+    buttonByText(surface.querySelector('[data-ub-viz-modes]')!, '结构')!.click();
+    await tick();
+    const config = surface.querySelector<HTMLElement>('[data-ub-viz-config]')!;
+    expect(config.textContent).toContain('自动更新参数');
+    expect(config.textContent).toContain('世界书注入');
+    expect(config.textContent).toContain('启用独立导出');
+    expect(config.textContent).not.toContain('条目名称');
+    expect(config.textContent).not.toContain('主条目位置');
 
-    await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await new Promise(r => setTimeout(r, 0));
-
-    const configTab = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('结构/参数'));
-    expect(configTab).not.toBeUndefined();
-    configTab!.click();
+    type(config.querySelector<HTMLInputElement>('input[aria-label="上下文层数"]')!, '9');
     await Promise.resolve();
+    config.querySelector<HTMLButtonElement>('[role="switch"][aria-label="启用独立导出"]')!.click();
+    await tick();
+    expect(config.textContent).toContain('条目名称');
+    expect(config.textContent).toContain('条目类型');
+    expect(config.textContent).toContain('主条目位置');
 
-    const configPanel = document.querySelector('[data-acu-visualizer-config]') as HTMLElement;
-    expect(configPanel?.textContent).toContain('自动化更新参数');
-    expect(configPanel?.textContent).toContain('世界书注入配置');
-    expect(configPanel?.textContent).toContain('启用独立导出');
-    expect(configPanel?.textContent).not.toContain('条目名称');
-    expect(configPanel?.textContent).not.toContain('主条目位置');
-
-    const updateDepthInput = Array.from(configPanel.querySelectorAll<HTMLInputElement>('input[type="number"]'))[0];
-    updateDepthInput.value = '9';
-    updateDepthInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    await Promise.resolve();
-
-    const enableCustomExportButton = Array.from(configPanel.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]'))
-      .find(button => button.textContent?.includes('启用独立导出'));
-    expect(enableCustomExportButton).not.toBeUndefined();
-    enableCustomExportButton!.click();
-    await new Promise(r => setTimeout(r, 0));
-
-    expect(configPanel?.textContent).toContain('条目名称');
-    expect(configPanel?.textContent).toContain('条目类型');
-    expect(configPanel?.textContent).toContain('主条目位置');
-
-    const mainPlacement = Array.from(configPanel.querySelectorAll<HTMLElement>('.acu-viz-placement'))
-      .find(item => item.textContent?.includes('主条目位置'))!;
-    const [depthInput, orderInput] = Array.from(mainPlacement.querySelectorAll<HTMLInputElement>('input[type="number"]'));
-    expect(depthInput.outerHTML).toContain('class="acu-input');
-    depthInput.value = '7';
-    depthInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    orderInput.value = '12345';
-    orderInput.dispatchEvent(new InputEvent('input', { bubbles: true }));
-    await new Promise(r => setTimeout(r, 0));
-
-    const pinia = mount.getAcuV2PiniaForBridge();
-    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
-    const visualizer = useVisualizerStore(pinia!);
+    type(config.querySelector<HTMLInputElement>('input[aria-label="主条目位置：深度"]')!, '7');
+    type(config.querySelector<HTMLInputElement>('input[aria-label="主条目位置：顺序"]')!, '12345');
+    await tick();
     expect(visualizer.currentSheet.updateConfig.contextDepth).toBe(9);
-    const placementAfterNumberInput = visualizer.currentSheet.exportConfig.entryPlacement;
+    expect(visualizer.currentSheet.exportConfig.entryPlacement).toEqual({ position: 'at_depth_as_system', depth: 7, order: 12345 });
 
-    const addColumnButton = Array.from(configPanel.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('新增列'));
-    expect(addColumnButton).not.toBeUndefined();
-    expect(addColumnButton!.classList.contains('acu-btn--primary')).toBe(true);
-
-    const firstHeaderInput = configPanel.querySelector<HTMLInputElement>('.acu-viz-config__column-row input')!;
-    firstHeaderInput.focus();
-    expect(document.activeElement).toBe(firstHeaderInput);
-    firstHeaderInput.value = '姓';
-    firstHeaderInput.dispatchEvent(new Event('input', { bubbles: true }));
+    const headerInput = config.querySelector<HTMLInputElement>('.ub-vconf__col input')!;
+    headerInput.focus();
+    type(headerInput, '姓');
     await Promise.resolve();
-
     expect(visualizer.currentSheet.content[0][1]).toBe('姓');
-    expect(placementAfterNumberInput).toEqual({
-      position: 'at_depth_as_system',
-      depth: 7,
-      order: 12345,
-    });
-    expect(document.activeElement).toBe(firstHeaderInput);
-    expect(configPanel.querySelector<HTMLInputElement>('.acu-viz-config__column-row input')).toBe(firstHeaderInput);
+    expect(document.activeElement).toBe(headerInput);
+    expect(config.querySelector<HTMLInputElement>('.ub-vconf__col input')).toBe(headerInput);
 
-    const databaseManagementButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('数据库管理'));
-    expect(databaseManagementButton).not.toBeUndefined();
-    databaseManagementButton!.click();
-    await Promise.resolve();
-
-    expect(document.querySelector('[data-acu-visualizer-global]')?.textContent).toContain('可读数据条目位置');
-    expect(document.querySelector('[data-acu-visualizer-global]')?.textContent)
-      .not.toContain('保存到当前聊天会同步这份全局草稿');
-    expect(document.querySelector('[data-acu-visualizer-table-management]')?.textContent).toContain('角色状态');
-    expect(document.querySelector('[data-acu-visualizer-table-management]')?.textContent).toContain('新增表格');
-    const addTableButton = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-acu-visualizer-table-management] button'))
-      .find(button => button.textContent?.includes('新增表格'));
-    expect(addTableButton).not.toBeUndefined();
-    expect(addTableButton!.classList.contains('acu-btn--primary')).toBe(true);
-    expect(document.querySelector('.acu-visualizer-surface__mode-tabs')).toBeNull();
+    buttonByText(surface.querySelector('[data-ub-viz-nav]')!, '数据库管理')!.click();
+    await tick();
+    const manage = surface.querySelector<HTMLElement>('[data-ub-viz-manage]')!;
+    expect(manage.textContent).toContain('可读数据条目位置');
+    expect(manage.textContent).toContain('角色状态');
+    expect(buttonByText(manage, '新增表格')).not.toBeUndefined();
+    expect(surface.querySelector('[data-ub-viz-modes]')).toBeNull();
     mount.__resetAcuV2MountForTests();
   });
 
-  it('移动端数据库导航使用侧抽屉选择表并自动收起', async () => {
-    persistAdvancedMode();
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_currentJsonTableData_ACU({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_a: {
-        uid: 'sheet_a',
-        name: '角色状态',
-        orderNo: 0,
-        content: [[null, '姓名'], [null, 'A']],
-      },
-      sheet_b: {
-        uid: 'sheet_b',
-        name: '事件记录',
-        orderNo: 1,
-        content: [[null, '事件'], [null, '初遇']],
-      },
+  it('手机上点顶部表名打开表格列表，选表后自动收起', async () => {
+    const { mount, visualizer, surface } = await openWith({
+      sheet_a: { name: '角色状态', content: [[null, '姓名'], [null, 'A']] },
+      sheet_b: { name: '事件记录', content: [[null, '事件'], [null, '初遇']] },
     });
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
-    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
-
-    await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await new Promise(r => setTimeout(r, 0));
-
-    const menuButton = document.querySelector<HTMLButtonElement>('.acu-visualizer-surface__mobile-menu');
-    expect(menuButton).not.toBeNull();
-    menuButton!.click();
-    await Promise.resolve();
-
-    const layer = document.querySelector<HTMLElement>('.acu-visualizer-surface__mobile-nav-layer');
-    expect(layer).not.toBeNull();
-    const drawer = layer!.querySelector<HTMLElement>('.acu-visualizer-surface__mobile-nav');
-    expect(drawer).not.toBeNull();
-    expect(drawer!.getAttribute('data-acu-mobile-nav-width')).toBe('360px');
-    expect(drawer!.style.width).toBe('360px');
-    expect(drawer!.style.maxWidth).toBe('calc(100% - 24px)');
-    expect(drawer!.style.flex).toBe('0 0 360px');
-    const sheetButton = Array.from(layer!.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('事件记录'));
-    expect(sheetButton).not.toBeUndefined();
-    sheetButton!.click();
-    await Promise.resolve();
-
-    const pinia = mount.getAcuV2PiniaForBridge();
-    expect(useVisualizerStore(pinia!).currentSheetKey).toBe('sheet_b');
-    expect(document.querySelector('.acu-visualizer-surface__mobile-nav-layer')?.classList.contains('is-closing')).toBe(true);
-    await new Promise(r => setTimeout(r, 170));
-    expect(document.querySelector('.acu-visualizer-surface__mobile-nav-layer')).toBeNull();
+    surface.querySelector<HTMLButtonElement>('.ub-viz__switcher')!.click();
+    await tick();
+    const sheet = document.querySelector<HTMLElement>('#ub-portal .ub-sheet')!;
+    expect(sheet).not.toBeNull();
+    expect(sheet.textContent).toContain('选择表格');
+    buttonByText(sheet, '事件记录')!.click();
+    await tick();
+    expect(visualizer.currentSheetKey).toBe('sheet_b');
+    await tick(400);
+    expect(document.querySelector('#ub-portal .ub-sheet')).toBeNull();
     mount.__resetAcuV2MountForTests();
   });
 
-  it('可进入 AI 助手面板且不展示额外常驻提示', async () => {
-    persistAdvancedMode();
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_currentJsonTableData_ACU({
-      mate: { type: 'chatSheets', version: 1 },
+  it('可进入 AI 助手视图，不展示额外常驻提示', async () => {
+    const { mount, surface } = await openWith({
       sheet_a: {
-        uid: 'sheet_a',
         name: '角色状态',
-        orderNo: 0,
         content: [[null, '姓名', '状态'], [null, 'A', '平静']],
-        sourceData: { note: '角色状态说明' },
+        sourceData: { note: '说明' },
         updateConfig: {},
         exportConfig: {},
       },
     });
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
-
-    await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await new Promise(r => setTimeout(r, 0));
-
-    const assistantTab = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('AI 助手'));
-    expect(assistantTab).not.toBeUndefined();
-    assistantTab!.click();
-    await Promise.resolve();
-
-    const panel = document.querySelector('[data-acu-visualizer-assistant]');
-    expect(panel?.textContent).toContain('AI 改表助手');
-    expect(panel?.textContent).not.toContain('当前锚点表：角色状态 (sheet_a)');
-    expect(panel?.textContent).not.toContain('确认前不会应用到编辑器草稿');
+    buttonByText(surface.querySelector('[data-ub-viz-modes]')!, 'AI 助手')!.click();
+    await tick();
+    const panel = surface.querySelector<HTMLElement>('[data-ub-viz-assistant]')!;
+    expect(panel.querySelector('[data-ub-viz-composer] textarea')).not.toBeNull();
+    expect(panel.textContent).not.toContain('当前锚点表：角色状态 (sheet_a)');
+    expect(panel.textContent).not.toContain('确认前不会应用到编辑器草稿');
     mount.__resetAcuV2MountForTests();
   });
 
-  it('编码索引自动编号以可配置开关展示，但不禁用手动输入框', async () => {
-    persistAdvancedMode();
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_currentJsonTableData_ACU({
-      mate: { type: 'chatSheets', version: 1 },
+  it('编码索引显示"自动编号"但仍可手动编辑；结构视图里自动重排开关默认打开', async () => {
+    const { mount, surface } = await openWith({
       sheet_summary: {
-        uid: 'sheet_summary',
         name: '总结表',
-        orderNo: 0,
         content: [[null, '事件', '编码索引'], [null, '初遇', 'AM0001']],
         sourceData: { note: '总结表说明' },
         updateConfig: {},
         exportConfig: {},
       },
     });
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
-
-    await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await new Promise(r => setTimeout(r, 0));
-
-    const surface = document.querySelector('[data-acu-visualizer-surface]') as HTMLElement;
     expect(surface.textContent).toContain('自动编号');
-    const indexPreview = Array.from(surface.querySelectorAll<HTMLElement>('[role="button"]'))
-      .find(item => item.textContent?.trim() === 'AM0001')!;
-    indexPreview.click();
-    await new Promise(r => setTimeout(r, 0));
+    preview(surface, 'AM0001').click();
+    await tick();
+    const textarea = Array.from(surface.querySelectorAll<HTMLTextAreaElement>('textarea')).find(item => item.value === 'AM0001');
+    expect(textarea?.disabled).toBe(false);
 
-    const indexTextarea = Array.from(surface.querySelectorAll<HTMLTextAreaElement>('textarea'))
-      .find(item => item.value === 'AM0001');
-    expect(indexTextarea?.disabled).toBe(false);
-
-    const configTab = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('结构/参数'));
-    configTab!.click();
-    await Promise.resolve();
-
-    const autoNumberSwitch = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="checkbox"]'))
-      .find(button => button.textContent?.includes('保存和 AI 更新时自动重排编码'));
-    expect(autoNumberSwitch?.getAttribute('aria-checked')).toBe('true');
-    expect(document.querySelector('[data-acu-visualizer-config]')?.textContent).not.toContain('启用编码索引列特殊锁定');
+    buttonByText(surface.querySelector('[data-ub-viz-modes]')!, '结构')!.click();
+    await tick();
+    const toggle = surface.querySelector<HTMLButtonElement>('[role="switch"][aria-label="保存和 AI 更新时自动重排编码"]');
+    expect(toggle?.getAttribute('aria-checked')).toBe('true');
     mount.__resetAcuV2MountForTests();
   });
 
-  it('切换表格时会把当前导航项滚入可见区域', async () => {
-    persistAdvancedMode();
+  it('切换表格时把当前列表项滚入可见区域', async () => {
     const scrollIntoView = vi.fn();
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
-      configurable: true,
-      value: scrollIntoView,
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+    const { mount, surface } = await openWith({
+      sheet_a: { name: '角色状态', content: [[null, '姓名'], [null, 'A']] },
+      sheet_b: { name: '事件记录', content: [[null, '事项'], [null, '旧值']] },
     });
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_currentJsonTableData_ACU({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_a: {
-        uid: 'sheet_a',
-        name: '角色状态',
-        orderNo: 0,
-        content: [[null, '姓名'], [null, 'A']],
-      },
-      sheet_b: {
-        uid: 'sheet_b',
-        name: '事件记录',
-        orderNo: 1,
-        content: [[null, '事项'], [null, '旧值']],
-      },
-    });
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
-
-    await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await new Promise(r => setTimeout(r, 0));
     scrollIntoView.mockClear();
-
-    const sheetButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.includes('事件记录'));
-    expect(sheetButton).not.toBeUndefined();
-    sheetButton!.click();
-    await new Promise(r => setTimeout(r, 0));
-
-    expect(scrollIntoView).toHaveBeenCalledWith({
-      block: 'nearest',
-      inline: 'nearest',
-    });
+    buttonByText(surface.querySelector('[data-ub-viz-nav]')!, '事件记录')!.click();
+    await tick();
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
     mount.__resetAcuV2MountForTests();
   });
 
-  it('VZ-5 响应式布局有桌面、平板、手机三档和 AI 非常驻结构', () => {
-    const surfaceSource = readFileSync(
-      join(process.cwd(), 'src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue'),
-      'utf8',
-    );
-    const assistantSource = readFileSync(
-      join(process.cwd(), 'src/presentation-v2/surfaces/visualizer/VisualizerAssistantPanel.vue'),
-      'utf8',
-    );
-    const configSource = readFileSync(
-      join(process.cwd(), 'src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue'),
-      'utf8',
-    );
-    const tableManagementSource = readFileSync(
-      join(process.cwd(), 'src/presentation-v2/surfaces/visualizer/VisualizerTableManagementPanel.vue'),
-      'utf8',
-    );
-
-    expect(surfaceSource).toContain('@media (max-width: 1024px)');
-    expect(surfaceSource).toContain('@media (max-width: 767px)');
-    expect(surfaceSource).toContain('@media (max-width: 480px)');
-    expect(surfaceSource).toContain('acu-visualizer-surface__topbar-context');
-    expect(surfaceSource).toContain('当前模板');
-    expect(surfaceSource).not.toContain('>已同步</AcuBadge>');
-    expect(surfaceSource).not.toContain('acu-visualizer-surface__mobile-current-sheet');
-    expect(surfaceSource).toMatch(
-      /\.acu-visualizer-surface__context-items\s*\{[\s\S]*?justify-content: flex-start;[\s\S]*?gap: 16px;/,
-    );
-    expect(surfaceSource).toMatch(
-      /\.acu-visualizer-surface__context-item:first-child\s*\{[\s\S]*?flex: 0 1 auto;[\s\S]*?max-width: min\(560px, 42vw\);/,
-    );
-    expect(surfaceSource).toMatch(
-      /\.acu-visualizer-surface__context-item:first-child strong\s*\{[\s\S]*?white-space: normal;[\s\S]*?word-break: break-word;/,
-    );
-    expect(surfaceSource).toContain('acu-visualizer-surface__mobile-nav-layer');
-    expect(surfaceSource).toContain('visualizer-mobile-nav-drawer-in');
-    expect(surfaceSource).not.toContain('acu-visualizer-surface__mobile-sheet');
-    expect(surfaceSource).toContain('grid-template-columns: 1fr');
-    expect(surfaceSource).toContain('table-management');
-    expect(surfaceSource).toContain('grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr))');
-    expect(surfaceSource).toContain('acu-visualizer-surface__footer-actions :deep(.acu-btn)');
-    expect(assistantSource).toContain('AcuDisclosureGroup');
-    expect(assistantSource).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*\.acu-viz-assistant__composer[\s\S]*flex-direction: column;[\s\S]*justify-content: flex-end;/,
-    );
-    expect(assistantSource).toMatch(
-      /\.acu-viz-assistant__composer\s*\{[\s\S]*?border-top: 1px solid var\(--acu-border\);[\s\S]*?background: var\(--acu-bg-1\);/,
-    );
-    expect(assistantSource).toContain('@media (max-width: 480px)');
-    expect(configSource).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*\.acu-viz-config__column-operation :deep\(\.acu-btn\)[\s\S]*width: 100%;/,
-    );
-    expect(tableManagementSource).toMatch(
-      /@media \(max-width: 767px\)[\s\S]*\.acu-viz-table-management__operation :deep\(\.acu-btn\)[\s\S]*width: 100%;/,
-    );
-  });
-
-  it('结构参数区的 AI 触发提示词和 DDL 输入框启用无最大高度自适应', () => {
-    const configSource = readFileSync(
-      join(process.cwd(), 'src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue'),
-      'utf8',
-    );
-
-    const promptPanel = configSource.slice(
-      configSource.indexOf('title="AI 触发提示词"'),
-      configSource.indexOf('title="DDL 定义"'),
-    );
-    const ddlPanel = configSource.slice(
-      configSource.indexOf('title="DDL 定义"'),
-      configSource.indexOf('title="世界书注入配置"'),
-    );
-
-    expect((promptPanel.match(/auto-resize/g) || []).length).toBe(5);
-    expect((promptPanel.match(/max-rows/g) || []).length).toBe(0);
-    expect((ddlPanel.match(/auto-resize/g) || []).length).toBe(1);
-    expect((ddlPanel.match(/max-rows/g) || []).length).toBe(0);
+  it('结构视图的 AI 触发提示词输入框随内容自动长高、不设上限', () => {
+    const source = readFileSync(join(process.cwd(), 'src/presentation-v3/surfaces/visualizer/VizConfigView.vue'), 'utf8');
+    const prompts = source.slice(source.indexOf('title="AI 触发提示词"'), source.indexOf('title="世界书注入"'));
+    expect(prompts).toContain('auto-resize');
+    expect(prompts).not.toContain('max-rows');
   });
 });

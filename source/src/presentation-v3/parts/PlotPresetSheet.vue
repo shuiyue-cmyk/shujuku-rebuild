@@ -35,7 +35,7 @@
       <p v-else class="ub-pps-empty">暂无预设，点上方按钮从默认新建，或在预设卡片里导入。</p>
     </template>
 
-    <form v-else id="ub-plot-preset-form" class="ub-pps-form" @submit.prevent="emit('save')">
+    <form v-else id="ub-plot-preset-form" class="ub-pps-form" novalidate @submit.prevent="emit('save')">
       <UbSection title="基础信息">
         <UbRow label="预设名称" stack>
           <UbInput :model-value="draftMeta.name" autocomplete="off" aria-label="预设名称" @update:model-value="emit('update-name', String($event))" />

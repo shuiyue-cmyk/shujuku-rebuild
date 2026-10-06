@@ -15,6 +15,37 @@ type PersistenceModule = typeof import('../../../src/presentation-v2/stores/pers
 type HostDocModule = typeof import('../../../src/presentation-v2/bootstrap/host-document');
 type PiniaModule = typeof import('pinia');
 
+type Rgba = [number, number, number, number];
+
+function parseColor(color: string): Rgba {
+  const value = color.trim();
+  if (value === 'transparent') return [0, 0, 0, 0];
+  const hex = value.match(/^#([0-9a-f]{6})$/i);
+  if (hex) return [0, 2, 4].map(i => parseInt(hex[1].slice(i, i + 2), 16)).concat(1) as Rgba;
+  const rgba = value.match(/^rgba?\(([^)]+)\)$/i);
+  if (!rgba) throw new Error(`无法解析颜色：${color}`);
+  const parts = rgba[1].split(',').map(Number);
+  return [parts[0], parts[1], parts[2], parts[3] ?? 1];
+}
+
+function composite(fg: Rgba, bg: Rgba): Rgba {
+  const a = fg[3];
+  return [0, 1, 2].map(i => fg[i] * a + bg[i] * (1 - a)).concat(1) as Rgba;
+}
+
+function luminance(c: Rgba): number {
+  const [r, g, b] = c.slice(0, 3).map(v => {
+    const x = v / 255;
+    return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrast(a: Rgba, b: Rgba): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
 const JIRAI_TOKENS = {
   bg0: '#2B2B2B',
   bg1: '#1F1F1F',
@@ -122,7 +153,7 @@ describe('theme-store', () => {
     expect(store.activeId).toBe(before);
   });
 
-  it('只暴露当前维护的四个内置主题', async () => {
+  it('只暴露当前维护的八个内置主题', async () => {
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());
     const store = m.themeStore.useThemeStore();
@@ -131,6 +162,10 @@ describe('theme-store', () => {
       'default-dark',
       'creamy-minimal',
       'jirai-kei',
+      'claude',
+      'claude-night',
+      'mist-blue',
+      'midnight',
     ]);
   });
 
@@ -163,6 +198,10 @@ describe('theme-store', () => {
       'default-dark',
       'creamy-minimal',
       'jirai-kei',
+      'claude',
+      'claude-night',
+      'mist-blue',
+      'midnight',
       'custom:theme',
     ]);
 
@@ -203,6 +242,10 @@ describe('theme-store', () => {
       'default-dark',
       'creamy-minimal',
       'jirai-kei',
+      'claude',
+      'claude-night',
+      'mist-blue',
+      'midnight',
     ]);
     expect(store.activeTheme.tokens.bg0).toBe('#2B2B2B');
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({
@@ -357,24 +400,12 @@ describe('theme-store', () => {
       name: '深色',
       colorScheme: 'dark',
       tokens: {
-        bg0: '#1F2428',
-        bg1: '#24292E',
-        bg2: '#2D343B',
-        sidebarBg: '#1F2428',
-        hoverOverlay: 'rgba(201, 209, 217, 0.08)',
-        border: 'rgba(205, 217, 229, 0.08)',
-        border2: 'rgba(205, 217, 229, 0.14)',
-        text1: '#F0F3F6',
-        text2: '#C9D1D9',
-        text3: '#8B949E',
+        bg0: '#15181C',
+        bg1: '#1E2227',
+        sidebarBg: '#121519',
+        text1: '#EEF1F4',
         accent: '#7FD6CA',
-        accent2: '#69C7BC',
-        onAccent: '#1F2428',
-        accentGlow: 'rgba(127, 214, 202, 0.26)',
-        success: '#8DBA9A',
-        warning: '#C9A35E',
-        danger: '#D07A74',
-        shadow: '0 18px 48px rgba(1, 4, 9, 0.36)',
+        onAccent: '#15181C',
       },
     });
   });
@@ -388,18 +419,12 @@ describe('theme-store', () => {
       name: '奶油风',
       colorScheme: 'light',
       tokens: {
-        bg0: '#F7F0E6',
-        bg1: '#FCF8F1',
-        bg2: '#EFE4D7',
-        sidebarBg: '#F6ECDD',
-        border: 'rgba(116, 91, 62, 0.12)',
-        text1: '#514638',
-        accent: '#85A76A',
-        onAccent: '#FCF8F1',
+        bg0: '#F2E8DA',
+        bg1: '#FFFBF5',
+        text1: '#463B2F',
+        accent: '#5A7A44',
+        onAccent: '#FFFBF5',
         hoverOverlay: 'rgba(116, 91, 62, 0.08)',
-        success: '#7F9B69',
-        warning: '#AA8050',
-        danger: '#A76561',
         radiusLg: '18px',
       },
     });
@@ -443,6 +468,55 @@ describe('theme-store', () => {
       theme: { activeId: 'jirai-kei' },
     });
   });
+  it('包含 Claude 浅色与 Claude 夜主题：暖象牙底 + 赤陶 accent', async () => {
+    const m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    const store = m.themeStore.useThemeStore();
+    expect(store.themes.find(t => t.id === 'claude')).toMatchObject({
+      name: 'Claude',
+      colorScheme: 'light',
+      tokens: { bg0: '#F0EEE6', bg1: '#FAF9F5', text1: '#1F1E1D', accent: '#BA5A36', onAccent: '#FFFFFF' },
+    });
+    expect(store.themes.find(t => t.id === 'claude-night')).toMatchObject({
+      name: 'Claude 夜',
+      colorScheme: 'dark',
+      tokens: { bg0: '#1F1E1D', bg1: '#2A2927', text1: '#FAF9F5', accent: '#D97757', onAccent: '#1F1E1D' },
+    });
+
+    store.setTheme('claude');
+    expect(store.activeId).toBe('claude');
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({ theme: { activeId: 'claude' } });
+  });
+
+  /**
+   * 新版界面靠「页面底色 bg0 / 卡片 bg1」分层、靠 accent 做选中与主按钮。
+   * 旧浅色 / 深色 / 奶油风两层几乎同色（对比 1.04~1.07）、奶油风主按钮字看不清，
+   * 这正是它们放到新界面上显得发灰发糊的原因。这里给所有内置主题立同一道可读性下限。
+   */
+  it('所有内置主题满足新版界面的可读性下限：文字对比、主按钮文字、卡片与底色分层', async () => {
+    const m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    const store = m.themeStore.useThemeStore();
+    const builtins = store.themes.filter(t => !t.id.startsWith('custom:'));
+    expect(builtins.length).toBeGreaterThanOrEqual(8);
+
+    for (const theme of builtins) {
+      const t = theme.tokens;
+      const bg1 = parseColor(t.bg1);
+      const on = (color: string, base = bg1) => composite(parseColor(color), base);
+      const accent = on(t.accent);
+      const checks = {
+        正文: [contrast(on(t.text1), bg1), 7],
+        次要文字: [contrast(on(t.text2), bg1), 4.5],
+        辅助文字: [contrast(on(t.text3), bg1), 3.5],
+        主按钮文字: [contrast(on(t.onAccent, accent), accent), 4.5],
+        卡片与底色分层: [contrast(parseColor(t.bg0), bg1), 1.08],
+      } as const;
+      for (const [label, [value, min]] of Object.entries(checks)) {
+        expect(value, `${theme.name}：${label}对比 ${value.toFixed(2)} 低于 ${min}`).toBeGreaterThanOrEqual(min);
+      }
+    }
+  });
 });
 
 describe('theme-injector', () => {
@@ -477,14 +551,14 @@ describe('theme-injector', () => {
     m.injector.applyTheme(store.activeTheme);
     const style2 = document.getElementById(STYLE_NODE_ID) as HTMLStyleElement | null;
     expect(style2).toBe(style1); // 同一个节点，textContent 被替换
-    expect(style2!.textContent).toContain('#f8f5ee'); // light 的 bg-0
+    expect(style2!.textContent).toContain('#F2F1ED'); // light 的 bg-0
 
     store.setTheme('creamy-minimal');
     m.injector.applyTheme(store.activeTheme);
     const style3 = document.getElementById(STYLE_NODE_ID) as HTMLStyleElement | null;
     expect(style3).toBe(style1);
-    expect(style3!.textContent).toContain('#F7F0E6'); // 奶油风的 bg-0
-    expect(style3!.textContent).toContain('#85A76A'); // 奶油风的 accent
+    expect(style3!.textContent).toContain('#F2E8DA'); // 奶油风的 bg-0
+    expect(style3!.textContent).toContain('#5A7A44'); // 奶油风的 accent
     expect(style3!.textContent).toContain('rgba(116, 91, 62, 0.08)'); // 奶油风的 hover overlay
   });
 

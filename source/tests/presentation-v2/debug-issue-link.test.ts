@@ -54,31 +54,21 @@ describe('Debug issue 链接构造', () => {
 });
 
 /**
- * 页面接线用源码文本断言：AdvancedToolsPage 没有可复用的挂载 harness（依赖 log/debug/vector 多条
- * 宿主链路），而这里要锁的只是「Debug 操作区里确实有一个指向 issue 页的入口」，不值得为它搭一套
- * 全量 mock。行为面（渲染成 <a>、target/rel 默认值）由 acu-button.test.ts 在真实 DOM 上钉住。
+ * 页面接线用源码文本断言：AdvancedToolsPage 依赖 log/debug/vector 多条宿主链路，
+ * 这里只锁「Debug 操作区里确实有一个指向 issue 页的入口」。
  */
 describe('Debug 操作区的 issue 入口接线', () => {
   const pageSource = readFileSync(
-    join(process.cwd(), 'src/presentation-v2/pages/AdvancedToolsPage.vue'),
+    join(process.cwd(), 'src/presentation-v3/pages/AdvancedToolsPage.vue'),
     'utf8',
   );
 
-  function debugActionsBlock(): string {
-    const start = pageSource.indexOf('acu-v2-advanced-tools-page__debug-actions');
-    expect(start, 'Debug 操作区容器必须存在').toBeGreaterThan(-1);
-    return pageSource.slice(start, pageSource.indexOf('</div>', start));
-  }
-
-  it('操作区内有一个绑定 issue URL 的 AcuButton（文案点明去向）', () => {
-    const block = debugActionsBlock();
-
-    expect(block).toContain(':href="debugIssueUrl"');
-    expect(block).toContain('前往 GitHub 提交 issue');
+  it('操作区内有一个绑定 issue URL 的按钮（文案点明去向）', () => {
+    expect(pageSource).toContain(':href="debugIssueUrl"');
+    expect(pageSource).toContain('前往 GitHub 提交 issue');
   });
 
   it('URL 由 buildDebugIssueUrl_ACU 生成，不在模板里手写仓库地址', () => {
-    expect(pageSource).toContain('buildDebugIssueUrl_ACU');
     expect(pageSource).toMatch(/const debugIssueUrl = buildDebugIssueUrl_ACU\(\)/);
     // 仓库地址只能有一个出处（composable），页面里不得再出现第二份硬编码。
     expect(pageSource).not.toContain('github.com/shuiyue-cmyk');

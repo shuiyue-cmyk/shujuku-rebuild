@@ -70,7 +70,7 @@ export interface UbPresetItem {
 <script setup lang="ts">
 /**
  * 预设选择器：触发按钮＋弹出列表（Teleport 到门户层，避免被卡片裁切）。
- * 列表项可"设为全局默认"（星标），与经典界面的预设下拉语义一致。
+ * 列表项可"设为全局默认"（星标）。
  */
 import { computed, ref } from 'vue';
 import UbIconButton from './UbIconButton.vue';

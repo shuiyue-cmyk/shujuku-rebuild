@@ -99,7 +99,7 @@ describe('DeveloperPage', () => {
   it('渲染开发者开关和填表执行参数', async () => {
     const { mount } = await mountDeveloperPage();
 
-    const page = document.querySelector('.acu-v2-developer-page');
+    const page = document.querySelector('[data-ub-main]');
     expect(page).not.toBeNull();
     const text = page!.textContent || '';
     expect(text).toContain('开发者 gated 字段');
@@ -114,12 +114,12 @@ describe('DeveloperPage', () => {
     // 拨动只写存储、不改变任何渲染。剥离：遗留存量也不得再出现该开关。
     const { mount } = await mountDeveloperPage({ vectorIndexAdvanced: true });
 
-    const page = document.querySelector('.acu-v2-developer-page');
+    const page = document.querySelector('[data-ub-main]');
     expect(page).not.toBeNull();
     expect(page!.textContent || '', '失效的交火模式开关必须已剥离').not.toContain('交火模式');
     // 结构级双保险：不只看文本，开关控件本身也不得存在（防文本巧合/空转）。
     expect(
-      page!.querySelector('[data-acu-toggle-key="vectorIndexAdvanced"]'),
+      page!.querySelector('[role="switch"][aria-label="交火模式"]'),
       'vectorIndexAdvanced 开关控件必须已剥离',
     ).toBeNull();
 
@@ -129,9 +129,7 @@ describe('DeveloperPage', () => {
   it('最大并发更新组数输入会保存到 settings', async () => {
     const { mount, settings, saveSettings } = await mountDeveloperPage();
 
-    const panel = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-developer-page .acu-panel'))
-      .find(el => el.querySelector('.acu-panel__title')?.textContent?.includes('填表执行参数'))!;
-    const input = panel.querySelector<HTMLInputElement>('input[type="number"]')!;
+    const input = document.querySelector<HTMLInputElement>('[data-ub-main] input[aria-label="最大并发更新组数"]')!;
     input.value = '4';
     input.dispatchEvent(new Event('change', { bubbles: true }));
     await Promise.resolve();
@@ -150,8 +148,8 @@ describe('DeveloperPage', () => {
    * 却既看不到也关不掉。本组用例把"看得见 + 关得掉"钉住。
    */
   describe('WARN 日志开关（常驻采集来源）', () => {
-    function findWarnToggle(): HTMLButtonElement | undefined {
-      return document.querySelector<HTMLButtonElement>('button[data-acu-toggle-key="warnLogEnabled"]');
+    function findWarnToggle(): HTMLElement | undefined {
+      return document.querySelector<HTMLElement>('[data-ub-main] [role="switch"][aria-label="WARN 日志"]') ?? undefined;
     }
 
     it('无遗留设置时开关可见且为关：warn 不入缓冲区（只有 error）', async () => {

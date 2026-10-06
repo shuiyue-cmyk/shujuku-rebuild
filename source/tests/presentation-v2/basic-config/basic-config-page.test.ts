@@ -164,10 +164,10 @@ describe('BasicConfigPage', () => {
   it('基础模式只显示基础配置页，并集中呈现 API、更新设置、表格模板、剧情推进预设', async () => {
     const { mount } = await mountBasicConfigPage();
 
-    const page = document.querySelector('.acu-v2-basic-config-page');
+    const page = document.querySelector<HTMLElement>('[data-ub-main]');
     expect(page).not.toBeNull();
     const text = page!.textContent || '';
-    expect(document.querySelector('.acu-v2-app__page-title')?.textContent || '').toContain('基础配置');
+    expect(document.querySelector('.ub-top__title')?.textContent || '').toContain('基础配置');
     expect(text).not.toContain('配置状态');
     expect(text).toContain('API 预设');
     expect(text).toContain('更新设置');
@@ -177,32 +177,30 @@ describe('BasicConfigPage', () => {
     expect(text).toContain('打开可视化表格编辑器');
     expect(text).toContain('剧情推进预设');
     expect(text).not.toContain('通常只有 API 连接需要你确认');
-    const panelTitles = Array.from(page!.querySelectorAll('.acu-v2-basic-config-page__grid > .acu-panel .acu-panel__title'))
-      .map(title => (title.textContent || '').trim());
-    expect(panelTitles).toEqual(['API 预设', '自动更新设置', '表格模板预设', '剧情推进预设']);
-    const mobileNavItems = Array.from(page!.querySelectorAll('.acu-mobile-panel-nav__item'))
+    const jumpItems = Array.from(page!.querySelectorAll('.ub-page__chip'))
       .map(item => (item.textContent || '').trim());
-    expect(mobileNavItems).toEqual(['API 预设', '更新设置', '表格模板', '剧情推进']);
-    expect(document.getElementById('basic-config-update-panel')).not.toBeNull();
+    expect(jumpItems).toEqual(['API 预设', '更新设置', '表格模板', '剧情推进']);
+    for (const id of ['basic-api-preset', 'basic-update', 'basic-table', 'basic-plot']) {
+      expect(document.getElementById(id), id).not.toBeNull();
+    }
 
-    const sidebarText = document.querySelector('.acu-v2-sidebar')?.textContent || '';
-    expect(sidebarText).toContain('基础模式');
-    expect(sidebarText).toContain('基础配置');
-    expect(sidebarText).not.toContain('仪表盘');
-    expect(sidebarText).not.toContain('更新参数');
+    const navText = document.querySelector('.ub-rail')?.textContent || '';
+    expect(navText).toContain('基础模式');
+    expect(navText).toContain('基础配置');
+    expect(navText).not.toContain('仪表盘');
+    expect(navText).not.toContain('更新参数');
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('基础配置页的表格模板面板提供可视化表格编辑器入口', async () => {
+  it('基础配置页的表格模板分节提供可视化表格编辑器入口', async () => {
     const { mount, openVisualizer } = await mountBasicConfigPage();
 
-    const tablePanel = document.getElementById('basic-config-table-panel') as HTMLElement | null;
-    expect(tablePanel).not.toBeNull();
-    const button = Array.from(tablePanel!.querySelectorAll<HTMLButtonElement>('button'))
+    const tableSection = document.getElementById('basic-table') as HTMLElement | null;
+    expect(tableSection).not.toBeNull();
+    const button = Array.from(tableSection!.querySelectorAll<HTMLButtonElement>('button'))
       .find(item => item.textContent?.trim() === '打开可视化表格编辑器');
-    expect(button).not.toBeNull();
-    expect(button!.classList.contains('acu-btn--primary')).toBe(true);
+    expect(button).toBeDefined();
 
     button!.click();
     await Promise.resolve();
@@ -212,31 +210,19 @@ describe('BasicConfigPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('基础配置页每个面板都渲染常驻说明信息条', async () => {
+  it('点击侧栏模式按钮后切换到高手模式并回到仪表盘', async () => {
     const { mount } = await mountBasicConfigPage();
 
-    const panels = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-basic-config-page .acu-panel'));
-    expect(panels).toHaveLength(4);
-    for (const panel of panels) {
-      expect(panel.querySelector('.acu-panel__description-region .acu-info-banner')).not.toBeNull();
-    }
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('点击侧边栏模式按钮后切换到高手模式并回到仪表盘', async () => {
-    const { mount } = await mountBasicConfigPage();
-
-    const switchButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.acu-v2-sidebar button'))
+    const switchButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-rail button'))
       .find(button => (button.textContent || '').includes('切换到高手模式'));
     expect(switchButton).toBeDefined();
     switchButton!.click();
     await new Promise(r => setTimeout(r, 0));
 
-    const sidebarText = document.querySelector('.acu-v2-sidebar')?.textContent || '';
-    expect(sidebarText).toContain('高手模式');
-    expect(sidebarText).toContain('仪表盘');
-    expect(document.querySelector('.acu-v2-dashboard-page')).not.toBeNull();
+    const navText = document.querySelector('.ub-rail')?.textContent || '';
+    expect(navText).toContain('高手模式');
+    expect(navText).toContain('仪表盘');
+    expect(document.querySelector('.ub-top__title')?.textContent?.trim()).toBe('仪表盘');
 
     const persisted = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
     expect(persisted.uiMode.mode).toBe('advanced');

@@ -75,7 +75,6 @@ import './presentation/triggers/settings-ui-sync';
 import { mainInitialize_ACU } from './presentation/bootstrap/init';
 import { installGlobalBuildBadge_ACU } from './presentation/bootstrap/install-build-badge';
 import { bootstrapAcuV2 } from './presentation-v2/bootstrap';
-import { installAcuV3 } from './presentation-v3/bootstrap/install';
 import { logDebug_ACU, logError_ACU, logWarn_ACU } from './shared/utils';
 import { waitForAcuHostReady } from './shared/host-bridge';
 
@@ -136,7 +135,6 @@ async function extensionMain() {
 
     logDebug_ACU('[插件启动] 宿主 API 已就绪，开始初始化...');
     mainInitialize_ACU();
-    installAcuV3();
     bootstrapAcuV2();
 }
 

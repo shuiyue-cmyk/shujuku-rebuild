@@ -108,117 +108,116 @@ beforeEach(() => {
   vi.unstubAllGlobals();
 });
 
+const wait = (ms = 0) => new Promise(r => setTimeout(r, ms));
+const page = () => document.querySelector<HTMLElement>('[data-ub-main]')!;
+const sheet = () => document.querySelector<HTMLElement>('#ub-portal .ub-sheet-layer');
+const buttonByText = (root: ParentNode, text: string) => Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
+  .find(button => (button.textContent || '').includes(text));
+const sectionByTitle = (root: ParentNode, title: string) => Array.from(root.querySelectorAll<HTMLElement>('.ub-section'))
+  .find(section => (section.querySelector('.ub-section__title')?.textContent || '').includes(title));
+
+async function openEditSheet(): Promise<HTMLElement> {
+  const editButton = page().querySelector<HTMLButtonElement>('button[title="编辑当前预设"]');
+  expect(editButton).not.toBeNull();
+  editButton!.click();
+  await wait();
+  const layer = sheet();
+  expect(layer).not.toBeNull();
+  return layer!;
+}
+
+async function saveSheet(layer: HTMLElement): Promise<void> {
+  const saveButton = buttonByText(layer, '保存预设');
+  expect(saveButton).not.toBeUndefined();
+  saveButton!.click();
+  await wait();
+}
+
 describe('PlotPage', () => {
-  it('渲染主区头部与状态行，header 不再放启用 toggle', async () => {
+  it('渲染预设、发送体验与世界书分节，不放启用开关，每节带常驻说明', async () => {
     const { mount } = await mountPlotPage();
 
-    const page = document.querySelector('.acu-v2-plot-page');
-    expect(page).not.toBeNull();
-    const text = page!.textContent || '';
-    expect(text).toContain('剧情推进');
+    const text = page().textContent || '';
+    expect(document.querySelector('.ub-top__title')?.textContent?.trim()).toBe('剧情推进');
     expect(text).toContain('剧情推进预设');
     expect(text).toContain('剧情推进世界书');
     expect(text).toContain('记忆召回'); // active preset name
-    expect(Array.from(page!.querySelectorAll('button')).some(b => b.textContent?.trim() === '刷新')).toBe(false);
+    expect(Array.from(page().querySelectorAll('button')).some(b => b.textContent?.trim() === '刷新')).toBe(false);
+    expect(page().querySelector('[role="switch"][aria-label*="启用剧情推进"]')).toBeNull();
 
-    const toggle = document.querySelector('button[data-acu-plot-toggle="enabled"]') as HTMLButtonElement | null;
-    expect(toggle).toBeNull();
+    const sections = Array.from(page().querySelectorAll<HTMLElement>('.ub-section'));
+    expect(sections.map(section => section.id)).toEqual(['plot-preset', 'plot-experience', 'plot-worldbook']);
+    sections.forEach(section => {
+      expect(section.querySelector('.ub-section__desc')?.textContent?.trim()).toBeTruthy();
+    });
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('发送体验面板暴露伪装发送楼层开关：默认关闭，点击可开启并落盘', async () => {
+  it('发送体验分节暴露伪装发送楼层开关：默认关闭，点击可开启并落盘', async () => {
     // 老设置无该键：store 必须归一为 false（可选项默认关闭），不能因 undefined 而开启。
     const { mount, settings } = await mountPlotPage();
     expect(settings.plotSettings.pendingDisguiseEnabled).not.toBe(true);
 
-    const page = document.querySelector('.acu-v2-plot-page');
-    const text = page?.textContent || '';
-    expect(text, '必须向用户暴露伪装发送楼层开关').toContain('伪装发送楼层');
+    expect(page().textContent || '', '必须向用户暴露伪装发送楼层开关').toContain('伪装发送楼层');
 
-    const toggle = Array.from(page?.querySelectorAll('[role="switch"]') || [])
-      .find(node => (node.textContent || '').includes('伪装'));
+    const toggle = page().querySelector('[role="switch"][aria-label*="伪装"]');
     expect(toggle, '伪装开关必须渲染为 role=switch 控件').toBeTruthy();
     expect(toggle?.getAttribute('aria-checked'), '默认应关闭').toBe('false');
 
     toggle!.dispatchEvent(new Event('click', { bubbles: true }));
-    await new Promise(r => setTimeout(r, 0));
+    await wait();
 
     expect(settings.plotSettings.pendingDisguiseEnabled, '开启后必须写进 plotSettings').toBe(true);
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('开发者选项关闭时，编辑抽屉不渲染"匹配替换"字段', async () => {
+  it('开发者选项关闭时，编辑面板不渲染"匹配替换"字段，底部为关闭/保存', async () => {
     const { mount } = await mountPlotPage();
 
-    const editButton = Array.from(document.querySelectorAll('button'))
-      .find(b => b.getAttribute('title') === '编辑当前预设') as HTMLButtonElement | undefined;
-    expect(editButton).not.toBeUndefined();
-    editButton!.click();
-    await new Promise(r => setTimeout(r, 0));
+    const layer = await openEditSheet();
+    expect(layer.textContent || '').not.toContain('匹配替换（进阶）');
+    const footerButtons = Array.from(layer.querySelectorAll<HTMLButtonElement>('.ub-sheet__foot button'));
+    expect(footerButtons.map(button => button.textContent?.trim())).toEqual(['关闭', '保存预设']);
+    expect(layer.textContent || '').not.toContain('取消');
 
-    const drawer = document.querySelector('.acu-v2-drawer');
-    expect(drawer).not.toBeNull();
-    expect(drawer!.textContent || '').not.toContain('匹配替换（进阶）');
-    const footerButtons = Array.from(drawer!.querySelectorAll<HTMLButtonElement>('.acu-v2-plot-drawer__actions button'));
-    expect(footerButtons[0].textContent?.trim()).toBe('关闭');
-    expect(footerButtons[0].classList.contains('acu-btn--default')).toBe(true);
-    expect(drawer!.textContent || '').not.toContain('取消');
     mount.__resetAcuV2MountForTests();
   });
 
-  it('开发者选项开启时，在编辑抽屉渲染"匹配替换"字段（含 5 个数字字段）', async () => {
+  it('开发者选项开启时，在编辑面板渲染"匹配替换"字段（含 5 个数字字段）', async () => {
     const { mount } = await mountPlotPage({ devOptions: { plotAdvanced: true } });
 
-    expect(document.querySelector('.acu-v2-plot-page')!.textContent || '').not.toContain('匹配替换（进阶）');
+    expect(page().textContent || '').not.toContain('匹配替换（进阶）');
 
-    const editButton = Array.from(document.querySelectorAll('button'))
-      .find(b => b.getAttribute('title') === '编辑当前预设') as HTMLButtonElement | undefined;
-    expect(editButton).not.toBeUndefined();
-    editButton!.click();
-    await new Promise(r => setTimeout(r, 0));
+    const layer = await openEditSheet();
+    const text = layer.textContent || '';
+    expect(text).toContain('匹配替换（进阶）');
+    expect(text).toContain('随当前预设保存');
+    expect(text.indexOf('标签筛选')).toBeLessThan(text.indexOf('匹配替换（进阶）'));
+    expect(text.indexOf('匹配替换（进阶）')).toBeLessThan(text.indexOf('当前任务使用的 API'));
 
-    const drawer = document.querySelector('.acu-v2-drawer');
-    expect(drawer).not.toBeNull();
-    const drawerText = drawer!.textContent || '';
-    expect(drawerText).toContain('匹配替换（进阶）');
-    expect(drawerText).toContain('随当前剧情推进预设保存');
-    expect(drawerText.indexOf('标签筛选')).toBeLessThan(drawerText.indexOf('匹配替换（进阶）'));
-    expect(drawerText.indexOf('匹配替换（进阶）')).toBeLessThan(drawerText.indexOf('当前任务使用的 API'));
-
-    const inputs = Array.from(document.querySelectorAll('.acu-v2-plot-match-fields input[type="number"]'));
-    expect(inputs).toHaveLength(5);
+    const rates = sectionByTitle(layer, '匹配替换（进阶）')!;
+    expect(rates.querySelectorAll('input[type="number"]')).toHaveLength(5);
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('编辑抽屉保存匹配替换参数到当前剧情推进预设', async () => {
+  it('编辑面板保存匹配替换参数到当前剧情推进预设', async () => {
     const { mount, settings } = await mountPlotPage({ devOptions: { plotAdvanced: true } });
 
-    const editButton = Array.from(document.querySelectorAll('button'))
-      .find(b => b.getAttribute('title') === '编辑当前预设') as HTMLButtonElement | undefined;
-    expect(editButton).not.toBeUndefined();
-    editButton!.click();
-    await new Promise(r => setTimeout(r, 0));
-
-    const drawer = document.querySelector('.acu-v2-drawer') as HTMLElement | null;
-    expect(drawer).not.toBeNull();
-    const inputs = Array.from(drawer!.querySelectorAll('.acu-v2-plot-match-fields input[type="number"]')) as HTMLInputElement[];
+    const layer = await openEditSheet();
+    const inputs = Array.from(sectionByTitle(layer, '匹配替换（进阶）')!.querySelectorAll<HTMLInputElement>('input[type="number"]'));
     expect(inputs).toHaveLength(5);
 
     const values = ['2.25', '1.75', '0.5', '1.25', '42'];
     for (let index = 0; index < inputs.length; index += 1) {
       inputs[index].value = values[index];
       inputs[index].dispatchEvent(new Event('change', { bubbles: true }));
-      await new Promise(r => setTimeout(r, 0));
+      await wait();
     }
 
-    const saveButton = Array.from(drawer!.querySelectorAll('button'))
-      .find(button => (button.textContent || '').includes('保存预设')) as HTMLButtonElement | undefined;
-    expect(saveButton).not.toBeUndefined();
-    saveButton!.click();
-    await new Promise(r => setTimeout(r, 0));
+    await saveSheet(layer);
 
     const savedPreset = settings.plotSettings.promptPresets.find((preset: any) => preset.name === '记忆召回');
     expect(savedPreset.rateMain).toBe(2.25);
@@ -235,15 +234,7 @@ describe('PlotPage', () => {
   it('任务 API 区域不暴露开发编号和 fallback 术语', async () => {
     const { mount } = await mountPlotPage();
 
-    const editButton = Array.from(document.querySelectorAll('button'))
-      .find(b => b.getAttribute('title') === '编辑当前预设') as HTMLButtonElement | undefined;
-    expect(editButton).not.toBeUndefined();
-    editButton!.click();
-    await new Promise(r => setTimeout(r, 0));
-
-    const drawer = document.querySelector('.acu-v2-drawer');
-    expect(drawer).not.toBeNull();
-    const text = drawer!.textContent || '';
+    const text = (await openEditSheet()).textContent || '';
     expect(text).toContain('当前任务使用的 API');
     expect(text).not.toContain('D23.4');
     expect(text).not.toContain('override');
@@ -252,79 +243,52 @@ describe('PlotPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('编辑预设抽屉的任务提示词段提供图标式上移和下移按钮', async () => {
+  it('编辑面板的任务提示词段提供图标式上移和下移按钮', async () => {
     const { mount } = await mountPlotPage();
 
-    const editButton = Array.from(document.querySelectorAll('button'))
-      .find(b => b.getAttribute('title') === '编辑当前预设') as HTMLButtonElement | undefined;
-    expect(editButton).not.toBeUndefined();
-    editButton!.click();
-    await new Promise(r => setTimeout(r, 0));
-
-    const promptSegments = document.querySelector('.acu-v2-drawer .acu-prompt-segs') as HTMLElement | null;
-    expect(promptSegments).not.toBeNull();
-    const moveUpButton = promptSegments!.querySelector('button[title="上移该段"]') as HTMLButtonElement | null;
-    const moveDownButton = promptSegments!.querySelector('button[title="下移该段"]') as HTMLButtonElement | null;
-    expect(moveUpButton).not.toBeNull();
-    expect(moveDownButton).not.toBeNull();
-    expect(moveUpButton!.textContent?.trim()).toBe('');
-    expect(moveDownButton!.textContent?.trim()).toBe('');
+    const layer = await openEditSheet();
+    const segments = layer.querySelector<HTMLElement>('.ub-segs');
+    expect(segments).not.toBeNull();
+    const iconButton = (icon: string) => Array.from(segments!.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.querySelector(`.${icon}`));
+    const moveUp = iconButton('fa-arrow-up');
+    const moveDown = iconButton('fa-arrow-down');
+    expect(moveUp).toBeDefined();
+    expect(moveDown).toBeDefined();
+    expect(moveUp!.getAttribute('title')).toMatch(/上移该段|已经是第一段/);
+    expect(moveDown!.getAttribute('title')).toMatch(/下移该段|已经是最后一段/);
+    expect(moveUp!.textContent?.trim()).toBe('');
+    expect(moveDown!.textContent?.trim()).toBe('');
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('编辑预设抽屉包含标签筛选，并将规则保存进预设', async () => {
+  it('编辑面板包含标签筛选，并将规则保存进预设', async () => {
     const { mount, settings } = await mountPlotPage();
 
-    const editButton = Array.from(document.querySelectorAll('button'))
-      .find(b => b.getAttribute('title') === '编辑当前预设') as HTMLButtonElement | undefined;
-    expect(editButton).not.toBeUndefined();
-    editButton!.click();
-    await new Promise(r => setTimeout(r, 0));
+    const layer = await openEditSheet();
+    expect(layer.textContent || '').toContain('标签筛选');
+    expect(layer.textContent || '').not.toContain('剧情上下文过滤');
+    expect(layer.textContent || '').toContain('提取规则');
+    expect(layer.textContent || '').toContain('排除规则');
 
-    const drawer = document.querySelector('.acu-v2-drawer') as HTMLElement | null;
-    expect(drawer).not.toBeNull();
-    expect(drawer!.textContent || '').toContain('标签筛选');
-    expect(drawer!.textContent || '').not.toContain('剧情上下文过滤');
-    expect(drawer!.textContent || '').toContain('提取规则');
-    expect(drawer!.textContent || '').toContain('排除规则');
-
-    const filterSection = Array.from(drawer!.querySelectorAll('.acu-v2-form__section'))
-      .find(section => (section.textContent || '').includes('标签筛选')) as HTMLElement | undefined;
+    const filterSection = sectionByTitle(layer, '标签筛选');
     expect(filterSection).not.toBeUndefined();
 
-    // 规则列表默认折叠：先点 header 展开，再寻找添加按钮。
-    const headers = Array.from(filterSection!.querySelectorAll<HTMLButtonElement>('.acu-rule-pair-list__header'));
-    expect(headers.length).toBe(2);
-    headers.forEach(h => h.click());
-    await new Promise(r => setTimeout(r, 0));
+    buttonByText(filterSection!, '添加提取规则')!.click();
+    buttonByText(filterSection!, '添加排除规则')!.click();
+    await wait();
 
-    const addExtractButton = Array.from(filterSection!.querySelectorAll('button'))
-      .find(button => (button.textContent || '').includes('添加提取规则')) as HTMLButtonElement | undefined;
-    const addExcludeButton = Array.from(filterSection!.querySelectorAll('button'))
-      .find(button => (button.textContent || '').includes('添加排除规则')) as HTMLButtonElement | undefined;
-    expect(addExtractButton).not.toBeUndefined();
-    expect(addExcludeButton).not.toBeUndefined();
-
-    addExtractButton!.click();
-    addExcludeButton!.click();
-    await new Promise(r => setTimeout(r, 0));
-
-    const inputs = Array.from(filterSection!.querySelectorAll('input.acu-input')) as HTMLInputElement[];
-    expect(inputs.length).toBeGreaterThanOrEqual(4);
+    const inputs = Array.from(filterSection!.querySelectorAll<HTMLInputElement>('.ub-rules__row input'));
+    expect(inputs).toHaveLength(4);
     const values = ['<recall>', '</recall>', '<thinking>', '</thinking>'];
     for (let index = 0; index < 4; index += 1) {
-      const input = inputs[index];
-      input.value = values[index];
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      await new Promise(r => setTimeout(r, 0));
+      inputs[index].value = values[index];
+      inputs[index].dispatchEvent(new Event('input', { bubbles: true }));
+      await wait();
     }
 
-    const saveButton = Array.from(drawer!.querySelectorAll('button'))
-      .find(button => (button.textContent || '').includes('保存预设')) as HTMLButtonElement | undefined;
-    expect(saveButton).not.toBeUndefined();
-    saveButton!.click();
-    await new Promise(r => setTimeout(r, 0));
+    await saveSheet(layer);
 
     const savedPreset = settings.plotSettings.promptPresets.find((preset: any) => preset.name === '记忆召回');
     expect(savedPreset.contextExtractRules).toEqual([{ start: '<recall>', end: '</recall>' }]);
@@ -335,110 +299,87 @@ describe('PlotPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('每个 AcuPanel 都附常驻说明信息条（D22.5）', async () => {
-    const { mount } = await mountPlotPage();
-    const panels = document.querySelectorAll('.acu-v2-plot-page .acu-panel');
-    expect(panels.length).toBeGreaterThanOrEqual(2);
-    panels.forEach(panel => {
-      expect(panel.querySelector('.acu-panel__description-region .acu-info-banner')).not.toBeNull();
-    });
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('剧情推进 API 预设下拉默认空选项 = "跟随当前活动"，并列出 apiStore 预设', async () => {
+  it('剧情推进 API 预设下拉默认 = "跟随当前活动"，并列出 API 预设', async () => {
     const { mount } = await mountPlotPage();
 
-    const panel = Array.from(document.querySelectorAll('.acu-v2-plot-page .acu-panel'))
-      .find(p => (p.textContent || '').includes('剧情推进 API 预设'));
-    expect(panel).not.toBeUndefined();
-    const acuSelect = panel!.querySelector('.acu-select') as HTMLElement | null;
-    expect(acuSelect).not.toBeNull();
-    const trigger = acuSelect!.querySelector('.acu-select__trigger') as HTMLButtonElement;
-    expect(trigger.textContent).toContain('跟随当前活动 API（gpt-mini）');
-    trigger.click();
-    await new Promise(r => setTimeout(r, 0));
-    const items = Array.from(acuSelect!.querySelectorAll('.acu-select__item'));
-    const labels = items.map(li => li.textContent?.trim() || '');
-    expect(labels[0]).toBe('跟随当前活动 API（gpt-mini）');
-    expect(labels.some(l => l === 'gpt-mini')).toBe(true);
+    const select = page().querySelector<HTMLSelectElement>('select[aria-label="剧情推进 API 预设"]');
+    expect(select).not.toBeNull();
+    expect(select!.selectedOptions[0]?.textContent).toContain('跟随当前活动 API（gpt-mini）');
+    const labels = Array.from(select!.options).map(option => option.textContent?.trim() || '');
+    expect(labels.some(label => label.includes('跟随当前活动 API（gpt-mini）'))).toBe(true);
+    expect(labels).toContain('gpt-mini');
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('点击"管理预设"按钮打开抽屉并显示已有预设', async () => {
+  it('点击"管理预设"按钮打开面板并显示已有预设', async () => {
     const { mount } = await mountPlotPage();
 
-    const gearButton = Array.from(document.querySelectorAll('button'))
-      .find(b => b.getAttribute('title') === '管理预设') as HTMLButtonElement | undefined;
-    expect(gearButton).not.toBeUndefined();
-    gearButton!.click();
-    await new Promise(r => setTimeout(r, 0));
+    page().querySelector<HTMLButtonElement>('button[title="管理预设"]')!.click();
+    await wait();
 
-    const drawer = document.querySelector('.acu-v2-drawer');
-    expect(drawer).not.toBeNull();
-    expect(drawer!.textContent || '').toContain('管理剧情推进预设');
-    expect(drawer!.textContent || '').toContain('记忆召回');
+    const layer = sheet();
+    expect(layer).not.toBeNull();
+    expect(layer!.textContent || '').toContain('管理剧情推进预设');
+    expect(layer!.textContent || '').toContain('记忆召回');
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('剧情推进预设下拉直接使用 AcuPresetDropdown，显示任务数并支持切换与星标', async () => {
+  it('剧情推进预设选择器显示任务数，支持切换与星标', async () => {
     const { mount, settings } = await mountPlotPage();
 
-    const trigger = document.querySelector('.acu-v2-plot-page .acu-preset-dd__trigger') as HTMLButtonElement | null;
+    const trigger = page().querySelector<HTMLButtonElement>('.ub-picker__trigger');
     expect(trigger).not.toBeNull();
     expect(trigger!.textContent).toContain('记忆召回');
 
+    const items = () => Array.from(document.querySelectorAll<HTMLElement>('#ub-portal .ub-picker-panel__item'));
     trigger!.click();
-    await Promise.resolve();
-    const items = Array.from(document.querySelectorAll('.acu-v2-plot-page .acu-preset-dd__item')) as HTMLElement[];
-    const defaultItem = items.find(item => item.textContent?.includes('默认预设'));
+    await wait();
+    const defaultItem = items().find(item => item.textContent?.includes('默认预设'));
     expect(defaultItem).not.toBeUndefined();
     expect(defaultItem!.textContent).toContain('1 个任务');
-    const slowItem = items.find(item => item.textContent?.includes('低速推进'));
+    const slowItem = items().find(item => item.textContent?.includes('低速推进'));
     expect(slowItem).not.toBeUndefined();
     expect(slowItem!.textContent).toContain('2 个任务');
     slowItem!.click();
-    await Promise.resolve();
+    await wait();
     expect(trigger!.textContent).toContain('低速推进');
 
     trigger!.click();
-    await Promise.resolve();
-    const stars = Array.from(document.querySelectorAll('.acu-v2-plot-page .acu-preset-dd__star')) as HTMLButtonElement[];
-    stars.find(star => star.closest('.acu-preset-dd__item')?.textContent?.includes('低速推进'))!.click();
-    await Promise.resolve();
+    await wait();
+    items().find(item => item.textContent?.includes('低速推进'))!
+      .querySelector<HTMLButtonElement>('.ub-picker-panel__star')!.click();
+    await wait();
     expect(settings.plotSettings.lastUsedPresetName).toBe('低速推进');
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('剧情推进预设下拉支持选择默认预设，并可将默认预设设为全局默认', async () => {
+  it('剧情推进预设选择器支持选择默认预设，并可将默认预设设为全局默认', async () => {
     const { mount, settings } = await mountPlotPage();
 
-    const trigger = document.querySelector('.acu-v2-plot-page .acu-preset-dd__trigger') as HTMLButtonElement | null;
-    expect(trigger).not.toBeNull();
+    const trigger = page().querySelector<HTMLButtonElement>('.ub-picker__trigger')!;
+    const items = () => Array.from(document.querySelectorAll<HTMLElement>('#ub-portal .ub-picker-panel__item'));
 
-    trigger!.click();
-    await Promise.resolve();
-    const defaultItem = Array.from(document.querySelectorAll('.acu-v2-plot-page .acu-preset-dd__item'))
-      .find(item => item.textContent?.includes('默认预设')) as HTMLElement | undefined;
-    expect(defaultItem).not.toBeUndefined();
-    defaultItem!.click();
-    await Promise.resolve();
+    trigger.click();
+    await wait();
+    items().find(item => item.textContent?.includes('默认预设'))!.click();
+    await wait();
 
-    expect(trigger!.textContent).toContain('记忆召回');
+    expect(trigger.textContent).toContain('记忆召回');
     expect(settings.plotPresetBindings?.['chat-plot']).toBeUndefined();
 
-    trigger!.click();
-    await Promise.resolve();
-    const defaultStar = Array.from(document.querySelectorAll('.acu-v2-plot-page .acu-preset-dd__star'))
-      .find(star => star.closest('.acu-preset-dd__item')?.textContent?.includes('默认预设')) as HTMLButtonElement | undefined;
-    expect(defaultStar).not.toBeUndefined();
-    defaultStar!.click();
-    await Promise.resolve();
+    trigger.click();
+    await wait();
+    items().find(item => item.textContent?.includes('默认预设'))!
+      .querySelector<HTMLButtonElement>('.ub-picker-panel__star')!.click();
+    await wait();
 
     expect(settings.plotSettings.lastUsedPresetName).toBe('');
-    expect((document.querySelector('.acu-v2-plot-page__status-line') as HTMLElement).textContent || '').toContain('全局默认: 默认预设');
+    const facts = page().querySelector<HTMLElement>('.ub-plotp__facts')!;
+    const globalDefault = Array.from(facts.querySelectorAll('div')).find(row => row.querySelector('dt')?.textContent === '全局默认');
+    expect(globalDefault?.querySelector('dd')?.textContent?.trim()).toBe('默认预设');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -448,54 +389,39 @@ describe('PlotPage', () => {
     settings.plotSettings.lastUsedPresetName = '';
     const { mount } = await mountPlotPage({ settings });
 
-    const editButton = document.querySelector('button[title="从默认新建预设"]') as HTMLButtonElement | null;
+    const editButton = page().querySelector<HTMLButtonElement>('button[title="从默认新建预设"]');
     expect(editButton).not.toBeNull();
     expect(editButton!.disabled).toBe(false);
     editButton!.click();
-    await new Promise(r => setTimeout(r, 0));
+    await wait();
 
-    const drawer = document.querySelector('.acu-v2-drawer') as HTMLElement | null;
-    expect(drawer).not.toBeNull();
-    expect(drawer!.textContent || '').toContain('从默认新建剧情推进预设');
-    expect(drawer!.querySelectorAll('.acu-v2-plot-tasks__card')).toHaveLength(1);
-    expect(drawer!.querySelector('.acu-v2-plot-tasks__card')?.tagName).toBe('BUTTON');
-    const nameInput = drawer!.querySelector('.acu-v2-form__section input.acu-input') as HTMLInputElement | null;
-    expect(nameInput).not.toBeNull();
-    expect(nameInput!.value).toBe('新预设');
+    const layer = sheet();
+    expect(layer).not.toBeNull();
+    expect(layer!.textContent || '').toContain('从默认新建剧情推进预设');
+    expect(layer!.querySelectorAll('.ub-pps-task')).toHaveLength(1);
+    expect(layer!.querySelector('.ub-pps-task')?.tagName).toBe('BUTTON');
+    expect(layer!.querySelector<HTMLInputElement>('input[aria-label="预设名称"]')?.value).toBe('新预设');
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('管理抽屉从默认新建时使用内置默认任务初始化，并可保存为自定义预设', async () => {
+  it('管理面板从默认新建时使用内置默认任务初始化，并可保存为自定义预设', async () => {
     const { mount, settings } = await mountPlotPage();
 
-    const gearButton = Array.from(document.querySelectorAll('button'))
-      .find(b => b.getAttribute('title') === '管理预设') as HTMLButtonElement | undefined;
-    expect(gearButton).not.toBeUndefined();
-    gearButton!.click();
-    await new Promise(r => setTimeout(r, 0));
+    page().querySelector<HTMLButtonElement>('button[title="管理预设"]')!.click();
+    await wait();
 
-    const createButton = Array.from(document.querySelectorAll('.acu-v2-drawer button'))
-      .find(button => (button.textContent || '').includes('从默认新建')) as HTMLButtonElement | undefined;
+    const createButton = buttonByText(sheet()!, '从默认新建');
     expect(createButton).not.toBeUndefined();
     createButton!.click();
-    await new Promise(r => setTimeout(r, 0));
+    await wait();
 
-    const drawer = document.querySelector('.acu-v2-drawer') as HTMLElement | null;
-    expect(drawer).not.toBeNull();
-    expect(drawer!.textContent || '').toContain('从默认新建剧情推进预设');
-    expect(drawer!.querySelectorAll('.acu-v2-plot-tasks__card')).toHaveLength(1);
-    expect(drawer!.querySelector('.acu-v2-plot-tasks__card')?.tagName).toBe('BUTTON');
+    const layer = sheet()!;
+    expect(layer.textContent || '').toContain('从默认新建剧情推进预设');
+    expect(layer.querySelectorAll('.ub-pps-task')).toHaveLength(1);
+    expect(layer.querySelector<HTMLInputElement>('input[aria-label="预设名称"]')?.value).toBe('新预设');
 
-    const nameInput = drawer!.querySelector('.acu-v2-form__section input.acu-input') as HTMLInputElement | null;
-    expect(nameInput).not.toBeNull();
-    expect(nameInput!.value).toBe('新预设');
-
-    const saveButton = Array.from(drawer!.querySelectorAll('button'))
-      .find(button => (button.textContent || '').includes('保存预设')) as HTMLButtonElement | undefined;
-    expect(saveButton).not.toBeUndefined();
-    saveButton!.click();
-    await new Promise(r => setTimeout(r, 0));
+    await saveSheet(layer);
 
     const savedPreset = settings.plotSettings.promptPresets.find((preset: any) => preset.name === '新预设');
     expect(savedPreset).toBeDefined();
@@ -504,10 +430,10 @@ describe('PlotPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('面板导入按钮会导入为预设并切换当前聊天使用', async () => {
+  it('预设卡片的导入按钮会导入为预设并切换当前聊天使用', async () => {
     const { mount, settings } = await mountPlotPage();
 
-    const input = document.querySelector('.acu-v2-plot-page .acu-file-button__input') as HTMLInputElement | null;
+    const input = page().querySelector<HTMLInputElement>('#plot-preset .ub-file__input');
     expect(input).not.toBeNull();
     const file = new File([
       JSON.stringify([
@@ -519,8 +445,8 @@ describe('PlotPage', () => {
     ], 'plot-import.json', { type: 'application/json' });
     Object.defineProperty(input!, 'files', { value: [file], configurable: true });
     input!.dispatchEvent(new Event('change', { bubbles: true }));
-    await new Promise(r => setTimeout(r, 0));
-    await new Promise(r => setTimeout(r, 0));
+    await wait();
+    await wait();
 
     expect(settings.plotSettings.promptPresets.map((preset: any) => preset.name)).toContain('导入推进');
     expect(settings.plotPresetBindings?.['chat-plot']?.presetName).toBe('导入推进');
@@ -531,30 +457,27 @@ describe('PlotPage', () => {
   it('世界书来源选择器支持角色卡来源与手动多选', async () => {
     const { mount, settings } = await mountPlotPage();
 
-    const picker = document.querySelector('.acu-v2-wb-source-picker') as HTMLElement | null;
+    const section = document.getElementById('plot-worldbook')!;
+    const picker = section.querySelector<HTMLElement>('.ub-wbsrc');
     expect(picker).not.toBeNull();
     expect(picker!.textContent).not.toContain('当前角色卡所有世界书 · 主册 CharBook');
-    expect(document.querySelector('.acu-v2-wb-entry-picker__hint')?.textContent)
-      .toContain('目前已选: 角色卡所有世界书 · 主册 CharBook');
+    const current = () => section.querySelector('.ub-plot__current')?.textContent || '';
+    expect(current()).toContain('角色卡所有世界书 · 主册 CharBook');
 
-    const manualButton = Array.from(picker!.querySelectorAll<HTMLButtonElement>('.acu-segmented__item'))
-      .find(button => button.textContent?.trim() === '手动选择')!;
-    manualButton.click();
-    await Promise.resolve();
+    Array.from(picker!.querySelectorAll<HTMLButtonElement>('.ub-seg__item'))
+      .find(button => button.textContent?.trim() === '手动选择')!.click();
+    await wait();
 
-    const checkboxes = Array.from(picker!.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]'));
-    const worldA = checkboxes.find(button => button.textContent?.trim() === 'world-A')!;
-    const worldB = checkboxes.find(button => button.textContent?.trim() === 'world-B')!;
-    worldA.click();
-    worldB.click();
-    await Promise.resolve();
-    await Promise.resolve();
+    const books = () => Array.from(picker!.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]'));
+    books().find(button => button.textContent?.trim() === 'world-A')!.click();
+    books().find(button => button.textContent?.trim() === 'world-B')!.click();
+    await wait();
 
     expect(settings.plotSettings.plotWorldbookConfig.source).toBe('manual');
     expect(settings.plotSettings.plotWorldbookConfig.manualSelection).toEqual(['world-A', 'world-B']);
-    expect(document.querySelector('.acu-v2-wb-entry-picker__hint')?.textContent).toContain('目前已选: world-A、world-B');
-    expect(worldA.getAttribute('aria-checked')).toBe('true');
-    expect(worldB.getAttribute('aria-checked')).toBe('true');
+    expect(current()).toContain('world-A、world-B');
+    expect(books().find(button => button.textContent?.trim() === 'world-A')!.getAttribute('aria-checked')).toBe('true');
+    expect(books().find(button => button.textContent?.trim() === 'world-B')!.getAttribute('aria-checked')).toBe('true');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -566,9 +489,9 @@ describe('PlotPage', () => {
       settings,
       resolveCharacterBinding: async () => { throw bindingError; },
     });
-    await new Promise(r => setTimeout(r, 50));
+    await wait(50);
 
-    const error = document.querySelector('.acu-v2-wb-entries [role="alert"]');
+    const error = document.querySelector('#plot-worldbook .ub-wbe [role="alert"]');
     expect(error?.textContent).toContain('加载角色世界书失败');
     expect(error?.textContent).not.toContain(bindingError.message);
     expect(settings.plotSettings.plotWorldbookConfig.enabledEntries).toEqual({});
@@ -579,17 +502,17 @@ describe('PlotPage', () => {
 
   it('世界书条目列表渲染可见条目并过滤数据库生成条目', async () => {
     const { mount } = await mountPlotPage();
-    await new Promise(r => setTimeout(r, 50));
+    await wait(50);
 
-    const entryList = document.querySelector('.acu-v2-wb-entries');
+    const entryList = document.querySelector<HTMLElement>('#plot-worldbook .ub-wbe');
     expect(entryList).not.toBeNull();
     expect(entryList!.textContent || '').not.toContain('角色设定');
 
-    const header = entryList!.querySelector('.acu-v2-wb-entry-group__header') as HTMLButtonElement | null;
+    const header = entryList!.querySelector<HTMLButtonElement>('.ub-disc__head');
     expect(header).not.toBeNull();
     expect(header!.textContent).toContain('2/2 条');
     header!.click();
-    await Promise.resolve();
+    await wait();
 
     const text = entryList!.textContent || '';
     expect(text).toContain('角色设定');
@@ -599,27 +522,26 @@ describe('PlotPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('世界书条目区域渲染"全选"和"全不选"按钮', async () => {
+  it('世界书条目区域渲染"全选"和"全不选"按钮，不带 Skill 化控件', async () => {
     const { mount } = await mountPlotPage();
-    await new Promise(r => setTimeout(r, 50));
+    await wait(50);
 
-    const toolbar = document.querySelector('.acu-v2-wb-entry-toolbar');
+    const toolbar = document.querySelector('#plot-worldbook .ub-wbe__toolbar');
     expect(toolbar).not.toBeNull();
     const buttons = Array.from(toolbar!.querySelectorAll('button')).map(b => b.textContent?.trim());
     expect(buttons).toContain('全选');
     expect(buttons).toContain('全不选');
     expect(buttons).not.toContain('Skill 全选');
     expect(buttons).not.toContain('对所选 Skill 化');
-    expect(document.querySelector('.acu-v2-agent-wb-control')).toBeNull();
 
     mount.__resetAcuV2MountForTests();
   });
 
   it('世界书条目区域渲染搜索过滤输入框', async () => {
     const { mount } = await mountPlotPage();
-    await new Promise(r => setTimeout(r, 50));
+    await wait(50);
 
-    const filterInput = document.querySelector('.acu-v2-wb-entry-toolbar__filter .acu-input') as HTMLInputElement | null;
+    const filterInput = document.querySelector<HTMLInputElement>('#plot-worldbook .ub-wbe__toolbar input');
     expect(filterInput).not.toBeNull();
     expect(filterInput!.placeholder).toContain('搜索');
 
@@ -631,7 +553,7 @@ describe('PlotPage', () => {
     settings.plotSettings.plotWorldbookConfig.enabledEntries = {};
 
     const { mount } = await mountPlotPage({ settings });
-    await new Promise(r => setTimeout(r, 50));
+    await wait(50);
 
     expect(settings.plotSettings.plotWorldbookConfig.enabledEntries['CharBook']).toBeDefined();
     const enabled: number[] = settings.plotSettings.plotWorldbookConfig.enabledEntries['CharBook'];

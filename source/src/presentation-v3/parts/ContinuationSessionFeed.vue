@@ -128,7 +128,7 @@ watch(() => props.entries.length, async (length, previous) => {
   flex-direction: column;
   gap: var(--ub-s2);
   min-height: calc(var(--ub-u) * 220);
-  max-height: min(62vh, calc(var(--ub-u) * 640));
+  max-height: min(calc(var(--tt-base-viewport-height, 100vh) * 0.62), calc(var(--ub-u) * 640));
   padding: var(--ub-s4);
   overflow-y: auto;
   overscroll-behavior: contain;

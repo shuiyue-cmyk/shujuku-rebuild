@@ -242,13 +242,13 @@ beforeEach(() => {
 });
 
 describe('TablePage', () => {
-  it('左右分栏：左列含附加世界书条目与提示词，右列含标签筛选与注入目标', async () => {
+  it('四个分节：附加世界书条目、写入目标、提示词、标签筛选，不混入模板与工具', async () => {
     const { mount } = await mountTablePage();
 
-    const page = document.querySelector('.acu-v2-table-page');
+    const page = document.querySelector('[data-ub-main]');
     expect(page).not.toBeNull();
     const text = page!.textContent || '';
-    expect(document.querySelector('.acu-v2-app__page-title')?.textContent || '').toContain('填表规则');
+    expect(document.querySelector('.ub-top__title')?.textContent || '').toContain('填表规则');
     expect(text).toContain('标签筛选');
     expect(text).toContain('填表提示词');
     expect(text).toContain('写入目标世界书');
@@ -256,19 +256,20 @@ describe('TablePage', () => {
     expect(text).not.toContain('表格模板预设');
     expect(text).not.toContain('打开可视化表格编辑器');
     expect(text).not.toContain('表格工具');
-    expect(page!.querySelector('.acu-v2-table-page__tool-card')).toBeNull();
     expect(text).not.toContain('立即构建交火纪要索引');
     expect(text).not.toContain('Embedding / Rerank');
     expect(Array.from(page!.querySelectorAll('button')).some(b => b.textContent?.trim() === '刷新')).toBe(false);
 
-    const cols = page!.querySelectorAll('.acu-v2-table-page__col');
-    expect(cols.length).toBe(2);
-    const panelTitles = Array.from(page!.querySelectorAll('.acu-panel .acu-panel__title'))
+    const sectionTitles = Array.from(page!.querySelectorAll('.ub-section__title'))
       .map(title => (title.textContent || '').trim());
-    expect(panelTitles).toEqual(['附加世界书条目', '填表提示词', '标签筛选', '写入目标世界书']);
-    const mobileNavItems = Array.from(page!.querySelectorAll('.acu-mobile-panel-nav__item'))
+    expect(sectionTitles).toEqual(['附加世界书条目', '写入目标世界书', '填表提示词', '标签筛选']);
+    const jumpItems = Array.from(page!.querySelectorAll('.ub-page__chip'))
       .map(item => (item.textContent || '').trim());
-    expect(mobileNavItems).toEqual(['附加世界书条目', '提示词', '标签筛选', '写入目标世界书']);
+    expect(jumpItems).toEqual(['附加条目', '写入目标', '提示词', '标签筛选']);
+    // 每个分节都带常驻说明
+    page!.querySelectorAll('.ub-section').forEach(section => {
+      expect(section.querySelector('.ub-section__desc')?.textContent?.trim()).toBeTruthy();
+    });
 
     mount.__resetAcuV2MountForTests();
   });
@@ -320,32 +321,15 @@ describe('TablePage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('每个面板都渲染常驻说明信息条', async () => {
-    const { mount } = await mountTablePage();
-
-    const panels = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-table-page .acu-panel'));
-    expect(panels.length).toBeGreaterThan(0);
-    for (const panel of panels) {
-      expect(panel.querySelector('.acu-panel__description-region .acu-info-banner')).not.toBeNull();
-    }
-
-    mount.__resetAcuV2MountForTests();
-  });
-
   it('注入目标在未解析角色卡世界书时仍显示角色卡绑定世界书默认选项', async () => {
     const { mount } = await mountTablePage({ injectionCharPrimary: null });
 
-    const page = document.querySelector('.acu-v2-table-page') as HTMLElement;
-    const injectionPanel = page.querySelector<HTMLElement>('#table-injection-target-panel')!;
-    const trigger = injectionPanel.querySelector<HTMLButtonElement>('.acu-select__trigger');
-    expect(trigger).not.toBeNull();
-    expect(trigger!.textContent).toContain('角色卡绑定世界书');
+    const target = document.getElementById('tbl-target')!;
+    const select = target.querySelector<HTMLSelectElement>('select[aria-label="目标世界书"]');
+    expect(select).not.toBeNull();
+    expect(select!.selectedOptions[0]?.textContent?.trim()).toBe('角色卡绑定世界书');
 
-    trigger!.click();
-    await Promise.resolve();
-
-    const labels = Array.from(injectionPanel.querySelectorAll('.acu-select__item'))
-      .map(item => item.textContent?.trim());
+    const labels = Array.from(select!.options).map(option => option.textContent?.trim());
     expect(labels).toContain('角色卡绑定世界书');
     expect(labels).toContain('CharBookT');
 
@@ -355,25 +339,23 @@ describe('TablePage', () => {
   it('附加世界书条目手动模式可以多选世界书', async () => {
     const { mount } = await mountTablePage();
 
-    const page = document.querySelector('.acu-v2-table-page') as HTMLElement;
-    const entriesPanel = page.querySelector<HTMLElement>('#table-entries-panel')!;
-    const manualButton = Array.from(entriesPanel.querySelectorAll<HTMLButtonElement>('.acu-segmented__item'))
+    const entriesSection = document.getElementById('tbl-entries')!;
+    const manualButton = Array.from(entriesSection.querySelectorAll<HTMLButtonElement>('.ub-seg__item'))
       .find(button => button.textContent?.trim() === '手动选择')!;
     manualButton.click();
-    await Promise.resolve();
+    await nextTick();
 
-    const checkboxes = Array.from(entriesPanel.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]'));
-    const charBook = checkboxes.find(button => button.textContent?.trim() === 'CharBookT')!;
-    const other = checkboxes.find(button => button.textContent?.trim() === 'Other')!;
-    charBook.click();
-    other.click();
+    const books = () => Array.from(entriesSection.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]'));
+    books().find(button => button.textContent?.trim() === 'CharBookT')!.click();
+    books().find(button => button.textContent?.trim() === 'Other')!.click();
     // 两次 toggle 各触发一次 refreshEntriesGroups（带 seq guard，旧调用中止），
     // 需要多次微任务刷新让最后一次调用的 resolveBookNames + loadEntries + label 写入全部完成
     for (let i = 0; i < 8; i++) await Promise.resolve();
+    await nextTick();
 
-    expect(entriesPanel.textContent).toContain('目前已选: CharBookT、Other');
-    expect(charBook.getAttribute('aria-checked')).toBe('true');
-    expect(other.getAttribute('aria-checked')).toBe('true');
+    expect(entriesSection.querySelector('.ub-tbl__current')?.textContent).toContain('CharBookT、Other');
+    expect(books().find(button => button.textContent?.trim() === 'CharBookT')!.getAttribute('aria-checked')).toBe('true');
+    expect(books().find(button => button.textContent?.trim() === 'Other')!.getAttribute('aria-checked')).toBe('true');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -381,22 +363,19 @@ describe('TablePage', () => {
   it('切换注入目标世界书后立即刷新目前已选提示', async () => {
     const { mount, injectionTargetChange, describeInjectionTarget } = await mountTablePage();
 
-    const page = document.querySelector('.acu-v2-table-page') as HTMLElement;
-    const injectionPanel = page.querySelector<HTMLElement>('#table-injection-target-panel')!;
-    expect(injectionPanel.textContent).toContain('目前已选: 角色卡绑定世界书 · CharBookT');
+    const target = document.getElementById('tbl-target')!;
+    expect(target.querySelector('.ub-tbl__current')?.textContent).toContain('角色卡绑定世界书 · CharBookT');
 
-    const trigger = injectionPanel.querySelector<HTMLButtonElement>('.acu-select__trigger')!;
-    trigger.click();
-    await Promise.resolve();
-    (Array.from(injectionPanel.querySelectorAll('.acu-select__item'))
-      .find(item => item.textContent?.trim() === 'Other') as HTMLElement).click();
+    const select = target.querySelector<HTMLSelectElement>('select[aria-label="目标世界书"]')!;
+    select.value = 'Other';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
     await Promise.resolve();
     await Promise.resolve();
     await nextTick();
 
     expect(injectionTargetChange).toHaveBeenCalledWith('Other');
     expect(describeInjectionTarget).toHaveBeenCalledTimes(2);
-    expect(injectionPanel.textContent).toContain('目前已选: Other');
+    expect(target.querySelector('.ub-tbl__current')?.textContent).toContain('Other');
 
     mount.__resetAcuV2MountForTests();
   });

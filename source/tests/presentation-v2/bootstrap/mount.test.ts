@@ -121,33 +121,36 @@ describe('mount — 当前文档场景', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('主题按钮可以打开主题菜单，并在外部点击后关闭', async () => {
+  function findButton(doc: Document, title: string): HTMLButtonElement | null {
+    return doc.querySelector<HTMLButtonElement>(`button[title="${title}"]`);
+  }
+
+  it('外观按钮打开外观面板（含内置主题与界面缩放），点遮罩关闭', async () => {
     const { mount } = await freshImport();
     await mount.openAcuV2App();
 
-    const themeButton = document.querySelector('.acu-v2-app__theme-btn') as HTMLButtonElement | null;
-    expect(themeButton).not.toBeNull();
-    expect(themeButton!.classList.contains('acu-icon-btn')).toBe(true);
+    const appearanceButton = findButton(document, '外观与界面');
+    expect(appearanceButton).not.toBeNull();
+    appearanceButton!.click();
+    await nextTick();
 
-    themeButton!.click();
-    await Promise.resolve();
+    const layer = document.querySelector<HTMLElement>('#ub-portal .ub-sheet-layer');
+    expect(layer).not.toBeNull();
+    expect(layer!.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
+    expect(layer!.textContent).toContain('浅色');
+    expect(layer!.textContent).toContain('地雷色');
+    expect(layer!.textContent).toContain('界面缩放');
+    expect(layer!.querySelector('[title^="删除自定义主题"]')).toBeNull();
 
-    const menu = document.querySelector('.acu-v2-app__theme-menu') as HTMLElement | null;
-    expect(menu).not.toBeNull();
-    expect(menu!.textContent).toContain('浅色');
-    expect(menu!.textContent).toContain('地雷色');
-    expect(menu!.textContent).toContain('界面缩放');
-    expect(menu!.querySelector('[title^="内置主题不可删除"]')).toBeNull();
-
-    document.body.click();
-    await Promise.resolve();
-
-    expect(menu!.classList.contains('is-closing')).toBe(true);
+    layer!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await nextTick();
+    await nextTick();
+    expect(layer!.classList.contains('is-closing')).toBe(true);
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('外观菜单可以切换界面缩放，并持久化到 appearance section', async () => {
+  it('外观面板可以切换界面缩放，并持久化到 appearance section', async () => {
     const { mount } = await freshImport();
     await mount.openAcuV2App();
 
@@ -158,21 +161,17 @@ describe('mount — 当前文档场景', () => {
     expect(root!.getAttribute('data-acu-ui-scale')).toBe('100');
     expect(style!.textContent).toContain('--acu-ui-scale: 1;');
 
-    const themeButton = document.querySelector('.acu-v2-app__theme-btn') as HTMLButtonElement | null;
-    expect(themeButton).not.toBeNull();
-    themeButton!.click();
-    await Promise.resolve();
+    findButton(document, '外观与界面')!.click();
+    await nextTick();
 
-    const menu = document.querySelector('.acu-v2-app__theme-menu') as HTMLElement | null;
-    expect(menu).not.toBeNull();
-    const scaleButtons = Array.from(
-      menu!.querySelectorAll<HTMLButtonElement>('.acu-v2-app__scale-control .acu-segmented__item'),
-    );
-    const option125 = scaleButtons.find(button => button.textContent?.trim() === '125%');
-    expect(option125).not.toBeNull();
+    const scale = document.querySelector<HTMLElement>('#ub-portal [aria-label="界面缩放"]');
+    expect(scale).not.toBeNull();
+    const option125 = Array.from(scale!.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.trim() === '125%');
+    expect(option125).toBeDefined();
 
     option125!.click();
-    await Promise.resolve();
+    await nextTick();
 
     expect(root!.getAttribute('data-acu-ui-scale')).toBe('125');
     expect(style!.textContent).toContain('--acu-ui-scale: 1.25;');
@@ -180,12 +179,11 @@ describe('mount — 当前文档场景', () => {
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({
       appearance: { uiScale: '125' },
     });
-    expect(menu!.textContent).toContain('125%');
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('toast layer is teleported to the app root instead of staying inside the shell', async () => {
+  it('通知层传送到浮层容器，不留在外壳内', async () => {
     const { mount } = await freshImport();
     await mount.openAcuV2App();
 
@@ -195,79 +193,69 @@ describe('mount — 当前文档场景', () => {
     useToastStore(pinia!).info('手动填表开始。', { durationMs: 0, muteable: false });
     await nextTick();
 
-    const root = document.getElementById(ROOT_ID);
-    const shell = document.querySelector<HTMLElement>('.acu-v2-app__shell');
-    const viewport = document.querySelector<HTMLElement>('.acu-toast-viewport');
-    const list = document.querySelector<HTMLElement>('.acu-toast-viewport__list');
+    const portal = document.getElementById('ub-portal');
+    const shell = document.querySelector<HTMLElement>('.ub-shell');
+    const toasts = document.querySelector<HTMLElement>('.ub-toasts');
 
-    expect(root).not.toBeNull();
+    expect(portal).not.toBeNull();
     expect(shell).not.toBeNull();
-    expect(viewport).not.toBeNull();
-    expect(list).not.toBeNull();
-    expect(viewport!.parentElement).toBe(root);
-    expect(shell!.contains(viewport!)).toBe(false);
-    expect(viewport!.style.zIndex).toBe('9410');
+    expect(toasts).not.toBeNull();
+    expect(toasts!.parentElement).toBe(portal);
+    expect(shell!.contains(toasts!)).toBe(false);
+    expect(toasts!.textContent).toContain('手动填表开始。');
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('汉堡按钮打开移动端导航抽屉，点击页面项后关闭抽屉并切换页面', async () => {
+  it('「全部页面」按钮打开页面面板，点页面项后收起并切换页面', async () => {
     persistAdvancedMode();
     const { mount } = await freshImport();
     await mount.openAcuV2App();
 
-    const menuButton = document.querySelector('.acu-v2-app__menu') as HTMLButtonElement | null;
+    const menuButton = findButton(document, '全部页面');
     expect(menuButton).not.toBeNull();
-    expect(menuButton!.classList.contains('acu-icon-btn')).toBe(true);
     expect(menuButton!.getAttribute('aria-expanded')).toBe('false');
 
     menuButton!.click();
-    await Promise.resolve();
+    await nextTick();
 
-    const drawer = document.querySelector<HTMLElement>('.acu-v2-app__mobile-nav');
-    expect(drawer).not.toBeNull();
+    const launcher = document.querySelector<HTMLElement>('.ub-launcher');
+    expect(launcher).not.toBeNull();
     expect(menuButton!.getAttribute('aria-expanded')).toBe('true');
-    expect(drawer!.querySelector('.acu-v2-app__mobile-nav-header')).toBeNull();
-    expect(drawer!.textContent).toContain('UnbirthDB');
-    expect(drawer!.getAttribute('data-acu-mobile-nav-width')).toBe('var(--acu-mobile-nav-width)');
-    expect(drawer!.style.width).toBe('var(--acu-mobile-nav-width)');
-    expect(drawer!.style.maxWidth).toBe('calc(100% - var(--acu-mobile-nav-edge-gap))');
-    expect(drawer!.style.flex).toBe('0 0 var(--acu-mobile-nav-width)');
+    expect(launcher!.textContent).toContain('UnbirthDB');
 
-    const formFillButton = drawer!.querySelector('[data-page-id="form-fill"]') as HTMLButtonElement | null;
+    const formFillButton = launcher!.querySelector<HTMLButtonElement>('[data-page-id="form-fill"]');
     expect(formFillButton).not.toBeNull();
     formFillButton!.click();
-    await Promise.resolve();
+    await nextTick();
 
-    const layer = document.querySelector('.acu-v2-app__mobile-nav-layer');
-    expect(layer?.classList.contains('is-closing')).toBe(true);
+    expect(document.querySelector('.ub-launcher')).toBeNull();
     expect(menuButton!.getAttribute('aria-expanded')).toBe('false');
-    expect(document.querySelector('.acu-v2-app__page-title')?.textContent?.trim()).toBe('填表工作台');
+    expect(document.querySelector('.ub-top__title')?.textContent?.trim()).toBe('填表工作台');
 
     mount.__resetAcuV2MountForTests();
   });
 
-  it('移动端导航抽屉通过遮罩 click 关闭并避免穿透底层控件', async () => {
+  it('页面面板点遮罩关闭，遮罩声明为 backdrop', async () => {
     const { mount } = await freshImport();
     await mount.openAcuV2App();
 
-    const menuButton = document.querySelector('.acu-v2-app__menu') as HTMLButtonElement | null;
-    expect(menuButton).not.toBeNull();
+    const menuButton = findButton(document, '全部页面')!;
+    menuButton.click();
+    await nextTick();
 
-    menuButton!.click();
-    await Promise.resolve();
+    const launcher = document.querySelector<HTMLElement>('.ub-launcher');
+    expect(launcher).not.toBeNull();
+    expect(launcher!.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
 
-    const layer = document.querySelector('.acu-v2-app__mobile-nav-layer') as HTMLElement | null;
-    expect(layer).not.toBeNull();
-    // 遮罩类浮层声明为 backdrop（不收宿主 safe-area 钳制）
-    expect(layer!.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
-    expect(menuButton!.getAttribute('aria-expanded')).toBe('true');
+    launcher!.querySelector<HTMLElement>('.ub-launcher__panel')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await nextTick();
+    expect(document.querySelector('.ub-launcher')).not.toBeNull();
 
-    layer!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await Promise.resolve();
-
-    expect(menuButton!.getAttribute('aria-expanded')).toBe('false');
-    expect(layer!.classList.contains('is-closing')).toBe(true);
+    launcher!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await nextTick();
+    expect(document.querySelector('.ub-launcher')).toBeNull();
+    expect(menuButton.getAttribute('aria-expanded')).toBe('false');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -393,39 +381,41 @@ describe('mount — 父文档场景（iframe 模拟）', () => {
     await nextTick();
 
     const parentDoc = parentDom.window.document;
-    const input = parentDoc.querySelector('input.acu-input') as HTMLInputElement | null;
+    const dialogLayer = parentDoc.querySelector('.ub-dialog-layer') as HTMLElement | null;
+    expect(dialogLayer).not.toBeNull();
+    // 弹窗遮罩层声明为 backdrop
+    expect(dialogLayer!.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
+
+    const input = dialogLayer!.querySelector('input') as HTMLInputElement | null;
     expect(input).not.toBeNull();
     expect(input!.ownerDocument).toBe(parentDoc);
     expect(input!).toBeInstanceOf(parentDom.window.HTMLInputElement);
     expect(input!).not.toBeInstanceOf(window.HTMLInputElement);
 
-    // 弹窗遮罩层声明为 backdrop
-    const dialogLayer = parentDoc.querySelector('.acu-dialog-layer') as HTMLElement | null;
-    expect(dialogLayer).not.toBeNull();
-    expect(dialogLayer!.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
-
     mount.__resetAcuV2MountForTests();
   });
 
-  it('父文档挂载时，主题菜单响应父文档外部点击关闭', async () => {
+  it('父文档挂载时，外观面板渲染在父文档并可点遮罩关闭', async () => {
     const { mount } = await freshImport();
 
     await mount.openAcuV2App();
 
     const parentDoc = parentDom.window.document;
-    const themeButton = parentDoc.querySelector('.acu-v2-app__theme-btn') as HTMLButtonElement | null;
-    expect(themeButton).not.toBeNull();
+    const appearanceButton = parentDoc.querySelector<HTMLButtonElement>('button[title="外观与界面"]');
+    expect(appearanceButton).not.toBeNull();
 
-    themeButton!.click();
-    await Promise.resolve();
+    appearanceButton!.click();
+    await nextTick();
 
-    const menu = parentDoc.querySelector('.acu-v2-app__theme-menu') as HTMLElement | null;
-    expect(menu).not.toBeNull();
+    const layer = parentDoc.querySelector('#ub-portal .ub-sheet-layer') as HTMLElement | null;
+    expect(layer).not.toBeNull();
+    expect(document.querySelector('.ub-sheet-layer')).toBeNull();
 
-    parentDoc.body.dispatchEvent(new parentDom.window.Event('pointerdown', { bubbles: true }));
-    await Promise.resolve();
+    layer!.dispatchEvent(new parentDom.window.MouseEvent('click', { bubbles: true }));
+    await nextTick();
+    await nextTick();
 
-    expect(menu!.classList.contains('is-closing')).toBe(true);
+    expect(layer!.classList.contains('is-closing')).toBe(true);
 
     mount.__resetAcuV2MountForTests();
   });

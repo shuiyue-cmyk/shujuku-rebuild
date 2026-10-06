@@ -27,7 +27,7 @@
     </UbSection>
 
     <UbSection id="vi-api" :title="copy.panels.api.title" :description="copy.panels.api.description" icon="fa-solid fa-server">
-      <form id="ub-vector-api-form" @submit.prevent="saveVectorApiConfig">
+      <form id="ub-vector-api-form" novalidate @submit.prevent="saveVectorApiConfig">
         <div class="ub-vi__group">Embedding（必填）</div>
         <UbRow label="URL" stack>
           <UbInput v-model="vectorApiConfig.form.embeddingEndpoint" placeholder="https://example.com/embeddings" aria-label="Embedding URL" />

@@ -7,7 +7,7 @@
       <span>{{ stageText }}</span>
       <span>已完成 {{ completedTurns }} / {{ totalTurns }} 轮</span>
       <span v-if="revisionText">大纲 {{ revisionText }}</span>
-      <span><i class="fa-regular fa-clock" aria-hidden="true"></i> {{ deadlineText }}</span>
+      <span><i class="fa-regular fa-clock" aria-hidden="true"></i> 倒计时 {{ deadlineText }}</span>
     </div>
     <ContinuationSessionFeed :entries="entries" :running="running" />
     <p v-if="notice" class="ub-cchat__notice">{{ notice }}</p>

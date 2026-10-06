@@ -34,7 +34,7 @@
       </div>
     </UbSection>
 
-    <form v-if="formMode !== 'empty'" class="ub-api__form" @submit.prevent="saveActiveDraft">
+    <form v-if="formMode !== 'empty'" class="ub-api__form" novalidate @submit.prevent="saveActiveDraft">
       <UbSection :id="`${idPrefix}-connection`" title="连接" icon="fa-solid fa-link">
         <UbRow label="预设名称" stack>
           <UbInput v-model="draft.name" autocomplete="off" aria-label="预设名称" />

@@ -5,7 +5,6 @@
  * - id：唯一标识，全局稳定，未来 setActivePage(id) / 外部深链都用它
  * - title：sidebar 显示文案
  * - group：4 分组之一（沿用旧 main-popup.ts 的分组体系）
- * - component：Vue 组件，在主区通过 <component :is> 渲染
  *
  * 可见性控制（按出现顺序短路求值）：
  * - requiresSqlite：true 时仅在 SQLite 存储模式下可见（保留给需要整页隐藏的 SQLite 专属页）
@@ -15,15 +14,12 @@
  *
  * 三档串接顺序：requiresSqlite -> featureGate -> visibleWhen，任一不通过就隐藏。
  */
-import type { Component } from 'vue';
-
 export type AcuV2PageGroup = 'overview' | 'config' | 'feature' | 'tool' | 'developer';
 
 export interface AcuV2Page {
   id: string;
   title: string;
   group: AcuV2PageGroup;
-  component: Component;
   requiresSqlite?: boolean;
   featureGate?: string;
   visibleWhen?: () => boolean;

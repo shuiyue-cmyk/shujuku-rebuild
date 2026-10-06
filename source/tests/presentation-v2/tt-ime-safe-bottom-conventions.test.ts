@@ -12,7 +12,7 @@
  *    （src/tauri/main/compat/mobile/mobile-ime-surface-controller.js:123-144）；
  * 2. 原生侧把 `--tt-ime-bottom` **inline 写到该 root**，切换目标时还会从旧 target
  *    `removeProperty`（WebViewInsetsStyleApplier.kt 的 applyImeBottom）⇒ 该变量是 surface-local；
- * 3. 我们的 `--acu-safe-bottom` 只声明在 `#acu-app-v2`（App.vue）。CSS 自定义属性在**声明处**
+ * 3. 我们的 `--ub-safe-bottom` 声明在 `.ub-app`（App.vue）。CSS 自定义属性在**声明处**
  *    完成替换、后代只继承算好的值 ⇒ 浮层继承到的 bottom 永远不含键盘高度；
  * 4. 宿主也救不了：`bottom` 钳制那条规则硬绑 `fullscreen-window`
  *    （mobile-geometry-firewall.js:390），通用规则只给 `scroll-padding-bottom`（:339-344），
@@ -27,15 +27,16 @@ import { describe, expect, it } from 'vitest';
 
 /**
  * 承载输入框的全屏浮层清单。**手工维护**：输入框多半经 slot 从别处传入
- * （AcuDrawer.vue 自身一个 textarea 都没有），静态扫描扫不出来。
+ * （UbSheet.vue 自身一个 textarea 都没有），静态扫描扫不出来。
  */
 const inputBearingOverlays = [
-  { file: 'components/_lib/AcuDrawer.vue', selector: '.acu-v2-drawer-layer' },
-  { file: 'components/_lib/AcuDialogHost.vue', selector: '.acu-dialog-layer' },
+  { file: 'ui/UbSheet.vue', selector: '.ub-sheet-layer' },
+  { file: 'ui/UbDialogHost.vue', selector: '.ub-dialog-layer' },
+  { file: 'App.vue', selector: '.ub-launcher' },
 ];
 
 function readComponent(relativePath: string): string {
-  return readFileSync(join(process.cwd(), 'src/presentation-v2', relativePath), 'utf8');
+  return readFileSync(join(process.cwd(), 'src/presentation-v3', relativePath), 'utf8');
 }
 
 /** 取某个选择器的规则体（这两条规则都是平铺的，没有嵌套与 @media），并剥掉 CSS 注释。 */
@@ -55,8 +56,7 @@ describe('TT IME 键盘避让：承载输入框的 backdrop 浮层就地重算�
     // 键盘高度是 surface-local 的：只有在本层声明，才能拿到宿主 inline 写在本元素上的那份值。
     // 断言收紧到「声明式本身消费了 --tt-ime-bottom」，不接受注释或其它声明里的同名文本。
     expect(body, `${selector} 必须就地用 --tt-ime-bottom 重算底部安全区，否则继承到的是不含键盘高度的旧值`)
-      .toMatch(/--acu-native-safe-bottom:\s*max\([^;]*var\(--tt-ime-bottom/);
-    expect(body).toMatch(/--acu-safe-bottom:\s*max\([^;]*var\(--acu-native-safe-bottom/);
+      .toMatch(/--ub-safe-bottom:\s*max\([^;]*var\(--tt-ime-bottom/);
   });
 
   /**
@@ -69,7 +69,7 @@ describe('TT IME 键盘避让：承载输入框的 backdrop 浮层就地重算�
    *   ⇒ 同样被宿主接管几何；
    * - 标 `none` 也没用：IME 兜底分支只看属性**存在**，不看值。
    */
-  it('两层保持 backdrop 打标（改标会被宿主接管几何，与自绘 padding 双重 inset）', () => {
+  it('这些浮层保持 backdrop 打标（改标会被宿主接管几何，与自绘 padding 双重 inset）', () => {
     for (const { file } of inputBearingOverlays) {
       expect(readComponent(file), file).toContain('data-tt-mobile-surface="backdrop"');
     }
