@@ -42,7 +42,6 @@
                 {{ router.activePage?.title || 'UnbirthDB' }}
               </h1>
             </div>
-            <UbIconButton icon="fa-solid fa-palette" title="外观与界面" @click="appearanceOpen = true" />
             <UbIconButton icon="fa-solid fa-xmark" title="关闭 UnbirthDB" @click="closeApp" />
           </header>
 
@@ -80,6 +79,9 @@
           <footer class="ub-launcher__foot">
             <UbButton icon="fa-solid fa-repeat" variant="soft" block @click="toggleMode">
               {{ uiMode.isBasicMode ? '切换到高手模式' : '返回基础模式' }}
+            </UbButton>
+            <UbButton icon="fa-solid fa-palette" variant="soft" block @click="openAppearanceFromLauncher">
+              外观与界面
             </UbButton>
           </footer>
         </div>
@@ -134,6 +136,12 @@ const appearanceOpen = ref(false);
 const scroller = ref<HTMLElement | null>(null);
 
 const activeEntry = computed(() => ubPageEntry(router.activePageId));
+
+/** 手机端没有侧栏，外观入口放在「全部页面」面板里；打开外观时先收起面板。 */
+function openAppearanceFromLauncher(): void {
+  launcherOpen.value = false;
+  appearanceOpen.value = true;
+}
 
 function toggleMode(): void {
   uiMode.toggleMode();
@@ -519,6 +527,9 @@ watch(() => rootShell.scrollResetTick, resetScroll);
 }
 
 .ub-launcher__foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ub-s2);
   padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);
   border-top: 1px solid var(--ub-line-soft);
 }

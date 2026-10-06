@@ -68,9 +68,32 @@ describe('v3 外壳', () => {
     await flush();
     expect(document.querySelector('.ub-top__title')?.textContent).toContain('API');
 
-    document.querySelector<HTMLButtonElement>('.ub-top button[title="外观与界面"]')!.click();
+    const railAppearance = Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-rail button'))
+      .find(button => button.textContent?.includes('外观与界面'))!;
+    railAppearance.click();
     await flush();
     expect(document.body.textContent).toContain('界面缩放');
     expect(document.body.textContent).not.toContain('经典');
+  });
+
+  it('顶栏右侧只留关闭按钮；外观入口在侧栏左下与手机「全部页面」面板底部', async () => {
+    const { mount } = await mountV3();
+    cleanup = () => mount.__resetAcuV2MountForTests();
+
+    const topButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-top > button'))
+      .filter(button => !button.classList.contains('ub-top__menu'))
+      .map(button => button.getAttribute('title'));
+    expect(topButtons).toEqual(['关闭 UnbirthDB']);
+    expect(document.querySelector('.ub-top button[title="外观与界面"]')).toBeNull();
+
+    document.querySelector<HTMLButtonElement>('.ub-top__menu')!.click();
+    await flush();
+    const launcherAppearance = Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-launcher__foot button'))
+      .find(button => button.textContent?.includes('外观与界面'));
+    expect(launcherAppearance).toBeDefined();
+    launcherAppearance!.click();
+    await flush();
+    expect(document.querySelector('.ub-launcher')).toBeNull();
+    expect(document.querySelector('#ub-portal .ub-sheet-layer')?.textContent).toContain('界面缩放');
   });
 });

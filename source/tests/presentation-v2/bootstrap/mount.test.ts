@@ -122,7 +122,9 @@ describe('mount — 当前文档场景', () => {
   });
 
   function findButton(doc: Document, title: string): HTMLButtonElement | null {
-    return doc.querySelector<HTMLButtonElement>(`button[title="${title}"]`);
+    return doc.querySelector<HTMLButtonElement>(`button[title="${title}"]`)
+      ?? Array.from(doc.querySelectorAll<HTMLButtonElement>('.ub-rail button')).find(button => button.textContent?.includes(title))
+      ?? null;
   }
 
   it('外观按钮打开外观面板（含内置主题与界面缩放），点遮罩关闭', async () => {
@@ -401,7 +403,7 @@ describe('mount — 父文档场景（iframe 模拟）', () => {
     await mount.openAcuV2App();
 
     const parentDoc = parentDom.window.document;
-    const appearanceButton = parentDoc.querySelector<HTMLButtonElement>('button[title="外观与界面"]');
+    const appearanceButton = Array.from(parentDoc.querySelectorAll<HTMLButtonElement>('.ub-rail button')).find(button => button.textContent?.includes('外观与界面')) ?? null;
     expect(appearanceButton).not.toBeNull();
 
     appearanceButton!.click();
