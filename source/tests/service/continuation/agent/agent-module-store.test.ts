@@ -96,6 +96,21 @@ describe('Agent 资料快照存储', () => {
     expect(empty.revisions.userRequirements).toBe(0);
   });
 
+  it('追溯边界缺字段兼容为无；出现就必须整体合法（移植上游 365dd863）', () => {
+    const legacy = {
+      schemaVersion: 1, settledThroughIndex: 2, updatedAt: 1,
+      revisions: { hooks: 1, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 },
+      hooks: [], infoGap: [], constraints: [],
+    };
+    expect(validateAgentModuleSnapshot_ACU(legacy)!.settlementBoundary).toBeUndefined();
+    const boundary = {
+      startIndex: 7, reason: '用户要求从第 7 楼开始', userMessageId: 3, updatedAt: 1, skippedPendingFixes: [],
+    };
+    expect(validateAgentModuleSnapshot_ACU({ ...legacy, settlementBoundary: boundary })!.settlementBoundary).toMatchObject({ startIndex: 7 });
+    expect(validateAgentModuleSnapshot_ACU({ ...legacy, settlementBoundary: { ...boundary, reason: '  ' } })).toBeNull();
+    expect(validateAgentModuleSnapshot_ACU({ ...legacy, settlementBoundary: { ...boundary, userMessageId: 0 } })).toBeNull();
+  });
+
   it('旧快照缺 userRequirements 时兼容为空清单；字段一旦出现就必须整体合法', () => {
     const legacy = {
       schemaVersion: 1, settledThroughIndex: 2, updatedAt: 1,

@@ -673,6 +673,18 @@ describe('主 Agent 循环收敛', () => {
     expect(h.written).toHaveLength(0);
   });
 
+  it('correct_materials 被拒后循环继续：回执进会话，随后 finalize 照常交付（移植上游 365dd863）', async () => {
+    const h = harness_ACU({ mainReplies: [
+      '{"action":"correct_materials","thought":"跳过旧史","reason":"用户要求","settlementStartIndex":3,"userMessageId":1}',
+      '{"action":"finalize","instruction":"纠正后交付","summary":"要点"}',
+    ] });
+    const result = await h.planner.plan(h.request);
+    expect(result.instruction).toBe('纠正后交付');
+    const receipts = h.conversation().messages.filter(message => message.kind === 'tool' && message.digest === '主会话纠正回执');
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].text).toContain('rejected');
+  });
+
   it('finalize 携带约束登记时落盘长期约束（旧 current/retired 键兼容为增量）', async () => {
     const h = harness_ACU({ mainReplies: ['{"action":"finalize","instruction":"指导","constraints":{"current":["不得提前揭穿守门人"],"retired":[]}}'] });
     await h.planner.plan(h.request);

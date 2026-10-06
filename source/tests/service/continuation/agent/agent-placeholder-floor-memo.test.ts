@@ -384,6 +384,21 @@ describe('未结算窗口选择（移植上游 5f8afe3a）', () => {
     expect(selection.startIndex).toBe(50);
   });
 
+  it('追溯边界之前的楼层不计入未结算（移植上游 365dd863）', () => {
+    const chat = buildChat();
+    const context = resolveContext(chat, RULES);
+    context.settledThroughIndex = 0;
+    context.moduleSnapshot = {
+      ...context.moduleSnapshot,
+      settlementBoundary: {
+        startIndex: 50, reason: '用户要求', userMessageId: 1, updatedAt: 1, skippedPendingFixes: [],
+      },
+    };
+    const selection = resolveAgentUnsettledStoryWindow_ACU(context);
+    expect(selection.floors.map(floor => floor.index)).toEqual([51, 53, 55, 57, 59]);
+    expect(selection.startIndex).toBe(50);
+  });
+
   it('未结算渲染只含窗口内楼层并注明窗口外省略', () => {
     const chat = buildChat();
     const text = renderAgentUnsettledHistory_ACU(resolveContext(chat, RULES));

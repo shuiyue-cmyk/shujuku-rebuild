@@ -44,6 +44,23 @@ describe('S11-TT 判别：write_sql 协议解析', () => {
     expect(denied.intents.length).toBe(0);
     expect(denied.rejected.length).toBeGreaterThan(0);
   });
+
+  it('主会话纠正角色 main 可写 hooks/info_gap/chronology/story_arc（移植上游 365dd863）', async () => {
+    const protocol = await import('../../../../src/service/continuation/agent/agent-protocol');
+    const parse = (protocol as Record<string, unknown>).parseAgentModuleSqlFieldWrites_ACU as unknown as
+      ((sql: string, role: string) => { intents: Array<{ module: string; kind: string }>; rejected: Array<{ path: string }> }) | undefined;
+    for (const sql of [
+      "INSERT INTO hooks (id, expected_revision, summary) VALUES ('H1', 0, 's')",
+      "INSERT INTO info_gap (id, expected_revision, topic) VALUES ('G1', 0, 't')",
+      "INSERT INTO chronology (id, expected_revision, anchor) VALUES ('E1', 0, 'a')",
+      "INSERT INTO story_arc (id, expected_revision, title) VALUES ('S1', 0, 't')",
+    ]) {
+      const ok = parse!(sql, 'main');
+      expect(ok.intents.length).toBe(1);
+    }
+    const denied = parse!("INSERT INTO web_refs (id, expected_revision, url) VALUES ('W1', 0, 'https://x')", 'main');
+    expect(denied.intents.length).toBe(0);
+  });
 });
 
 describe('S11-TT 判别：栏级修补事务', () => {

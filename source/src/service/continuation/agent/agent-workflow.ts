@@ -657,6 +657,16 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       snapshot = recordWorkflowIssues_ACU(snapshot, issues, MAINTAINER_NAME_ACU, settlementStartIndex, settlementEndIndex, maintainer.acceptedKeys);
       completion = appliedModules.length ? 'partial' : 'failed';
     }
+    if (maintainer.ok && !maintainer.usedFieldWrites) {
+      // 成功检查同一范围后，旧调用失败已恢复；字段拒绝不能靠无变化交付清账。
+      const completed = new Set(Object.entries(modules)
+        .filter(([, state]) => state === 'complete_changed' || state === 'complete_no_change')
+        .map(([module]) => module));
+      const unresolvedModules = new Set(issues.map(item => item.module));
+      snapshot = { ...snapshot, pendingFixes: snapshot.pendingFixes.filter(item => item.source !== 'invoke_failed'
+        || !completed.has(item.module) || unresolvedModules.has(item.module)
+        || !pendingWithinSettlement_ACU(item, settlementStartIndex, settlementEndIndex)) };
+    }
     const transactionPending = snapshot.pendingFixes.filter(item => writes.includes(item.module));
     if (transactionPending.length) {
       for (const fix of transactionPending) {
@@ -680,7 +690,10 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       updatedAt: Math.max(snapshot.updatedAt, now),
     };
     if (completion === 'complete_changed' || completion === 'complete_no_change') {
-      snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
+      // 窗口外仍有未处理正文时不得推进连续结算水位：只结算窗口内已确认的部分。
+      if (input.canAdvanceSettlement !== false) {
+        snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
+      }
     }
     if (!maintainer.ok || completion === 'failed') {
       steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'failed', summary: maintainer.summary });

@@ -312,6 +312,9 @@ function loadSnapshot_ACU(engine: SqliteEngine, snapshot: AgentModuleSnapshot_AC
   engine.run(`INSERT INTO ${BASE_TABLE_ACU} (key, value) VALUES ('updatedAt', ?)`, [String(snapshot.updatedAt)]);
   engine.run(`INSERT INTO ${BASE_TABLE_ACU} (key, value) VALUES ('userRequirements', ?)`, [JSON.stringify(snapshot.userRequirements)]);
   engine.run(`INSERT INTO ${BASE_TABLE_ACU} (key, value) VALUES ('pendingFixes', ?)`, [JSON.stringify(snapshot.pendingFixes)]);
+  if (snapshot.settlementBoundary) {
+    engine.run(`INSERT INTO ${BASE_TABLE_ACU} (key, value) VALUES ('settlementBoundary', ?)`, [JSON.stringify(snapshot.settlementBoundary)]);
+  }
   if (snapshot.settledPrefixFingerprint) {
     engine.run(`INSERT INTO ${BASE_TABLE_ACU} (key, value) VALUES ('settledPrefixFingerprint', ?)`, [snapshot.settledPrefixFingerprint]);
   }
@@ -539,6 +542,7 @@ function readSnapshot_ACU(engine: SqliteEngine): AgentModuleSnapshot_ACU {
     webRefs: [],
     userRequirements: JSON.parse(base.get('userRequirements') ?? '[]'),
     pendingFixes: JSON.parse(base.get('pendingFixes') ?? '[]'),
+    ...(base.has('settlementBoundary') ? { settlementBoundary: JSON.parse(base.get('settlementBoundary')!) } : {}),
   } as unknown as AgentModuleSnapshot_ACU;
   const fingerprint = base.get('settledPrefixFingerprint');
   if (typeof fingerprint === 'string' && fingerprint) {

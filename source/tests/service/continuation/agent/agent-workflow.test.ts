@@ -84,8 +84,49 @@ describe('续写固定工作流（TT）', () => {
     expect(remaining[0]).toMatchObject({ module: 'hooks', rangeStartIndex: 100, rangeEndIndex: 100 });
   });
 
-  it('settlementStartIndex 入参覆盖缺省起点（移植上游 5f8afe3a）', async () => {
-    const pending = {
+  it('旧 invoke_failed 缺口在同范围成功后清除，不靠无变化交付清账（移植上游 365dd863）', async () => {
+    const stale = {
+      module: 'hooks', agentName: 'hook-cognition-maintainer',
+      violations: [{ path: 'hooks', message: '维护子代理调用失败' }], attempts: 1, firstFailedAtIndex: 5,
+      lastError: '维护子代理调用失败', source: 'invoke_failed', completion: 'failed',
+      rangeStartIndex: 5, rangeEndIndex: 6, acceptedKeys: [], createdAt: 1, updatedAt: 1,
+    } as const;
+    const { run } = harness_ACU({ snapshot: snapshot_ACU({ pendingFixes: [stale as any] }) });
+    const result = await run();
+    expect(result.pendingFixes.some(item => item.source === 'invoke_failed')).toBe(false);
+  });
+
+  it('窗口外仍有未处理正文时不得推进连续结算水位（移植上游 365dd863）', async () => {
+    const { run } = harness_ACU({ canAdvanceSettlement: false });
+    const result = await run();
+    expect(result.snapshot.settledThroughIndex).toBe(4);
+  });
+
+  it('无变化交付同样清除同范围旧 invoke_failed（移植上游 365dd863）', async () => {    const stale = {
+      module: 'hooks', agentName: 'hook-cognition-maintainer',
+      violations: [{ path: 'hooks', message: '维护子代理调用失败' }], attempts: 1, firstFailedAtIndex: 5,
+      lastError: '维护子代理调用失败', source: 'invoke_failed', completion: 'failed',
+      rangeStartIndex: 5, rangeEndIndex: 6, acceptedKeys: [], createdAt: 1, updatedAt: 1,
+    } as const;
+    const base = harness_ACU({ snapshot: snapshot_ACU({ pendingFixes: [stale as any] }) });
+    const { run } = harness_ACU({
+      snapshot: snapshot_ACU({ pendingFixes: [stale as any] }),
+      runAgent: async (call: any) => {
+        if (call.agentName === 'hook-cognition-maintainer') {
+          return {
+            ok: true, summary: '复查无变化', noChange: true,
+            maintainer: { summary: '复查无变化', delta: delta_ACU() },
+            writes: ['hooks'], readRevisions: snapshot_ACU().revisions,
+          };
+        }
+        return base.input.runAgent(call);
+      },
+    });
+    const result = await run();
+    expect(result.pendingFixes.some(item => item.source === 'invoke_failed')).toBe(false);
+  });
+
+  it('settlementStartIndex 入参覆盖缺省起点（移植上游 5f8afe3a）', async () => {    const pending = {
       module: 'hooks', agentName: 'hook-cognition-maintainer',
       violations: [{ path: 'hooks', message: 'x' }], attempts: 1, firstFailedAtIndex: 5,
       lastError: 'x', source: 'maintainer', completion: 'failed',

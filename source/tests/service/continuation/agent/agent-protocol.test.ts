@@ -111,6 +111,24 @@ describe('主 Agent 动作解析', () => {
     }, true)).toThrowError(/总纲与阶段大纲由 open_round 固定工作流维护/);
   });
 
+  it('correct_materials 主会话纠正：reason 必填，sql 与追溯起点至少给一项', () => {
+    const sqlOnly = parseAgentMainAction_ACU({
+      action: 'correct_materials', thought: '纠正错字', reason: '正文写明是红布',
+      sql: "UPDATE hooks SET summary = '红布' WHERE id = 'H1'",
+    }, true);
+    expect(sqlOnly).toMatchObject({ kind: 'correct_materials', reason: '正文写明是红布' });
+    const withBoundary = parseAgentMainAction_ACU({
+      action: 'correct_materials', thought: '跳过旧史', reason: '用户要求从楼层 7 开始',
+      settlementStartIndex: 7, userMessageId: 3,
+    }, true);
+    expect(withBoundary).toMatchObject({ kind: 'correct_materials', settlementStartIndex: 7, userMessageId: 3 });
+    expect(() => parseAgentMainAction_ACU({ action: 'correct_materials', thought: 'x' }, true)).toThrowError(/reason/);
+    expect(() => parseAgentMainAction_ACU({ action: 'correct_materials', thought: 'x', reason: 'r' }, true)).toThrowError(/sql 或 settlementStartIndex/);
+    expect(() => parseAgentMainAction_ACU({
+      action: 'correct_materials', thought: 'x', reason: 'r', settlementStartIndex: 7,
+    }, true)).toThrowError(/userMessageId/);
+  });
+
   it('维护类的 patch 只收显式字段，至少要带一个可改字段', () => {
     const output = parseAgentMaintainerOutput_ACU({
       summary: '微调',
@@ -164,7 +182,7 @@ describe('主 Agent 动作解析', () => {
 
   it('未知动作和已退役的大纲动作直接拒绝', () => {
     expect(() => parseAgentMainAction_ACU({ action: 'write_story' }, true)).toThrowError(/action 必须是/);
-    expect(() => parseAgentMainAction_ACU({ action: 'revise_outline', replanInstruction: '改' }, true)).toThrowError(/action 必须是 read \/ search \/ delegate \/ open_round \/ finalize \/ block/);
+    expect(() => parseAgentMainAction_ACU({ action: 'revise_outline', replanInstruction: '改' }, true)).toThrowError(/action 必须是 read \/ search \/ delegate \/ open_round \/ correct_materials \/ finalize \/ block/);
     expect(parseAgentMainAction_ACU({ action: 'open_round', focus: '接住守门人的回避' }, true)).toMatchObject({
       kind: 'open_round', focus: '接住守门人的回避', dispatchWebResearcher: false,
     });

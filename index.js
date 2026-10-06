@@ -91870,7 +91870,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261005-14"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261006-09"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -91889,7 +91889,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261005-14";
+        const stamp = "20261006-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -121961,6 +121961,7 @@ function semanticPayload_ACU(snapshot) {
         userRequirements: snapshot.userRequirements ?? [],
         materialCompletion: snapshot.materialCompletion,
         pendingFixes: snapshot.pendingFixes ?? [],
+        ...(snapshot.settlementBoundary ? { settlementBoundary: snapshot.settlementBoundary } : {}),
     });
 }
 function sameSemantic_ACU(left, right) {
@@ -121998,6 +121999,7 @@ function parseDelta_ACU(raw, deps) {
         ...(Array.isArray(raw.userRequirements) ? { userRequirements: raw.userRequirements } : {}),
         ...(isRecord_ACU$a(raw.removedIds) ? { removedIds: raw.removedIds } : {}),
         ...(isRecord_ACU$a(raw.materialCompletion) ? { materialCompletion: raw.materialCompletion } : {}),
+        ...(isRecord_ACU$a(raw.settlementBoundary) ? { settlementBoundary: raw.settlementBoundary } : {}),
         ...(raw.settledThroughIndex === undefined ? {} : { settledThroughIndex: raw.settledThroughIndex }),
         updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
     });
@@ -122020,6 +122022,8 @@ function parseDelta_ACU(raw, deps) {
         delta.removedIds = cloneJson_ACU$2(raw.removedIds);
     if (isRecord_ACU$a(raw.materialCompletion))
         delta.materialCompletion = cloneJson_ACU$2(applied.materialCompletion);
+    if (isRecord_ACU$a(raw.settlementBoundary))
+        delta.settlementBoundary = cloneJson_ACU$2(applied.settlementBoundary);
     if (typeof raw.settledThroughIndex === 'number' && Number.isInteger(raw.settledThroughIndex) && raw.settledThroughIndex >= 0) {
         delta.settledThroughIndex = raw.settledThroughIndex;
     }
@@ -122154,6 +122158,8 @@ function applyDelta_ACU(snapshot, delta) {
         next.pendingFixes = [];
     if (delta.materialCompletion !== undefined)
         next.materialCompletion = cloneJson_ACU$2(delta.materialCompletion);
+    if (delta.settlementBoundary !== undefined)
+        next.settlementBoundary = cloneJson_ACU$2(delta.settlementBoundary);
     next.updatedAt = delta.updatedAt;
     return next;
 }
@@ -122210,6 +122216,11 @@ function diffSnapshot_ACU(before, after, swipeId, seq) {
         delta.removedIds = removedIds;
     if (JSON.stringify(before.materialCompletion) !== JSON.stringify(after.materialCompletion)) {
         delta.materialCompletion = cloneJson_ACU$2(after.materialCompletion);
+        changed = true;
+    }
+    if (JSON.stringify(before.settlementBoundary) !== JSON.stringify(after.settlementBoundary)) {
+        if (after.settlementBoundary)
+            delta.settlementBoundary = cloneJson_ACU$2(after.settlementBoundary);
         changed = true;
     }
     if (before.settledThroughIndex !== after.settledThroughIndex) {
@@ -123062,6 +123073,9 @@ function loadSnapshot_ACU(engine, snapshot) {
     engine.run(`INSERT INTO ${BASE_TABLE_ACU} (key, value) VALUES ('updatedAt', ?)`, [String(snapshot.updatedAt)]);
     engine.run(`INSERT INTO ${BASE_TABLE_ACU} (key, value) VALUES ('userRequirements', ?)`, [JSON.stringify(snapshot.userRequirements)]);
     engine.run(`INSERT INTO ${BASE_TABLE_ACU} (key, value) VALUES ('pendingFixes', ?)`, [JSON.stringify(snapshot.pendingFixes)]);
+    if (snapshot.settlementBoundary) {
+        engine.run(`INSERT INTO ${BASE_TABLE_ACU} (key, value) VALUES ('settlementBoundary', ?)`, [JSON.stringify(snapshot.settlementBoundary)]);
+    }
     if (snapshot.settledPrefixFingerprint) {
         engine.run(`INSERT INTO ${BASE_TABLE_ACU} (key, value) VALUES ('settledPrefixFingerprint', ?)`, [snapshot.settledPrefixFingerprint]);
     }
@@ -123297,6 +123311,7 @@ function readSnapshot_ACU(engine) {
         webRefs: [],
         userRequirements: JSON.parse(base.get('userRequirements') ?? '[]'),
         pendingFixes: JSON.parse(base.get('pendingFixes') ?? '[]'),
+        ...(base.has('settlementBoundary') ? { settlementBoundary: JSON.parse(base.get('settlementBoundary')) } : {}),
     };
     const fingerprint = base.get('settledPrefixFingerprint');
     if (typeof fingerprint === 'string' && fingerprint) {
@@ -124558,10 +124573,33 @@ function parseAgentMainAction_ACU(payload, allowDelegate) {
             failProtocol_ACU('block 动作必须提供 reason');
         return { kind: 'block', thought, reason, unresolved: readTextList_ACU(payload.unresolved) };
     }
+    if (action === 'correct_materials') {
+        const allowed = ['action', 'thought', 'reason', 'sql', 'settlementStartIndex', 'userMessageId'];
+        if (Object.keys(payload).some(key => !allowed.includes(key)))
+            failProtocol_ACU('correct_materials 含未声明的参数');
+        const reason = readText_ACU$1(payload.reason).trim();
+        const sql = readText_ACU$1(payload.sql).trim();
+        const start = payload.settlementStartIndex;
+        const user = payload.userMessageId;
+        if (!reason || (!sql && start === undefined))
+            failProtocol_ACU('correct_materials 必须提供 reason 与 sql 或 settlementStartIndex');
+        if (payload.sql !== undefined && (typeof payload.sql !== 'string' || !sql))
+            failProtocol_ACU('sql 必须是非空字符串');
+        if (start !== undefined && (typeof start !== 'number' || !Number.isInteger(start) || start < 0))
+            failProtocol_ACU('settlementStartIndex 必须是非负整数');
+        if (start !== undefined && (typeof user !== 'number' || !Number.isInteger(user) || user < 1))
+            failProtocol_ACU('改变追溯起点必须引用真实用户消息 userMessageId');
+        if (start === undefined && user !== undefined)
+            failProtocol_ACU('userMessageId 只能随 settlementStartIndex 提供');
+        return { kind: 'correct_materials', thought, reason,
+            ...(sql ? { sql } : {}),
+            ...(start !== undefined ? { settlementStartIndex: start, userMessageId: user } : {}),
+        };
+    }
     if (action === 'read' || action === 'search') {
         return { kind: 'tools', thought, calls: [parseAgentToolCall_ACU(payload)] };
     }
-    failProtocol_ACU(`action 必须是 read / search / delegate / open_round / finalize / block 之一；总纲与阶段大纲由 open_round 固定工作流维护，实际收到：${action || '(空)'}`);
+    failProtocol_ACU(`action 必须是 read / search / delegate / open_round / correct_materials / finalize / block 之一；总纲与阶段大纲由 open_round 固定工作流维护，实际收到：${action || '(空)'}`);
 }
 function parseAgentComposerOutput_ACU(payload) {
     const instruction = readText_ACU$1(payload.instruction).trim();
@@ -125412,6 +125450,7 @@ const FIELD_SQL_ROLE_TABLES_ACU = {
     'arc-architect': ['story_arc'],
     'hook-cognition-maintainer': ['hooks', 'info_gap', 'chronology'],
     'web-researcher': ['web_refs'],
+    main: ['hooks', 'info_gap', 'chronology', 'story_arc'],
 };
 /** 一次性解析语法；语句/栏目错误归入拒绝清单，合法栏保留供提交入口独立领域校验。 */
 function parseAgentModuleSqlFieldWrites_ACU(sql, role) {
@@ -125901,6 +125940,9 @@ function validateAgentModuleSnapshot_ACU(raw) {
     const materialCompletion = validateMaterialCompletion_ACU(raw.materialCompletion, completionPresent, legacy, updatedAt);
     if (!materialCompletion)
         return null;
+    const settlementBoundary = validateSettlementBoundary_ACU(raw.settlementBoundary);
+    if (settlementBoundary === null)
+        return null;
     return {
         schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
         settledThroughIndex,
@@ -125926,6 +125968,7 @@ function validateAgentModuleSnapshot_ACU(raw) {
         userRequirements: validatedUserRequirements,
         materialCompletion,
         pendingFixes,
+        ...(settlementBoundary ? { settlementBoundary } : {}),
     };
 }
 function readRangeIndex_ACU(value) {
@@ -126009,6 +126052,25 @@ function validatePendingFixes_ACU(raw, present, legacy, fallbackUpdatedAt) {
     }
     return fixes;
 }
+function validateSettlementBoundary_ACU(raw) {
+    if (raw === undefined)
+        return undefined;
+    if (!isRecord_ACU$7(raw) || typeof raw.startIndex !== 'number' || !Number.isInteger(raw.startIndex) || raw.startIndex < 0
+        || typeof raw.userMessageId !== 'number' || !Number.isInteger(raw.userMessageId) || raw.userMessageId < 1
+        || typeof raw.reason !== 'string' || !raw.reason.trim()
+        || typeof raw.updatedAt !== 'number' || !Number.isInteger(raw.updatedAt) || raw.updatedAt < 0)
+        return null;
+    const skippedPendingFixes = validatePendingFixes_ACU(raw.skippedPendingFixes, true, false, raw.updatedAt);
+    if (!skippedPendingFixes)
+        return null;
+    return {
+        startIndex: raw.startIndex,
+        userMessageId: raw.userMessageId,
+        reason: raw.reason,
+        updatedAt: raw.updatedAt,
+        skippedPendingFixes,
+    };
+}
 /**
  * 宽容解析一份损坏的快照：丢掉单条非法记录、修正非法水位，尽量保住其余数据。
  * 只在严格路径全程无命中时作为兜底使用——静默回退成空快照会让用户误以为数据从未写入。
@@ -126048,6 +126110,9 @@ function salvageAgentModuleSnapshot_ACU(raw) {
     const materialCompletion = validateMaterialCompletion_ACU(raw.materialCompletion, completionPresent, legacy, updatedAt);
     if (!materialCompletion)
         problems.push('materialCompletion 结构非法，已按 legacy_unknown 读取');
+    const settlementBoundary = validateSettlementBoundary_ACU(raw.settlementBoundary);
+    if (settlementBoundary === null)
+        problems.push('settlementBoundary 结构非法，已按无追溯边界读取');
     const snapshot = {
         schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
         settledThroughIndex: Math.max(0, settledThroughIndex),
@@ -126073,6 +126138,7 @@ function salvageAgentModuleSnapshot_ACU(raw) {
         userRequirements: pick(raw.userRequirements, validateUserRequirementLine_ACU, 'userRequirements'),
         materialCompletion: materialCompletion ?? { state: 'legacy_unknown', rangeStartIndex: -1, rangeEndIndex: -1, modules: {}, updatedAt },
         pendingFixes: pendingFixes ?? [],
+        ...(settlementBoundary ? { settlementBoundary } : {}),
     };
     return { snapshot, problems };
 }
@@ -126288,6 +126354,7 @@ const FIELD_COMMIT_ROLE_MODULES_ACU = {
     'arc-architect': ['storyArc'],
     'hook-cognition-maintainer': ['hooks', 'infoGap', 'chronology'],
     'web-researcher': ['webRefs'],
+    main: ['hooks', 'infoGap', 'chronology', 'storyArc'],
 };
 function fieldCommitText_ACU(value) { return typeof value === 'string'; }
 function fieldCommitNonempty_ACU(value) { return fieldCommitText_ACU(value) && !!value.trim(); }
@@ -130431,7 +130498,7 @@ const MAIN_AGENT_PROMPT_ACU = [
     },
     {
         role: 'assistant',
-        content: '我能做的：用 read/search 调阅任何目录里列出的资料、用 open_round 把本轮交给固定工作流、按需派工 arc-architect / web-researcher / outline-architect、确认工作流交出的写作指令、必要时阻断。\n我绝对不做的：不写正文（正文是正文模型的职责）、不亲自编或直接修改大纲（大纲只能由 outline-architect 产出并经运行时校验；卷级台阶由 arc-architect 维护）、不直接改资料模块（维护类子代理按职责写入，长期约束由 instruction-composer 增量登记）、不自己编写写作指令（instruction 只由 instruction-composer 产出）、不把内部信息塞进最终指导（子代理目录、资料目录、读取地址、维护报告、预算、工具轨迹一律不外传）、不为了「也许还能更好」而无限消耗预算或读取额度。',
+        content: '我能做的：用 read/search 调阅任何目录里列出的资料、用 open_round 把本轮交给固定工作流、按需派工 arc-architect / web-researcher / outline-architect、确认工作流交出的写作指令、必要时阻断。\n我绝对不做的：不写正文（正文是正文模型的职责）、不亲自编或直接修改大纲（大纲只能由 outline-architect 产出并经运行时校验；卷级台阶由 arc-architect 维护）、不绕过校验改资料模块（常规维护按角色执行，主会话纠正使用 correct_materials；长期约束由 instruction-composer 增量登记）、不自己编写写作指令（instruction 只由 instruction-composer 产出）、不把内部信息塞进最终指导（子代理目录、资料目录、读取地址、维护报告、预算、工具轨迹一律不外传）、不为了「也许还能更好」而无限消耗预算或读取额度。',
         enabled: true,
         deletable: true,
     },
@@ -130461,7 +130528,7 @@ const MAIN_AGENT_PROMPT_ACU = [
     },
     {
         role: 'user',
-        content: '【文本协议规范】\n你的每个动作用 JSON 对象表达，形如：\n{"thought":"一句话决策依据","action":"read|search|open_round|delegate|finalize|block", ...}\n你可以在 JSON 前用少量自然语言梳理思路（运行时会忽略这些文字），但动作本身必须完整出现在 JSON 对象里。\n\n【工具动作：read / search，可并发】\naction = read：按地址调阅资料。附加字段 reads，数组，元素是各目录里给出的读取地址（地址体系见「读取地址词汇表」）。\naction = search：跨域检索。附加字段 query（关键词或正则）、scope（["story","tables","modules","outline","worldbook"] 的子集，省略为全域）、可选 isRegex、maxResults。命中行会带上可直接复制进 read 的地址。\n并发规则：一次输出里可以写多个 read / search 对象，它们同批执行、结果一起回来——需要多份资料时务必合并成一个批次，不要一轮只读一份浪费迭代。工具对象不能与决策动作混在同一次输出：出现任何 read/search 时整次输出按工具批次处理，混入的决策会被忽略。\n工具结果回来后再输出下一个动作。批次被门禁打回时按报告里的修正协议缩小目标（更窄的楼层区间、行区间或按 ID 精读）重试，不要原样重发。\n\n【决策动作：一次输出只表达一个】\naction = delegate：并行派工。附加字段 delegations，数组，每项 {"agentName":"目录里的代理名","prompt":"给该代理的任务描述","reads":["种子资料地址"]}。互不依赖的派工放在同一次输出里即为并发。reads 是你替它准备的初始资料（地址体系同 read 工具）；它拿到后还能自己 read/search 补充，但种子给得准能帮它少跑几轮。\n大纲的创建、大幅改写、继续下一阶段走 delegate：派工 outline-architect，prompt 写清你对大纲的要求，不需要 reads。它会串行先于同波次其他派工执行，做完后你在下一次迭代的大纲状态里就能看到新大纲。\n\n\n\naction = open_round：每轮一次的开局决策。附加字段 focus（本轮焦点，非空）、可选 summary、dispatchArcArchitect、dispatchWebResearcher。运行时按固定顺序执行结算、策划、条件审查、容错提交、自动修复和 instruction-composer。不要再逐个派这些角色。\n\naction = finalize：确认交付工作流已经产出的写作指令。instruction 必须是 instruction-composer 本轮写出的那一版，不要另写一版。前提：大纲状态里必须有可执行的本轮目标——没有大纲或阶段已完成时会被拒绝，必须先派工 outline-architect。正常路径是先 open_round。交付前自检：存在未结算历史时由工作流结算，不要自己派 hook-cognition-maintainer；instruction 里的伏笔与信息差操作应来自工作流的策划建议或伏笔账本，不是即兴发挥；本轮指导涉及的正文事实与世界书设定，你已亲自读过或已核对，而不是凭目录摘要或记忆断言。附加字段 instruction（发给正文模型的指导正文，300-400 字为基准上限；正文模型单轮只输出约 800-1200 字，指导必须让它在这个篇幅内完成本轮目标，不许塞进多个场景或多个转折；指导的压力等级必须与【本轮节奏】一致，低压轮不许写危机）、summary（一句话本轮要点）、可选 constraints（{"add":["新增的长期约束"],"retire":["要废除条目的 id 或原文"]}，增量登记：add 只写本轮新增，retire 只写本轮废除，不需要重抄既有清单——漏写不等于删除，重抄已有条目也不会报错；retire 必须精确引用活跃条目的 id 或原文）。\ninstruction 按下列字段组织，每个字段一到两句、总量控制在上限内，无内容的字段直接省略：\n' + AGENT_FINAL_INSTRUCTION_TEMPLATE_ACU + '\ninstruction 里禁止出现占位符名、代理名、模块名、读取地址、预算信息与任何内部过程。\n\naction = block：阻断本轮。附加字段 reason（阻断原因）与 unresolved（未解决问题列表）。只在关键资料缺失或存在无法裁决的硬事实冲突时使用。',
+        content: '【文本协议规范】\n你的每个动作用 JSON 对象表达，形如：\n{"thought":"一句话决策依据","action":"read|search|open_round|correct_materials|delegate|finalize|block", ...}\n你可以在 JSON 前用少量自然语言梳理思路（运行时会忽略这些文字），但动作本身必须完整出现在 JSON 对象里。\n\n【工具动作：read / search，可并发】\naction = read：按地址调阅资料。附加字段 reads，数组，元素是各目录里给出的读取地址（地址体系见「读取地址词汇表」）。\naction = search：跨域检索。附加字段 query（关键词或正则）、scope（["story","tables","modules","outline","worldbook"] 的子集，省略为全域）、可选 isRegex、maxResults。命中行会带上可直接复制进 read 的地址。\n并发规则：一次输出里可以写多个 read / search 对象，它们同批执行、结果一起回来——需要多份资料时务必合并成一个批次，不要一轮只读一份浪费迭代。工具对象不能与决策动作混在同一次输出：出现任何 read/search 时整次输出按工具批次处理，混入的决策会被忽略。\n工具结果回来后再输出下一个动作。批次被门禁打回时按报告里的修正协议缩小目标（更窄的楼层区间、行区间或按 ID 精读）重试，不要原样重发。\n\n【决策动作：一次输出只表达一个】\naction = delegate：并行派工。附加字段 delegations，数组，每项 {"agentName":"目录里的代理名","prompt":"给该代理的任务描述","reads":["种子资料地址"]}。互不依赖的派工放在同一次输出里即为并发。reads 是你替它准备的初始资料（地址体系同 read 工具）；它拿到后还能自己 read/search 补充，但种子给得准能帮它少跑几轮。\n大纲的创建、大幅改写、继续下一阶段走 delegate：派工 outline-architect，prompt 写清你对大纲的要求，不需要 reads。它会串行先于同波次其他派工执行，做完后你在下一次迭代的大纲状态里就能看到新大纲。\n\n\n\naction = correct_materials：主会话纠正资料。附加字段 reason（纠正依据或用户选择，不能为空）、可选 sql（受限 INSERT/UPDATE/DELETE，只允许 hooks、info_gap、chronology、story_arc；已有条目带 id 与当前 expected_revision，缺栏只补缺失栏目）、可选 settlementStartIndex（用户明确要求跳过旧历史时，从该 AI 楼层开始，包含该楼）与 userMessageId（会话中最新真实用户消息的 ID）。sql 与 settlementStartIndex 至少给一项；只有 committed 回执证明保存。登记追溯起点后依据回执 open_round，不重发同一超限范围。\n\naction = open_round：每轮一次的开局决策。附加字段 focus（本轮焦点，非空）、可选 summary、dispatchArcArchitect、dispatchWebResearcher。运行时按固定顺序执行结算、策划、条件审查、容错提交、自动修复和 instruction-composer。不要再逐个派这些角色。\n\naction = finalize：确认交付工作流已经产出的写作指令。instruction 必须是 instruction-composer 本轮写出的那一版，不要另写一版。前提：大纲状态里必须有可执行的本轮目标——没有大纲或阶段已完成时会被拒绝，必须先派工 outline-architect。正常路径是先 open_round。交付前自检：存在未结算历史时由工作流结算，不要自己派 hook-cognition-maintainer；instruction 里的伏笔与信息差操作应来自工作流的策划建议或伏笔账本，不是即兴发挥；本轮指导涉及的正文事实与世界书设定，你已亲自读过或已核对，而不是凭目录摘要或记忆断言。附加字段 instruction（发给正文模型的指导正文，300-400 字为基准上限；正文模型单轮只输出约 800-1200 字，指导必须让它在这个篇幅内完成本轮目标，不许塞进多个场景或多个转折；指导的压力等级必须与【本轮节奏】一致，低压轮不许写危机）、summary（一句话本轮要点）、可选 constraints（{"add":["新增的长期约束"],"retire":["要废除条目的 id 或原文"]}，增量登记：add 只写本轮新增，retire 只写本轮废除，不需要重抄既有清单——漏写不等于删除，重抄已有条目也不会报错；retire 必须精确引用活跃条目的 id 或原文）。\ninstruction 按下列字段组织，每个字段一到两句、总量控制在上限内，无内容的字段直接省略：\n' + AGENT_FINAL_INSTRUCTION_TEMPLATE_ACU + '\ninstruction 里禁止出现占位符名、代理名、模块名、读取地址、预算信息与任何内部过程。\n\naction = block：阻断本轮。附加字段 reason（阻断原因）与 unresolved（未解决问题列表）。只在关键资料缺失或存在无法裁决的硬事实冲突时使用。',
         enabled: true,
         deletable: false,
         pinned: true,
@@ -136614,6 +136681,16 @@ async function runContinuationAgentWorkflow_ACU(input) {
                 snapshot = recordWorkflowIssues_ACU(snapshot, issues, MAINTAINER_NAME_ACU, settlementStartIndex, settlementEndIndex, maintainer.acceptedKeys);
                 completion = appliedModules.length ? 'partial' : 'failed';
             }
+            if (maintainer.ok && !maintainer.usedFieldWrites) {
+                // 成功检查同一范围后，旧调用失败已恢复；字段拒绝不能靠无变化交付清账。
+                const completed = new Set(Object.entries(modules)
+                    .filter(([, state]) => state === 'complete_changed' || state === 'complete_no_change')
+                    .map(([module]) => module));
+                const unresolvedModules = new Set(issues.map(item => item.module));
+                snapshot = { ...snapshot, pendingFixes: snapshot.pendingFixes.filter(item => item.source !== 'invoke_failed'
+                        || !completed.has(item.module) || unresolvedModules.has(item.module)
+                        || !pendingWithinSettlement_ACU(item, settlementStartIndex, settlementEndIndex)) };
+            }
             const transactionPending = snapshot.pendingFixes.filter(item => writes.includes(item.module));
             if (transactionPending.length) {
                 for (const fix of transactionPending) {
@@ -136638,7 +136715,10 @@ async function runContinuationAgentWorkflow_ACU(input) {
                 updatedAt: Math.max(snapshot.updatedAt, now),
             };
             if (completion === 'complete_changed' || completion === 'complete_no_change') {
-                snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
+                // 窗口外仍有未处理正文时不得推进连续结算水位：只结算窗口内已确认的部分。
+                if (input.canAdvanceSettlement !== false) {
+                    snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
+                }
             }
             if (!maintainer.ok || completion === 'failed') {
                 steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'failed', summary: maintainer.summary });
@@ -140833,14 +140913,17 @@ function resolveAgentUnsettledStoryWindow_ACU(context) {
         && (completion.state === 'complete_changed' || completion.state === 'complete_no_change')
         && completion.rangeStartIndex >= 0 && completion.rangeEndIndex >= completion.rangeStartIndex
         ? completion : null;
+    // 用户指定的追溯起点：此前历史未结算，不再纳入本次选择。
+    const boundary = context.moduleSnapshot.settlementBoundary?.startIndex ?? 0;
     const isUnsettled = (floor) => floor.index > context.settledThroughIndex
+        && floor.index >= boundary
         && !(completedRange && floor.index >= completedRange.rangeStartIndex && floor.index <= completedRange.rangeEndIndex);
     const unsettledFloors = allFloors.filter(isUnsettled);
     const floors = windowFloors.filter(isUnsettled);
     const hiddenCount = unsettledFloors.length - floors.length;
     let startIndex = hiddenCount > 0
         ? floors[0]?.index ?? context.chat.length
-        : Math.max(0, context.settledThroughIndex + 1);
+        : Math.max(boundary, context.settledThroughIndex + 1);
     // 最近窗口已完成后，只处理其后新增的正文；保留连续水位与窗口完成区间的区别。
     if (floors.length && completedRange && windowFloors[0].index >= completedRange.rangeStartIndex
         && windowFloors[0].index <= completedRange.rangeEndIndex
@@ -140848,7 +140931,7 @@ function resolveAgentUnsettledStoryWindow_ACU(context) {
         startIndex = completedRange.rangeEndIndex + 1;
     }
     if (!floors.length)
-        startIndex = windowFloors[0]?.index ?? context.chat.length;
+        startIndex = Math.max(boundary, windowFloors[0]?.index ?? context.chat.length);
     return { floors, hiddenCount, startIndex };
 }
 function renderUnsettledWindow_ACU(selection) {
@@ -141220,6 +141303,108 @@ function renderAgentReadMaterials_ACU(tokens, context) {
     return unique
         .map(token => { const resolved = resolveAgentReadToken_ACU(token, context); return `### ${resolved.title}（${token}）\n${resolved.text}`; })
         .join('\n\n');
+}
+
+function renderAgentCorrectionGuide_ACU(conversation, snapshot) {
+    const users = conversation.messages.filter(message => message.kind === 'user');
+    const user = users[users.length - 1];
+    return [
+        '【主会话纠正权限】可用 correct_materials 的 sql 直接纠正 hooks、info_gap、chronology、story_arc；按正文证据和当前修订号提交，只有 committed 回执证明保存。不能写用户要求、结算水位或其它表。',
+        '用户明确要求跳过旧历史、从指定 AI 楼层开始时，单独给 settlementStartIndex（包含该楼）、userMessageId 与 reason。不得仅因容量失败自行跳过。旧缺口保留为跳过记录，不算已结算；成功后再 open_round，不重发同一超限范围。',
+        `最新真实用户消息 ID：${user?.id ?? '无'}；模块修订号：${JSON.stringify(snapshot.revisions)}。`,
+        snapshot.settlementBoundary ? `当前追溯起点：${snapshot.settlementBoundary.startIndex}；此前历史未结算。` : '',
+    ].filter(Boolean).join('\n');
+}
+/** 只按回执确认为已保存的同一条目、同一栏目清除字段拒绝，不能用无关成功清空模块。 */
+function repairedPending_ACU(fixes, receipt) {
+    const confirmed = new Set([...receipt.accepted, ...(receipt.alreadySaved ?? [])].map(item => `${item.module}#${item.id}.${item.field}`));
+    const confirmedModules = new Set([...receipt.accepted, ...(receipt.alreadySaved ?? [])].map(item => item.module));
+    return fixes.flatMap(fix => {
+        // 调用失败缺口的违规路径是模块级：该模块有字段确认保存即视为本次纠正已恢复。
+        if (fix.source === 'invoke_failed') {
+            const violations = fix.violations.filter(issue => !confirmedModules.has(issue.path));
+            return violations.length === fix.violations.length ? [fix] : violations.length ? [{ ...fix, violations }] : [];
+        }
+        if (fix.source !== 'transaction_rejected' && fix.source !== 'contract_rejected')
+            return [fix];
+        const violations = fix.violations.filter(issue => !confirmed.has(issue.path));
+        return violations.length === fix.violations.length ? [fix] : violations.length ? [{ ...fix, violations }] : [];
+    });
+}
+async function correctAgentMaterials_ACU(input) {
+    const { action, chat } = input;
+    let sqlReceipt;
+    const reject = (reason) => ({ status: 'rejected', reason, ...(sqlReceipt ? { sqlReceipt } : {}) });
+    const targetIndex = chat.length - 1;
+    const target = chat[targetIndex];
+    const dispatchTarget = { message: target, swipeId: readMessageSwipeId_ACU(target), content: target?.mes };
+    const current = () => input.isCurrent() && chat.length - 1 === targetIndex
+        && chat[targetIndex] === target && readMessageSwipeId_ACU(target) === dispatchTarget.swipeId;
+    if (!current() || !agentStoryEvidenceFloorIndexes_ACU(chat).has(targetIndex))
+        return reject('当前聊天或承载正文楼层不可用');
+    let folded = readAgentModuleFoldState_ACU(chat);
+    if (folded.salvaged || folded.candidates.some(item => !item.valid))
+        return reject('资料帧损坏，不能在抢救结果上纠正');
+    if (action.settlementStartIndex !== undefined) {
+        const users = input.conversation.messages.filter(message => message.kind === 'user');
+        const user = users[users.length - 1];
+        if (!user || user.id !== action.userMessageId)
+            return reject('追溯起点必须依据最新真实用户消息');
+        if (!agentStoryEvidenceFloorIndexes_ACU(chat).has(action.settlementStartIndex))
+            return reject('追溯起点必须是已存在的 AI 正文楼层');
+        if (action.settlementStartIndex < (folded.snapshot.settlementBoundary?.startIndex ?? 0))
+            return reject('不能把已跳过历史隐式恢复为待结算，请先明确恢复范围');
+    }
+    if (action.sql) {
+        sqlReceipt = await commitAgentModuleFieldWrites_ACU({ chat, targetIndex,
+            sql: action.sql, role: 'main', isCurrent: current });
+        if (sqlReceipt.status !== 'committed')
+            return { status: sqlReceipt.status, sqlReceipt };
+        folded = readAgentModuleFoldState_ACU(chat);
+        if (!current() || folded.salvaged || folded.candidates.some(item => !item.valid))
+            return reject('纠正后权威资料状态无法确认');
+    }
+    const before = folded.snapshot;
+    const now = Date.now();
+    const pendingFixes = sqlReceipt ? repairedPending_ACU(before.pendingFixes, sqlReceipt) : before.pendingFixes;
+    let settlementBoundary = before.settlementBoundary;
+    if (action.settlementStartIndex !== undefined) {
+        const startIndex = action.settlementStartIndex;
+        const skipped = [...(settlementBoundary?.skippedPendingFixes ?? [])];
+        const active = [];
+        for (const fix of pendingFixes) {
+            if (!['hooks', 'infoGap', 'chronology'].includes(fix.module) || fix.rangeStartIndex < 0 || fix.rangeStartIndex >= startIndex) {
+                active.push(fix);
+                continue;
+            }
+            const historical = { ...fix, rangeEndIndex: Math.min(fix.rangeEndIndex, startIndex - 1) };
+            if (!skipped.some(item => JSON.stringify(item) === JSON.stringify(historical)))
+                skipped.push(historical);
+            if (fix.rangeEndIndex >= startIndex)
+                active.push({ ...fix, rangeStartIndex: startIndex });
+        }
+        if (skipped.length > 128)
+            return reject('跳过记录超过可保存上限，未改变追溯起点');
+        settlementBoundary = { startIndex, userMessageId: action.userMessageId, reason: action.reason, updatedAt: now, skippedPendingFixes: skipped };
+    }
+    const changed = JSON.stringify(pendingFixes) !== JSON.stringify(before.pendingFixes)
+        || JSON.stringify(settlementBoundary) !== JSON.stringify(before.settlementBoundary);
+    if (!changed)
+        return { status: 'committed', sqlReceipt, settlementBoundary };
+    const next = { ...before, pendingFixes, ...(settlementBoundary ? { settlementBoundary } : {}) };
+    try {
+        await writeAgentModuleSnapshot_ACU(chat, targetIndex, next);
+    }
+    catch {
+        return reject('纠正后快照落盘失败，未改变追溯起点与缺口');
+    }
+    const readback = readAgentModuleFoldState_ACU(chat);
+    if (readback.salvaged || readback.candidates.some(item => !item.valid)
+        || JSON.stringify(readback.snapshot.pendingFixes) !== JSON.stringify(pendingFixes)
+        || JSON.stringify(readback.snapshot.settlementBoundary) !== JSON.stringify(settlementBoundary)) {
+        return reject('纠正后权威资料状态无法确认');
+    }
+    return { status: 'committed', sqlReceipt, settlementBoundary, pendingFixes };
 }
 
 /**
@@ -143600,6 +143785,8 @@ function describeAgentActionLabel_ACU(action) {
         return `派工 ${action.delegations.length} 项`;
     if (action.kind === 'open_round')
         return '开局并交给固定工作流';
+    if (action.kind === 'correct_materials')
+        return '主会话纠正资料';
     if (action.kind === 'finalize')
         return '交付写作指导';
     return '阻断本轮';
@@ -144120,8 +144307,8 @@ class ContinuationAgentTurnPlanner_ACU {
                     detail: action.thought,
                 });
                 const outcomesBefore = ledger.outcomes.length;
-                if (maintenanceConvergenceAvailable && action.kind !== 'finalize' && action.kind !== 'block' && action.kind !== 'open_round') {
-                    failLoop_ACU('CONTINUATION_AGENT_PROTOCOL_INVALID', '必要大纲维护完成后只允许 finalize 或 block，不能继续读取或派工。', { action: action.kind });
+                if (maintenanceConvergenceAvailable && action.kind !== 'finalize' && action.kind !== 'block' && action.kind !== 'open_round' && action.kind !== 'correct_materials') {
+                    failLoop_ACU('CONTINUATION_AGENT_PROTOCOL_INVALID', '必要大纲维护完成后只允许 finalize、block、open_round 或 correct_materials，不能继续读取或派工。', { action: action.kind });
                 }
                 if (postReviewDecisionAvailable && action.kind !== 'tools') {
                     logAgentSession_ACU({
@@ -144163,7 +144350,8 @@ class ContinuationAgentTurnPlanner_ACU {
                         await session.flush();
                         return { instruction: workflow.instruction, attempts: totalAttempts, apiPreset: { presetName: preset.presetName, source: preset.source, reason: preset.reason } };
                     }
-                    session.record([{ kind: 'tool', text: `${workflow.summary}\n自动修复已停止代为提交这些模块。请向用户说明阻塞；总纲与阶段大纲仍由后续 open_round 固定工作流维护，只有网页检索可按需 delegate web-researcher。不要对同一批已升级的待修复项再次 open_round。`, digest: '工作流升级主会话', turnKey: session.turnKey }]);
+                    const correctionGuide = renderAgentCorrectionGuide_ACU(session.snapshot(), context.moduleSnapshot);
+                    session.record([{ kind: 'tool', text: `${workflow.summary}\n自动修复已停止代为提交这些模块。请向用户说明阻塞；已核实的字段错误可用 correct_materials 直接纠正；用户已明确选择跳过旧历史时，用 correct_materials 登记新追溯起点。只有纠正保存成功、实际范围或资料版本改变后再 open_round；没有可执行的纠正或仍需用户决定时输出 block。不要对同一批已升级的待修复项再次 open_round。\n${correctionGuide}`, digest: '工作流升级主会话', turnKey: session.turnKey }]);
                     await session.flush();
                     iteration += 1;
                     continue;
@@ -144276,6 +144464,21 @@ class ContinuationAgentTurnPlanner_ACU {
                     clearAgentRunState_ACU(identitySeed.chatIdentity);
                     await session.flush();
                     failLoop_ACU('CONTINUATION_AGENT_BLOCKED', `主 Agent 阻断本轮：${action.reason}`, { unresolved: action.unresolved });
+                }
+                if (action.kind === 'correct_materials') {
+                    const receipt = await correctAgentMaterials_ACU({
+                        action, chat, conversation: session.snapshot(),
+                        isCurrent: () => !request.signal?.aborted && request.isInternalRequestCurrent(identitySeed),
+                        completedStages: context.execution.task.stages.filter(stage => stage.status === 'completed').map(stage => stage.stageNumber),
+                    });
+                    context.moduleSnapshot = readAgentModuleSnapshot_ACU(chat);
+                    context.settledThroughIndex = context.moduleSnapshot.settledThroughIndex;
+                    snapshot = context.moduleSnapshot;
+                    session.record([{ kind: 'tool', text: JSON.stringify(receipt), digest: '主会话纠正回执', turnKey: session.turnKey }]);
+                    await session.flush();
+                    logAgentSession_ACU({ kind: 'thought', title: '主会话纠正回执', detail: JSON.stringify(receipt), ok: receipt.status === 'committed' });
+                    iteration += 1;
+                    continue;
                 }
                 const delegationResult = await this.runDelegations(action, request, context, ledger, budget, chat, snapshot, apiDependencies, outlineMaintenanceReserveAvailable);
                 snapshot = delegationResult.snapshot;
@@ -144606,7 +144809,8 @@ class ContinuationAgentTurnPlanner_ACU {
      */
     async ensureRuntimeSnapshot_ACU(request, session, context, ledger, budget, iteration, toolUsage, gateConfig, lifecycle) {
         const rendered = await renderContinuationPrompt_ACU([{ role: 'user', content: AGENT_RUNTIME_SNAPSHOT_TEMPLATE_ACU, enabled: true, deletable: false, pinned: true }], this.buildMainPromptResolvers_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig, lifecycle), 'agent_loop');
-        const text = rendered.messages[0]?.content?.trim() ?? '';
+        const text = [rendered.messages[0]?.content?.trim() ?? '', renderAgentCorrectionGuide_ACU(session.snapshot(), context.moduleSnapshot)]
+            .filter(Boolean).join('\n\n');
         if (!text || text === lastRuntimeSnapshotText_ACU(session.snapshot()))
             return;
         session.record([{ kind: 'runtime', text, digest: '运行时快照', turnKey: session.turnKey }]);
@@ -144764,6 +144968,7 @@ class ContinuationAgentTurnPlanner_ACU {
     async runFixedWorkflow_ACU(action, request, context, ledger, budget, chat, apiDependencies) {
         await this.prepareFixedWorkflowStructure_ACU(action, request, context, budget, chat, apiDependencies);
         const unsettled = renderAgentUnsettledHistory_ACU(context);
+        const unsettledSelection = resolveAgentUnsettledStoryWindow_ACU(context);
         const mapPayload = (result) => ({
             ok: true,
             summary: result.composer?.summary || result.maintainer?.summary || result.arc?.summary || result.planner?.summary || result.reviewer?.reason || result.researcher?.summary || '',
@@ -144802,6 +145007,8 @@ class ContinuationAgentTurnPlanner_ACU {
             allowedEvidenceIndexes: aiEvidenceIndexes,
             // S11-TT：工作流内已即时保存的栏目从帧重读，不再走旧最终写集覆盖。
             readCommittedSnapshot: () => readAgentModuleSnapshot_ACU(chat),
+            // 窗口外仍有未处理正文、或已登记追溯边界时，不得推进连续结算水位。
+            canAdvanceSettlement: unsettledSelection.hiddenCount === 0 && !context.moduleSnapshot.settlementBoundary,
             runAgent: async (call) => {
                 if (call.billing === 'opening') {
                     const used = ledger.perAgent.get(call.agentName) ?? 0;
@@ -145309,7 +145516,7 @@ class ContinuationAgentTurnPlanner_ACU {
         logAgentSession_ACU({
             kind: 'thought',
             title: landed === null ? '资料快照本次未写入（内容无变化，或没有可承载资料的 AI 楼层）' : `资料快照已写入楼层 ${landed}`,
-            detail: `承载楼层 ${landed ?? '无'} · 结算截至楼层 ${targetIndex} · 伏笔 ${active(snapshot.hooks)} 条 · 信息差 ${active(snapshot.infoGap)} 条 · 总纲 ${active(snapshot.storyArc)} 条 · 年代学 ${active(snapshot.chronology)} 条 · 百科 ${active(snapshot.webRefs)} 条 · 长期约束 ${snapshot.constraints.length} 条 · 入参结算水位 ${Math.max(snapshot.settledThroughIndex, 0)}（落盘水位随承载楼对齐，可能更低）。资料按最近基线折叠；承载楼被删除或 swipe 时，该楼增量会随之退出折叠。`,
+            detail: `承载楼层 ${landed ?? '无'} · 结算截至楼层 ${targetIndex} · 伏笔 ${active(snapshot.hooks)} 条 · 信息差 ${active(snapshot.infoGap)} 条 · 总纲 ${active(snapshot.storyArc)} 条 · 年代学 ${active(snapshot.chronology)} 条 · 百科 ${active(snapshot.webRefs)} 条 · 长期约束 ${snapshot.constraints.length} 条 · 入参结算水位 ${Math.max(snapshot.settledThroughIndex, 0)}（落盘水位随承载楼对齐，可能更低）。${snapshot.settlementBoundary ? `追溯从楼层 ${snapshot.settlementBoundary.startIndex} 开始，此前历史未结算，跳过缺口 ${snapshot.settlementBoundary.skippedPendingFixes.length} 项。` : ''}资料按最近基线折叠；承载楼被删除或 swipe 时，该楼增量会随之退出折叠。`,
             ok: true,
         });
     }
@@ -152861,7 +153068,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261005-14";
+        const stamp = "20261006-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

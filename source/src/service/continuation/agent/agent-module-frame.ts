@@ -314,6 +314,7 @@ function semanticPayload_ACU(snapshot: AgentModuleSnapshot_ACU): string {
     userRequirements: snapshot.userRequirements ?? [],
     materialCompletion: snapshot.materialCompletion,
     pendingFixes: snapshot.pendingFixes ?? [],
+    ...(snapshot.settlementBoundary ? { settlementBoundary: snapshot.settlementBoundary } : {}),
   });
 }
 
@@ -353,6 +354,7 @@ function parseDelta_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): AgentModu
     ...(Array.isArray(raw.userRequirements) ? { userRequirements: raw.userRequirements as string[] } : {}),
     ...(isRecord_ACU(raw.removedIds) ? { removedIds: raw.removedIds as AgentModuleFloorDelta_ACU['removedIds'] } : {}),
     ...(isRecord_ACU(raw.materialCompletion) ? { materialCompletion: raw.materialCompletion as unknown as AgentModuleFloorDelta_ACU['materialCompletion'] } : {}),
+    ...(isRecord_ACU(raw.settlementBoundary) ? { settlementBoundary: raw.settlementBoundary as unknown as AgentModuleFloorDelta_ACU['settlementBoundary'] } : {}),
     ...(raw.settledThroughIndex === undefined ? {} : { settledThroughIndex: raw.settledThroughIndex as number }),
     updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
   });
@@ -370,6 +372,7 @@ function parseDelta_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): AgentModu
   if (isRecord_ACU(raw.fieldUpserts)) delta.fieldUpserts = cloneJson_ACU(raw.fieldUpserts) as AgentModuleFieldUpserts_ACU;
   if (isRecord_ACU(raw.removedIds)) delta.removedIds = cloneJson_ACU(raw.removedIds) as AgentModuleFloorDelta_ACU['removedIds'];
   if (isRecord_ACU(raw.materialCompletion)) delta.materialCompletion = cloneJson_ACU(applied.materialCompletion);
+  if (isRecord_ACU(raw.settlementBoundary)) delta.settlementBoundary = cloneJson_ACU(applied.settlementBoundary);
   if (typeof raw.settledThroughIndex === 'number' && Number.isInteger(raw.settledThroughIndex) && raw.settledThroughIndex >= 0) {
     delta.settledThroughIndex = raw.settledThroughIndex;
   }
@@ -496,6 +499,7 @@ function applyDelta_ACU(snapshot: AgentModuleSnapshot_ACU, delta: AgentModuleFlo
   }
   if (!Array.isArray(next.pendingFixes)) next.pendingFixes = [];
   if (delta.materialCompletion !== undefined) next.materialCompletion = cloneJson_ACU(delta.materialCompletion);
+  if (delta.settlementBoundary !== undefined) next.settlementBoundary = cloneJson_ACU(delta.settlementBoundary);
   next.updatedAt = delta.updatedAt;
   return next;
 }
@@ -551,6 +555,10 @@ function diffSnapshot_ACU(before: AgentModuleSnapshot_ACU, after: AgentModuleSna
   if (Object.keys(removedIds).length) delta.removedIds = removedIds;
   if (JSON.stringify(before.materialCompletion) !== JSON.stringify(after.materialCompletion)) {
     delta.materialCompletion = cloneJson_ACU(after.materialCompletion);
+    changed = true;
+  }
+  if (JSON.stringify(before.settlementBoundary) !== JSON.stringify(after.settlementBoundary)) {
+    if (after.settlementBoundary) delta.settlementBoundary = cloneJson_ACU(after.settlementBoundary);
     changed = true;
   }
   if (before.settledThroughIndex !== after.settledThroughIndex) {

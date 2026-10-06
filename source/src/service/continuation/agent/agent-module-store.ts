@@ -56,7 +56,9 @@ import {
   type AgentModuleFieldSnapshot_ACU,
   type AgentModuleFieldUpserts_ACU,
   type AgentModuleSnapshot_ACU,
+  type AgentModuleWriterRole_ACU,
   type AgentPendingFix_ACU,
+  type AgentSettlementBoundary_ACU,
   type AgentStoryArcEntry_ACU,
   type AgentSubagentName_ACU,
   type AgentWebRefEntry_ACU,
@@ -421,6 +423,8 @@ export function validateAgentModuleSnapshot_ACU(raw: unknown): AgentModuleSnapsh
   const completionPresent = Object.prototype.hasOwnProperty.call(raw, 'materialCompletion');
   const materialCompletion = validateMaterialCompletion_ACU(raw.materialCompletion, completionPresent, legacy, updatedAt);
   if (!materialCompletion) return null;
+  const settlementBoundary = validateSettlementBoundary_ACU(raw.settlementBoundary);
+  if (settlementBoundary === null) return null;
   return {
     schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
     settledThroughIndex,
@@ -446,6 +450,7 @@ export function validateAgentModuleSnapshot_ACU(raw: unknown): AgentModuleSnapsh
     userRequirements: validatedUserRequirements as string[],
     materialCompletion,
     pendingFixes,
+    ...(settlementBoundary ? { settlementBoundary } : {}),
   };
 }
 
@@ -518,6 +523,23 @@ function validatePendingFixes_ACU(raw: unknown, present: boolean, legacy: boolea
   return fixes;
 }
 
+function validateSettlementBoundary_ACU(raw: unknown): AgentSettlementBoundary_ACU | null | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord_ACU(raw) || typeof raw.startIndex !== 'number' || !Number.isInteger(raw.startIndex) || raw.startIndex < 0
+    || typeof raw.userMessageId !== 'number' || !Number.isInteger(raw.userMessageId) || raw.userMessageId < 1
+    || typeof raw.reason !== 'string' || !raw.reason.trim()
+    || typeof raw.updatedAt !== 'number' || !Number.isInteger(raw.updatedAt) || raw.updatedAt < 0) return null;
+  const skippedPendingFixes = validatePendingFixes_ACU(raw.skippedPendingFixes, true, false, raw.updatedAt);
+  if (!skippedPendingFixes) return null;
+  return {
+    startIndex: raw.startIndex,
+    userMessageId: raw.userMessageId,
+    reason: raw.reason,
+    updatedAt: raw.updatedAt,
+    skippedPendingFixes,
+  };
+}
+
 /**
  * 宽容解析一份损坏的快照：丢掉单条非法记录、修正非法水位，尽量保住其余数据。
  * 只在严格路径全程无命中时作为兜底使用——静默回退成空快照会让用户误以为数据从未写入。
@@ -546,6 +568,8 @@ export function salvageAgentModuleSnapshot_ACU(raw: unknown): { snapshot: AgentM
   const completionPresent = Object.prototype.hasOwnProperty.call(raw, 'materialCompletion');
   const materialCompletion = validateMaterialCompletion_ACU(raw.materialCompletion, completionPresent, legacy, updatedAt);
   if (!materialCompletion) problems.push('materialCompletion 结构非法，已按 legacy_unknown 读取');
+  const settlementBoundary = validateSettlementBoundary_ACU(raw.settlementBoundary);
+  if (settlementBoundary === null) problems.push('settlementBoundary 结构非法，已按无追溯边界读取');
   const snapshot: AgentModuleSnapshot_ACU = {
     schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
     settledThroughIndex: Math.max(0, settledThroughIndex),
@@ -571,6 +595,7 @@ export function salvageAgentModuleSnapshot_ACU(raw: unknown): { snapshot: AgentM
     userRequirements: pick(raw.userRequirements, validateUserRequirementLine_ACU, 'userRequirements'),
     materialCompletion: materialCompletion ?? { state: 'legacy_unknown', rangeStartIndex: -1, rangeEndIndex: -1, modules: {}, updatedAt },
     pendingFixes: pendingFixes ?? [],
+    ...(settlementBoundary ? { settlementBoundary } : {}),
   };
   return { snapshot, problems };
 }
@@ -839,10 +864,11 @@ export interface AgentModuleFieldReceipt_ACU {
 
 type FieldCommitModule_ACU = 'hooks' | 'infoGap' | 'storyArc' | 'chronology' | 'webRefs';
 
-const FIELD_COMMIT_ROLE_MODULES_ACU: Readonly<Partial<Record<AgentSubagentName_ACU, readonly AgentWritableModule_ACU[]>>> = {
+const FIELD_COMMIT_ROLE_MODULES_ACU: Readonly<Partial<Record<AgentModuleWriterRole_ACU, readonly AgentWritableModule_ACU[]>>> = {
   'arc-architect': ['storyArc'],
   'hook-cognition-maintainer': ['hooks', 'infoGap', 'chronology'],
   'web-researcher': ['webRefs'],
+  main: ['hooks', 'infoGap', 'chronology', 'storyArc'],
 };
 
 function fieldCommitText_ACU(value: unknown): value is string { return typeof value === 'string'; }
@@ -983,7 +1009,7 @@ export function commitAgentModuleFieldWrites_ACU(input: {
   chat: any[];
   targetIndex: number;
   sql: string;
-  role: AgentSubagentName_ACU;
+  role: AgentModuleWriterRole_ACU;
   resolvePage?: (handle: string) => AgentFieldPage_ACU | null;
   isCurrent?: () => boolean;
 }): Promise<AgentModuleFieldReceipt_ACU> {
