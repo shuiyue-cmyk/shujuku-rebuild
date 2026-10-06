@@ -228,4 +228,22 @@ describe('api preset draft helpers', () => {
     expect(draft.promptPostProcessing).toBe('strict');
     expect(draft.customApiFormat).toBe('openai_compat');
   });
+
+  it('保留多个 system 默认开启：缺失归一 true，显式 false 往返保留（移植上游 e1876435）', () => {
+    expect(normalizeApiConfig_ACU({ url: 'https://e.test', model: 'e' } as any).preserveMultipleSystem).toBe(true);
+    expect(normalizeApiConfig_ACU({ url: 'https://e.test', model: 'e', preserveMultipleSystem: false } as any).preserveMultipleSystem).toBe(false);
+    expect(createEmptyApiPresetDraft().preserveMultipleSystem).toBe(true);
+    const legacy = apiPresetDraftFromPreset({
+      name: 'legacy', apiMode: 'custom',
+      apiConfig: { url: 'https://old.test', apiKey: '', model: 'm', max_tokens: 1, temperature: 1 } as any,
+    });
+    expect(legacy.preserveMultipleSystem).toBe(true);
+    expect(apiPresetFromDraft(legacy).apiConfig.preserveMultipleSystem).toBe(true);
+    const off = apiPresetDraftFromPreset({
+      name: 'off', apiMode: 'custom',
+      apiConfig: { url: 'https://old.test', apiKey: '', model: 'm', max_tokens: 1, temperature: 1, preserveMultipleSystem: false } as any,
+    });
+    expect(off.preserveMultipleSystem).toBe(false);
+    expect(apiPresetFromDraft(off).apiConfig.preserveMultipleSystem).toBe(false);
+  });
 });

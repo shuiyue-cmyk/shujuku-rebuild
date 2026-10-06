@@ -386,6 +386,19 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(body.custom_prompt_post_processing).toBe('strict');
   });
 
+  it('preserve_multiple_system 缺省为 true，显式 false 原样透传（移植上游 e1876435）', () => {
+    const def = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4' },
+    );
+    expect(def.preserve_multiple_system).toBe(true);
+    const off = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', preserveMultipleSystem: false },
+    );
+    expect(off.preserve_multiple_system).toBe(false);
+  });
+
   it('tools 随 toolChoice 顶层透传（填表原生工具调用可选项）', () => {
     const tools = [{ type: 'function', function: { name: 'table_sql', parameters: { type: 'object', properties: { sql: { type: 'string' } }, required: ['sql'] } } }];
     const body = buildCustomApiRequestBody_ACU(

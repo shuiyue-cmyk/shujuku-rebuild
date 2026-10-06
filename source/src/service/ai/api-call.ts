@@ -458,6 +458,9 @@ export function buildCustomApiRequestBody_ACU(
     request_images: false,
     // 提示词后处理：'strict' 等合法值透传；显式 '' 时省略该键（后端按 none 原样透传）。
     ...(promptPostProcessing_ACU ? { custom_prompt_post_processing: promptPostProcessing_ACU } : {}),
+    // 保留多个 system：默认开启；严格/半严格后处理也不把中部 system 降级为 user。
+    // 后端不识别该键时忽略之，行为与旧 strict 一致，不改变现状。
+    preserve_multiple_system: effectiveApiConfig.preserveMultipleSystem !== false,
     reverse_proxy: effectiveApiConfig.url,
     proxy_password: '',
     custom_url: effectiveApiConfig.url,

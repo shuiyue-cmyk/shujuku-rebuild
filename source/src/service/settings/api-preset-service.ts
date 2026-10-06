@@ -85,6 +85,8 @@ export interface ApiPresetApiConfig_ACU {
   customApiFormat: CustomApiFormat_ACU;
   /** 提示词后处理（预设级）：strict（默认）/ merge / semi / single / *_tools；显式 '' = 未选择，请求体省略该字段 */
   promptPostProcessing: ApiPromptPostProcessingValue_ACU;
+  /** 保留多个 system（预设级）：默认开启；严格/半严格后处理也不把中部 system 降级为 user */
+  preserveMultipleSystem?: boolean;
 }
 
 export interface ApiPreset_ACU {
@@ -148,11 +150,12 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
     requestHeaders: typeof source.requestHeaders === 'string' ? source.requestHeaders : '',
     customApiFormat: normalizeCustomApiFormat_ACU(source.customApiFormat),
     promptPostProcessing: normalizePromptPostProcessing_ACU(source.promptPostProcessing),
+    preserveMultipleSystem: typeof source.preserveMultipleSystem === 'boolean' ? source.preserveMultipleSystem : true,
     ...(streamingEnabled !== undefined ? { streamingEnabled } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...Object.fromEntries(
       Object.entries(source).filter(([key]) =>
-        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort', 'customApiFormat', 'promptPostProcessing'].includes(key)
+        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort', 'customApiFormat', 'promptPostProcessing', 'preserveMultipleSystem'].includes(key)
       )
     ),
   };

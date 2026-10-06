@@ -145,6 +145,11 @@
         label="需要时格式化输出"
         description="该预设开启后，需要明确返回 JSON 的调用（正文替换/Skill 化/决策/改表助手/续写 Agent 协议）会在请求体附加 response_format json_object，与 MVU 格式化输出同参。不支持该参数的后端请勿开启，或用「排除主体参数」填 response_format 剔除。"
       />
+      <AcuToggle
+        v-model="activeDraft.preserveMultipleSystem"
+        label="保留多个 system 消息"
+        description="默认开启。后处理为严格/半严格时，中部 system 消息仍保留角色，不降级为 user。关闭后中部 system 按后处理模式改写（严格模式下改为 user）。"
+      />
       </div>
 
       <div class="acu-api-config-panel__editor-section">

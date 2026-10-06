@@ -33,6 +33,8 @@ export interface ApiPresetDraft {
    * 草稿若回显「未选择」，用户直接保存会把行为静默改成透传，故缺失必须回 strict。
    */
   promptPostProcessing: string;
+  /** 保留多个 system（预设级）：默认开启；严格/半严格后处理也不把中部 system 降级为 user */
+  preserveMultipleSystem: boolean;
 }
 
 /** 连接模式（酒馆主 API / 酒馆预设已剥离，恒为自定义 API） */
@@ -57,6 +59,7 @@ export function createEmptyApiPresetDraft(): ApiPresetDraft {
     publicServiceMode: false,
     customApiFormat: 'openai_compat',
     promptPostProcessing: API_PROMPT_POST_PROCESSING_DEFAULT_ACU,
+    preserveMultipleSystem: true,
   };
 }
 
@@ -82,6 +85,7 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     customApiFormat: preset.apiConfig.customApiFormat || 'openai_compat',
     // 与请求体共用同一归一化：缺失 → strict；显式 ''（未选择）保留；非法 → strict。
     promptPostProcessing: normalizePromptPostProcessing_ACU(preset.apiConfig.promptPostProcessing),
+    preserveMultipleSystem: preset.apiConfig.preserveMultipleSystem !== false,
   };
 }
 
@@ -110,6 +114,7 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
         : 'openai_compat',
       // 白名单校验仿 customApiFormat：显式 ''（未选择）保留，非法值降级 strict，不写入预设。
       promptPostProcessing: normalizePromptPostProcessing_ACU(draft.promptPostProcessing),
+      preserveMultipleSystem: draft.preserveMultipleSystem !== false,
     },
     nonPrefillSupport: draft.nonPrefillSupport === true,
     jsonFormatOutput: draft.jsonFormatOutput === true,
