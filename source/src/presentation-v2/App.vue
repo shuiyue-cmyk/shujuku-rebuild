@@ -98,6 +98,14 @@
                 </div>
               </div>
               <AcuIconButton
+                v-if="canSwitchToNextUi"
+                class="acu-v2-app__theme-btn"
+                icon="fa-solid fa-wand-magic-sparkles"
+                title="切换到新版界面"
+                aria-label="切换到新版界面"
+                @click="switchToNextUi"
+              />
+              <AcuIconButton
                 class="acu-v2-app__close"
                 icon="fa-solid fa-xmark"
                 :title="visualizer.isActive ? '关闭数据库编辑器' : '关闭新 UI'"
@@ -161,6 +169,8 @@ import { useVisualizerStore } from "./stores/visualizer-store";
 import VisualizerSurface from "./surfaces/visualizer/VisualizerSurface.vue";
 import type { AcuV2ThemeId } from "./theme/theme-types";
 import { getAcuHostDocument } from "./bootstrap/host-document";
+import { switchAcuUiGeneration } from "./bootstrap/mount";
+import { isNextUiAvailable_ACU } from "./bootstrap/ui-generation";
 import { acuClearTimeout, acuSetTimeout, type AcuTimerHandle } from "./bootstrap/host-env";
 import {
   ACU_UI_SCALE_OPTIONS,
@@ -192,6 +202,14 @@ const mobileNavDrawerStyle = {
 };
 let themeMenuCloseTimer: AcuTimerHandle | undefined;
 let mobileNavCloseTimer: AcuTimerHandle | undefined;
+
+const canSwitchToNextUi = isNextUiAvailable_ACU();
+
+function switchToNextUi(): void {
+  closeThemeMenu();
+  closeMobileNav();
+  switchAcuUiGeneration("next");
+}
 
 const shellTitle = computed(() =>
   visualizer.isActive ? "数据库编辑器" : router.activePage?.title || "UnbirthDB",

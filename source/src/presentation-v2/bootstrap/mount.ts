@@ -27,6 +27,12 @@ import {
   getAcuHostWindow,
 } from './host-document';
 import { createHostDocumentApp, __resetHostRendererForTests } from './host-renderer';
+import {
+  __resetUiGenerationForTests,
+  resolveUiRootComponent_ACU,
+  writeUiGeneration_ACU,
+  type AcuUiGeneration,
+} from './ui-generation';
 
 const ROOT_ID = 'acu-app-v2';
 
@@ -55,6 +61,21 @@ function createAcuRenderErrorHandler(): (err: unknown, instance: unknown, info: 
       renderErrorReentry_ACU = false;
     }
   };
+}
+
+/** 按界面代偏好创建根 Vue app 并挂到 root；pinia 由调用方提供，两代界面共享。 */
+function mountRootApp(root: HTMLElement, pinia: Pinia, doc: Document): VueApp {
+  const vueApp = createHostDocumentApp(resolveUiRootComponent_ACU(App), {
+    onClose: () => closeAcuV2App(),
+  }, doc);
+  vueApp.use(pinia);
+  // 渲染异常证据链：Vue 默认只把 setup/render 抛错打到 console，用户侧是主区空白
+  // 且运行日志零记录（偶发时无从查起）。收进 log-buffer（含 Debug 导出）以便下次可查。
+  vueApp.config.errorHandler = createAcuRenderErrorHandler();
+  vueApp.mount(root);
+  root.removeAttribute('v-cloak');
+  root.setAttribute('data-v-app', '');
+  return vueApp;
 }
 
 function ensureMounted(): MountedState {
@@ -98,16 +119,7 @@ function ensureMounted(): MountedState {
   applyAppearance(appearanceStore.uiScaleOption);
   appearanceStore.$subscribe(() => applyAppearance(appearanceStore.uiScaleOption));
 
-  const vueApp = createHostDocumentApp(App, {
-    onClose: () => closeAcuV2App(),
-  }, doc);
-  vueApp.use(pinia);
-  // 渲染异常证据链：Vue 默认只把 setup/render 抛错打到 console，用户侧是主区空白
-  // 且运行日志零记录（偶发时无从查起）。收进 log-buffer（含 Debug 导出）以便下次可查。
-  vueApp.config.errorHandler = createAcuRenderErrorHandler();
-  vueApp.mount(root);
-  root.removeAttribute('v-cloak');
-  root.setAttribute('data-v-app', '');
+  const vueApp = mountRootApp(root, pinia, doc);
 
   state = { vueApp, pinia, root };
   logDebug_ACU(`[ACU-V2] app mounted into ${source} (id=#${ROOT_ID}, width=${hostWidth}px)`);
@@ -124,6 +136,19 @@ export async function openAcuV2App(): Promise<void> {
   const wasOpen = store.isOpen;
   store.setOpen(true);
   if (wasMounted && !wasOpen) store.requestOpenRefresh();
+}
+
+/**
+ * 切换界面代（经典 / 新版）：写入偏好，已挂载时就地换根组件。
+ * Pinia 与根节点保留，所以路由、主题、各 store 状态在两代界面间无缝延续。
+ */
+export function switchAcuUiGeneration(generation: AcuUiGeneration): void {
+  writeUiGeneration_ACU(generation);
+  if (!state) return;
+  const { pinia, root } = state;
+  state.vueApp.unmount();
+  root.textContent = '';
+  state.vueApp = mountRootApp(root, pinia, root.ownerDocument);
 }
 
 /** Bridge 层在 Vue 组件外访问现有 Pinia；不会主动创建应用。 */
@@ -166,6 +191,7 @@ export function __resetAcuV2MountForTests(): void {
   __resetAppearanceInjectorForTests();
   __resetHostDocumentCacheForTests();
   __resetHostRendererForTests();
+  __resetUiGenerationForTests();
 }
 
 
