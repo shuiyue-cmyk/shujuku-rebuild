@@ -722,3 +722,36 @@ describe('v3 单表完整替换协议', () => {
   });
 });
 
+
+// R6-05：整表替换时，隐藏列集合与列/表别名以本地原表为准，不靠模型回显（模型看不到它们）。
+describe('v3 整表替换保留本地隐藏列与别名', () => {
+  it('模型按快照回显 sourceData 后，hiddenPhysicalColumns / tableAliases / columnAliases 仍在', async () => {
+    const { getSheetColumnProjection_ACU } = await import('../../../src/shared/ddl-utils');
+    const ddl = 'CREATE TABLE sheet_a (row_id INTEGER PRIMARY KEY, name TEXT, old_col TEXT)';
+    const tempData: any = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: {
+        uid: 'sheet_a', name: '物品', orderNo: 0, domain: 'chat', type: 'dynamic', enable: true, required: false,
+        content: [['row_id', 'name', 'old_col'], ['r1', '剑', 'x']],
+        sourceData: { note: 'n', ddl, hiddenPhysicalColumns: ['old_col'], tableAliases: ['旧物品'], columnAliases: { name: ['名称'] } },
+        updateConfig: {}, exportConfig: {},
+      },
+    };
+    const draft = {
+      protocolVersion: 3, mode: 'single_sheet_full_replace', requestId: 'r', baseFingerprint: 'fp', atomic: true,
+      selectedSheetKey: 'sheet_a', summary: '改备注', warnings: [],
+      result: { action: 'replace', sheetKey: 'sheet_a', sheet: {
+        name: '物品', domain: 'chat', type: 'dynamic', enable: true, required: false,
+        content: [['row_id', 'name', 'old_col'], ['r1', '剑', 'x']],
+        sourceData: { note: '新备注', ddl }, updateConfig: {}, exportConfig: {},
+      } },
+    };
+    const result = compileTemplateAssistantDraft_ACU({ tempData, sheetOrder: ['sheet_a'], currentSheetKey: 'sheet_a', draft } as any);
+    const sheet = result.candidateData.sheet_a;
+    expect(sheet.sourceData.note).toBe('新备注');
+    expect(sheet.sourceData.hiddenPhysicalColumns).toEqual(['old_col']);
+    expect(sheet.sourceData.tableAliases).toEqual(['旧物品']);
+    expect(sheet.sourceData.columnAliases).toEqual({ name: ['名称'] });
+    expect(getSheetColumnProjection_ACU(sheet).visibleColumns.map((column: any) => column.header)).not.toContain('old_col');
+  });
+});

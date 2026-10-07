@@ -1534,13 +1534,6 @@ describe('refreshMergedDataAndNotify_ACU', () => {
 });
 
 describe('updateReadableLorebookEntry_ACU', () => {
-  it('抑制期间只执行清理', async () => {
-    mockShouldSuppressWorldbookInjection.mockReturnValue(true);
-    await updateReadableLorebookEntry_ACU(false, false);
-    // 应该调用 deleteAllGeneratedEntries 但不调用 formatJsonToReadable
-    expect(mockFormatJsonToReadable).not.toHaveBeenCalled();
-  });
-
   it('使用 dataOverride 时深拷贝权威快照且不重新合并聊天历史', async () => {
     const dataOverride = {
       mate: { type: 'chatSheets', version: 1 },
@@ -1685,7 +1678,7 @@ describe('updateReadableLorebookEntry_ACU', () => {
     await updateReadableLorebookEntry_ACU(true, false);
 
     expect(mockGwDeleteLorebookEntries).toHaveBeenCalledWith('test-lorebook', [201, 202, 203]);
-    expect(mockUpdateCustomTableExports).toHaveBeenCalledWith(null, false, null);
+    expect(mockUpdateCustomTableExports).toHaveBeenCalledWith(null, false, 'test-lorebook');
   });
 });
 
@@ -2168,5 +2161,86 @@ describe('getCombinedWorldbookContent_ACU', () => {
     mockGetCharLorebooks.mockRejectedValue(new Error('网络错误'));
     const result = await getCombinedWorldbookContent_ACU();
     expect(result).toBe('');
+  });
+});
+
+describe('块 6 复审：生成条目判定', () => {
+  it('R6-01 不按表导出名前缀删除：用户自建的同前缀条目保留，本插件生成条目照删', async () => {
+    mockCurrentJsonTableData.value = {
+      sheet_a: { name: '纪要表', exportConfig: { enabled: true, entryName: '纪要' }, content: [['row_id']] },
+    };
+    mockGetSortedSheetKeys.mockReturnValue(['sheet_a']);
+    mockGwGetLorebookEntries.mockResolvedValue([
+      { uid: 1, comment: '纪要-世界观设定（作者手写）' },
+      { uid: 2, comment: '纪要索引说明' },
+      { uid: 3, comment: '无关条目' },
+      { uid: 4, comment: 'TavernDB-ACU-CustomExport-纪要' },
+      { uid: 5, comment: 'TavernDB-ACU-ReadableDataTable' },
+    ]);
+    await deleteAllGeneratedEntries_ACU('char-bound-book');
+    expect(mockGwDeleteLorebookEntries).toHaveBeenCalledWith('char-bound-book', [4, 5]);
+  });
+
+  it('R6-02 隔离模式：$4 排除本环境与其他隔离环境的生成条目，只留用户设定', async () => {
+    mockSettings.dataIsolationEnabled = true;
+    mockSettings.dataIsolationCode = 'X';
+    mockGetIsolationPrefix.mockReturnValue('ACU-[X]-');
+    mockGetCurrentWorldbookConfig.mockReturnValue({ source: 'character', injectionTarget: 'character', manualSelection: [], enabledEntries: {}, zeroTkOccupyMode: false } as any);
+    mockGetCharLorebooks.mockResolvedValue({ primary: 'book', additional: [] });
+    const entriesByBook = {
+      book: [
+        { uid: 1, comment: 'TavernDB-ACU-ReadableDataTable', content: 'PLAIN_GENERATED', enabled: true, type: 'constant' },
+        { uid: 2, comment: 'ACU-[X]-TavernDB-ACU-ReadableDataTable', content: 'ISO_X_GENERATED', enabled: true, type: 'constant' },
+        { uid: 3, comment: 'ACU-[Y]-总结条目1', content: 'ISO_Y_SUMMARY', enabled: true, type: 'constant' },
+        { uid: 4, comment: '用户设定', content: 'USER_LORE', enabled: true, type: 'constant' },
+      ],
+    };
+    const content = await getCombinedWorldbookContent_ACU('', { entriesByBook } as any);
+    expect(content).not.toContain('PLAIN_GENERATED');
+    expect(content).not.toContain('ISO_X_GENERATED');
+    expect(content).not.toContain('ISO_Y_SUMMARY');
+    expect(content).toContain('USER_LORE');
+  });
+});
+
+describe('块 6 复审：世界书派生刷新期间切换聊天', () => {
+  const readable = {
+    readableText: '测试可读文本',
+    importantPersonsTable: { name: '重要人物表', content: [['', '姓名'], ['', '角色A']] },
+    summaryTable: { name: '总结表', content: [['', '编码索引'], ['', 'AM0001']] },
+    outlineTable: { name: '总体大纲', content: [['', '大纲列'], ['', '内容']] },
+  };
+  const data = { mate: { type: 'chatSheets', version: 1 }, sheet_0: { name: '测试', content: [['', '列1'], ['', '值1']] } };
+
+  it('各派生步骤写入入口时固定的世界书；中途切聊天后其余步骤全部放弃', async () => {
+    mockFormatJsonToReadable.mockReturnValue(readable);
+    mockGetInjectionTargetLorebook.mockResolvedValue('旧角色的书');
+    mockUpdateImportantPersonsRelatedEntries.mockImplementationOnce(async () => {
+      mockCurrentChatFileIdentifier.value = 'other-chat';
+      mockGetInjectionTargetLorebook.mockResolvedValue('新角色的书');
+    });
+
+    await updateReadableLorebookEntry_ACU(true, false, null, data);
+
+    expect(mockUpdateImportantPersonsRelatedEntries).toHaveBeenCalledWith(expect.any(Object), false, '旧角色的书');
+    expect(mockUpdateSummaryTableEntries).not.toHaveBeenCalled();
+    expect(mockUpdateOutlineTableEntry).not.toHaveBeenCalled();
+    expect(mockUpdateCustomTableExports).not.toHaveBeenCalled();
+    expect(mockGwGetLorebookEntries).not.toHaveBeenCalled();
+  });
+
+  it('合并刷新期间切聊天时，不把旧聊天数据设为当前数据，也不刷新世界书', async () => {
+    mockMergeAllIndependentTables.mockImplementationOnce(async () => {
+      mockCurrentChatFileIdentifier.value = 'other-chat';
+      return JSON.parse(JSON.stringify(data));
+    });
+    mockGetSortedSheetKeys.mockReturnValue(['sheet_0']);
+    mockReorderDataBySheetKeys.mockImplementation((value: any) => value);
+
+    const result: any = await refreshMergedDataAndNotify_ACU();
+
+    expect(mockSetCurrentJsonTableData).not.toHaveBeenCalled();
+    expect(mockFormatJsonToReadable).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ stale: true });
   });
 });

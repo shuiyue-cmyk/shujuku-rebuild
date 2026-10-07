@@ -100,6 +100,8 @@ export function __resetCustomTableExportStateForTests_ACU(): void {
 
                   // 用户要求：外部导入每次导入前不清理（允许多批并存）
                   if (isImport) return false;
+                  // 非隔离模式（isoPrefix 为空，startsWith('') 恒真）不得碰其他隔离环境的条目（R6-03）。
+                  if (!isoPrefix && comment.startsWith('ACU-[')) return false;
                   
                   // 1. 检查旧版前缀 (兼容性)
                   // LEGACY_EXPORT_PREFIX 已经包含了 isoPrefix
@@ -192,7 +194,8 @@ export function __resetCustomTableExportStateForTests_ACU(): void {
                       finalTemplate = `# ${entryName}\n\n$1`;
                   }
               }
-              return finalTemplate.replace('$1', tableData);
+              // 回调形式：单元格里的 $$ / $' / $& 等不能被当作替换模式展开（R6-04）。
+              return finalTemplate.replace('$1', () => tableData);
           };
 
           const buildMarkdownTableFromRows_ACU = (headerList: string[], rowList: any[]): string => {
@@ -659,7 +662,8 @@ export function __resetCustomTableExportStateForTests_ACU(): void {
               };
               const getMergedEntryComment_ACU = (name: string, role: ExternalCustomTableExportMarker_ACU['role']) => isImport
                   ? getImportEntryName(name, { ...groupMarker, role })
-                  : `${exportPrefix}${name}`;
+                  // 带生成前缀：裸表名会撞上用户/卡作者的同名条目被刷新删掉，也逃过生成条目过滤（R6-03）。
+                  : `${exportPrefix}TavernDB-ACU-CustomExport-${name}`;
 
               if (useWrapperEntries && wrapperParts?.before) {
                   const wrapperName = getMergedEntryComment_ACU(`${group.entryName}-包裹-上`, 'wrapper_before');

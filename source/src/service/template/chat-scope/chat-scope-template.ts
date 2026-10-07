@@ -12,7 +12,6 @@ import {
 } from '../../../data/repositories/profile-repo';
 import {
   DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU,
-  getCurrentTemplatePresetName_ACU,
   normalizeTemplatePresetSelectionValue_ACU
 } from '../../../shared/template-preset-utils';
 import {
@@ -37,12 +36,6 @@ import {
 } from '../../../data/gateways/chat-gateway';
 
 import {
-  applyTemplateScopeForCurrentChat_ACU
-} from '../../settings/settings-service';
-import {
-  refreshMergedDataAndNotify_ACU
-} from '../../worldbook/pipeline';
-import {
   safeJsonParse_ACU,
   safeJsonStringify_ACU
 } from '../../../shared/json-helpers';
@@ -56,8 +49,7 @@ import {
 } from '../../../shared/utils';
 
 import {
-  getTemplatePresetDisplayName_ACU,
-  persistTemplateScopeSelectionState_ACU
+  getTemplatePresetDisplayName_ACU
 } from '../template-preset-service';
 import {
   formatPlotScopeUpdatedAt_ACU
@@ -71,8 +63,7 @@ import {
   migrateLegacyTemplateScopeForCurrentChat_ACU,
   clearChatSheetGuideDataForIsolationKey_ACU,
   getChatSheetGuideDataForIsolationKey_ACU,
-  buildChatSheetGuideDataFromTemplateObj_ACU,
-  setChatSheetGuideDataForIsolationKey_ACU
+  buildChatSheetGuideDataFromTemplateObj_ACU
 } from './chat-scope-guide';
 import {
   sanitizeChatSheetsObject_ACU
@@ -218,21 +209,6 @@ import {
       return findChatTemplatePresetEntry_ACU(normalizedState.presetName || '', { chat, isolationKey: normalizedKey });
   }
 
-  function ensureCurrentChatTemplatePresetEntry_ACU({ chat = getChatArray_ACU(), isolationKey = getCurrentIsolationKey_ACU() } = {}) {
-      const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(isolationKey);
-      const currentState = getCurrentChatTemplateScopeState_ACU({ chat, isolationKey: normalizedKey }) || migrateLegacyTemplateScopeForCurrentChat_ACU({ chat, isolationKey: normalizedKey });
-      const normalizedState = normalizeChatTemplateScopeState_ACU(currentState, { isolationKey: normalizedKey });
-      if (normalizedState.mode !== 'chat_override' || !normalizedState.templateStr) return null;
-
-      const existingEntry = findChatTemplatePresetEntry_ACU(normalizedState.presetName || '', { chat, isolationKey: normalizedKey });
-      const currentFingerprint = buildChatTemplateArchiveFingerprint_ACU(normalizedState, { isolationKey: normalizedKey });
-      const existingFingerprint = existingEntry ? buildChatTemplateArchiveFingerprint_ACU(existingEntry, { isolationKey: normalizedKey }) : '';
-      if (existingEntry && currentFingerprint && existingFingerprint === currentFingerprint) {
-          return existingEntry;
-      }
-      return upsertChatTemplatePresetEntry_ACU(normalizedState, { chat, isolationKey: normalizedKey });
-  }
-
   export function buildChatTemplatePresetLinkState_ACU({ isolationKey = getCurrentIsolationKey_ACU(), presetName = '', source = 'ui', originGlobalName = '', originGlobalRevision = 0, updatedAt = Date.now() } = {}) {
       const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(isolationKey);
       return normalizeChatTemplateScopeState_ACU({
@@ -244,77 +220,6 @@ import {
           updatedAt,
           source,
       }, { isolationKey: normalizedKey });
-  }
-
-  export async function activateChatTemplatePresetSelection_ACU(presetName: string, { source = 'ui_chat_select', save = true } = {}) {
-      const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(getCurrentIsolationKey_ACU());
-      const normalizedPresetName = normalizeTemplatePresetSelectionValue_ACU(presetName);
-      const localEntry = findChatTemplatePresetEntry_ACU(normalizedPresetName, { isolationKey: normalizedKey });
-      const hasGlobalPreset = !normalizedPresetName || !!getTemplatePreset_ACU(normalizedPresetName)?.templateStr;
-
-      let appliedFromLocalSnapshot = false;
-      if (localEntry?.templateStr) {
-          persistTemplateScopeSelectionState_ACU(normalizedPresetName, {
-              source,
-              updateGlobal: false,
-              save: false,
-              persistChatScope: true,
-              templateSource: localEntry.templateStr,
-              guideData: localEntry.guideData,
-              scopeMode: 'chat_override',
-              registerChatPresetEntry: false,
-          });
-          if (localEntry.guideData) {
-              setChatSheetGuideDataForIsolationKey_ACU(normalizedKey, localEntry.guideData, {
-                  reason: `template_scope_${source}`,
-                  syncTemplateScope: false,
-              });
-          }
-          appliedFromLocalSnapshot = true;
-      } else {
-          if (!hasGlobalPreset) return false;
-          const snapshot = !normalizedPresetName
-              ? getDefaultTemplateSnapshot_ACU()
-              : sanitizeTemplateSnapshotForChat_ACU(getTemplatePreset_ACU(normalizedPresetName)?.templateStr || null);
-          if (!snapshot?.templateStr || !snapshot?.templateObj) return false;
-          const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(snapshot.templateObj, { stripSeedRows: false });
-          const templateState = buildChatTemplateScopeStateFromCurrent_ACU({
-              isolationKey: normalizedKey,
-              presetName: normalizedPresetName,
-              source,
-              originGlobalName: getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false }),
-              originGlobalRevision: 0,
-              updatedAt: Date.now(),
-              templateSource: snapshot.templateStr,
-              guideData,
-          });
-          if (!templateState) return false;
-          setCurrentChatTemplateScopeState_ACU(templateState, {
-              isolationKey: normalizedKey,
-              reason: `template_scope_${source}`,
-          });
-          if (guideData) {
-              setChatSheetGuideDataForIsolationKey_ACU(normalizedKey, guideData, {
-                  reason: `template_scope_${source}`,
-                  syncTemplateScope: false,
-              });
-          }
-      }
-      if (save) {
-          try {
-              await saveChatToHost_ACU();
-          } catch (error) {
-              logWarn_ACU('[TemplateScope] 保存聊天级模板预设快照失败:', error);
-          }
-      }
-
-      applyTemplateScopeForCurrentChat_ACU({ isolationKey: normalizedKey });
-      try { await refreshMergedDataAndNotify_ACU(); } catch (e) {}
-      return {
-          presetName: normalizedPresetName,
-          mode: 'chat_override',
-          fromLocalSnapshot: appliedFromLocalSnapshot,
-      };
   }
 
   function buildChatTemplateArchiveFingerprint_ACU(templateState: Record<string, any>, { isolationKey = getCurrentIsolationKey_ACU() } = {}) {

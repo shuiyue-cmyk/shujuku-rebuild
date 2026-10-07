@@ -3,7 +3,6 @@
  * Sheet Guide 数据操作（D 组）
  */
 import {
-  deriveTemplatePresetNameForImport_ACU,
   getCurrentTemplatePresetName_ACU,
   normalizeTemplatePresetSelectionValue_ACU
 } from '../../../shared/template-preset-utils';
@@ -33,12 +32,6 @@ import {
   TABLE_ORDER_FIELD_ACU
 } from '../../../shared/constants';
 import {
-  applyTemplateScopeForCurrentChat_ACU
-} from '../../settings/settings-service';
-import {
-  refreshMergedDataAndNotify_ACU
-} from '../../worldbook/pipeline';
-import {
   safeJsonParse_ACU
 } from '../../../shared/json-helpers';
 import {
@@ -52,9 +45,6 @@ import {
   parseTableTemplateJson_ACU
 } from '../../../shared/utils';
 
-import {
-  upsertTemplatePreset_ACU
-} from '../template-preset-service';
 
 import {
   ensureExportConfigDefaults_ACU,
@@ -737,39 +727,6 @@ export function shouldUseOpeningSeedRows_ACU(): boolean {
           out[k] = base;
       });
       return normalizeGuideData_ACU(out);
-  }
-
-  // [新增] 覆盖式更新：用模板写入当前聊天第一层"空白指导表"
-  export async function overwriteChatSheetGuideFromTemplate_ACU(templateObj: Record<string, any> | null, { reason = 'template_changed', stripSeedRows = true, presetName = '', source = 'ui', syncTemplateScope = false, registerPreset = false } = {}) {
-      const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(templateObj, { stripSeedRows });
-      if (!guideData) return false;
-      const isolationKey = getCurrentIsolationKey_ACU();
-      const templateSnapshot = sanitizeTemplateSnapshotForChat_ACU(templateObj);
-      const normalizedPresetName = deriveTemplatePresetNameForImport_ACU({ presetName });
-      if (registerPreset && normalizedPresetName && templateSnapshot?.templateStr) {
-          try {
-              const savePresetOk = upsertTemplatePreset_ACU(normalizedPresetName, templateSnapshot.templateStr);
-              if (!savePresetOk) {
-                  logWarn_ACU(`[TemplateScope] 保存模板预设失败：${normalizedPresetName}`);
-              }
-          } catch (e) {
-              logWarn_ACU('[TemplateScope] 保存模板预设失败:', e);
-          }
-      }
-      const ok = setChatSheetGuideDataForIsolationKey_ACU(isolationKey, guideData, {
-          reason,
-          syncTemplateScope,
-          templateSource: templateSnapshot?.templateStr || templateObj,
-          presetName: normalizedPresetName,
-          source,
-      });
-      if (!ok) return false;
-      if (syncTemplateScope) {
-          try { applyTemplateScopeForCurrentChat_ACU(); } catch (e) { logWarn_ACU('[Guide] applyTemplateScope 失败:', e); }
-      }
-      try { await saveChatToHost_ACU(); } catch (e) { logWarn_ACU('[Guide] saveChatToHost 失败:', e); }
-      try { await refreshMergedDataAndNotify_ACU(); } catch (e) {}
-      return true;
   }
 
   // [表格顺序新机制] 获取表格 keys：

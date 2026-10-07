@@ -25,7 +25,6 @@ export {
     getChatTemplateArchiveOptionLabel_ACU,
     upsertChatTemplatePresetEntry_ACU,
     buildChatTemplatePresetLinkState_ACU,
-    activateChatTemplatePresetSelection_ACU,
     clearCurrentChatTemplateSnapshots_ACU,
     getCurrentChatTemplateScopeState_ACU,
     buildChatTemplateScopeStateFromCurrent_ACU,
@@ -49,7 +48,6 @@ export {
     attachSeedRowsToCurrentDataFromGuide_ACU,
     buildChatSheetGuideDataFromData_ACU,
     buildChatSheetGuideDataFromTemplateObj_ACU,
-    overwriteChatSheetGuideFromTemplate_ACU,
 } from './chat-scope-guide';
 
 // E 组：Sheet 排序和清洗

@@ -18,6 +18,8 @@ import {
   saveChatToHostStrict_ACU
 } from '../../data/gateways/chat-gateway';
 import {
+  currentChatFileIdentifier_ACU,
+  currentJsonTableData_ACU,
   getCurrentIsolationKey_ACU,
   settings_ACU
 } from '../runtime/state-manager';
@@ -63,12 +65,13 @@ export interface SeedMigrationPlan_ACU {
   actions: SeedMigrationAction_ACU[];
   /** 存在 error 级动作时要求显式确认 */
   requiresConfirmation: boolean;
-  /** 回滚/审计用备份：迁移前的 guide / scoped config / 聊天快照 */
+  /** 回滚/审计用备份：迁移前的 guide / scoped config 两个容器（迁移只改这两处） */
   backup: {
     guideContainer: any;
     scopedConfigContainer: any;
-    chatSnapshot: any[];
   };
+  /** 已成功提交；只有已提交的计划才有东西可回滚 */
+  committed?: boolean;
   /** commit 时校验作用域与帧是否变化的 chat 引用 */
   chat: any[];
 }
@@ -247,7 +250,7 @@ export function prepareSeedMigration_ACU(
   const actions: SeedMigrationAction_ACU[] = [];
   let hasAction = false;
   const guideClone = clone_ACU(guideData);
-  const runtimeData: any = (globalThis as any).currentJsonTableData_ACU ?? (globalThis as any).__currentJsonTableData_ACU;
+  const runtimeData: any = currentJsonTableData_ACU;
 
   for (const sheetKey of Object.keys(guideClone).filter(k => k.startsWith('sheet_'))) {
     const sheet = guideClone[sheetKey];
@@ -278,7 +281,7 @@ export function prepareSeedMigration_ACU(
   const plan: SeedMigrationPlan_ACU = {
     planId: buildPlanId_ACU(),
     kind: 'seed_pollution_cleanup',
-    chatKey: String((globalThis as any).currentChatFileIdentifier_ACU ?? '').trim() || 'current-chat',
+    chatKey: String(currentChatFileIdentifier_ACU ?? '').trim() || 'current-chat',
     isolationKey,
     createdAt: Date.now(),
     actions,
@@ -286,7 +289,6 @@ export function prepareSeedMigration_ACU(
     backup: {
       guideContainer: clone_ACU(getChatSheetGuideContainer_ACU(chat)),
       scopedConfigContainer: clone_ACU(getChatScopedConfigContainer_ACU(chat)),
-      chatSnapshot: clone_ACU(chat),
     },
     chat,
   };
@@ -309,6 +311,7 @@ export async function commitSeedMigration_ACU(
   const plan = seedMigrationPlans_ACU.get(planId);
   const failure = (error: string): SeedMigrationCommitResult_ACU => ({ status: 'commit_failed_rolled_back', planId, error });
   if (!plan) return failure('迁移计划不存在或已失效，请重新准备。');
+  if (plan.committed) return failure('该迁移计划已提交；如需撤销请回滚。');
   if (plan.requiresConfirmation && options.confirm !== true) {
     return failure('迁移包含清理动作，必须显式确认（confirm: true）后才能执行。');
   }
@@ -340,7 +343,7 @@ export async function commitSeedMigration_ACU(
           return failure('备份 guide 数据缺失，无法执行迁移。');
         }
         const nextGuide = clone_ACU(guideData);
-        const runtimeData: any = (globalThis as any).currentJsonTableData_ACU ?? (globalThis as any).__currentJsonTableData_ACU;
+        const runtimeData: any = currentJsonTableData_ACU;
         for (const action of plan.actions) {
           if (action.kind === 'no_change') { appliedActions.push(action); continue; }
           const sheet = nextGuide[action.sheetKey];
@@ -361,12 +364,14 @@ export async function commitSeedMigration_ACU(
           appliedActions.push(action);
         }
 
-        const beforeChat = clone_ACU(plan.chat);
+        const beforeGuideContainer = clone_ACU(getChatSheetGuideContainer_ACU(plan.chat));
+        const beforeScopedContainer = clone_ACU(getChatScopedConfigContainer_ACU(plan.chat));
+        // 不强制 chat_override：guide 写入器会按聊天现有作用域（chat_override/preset_link）自行同步，
+        // 跟随全局的聊天保持跟随全局。
         const saved = setChatSheetGuideDataForIsolationKey_ACU(plan.isolationKey, nextGuide, {
           reason: 'seed_pollution_cleanup',
-          syncTemplateScope: true,
+          syncTemplateScope: false,
           source: 'migration',
-          presetName: String((globalThis as any).currentTemplatePresetName_ACU ?? ''),
         });
         if (!saved) {
           return failure('guide 写入被拒绝（normalize 失败或空数据），已回滚内存。');
@@ -374,11 +379,13 @@ export async function commitSeedMigration_ACU(
         try {
           await saveChatToHostStrict_ACU();
         } catch (error) {
-          plan.chat.splice(0, plan.chat.length, ...beforeChat);
+          setChatSheetGuideContainer_ACU(plan.chat, beforeGuideContainer);
+          setChatScopedConfigContainer_ACU(plan.chat, beforeScopedContainer);
           return failure(`宿主保存失败，已恢复内存聊天：${getErrorMessage_ACU(error)}`);
         }
 
-        seedMigrationPlans_ACU.delete(planId);
+        // 保留计划供回滚。
+        plan.committed = true;
         return { status: 'committed', planId, appliedActions };
       });
     } catch (error) {
@@ -402,8 +409,9 @@ export async function commitSeedMigration_ACU(
 }
 
 /**
- * 回滚：从计划备份恢复 guide container / scoped config / 聊天快照，并重新 hydrate 验证。
- * 仅对尚未失效的计划可用；执行后删除计划。
+ * 回滚：从计划备份恢复 guide container / scoped config，并重新 hydrate 验证。
+ * 只对已提交的计划可用（未提交的计划没有东西可回滚，直接作废）；执行后删除计划。
+ * 迁移只改这两个容器，回滚也只恢复这两个容器，不碰之后新增的楼层、swipe 与表格帧。
  */
 export async function rollbackSeedMigration_ACU(planId: string): Promise<SeedMigrationCommitResult_ACU> {
   if (!isSeedMigrationEnabled_ACU()) {
@@ -416,17 +424,21 @@ export async function rollbackSeedMigration_ACU(planId: string): Promise<SeedMig
     return { status: 'commit_failed_rolled_back', planId, error: '迁移计划作用域已变化，无法回滚。' };
   }
 
-  const beforeChat = clone_ACU(plan.chat);
+  if (!plan.committed) {
+    seedMigrationPlans_ACU.delete(planId);
+    return { status: 'commit_failed_rolled_back', planId, error: '该迁移计划尚未提交，无需回滚，计划已作废。' };
+  }
+
+  const beforeGuideContainer = clone_ACU(getChatSheetGuideContainer_ACU(plan.chat));
+  const beforeScopedContainer = clone_ACU(getChatScopedConfigContainer_ACU(plan.chat));
   try {
-    // 恢复 guide / scoped config 容器到迁移前快照
-    setChatSheetGuideContainer_ACU(plan.chat, plan.backup.guideContainer);
-    setChatScopedConfigContainer_ACU(plan.chat, plan.backup.scopedConfigContainer);
-    // 恢复聊天快照（覆盖内存中已提交的变更）
-    plan.chat.splice(0, plan.chat.length, ...clone_ACU(plan.backup.chatSnapshot));
+    setChatSheetGuideContainer_ACU(plan.chat, clone_ACU(plan.backup.guideContainer));
+    setChatScopedConfigContainer_ACU(plan.chat, clone_ACU(plan.backup.scopedConfigContainer));
     await saveChatToHostStrict_ACU();
     seedMigrationPlans_ACU.delete(planId);
   } catch (error) {
-    plan.chat.splice(0, plan.chat.length, ...beforeChat);
+    setChatSheetGuideContainer_ACU(plan.chat, beforeGuideContainer);
+    setChatScopedConfigContainer_ACU(plan.chat, beforeScopedContainer);
     return { status: 'commit_failed_rolled_back', planId, error: `回滚保存失败，已恢复内存：${getErrorMessage_ACU(error)}` };
   }
 

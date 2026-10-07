@@ -697,10 +697,10 @@ describe('updateCustomTableExports_ACU', () => {
       expect(mockDeleteLorebookEntries).toHaveBeenCalledWith('test-lorebook', [101, 102]);
       const recreated = mockCreateLorebookEntries.mock.calls[0][1];
       expect(recreated).toEqual(expect.arrayContaining([
-        expect.objectContaining({ comment: '纪要表' }),
+        expect.objectContaining({ comment: 'TavernDB-ACU-CustomExport-纪要表' }),
       ]));
       expect(recreated).not.toEqual(expect.arrayContaining([
-        expect.objectContaining({ comment: '飞行模式前的自定义纪要索引' }),
+        expect.objectContaining({ comment: 'TavernDB-ACU-CustomExport-飞行模式前的自定义纪要索引' }),
       ]));
     });
   });
@@ -855,5 +855,50 @@ describe('交火纪要索引正文独占', () => {
     expect(deleted).toContain(firstUid);
     expect(readIndex(entries).uid).not.toBe(firstUid);
     expect(readIndex(entries).content).not.toBe('交火筛选正文');
+  });
+});
+
+describe('块 6 复审：自定义导出', () => {
+  const exportCfg = (over: any = {}) => ({
+    enabled: true, splitByRow: false, entryName: '自定义表', entryType: 'constant', keywords: '',
+    preventRecursion: true, injectionTemplate: '', extraIndexEnabled: false, extraIndexEntryName: '自定义表-索引',
+    extraIndexColumns: [], extraIndexColumnModes: {}, extraIndexInjectionTemplate: '',
+    entryPlacement: { position: 'at_depth_as_system', depth: 2, order: 10000 },
+    extraIndexPlacement: { position: 'at_depth_as_system', depth: 2, order: 10010 }, ...over,
+  });
+
+  it('R6-03 非隔离模式刷新不碰其他隔离环境（ACU-[X]-）的条目', async () => {
+    mockSettings.dataIsolationEnabled = false;
+    mockGetIsolationPrefix.mockReturnValue('');
+    mockSettings.knownCustomEntryNames = ['ACU-[X]-TavernDB-ACU-CustomExport-自定义表', 'ACU-[X]-TavernDB-ACU-CustomExport-自定义表-表头'];
+    mockGetLorebookEntries.mockResolvedValue([
+      { uid: 11, comment: 'ACU-[X]-TavernDB-ACU-CustomExport-自定义表' },
+      { uid: 12, comment: 'ACU-[X]-TavernDB-ACU-CustomExport-自定义表-表头' },
+    ]);
+    await updateCustomTableExports_ACU(null);
+    const deleted = mockDeleteLorebookEntries.mock.calls.flatMap((call: any[]) => call[1]);
+    expect(deleted).not.toContain(11);
+    expect(deleted).not.toContain(12);
+  });
+
+  it('R6-03 整表合并导出的条目名带生成前缀，不再是会撞上用户条目的裸表名', async () => {
+    const mergedData: any = { sheet_0: { name: '自定义表', content: [['row_id', '列1'], ['r1', 'v']], exportConfig: { enabled: true } } };
+    mockGetSortedSheetKeys.mockReturnValue(['sheet_0']);
+    mockEnsureExportConfigDefaults.mockReturnValue(exportCfg());
+    await updateCustomTableExports_ACU(mergedData);
+    const created = (mockCreateLorebookEntries.mock.calls[0] as any)[1].map((entry: any) => entry.comment);
+    expect(created).toContain('TavernDB-ACU-CustomExport-自定义表');
+    expect(created).not.toContain('自定义表');
+  });
+
+  it('R6-04 单元格里的 $$ / $\' 原样进入条目正文', async () => {
+    const mergedData: any = { sheet_0: { name: '自定义表', content: [['row_id', '价格'], ['r1', '$$5'], ['r2', "A$'B"]], exportConfig: { enabled: true } } };
+    mockGetSortedSheetKeys.mockReturnValue(['sheet_0']);
+    mockEnsureExportConfigDefaults.mockReturnValue(exportCfg({ injectionTemplate: '<表>$1</表>' }));
+    await updateCustomTableExports_ACU(mergedData);
+    const entries = (mockCreateLorebookEntries.mock.calls[0] as any)[1];
+    const main = entries.find((entry: any) => String(entry.comment).endsWith('自定义表'));
+    expect(main.content).toContain('$$5');
+    expect(main.content).toContain("A$'B");
   });
 });

@@ -159,8 +159,9 @@ function loadTemplatePresetsStore_ACU() {
 function saveTemplatePresetsStore_ACU(obj: any) {
     try {
         const store = getConfigStorage_ACU();
-        store?.setItem?.(STORAGE_KEY_TEMPLATE_PRESETS_ACU, safeJsonStringify_ACU(obj, '{}'));
-        return true;
+        if (!store?.setItem) return false;
+        // 酒馆设置持久化失败时 setItem 会回滚内存并返回 false，必须如实上报。
+        return store.setItem(STORAGE_KEY_TEMPLATE_PRESETS_ACU, safeJsonStringify_ACU(obj, '{}')) !== false;
     } catch (e) {
         logWarn_ACU('[TemplatePresets] Failed to save:', e);
         return false;
@@ -522,10 +523,18 @@ function applyMergePlanToCandidate_ACU(
             const rowId = String(row[0] ?? '').trim();
             if (rowId) templateRowByRowId.set(rowId, row);
         }
+        const existingCandidateRowIds = new Set(candidateContent.slice(1)
+            .filter(Array.isArray)
+            .map((row: unknown[]) => String(row[0] ?? '').trim())
+            .filter(Boolean));
         for (const rowId of plan.insertRowIds) {
             const templateRow = templateRowByRowId.get(rowId);
             if (!templateRow) {
                 errors.push(`表 ${sheetKey} 的插入计划 row_id=${rowId} 未在模板中找到。`);
+                continue;
+            }
+            if (existingCandidateRowIds.has(rowId)) {
+                errors.push(`表 ${sheetKey} 的插入计划 row_id=${rowId} 已被当前数据占用，拒绝写入重复身份。`);
                 continue;
             }
             const cells = [...templateRow];
@@ -639,8 +648,16 @@ export function persistTemplateScopeSelectionState_ACU(presetName: string, { sou
  * 翻回 inherit_global。刻意不走 persistTemplateScopeSelectionState_ACU 的
  * inherit_global 分支——那条路会顺带清除协调刚写入的聊天指导表。
  * saveChatToHost 失败只降级为警告：容器已在内存更新，将随下次保存落盘。
+ * 协调提交可能耗时数秒；翻转前必须确认当前聊天仍是提交的那个，否则放弃（返回 false），
+ * 不能把别的聊天的作用域改掉。
  */
-async function flipCurrentChatScopeToInheritGlobal_ACU(reason: string): Promise<void> {
+const CHAT_SWITCHED_BEFORE_SCOPE_FLIP_WARNING_ACU = '模板已提交到原聊天，但提交期间切换了聊天，原聊天未改回「跟随全局」，请回到原聊天后重新操作。';
+
+async function flipCurrentChatScopeToInheritGlobal_ACU(reason: string, expected: { identity: string; firstMessage: unknown }): Promise<boolean> {
+    if (!chatContextMatches_ACU(expected.identity, expected.firstMessage)) {
+        logWarn_ACU('[TemplateScope] 协调提交期间聊天已切换，放弃 scope 翻转 inherit_global:', reason);
+        return false;
+    }
     setCurrentChatTemplateScopeState_ACU({ mode: 'inherit_global' }, {
         isolationKey: normalizeTemplateScopeIsolationKey_ACU(getCurrentIsolationKey_ACU()),
         reason,
@@ -650,6 +667,7 @@ async function flipCurrentChatScopeToInheritGlobal_ACU(reason: string): Promise<
     } catch (error) {
         logWarn_ACU('[TemplateScope] scope 翻转 inherit_global 后保存聊天失败（容器已在内存更新，将随下次保存落盘）:', error);
     }
+    return true;
 }
 
 export async function applyTemplateSnapshotToScope_ACU(templateSource: any, { scope = 'global', source = 'ui', presetName = '', save = true, persistChatScope = null as boolean | null, registerChatPresetEntry = null as boolean | null, destructiveChangeConfirmed = false, signal = undefined as AbortSignal | undefined } = {}) {
@@ -678,6 +696,8 @@ export async function applyTemplateSnapshotToScope_ACU(templateSource: any, { sc
     // 当前聊天，失败（含 blockers）则原样返回且不碰任何全局状态（fail-closed）；
     // 空聊天或存在 chat_override/preset_link 的聊天不受全局切换影响，走轻路径。
     let reconciledForGlobalSwitch: any = null;
+    let globalSwitchFlipWarning = '';
+    const chatBeforeGlobalSwitch = getChatContextSnapshot_ACU();
     if (updateGlobal) {
         const chatForGlobalSwitch = getChatArray_ACU();
         const globalAffectsCurrentChat = Array.isArray(chatForGlobalSwitch)
@@ -702,7 +722,8 @@ export async function applyTemplateSnapshotToScope_ACU(templateSource: any, { sc
     }
     if (reconciledForGlobalSwitch) {
         // 协调提交写了 chat_override；全局切换语义下当前聊天仍应跟随全局。
-        await flipCurrentChatScopeToInheritGlobal_ACU('template_scope_global_switch_reconcile');
+        const flipped = await flipCurrentChatScopeToInheritGlobal_ACU('template_scope_global_switch_reconcile', chatBeforeGlobalSwitch);
+        if (!flipped) globalSwitchFlipWarning = CHAT_SWITCHED_BEFORE_SCOPE_FLIP_WARNING_ACU;
     }
 
     const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(snapshot.templateObj, { stripSeedRows: false });
@@ -729,8 +750,8 @@ export async function applyTemplateSnapshotToScope_ACU(templateSource: any, { sc
         ...(reconciledForGlobalSwitch ? {
             reconciledCurrentChat: true,
             ...('runtimeReady' in reconciledForGlobalSwitch ? { runtimeReady: reconciledForGlobalSwitch.runtimeReady } : {}),
-            ...(typeof reconciledForGlobalSwitch.postCommitWarning === 'string' && reconciledForGlobalSwitch.postCommitWarning
-                ? { postCommitWarning: reconciledForGlobalSwitch.postCommitWarning }
+            ...((globalSwitchFlipWarning || (typeof reconciledForGlobalSwitch.postCommitWarning === 'string' && reconciledForGlobalSwitch.postCommitWarning))
+                ? { postCommitWarning: [reconciledForGlobalSwitch.postCommitWarning, globalSwitchFlipWarning].filter(w => typeof w === 'string' && w).join('\n') }
                 : {}),
         } : {}),
     };
@@ -1326,6 +1347,7 @@ export async function followGlobalTemplateForCurrentChat_ACU({
     if (!globalSnapshot?.templateStr || !globalSnapshot?.templateObj) {
         return { saved: false, error: '无法解析当前全局模板，已取消跟随全局。' };
     }
+    const chatBeforeFollow = getChatContextSnapshot_ACU();
     const result = await applyChatTemplateSnapshotWithReconciliation_ACU(globalSnapshot.templateObj, {
         source,
         presetName: globalPresetName,
@@ -1334,7 +1356,10 @@ export async function followGlobalTemplateForCurrentChat_ACU({
     });
     if (!result || result.saved !== true) return result;
 
-    await flipCurrentChatScopeToInheritGlobal_ACU('template_scope_follow_global');
+    if (!await flipCurrentChatScopeToInheritGlobal_ACU('template_scope_follow_global', chatBeforeFollow)) {
+        const priorWarning = typeof (result as any).postCommitWarning === 'string' ? (result as any).postCommitWarning : '';
+        return { ...result, postCommitWarning: [priorWarning, CHAT_SWITCHED_BEFORE_SCOPE_FLIP_WARNING_ACU].filter(Boolean).join('\n') };
+    }
     applyTemplateScopeForCurrentChat_ACU();
     notifyTemplateRuntimeCommitted_ACU();
     return { ...result, mode: 'inherit_global' as const, presetName: globalPresetName };

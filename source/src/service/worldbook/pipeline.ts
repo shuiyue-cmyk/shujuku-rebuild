@@ -77,9 +77,7 @@ import {
   consumeLastMergeQuarantinedSheetKeys_ACU,
   consumeLastMergeWarnings_ACU,
   formatJsonToReadable_ACU,
-  maybeLiftWorldbookSuppression_ACU,
-  mergeAllIndependentTables_ACU,
-  shouldSuppressWorldbookInjection_ACU
+  mergeAllIndependentTables_ACU
 } from '../runtime/helpers-remaining';
 import {
   normalizeCanonicalTableRows_ACU,
@@ -119,24 +117,16 @@ import {
 // 从 05_core_tail.js 迁入
 
 export   async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport = false, targetLorebookOverride: string | null = null, dataOverride: Record<string, any> | null = null) { // [外部导入] 添加 targetLorebookOverride 参数，避免临时修改 worldbookConfig 被兜底补齐逻辑覆盖
-    // [健全性] 新对话开场白阶段：禁止自动创建/更新世界书条目
-    // - 仅影响非导入流程（isImport=false）
-    // - 仅在“无任何用户消息”的开场白阶段生效
-    // - 用户一旦开始对话，会自动解除抑制
-    if (!isImport) {
-        maybeLiftWorldbookSuppression_ACU();
-        if (shouldSuppressWorldbookInjection_ACU()) {
-            // 注意：这里必须“只抑制注入/创建”，但不能抑制“清理旧条目/回退导致的删除”。
-            // 因此在抑制期间，我们仍然执行一次清理，以确保新开对话会清除旧世界书条目。
-            try {
-                await deleteAllGeneratedEntries_ACU();
-                logDebug_ACU('[Worldbook] Greeting-stage suppression: cleanup-only (no create/update).');
-            } catch (e) {
-                logWarn_ACU('[Worldbook] Greeting-stage cleanup-only failed:', e);
-            }
-            return;
-        }
-    }
+    // 本函数全程不持锁，各步骤之间有多次宿主 I/O；期间若切了聊天/隔离标识，
+    // 后续步骤会把旧聊天的表格写进新聊天的世界书。入口固化身份，每步之前复核，不一致整体放弃。
+    const refreshChatKey = String(currentChatFileIdentifier_ACU || '');
+    const refreshIsolationKey = String(getCurrentIsolationKey_ACU() || '');
+    const chatStillCurrent = (stage: string) => {
+        if (String(currentChatFileIdentifier_ACU || '') === refreshChatKey
+            && String(getCurrentIsolationKey_ACU() || '') === refreshIsolationKey) return true;
+        logDebug_ACU(`[Worldbook] 派生刷新期间聊天身份已变化（${stage}），放弃剩余步骤。`);
+        return false;
+    };
 
     // [新增] 分别从最新的标准表和总结表数据源中拉取数据并合并
     let mergedData = null;
@@ -155,8 +145,6 @@ export   async function updateReadableLorebookEntry_ACU(createIfNeeded = false, 
         // 本函数全程不持任何锁（世界书更新链无互斥量，让出不会让出到半完成的临界区），
         // 但让出窗口内可能切聊，因此 await 之后必须复检聊天身份：陈旧结果一律丢弃，
         // 既不写内存表数据也不更新任何世界书条目（与可视化器载入的 contextKey 校验同口径）。
-        const mergeChatKey = String(currentChatFileIdentifier_ACU || '');
-        const mergeIsolationKey = String(getCurrentIsolationKey_ACU() || '');
         await loadAllChatMessages_ACU();
         let mergedFromHistory: Record<string, any> | null = null;
         try {
@@ -171,11 +159,7 @@ export   async function updateReadableLorebookEntry_ACU(createIfNeeded = false, 
             }
             throw error;
         }
-        if (String(currentChatFileIdentifier_ACU || '') !== mergeChatKey
-            || String(getCurrentIsolationKey_ACU() || '') !== mergeIsolationKey) {
-            logDebug_ACU('[Worldbook] 冷回放期间聊天身份已变化，丢弃陈旧的世界书派生刷新。');
-            return;
-        }
+        if (!chatStillCurrent('冷回放')) return;
         if (mergedFromHistory) {
             mergedData = mergedFromHistory;
             // 同步内存中的全局数据，确保后续调用保持一致
@@ -248,23 +232,30 @@ export   async function updateReadableLorebookEntry_ACU(createIfNeeded = false, 
         }
     }
 
+    // 注入目标只解析一次并透传给所有子步骤，避免切聊天后各步骤各自解析到新角色的书。
+    // [修复] 外部导入时优先使用 targetLorebookOverride 参数，避免临时修改 worldbookConfig 被兜底补齐逻辑覆盖
+    const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
+    if (!chatStillCurrent('解析注入目标')) return;
+
     // Call all the individual entry updaters
-    await updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, isImport, targetLorebookOverride);
-    await updateSummaryTableEntries_ACU(summaryTable, isImport, targetLorebookOverride);
-    await updateOutlineTableEntry_ACU(outlineTable, isImport, targetLorebookOverride);
+    await updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, isImport, primaryLorebookName);
+    if (!chatStillCurrent('人物条目')) return;
+    await updateSummaryTableEntries_ACU(summaryTable, isImport, primaryLorebookName);
+    if (!chatStillCurrent('总结条目')) return;
+    await updateOutlineTableEntry_ACU(outlineTable, isImport, primaryLorebookName);
+    if (!chatStillCurrent('大纲条目')) return;
 
     // [修复] 自定义导出/按行拆分条目是否需要注入，应以 mergedData 中是否存在真实单元格数据为准，
     // 不能再依赖 readableText 判空。
     // 否则当所有表格都开启“按行拆分”后，readableText 会为空，进而误判为“数据库为空”，
     // 导致本应创建的拆分世界书条目被整体跳过。
     if (hasNonEmptyCellData_ACU) {
-        await updateCustomTableExports_ACU(mergedData, isImport, targetLorebookOverride);
+        await updateCustomTableExports_ACU(mergedData, isImport, primaryLorebookName);
     } else {
-        await updateCustomTableExports_ACU(null, isImport, targetLorebookOverride); // 仅清理旧自定义导出条目，不创建新条目
+        await updateCustomTableExports_ACU(null, isImport, primaryLorebookName); // 仅清理旧自定义导出条目，不创建新条目
     }
+    if (!chatStillCurrent('自定义导出')) return;
 
-    // [修复] 外部导入时优先使用 targetLorebookOverride 参数，避免临时修改 worldbookConfig 被兜底补齐逻辑覆盖
-    const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
     if (primaryLorebookName) {
         try {
             const IMPORT_PREFIX = getImportBatchPrefix_ACU();
@@ -603,20 +594,8 @@ export   async function deleteAllGeneratedEntries_ACU(targetLorebook: string | n
         // [修改] 使用 knownCustomEntryNames 增强删除逻辑
         const knownNames = settings_ACU.knownCustomEntryNames || [];
         
-        // [新增] 获取当前配置的预期前缀作为补充 (防止 knownNames 丢失)
-        const currentConfigPrefixes = new Set();
-        if (currentJsonTableData_ACU) {
-             const tableKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
-             tableKeys.forEach(sheetKey => {
-                 const table = currentJsonTableData_ACU[sheetKey];
-                 if (table && table.exportConfig && table.exportConfig.enabled) {
-                     const entryName = table.exportConfig.entryName || table.name;
-                     if (entryName) {
-                         currentConfigPrefixes.add(entryName);
-                     }
-                 }
-             });
-        }
+        // 不再按「当前表的导出名」做前缀兜底：本插件生成的自定义导出条目都带 TavernDB-ACU-CustomExport 前缀
+        // （上面的基础前缀已覆盖）或是 knownNames 精确名；裸导出名前缀只会误删用户/卡作者自建的同前缀条目（R6-01）。
         const importPrefix = getImportStablePrefix_ACU();
 
         const uidsToDelete = allEntries
@@ -642,11 +621,6 @@ export   async function deleteAllGeneratedEntries_ACU(targetLorebook: string | n
                     // 2. 已知自定义条目 (Known List) - 必须匹配隔离前缀
                     if (knownNames.includes(entry.comment) && entry.comment.startsWith(isolationPrefix)) return true;
 
-                    // 3. 当前配置前缀 (Fallback)
-                    for (const customPrefix of currentConfigPrefixes) {
-                        if (entry.comment.startsWith(isolationPrefix + customPrefix)) return true;
-                    }
-
                     return false;
                 } else {
                     // 非隔离模式
@@ -658,11 +632,6 @@ export   async function deleteAllGeneratedEntries_ACU(targetLorebook: string | n
                     // 2. 已知自定义条目 (Known List) - 必须不带隔离前缀(或者说我们假设knownNames存了完整名，这里只需检查它是否不以ACU-[开头)
                     // 其实 knownNames 可能包含带隔离前缀的（如果是切模式过来的）。我们只删非隔离的。
                     if (knownNames.includes(entry.comment) && !entry.comment.startsWith('ACU-[')) return true;
-
-                    // 3. 当前配置前缀 (Fallback)
-                    for (const customPrefix of currentConfigPrefixes) {
-                        if (entry.comment.startsWith(customPrefix)) return true;
-                    }
 
                     return false;
                 }
@@ -727,8 +696,26 @@ function migrateLegacyAutoMergedOrderBeforeTailRepair_ACU(data: Record<string, a
  * 不提供时保持原行为（冷路径全量回放），兼容全部既有调用方。
  */
 export async function refreshMergedDataAndNotify_ACU(options: { canonicalData?: Record<string, any> | null } = {}) {
+    // 合并期间有多次 await；若切了聊天，旧聊天的合并结果不能设为当前数据，也不能写世界书。
+    const refreshChatKey = String(currentChatFileIdentifier_ACU || '');
+    const refreshIsolationKey = String(getCurrentIsolationKey_ACU() || '');
+    const chatSwitchedSinceStart = () => String(currentChatFileIdentifier_ACU || '') !== refreshChatKey
+        || String(getCurrentIsolationKey_ACU() || '') !== refreshIsolationKey;
+    const staleResult = () => {
+        logDebug_ACU('[数据加载] 合并刷新期间聊天身份已变化，丢弃陈旧结果。');
+        return {
+            mergedData: null as Record<string, any> | null,
+            integrityFixed: false,
+            removedNullRowCount: 0,
+            canonicalIssues: [] as Array<{ sheetKey: string; rowIndex: number; reason: string }>,
+            degraded: true,
+            stale: true as const,
+            nullRowCleanupPersisted: 'skipped_no_changes' as NullRowCleanupPersistStatus_ACU,
+        };
+    };
       // 重新加载聊天记录（canonical 快照路径也保留：世界书派生刷新依赖最新聊天数组）
     await loadAllChatMessages_ACU();
+    if (chatSwitchedSinceStart()) return staleResult();
     let removedNullRowCount = 0;
     let canonicalIssues: Array<{ sheetKey: string; rowIndex: number; reason: string }> = [];
     let integrityFixed = false;
@@ -754,6 +741,7 @@ export async function refreshMergedDataAndNotify_ACU(options: { canonicalData?: 
         }
         const mergeWarnings = consumeLastMergeWarnings_ACU();
         mergeWarnings.forEach(w => logWarn_ACU(w));
+        if (chatSwitchedSinceStart()) return staleResult();
     } catch (error) {
         degraded = true;
         logError_ACU('[数据加载] 表格合并失败，已保留可用数据并降级。', error);
@@ -839,6 +827,7 @@ export async function refreshMergedDataAndNotify_ACU(options: { canonicalData?: 
             logDebug_ACU('数据完整性已完成受控修复。');
         }
 
+        if (chatSwitchedSinceStart()) return staleResult();
         // [修复] 强制稳定顺序（用户手动顺序优先，否则模板顺序）
         const stableKeys = getSortedSheetKeys_ACU(mergedData);
         mergedData = reorderDataBySheetKeys_ACU(mergedData, stableKeys);
@@ -1609,6 +1598,7 @@ export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride 
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
     const excludeImportTaggedEntries = options?.excludeImportTaggedEntries === true;
     const includeGeneratedEntries = options?.includeGeneratedEntries === true;
+    const currentIsolationPrefix = settings_ACU.dataIsolationEnabled ? getIsolationPrefix_ACU() : '';
     const agentGreenlightKeySet = new Set((Array.isArray(options?.agentGreenlights) ? options.agentGreenlights : [])
         .map((ref: any) => `${String(ref?.bookName || '').trim()}\u0000${String(ref?.uid || '').trim()}`)
         .filter((key: string) => !key.startsWith('\u0000') && !key.endsWith('\u0000')));
@@ -1677,9 +1667,16 @@ export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride 
                 const comment = entry.comment || '';
                 const isAgentGreenlight = agentGreenlightKeySet.has(`${String(entry.bookName || '').trim()}\u0000${String(entry.uid || '').trim()}`);
                 if (isAgentGreenlight) return true;
-                if (!includeGeneratedEntries && comment.startsWith('TavernDB-ACU-')) return false;
-                if (!includeGeneratedEntries && comment.startsWith('重要人物条目')) return false;
-                if (!includeGeneratedEntries && comment.startsWith('总结条目')) return false;
+                if (!includeGeneratedEntries) {
+                    // 隔离模式下生成条目带 ACU-[code]- 前缀：先剥前缀再判定（与 $9 同口径，R6-02）。
+                    // 其他隔离环境（前缀不是本环境）的条目一律不进填表上下文，否则多套数据共用一本书时互相串扰。
+                    const isolationMatch = /^ACU-\[[^\]]+\]-/.exec(comment);
+                    if (isolationMatch && isolationMatch[0] !== currentIsolationPrefix) return false;
+                    const normalized = isolationMatch ? comment.slice(isolationMatch[0].length) : comment;
+                    if (normalized.startsWith('TavernDB-ACU-')) return false;
+                    if (normalized.startsWith('重要人物条目')) return false;
+                    if (normalized.startsWith('总结条目') || normalized.startsWith('小总结条目')) return false;
+                }
                 if (excludeImportTaggedEntries && isImportTaggedLorebookEntry_ACU(entry)) return false;
                 if (isEntryBlocked_ACU(entry)) return false;
                 return true;

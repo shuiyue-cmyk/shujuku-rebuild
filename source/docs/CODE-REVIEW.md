@@ -105,11 +105,25 @@
 | R3-09 维护事务等锁跨切聊 | P2 | 已修：事务新增 guardChatSwitch（chat-service 维护类与删楼恢复启用）；删楼恢复另复核聊天数组身份 | table-write-transaction.test「guardChatSwitch」、checkpoint-delete-guard.test「聊天数组被替换」 |
 | R3-10 死代码跨标识清表 | P3 | 部分：删除 clearTableDataAtFloors_ACU 及用例；另三个无害死代码保留（saveCurrentDataForTable 仍在对外 API） | — |
 | R3-11 删向量文件前非严格保存 | P3 | 已修：有向量文件待删时严格保存 | chat-service.test「走严格保存」 |
+| R6-01 全删生成条目误删别的环境/外部条目 | P1 | 已修：去掉按当前配置前缀兜底判定，只认本插件生成条目 | pipeline.test「块 6 复审：生成条目判定」 |
+| R6-02 合并世界书内容混入别的隔离环境条目 | P1 | 已修：剥当前隔离前缀后判定，排除其他环境前缀与本插件生成条目 | pipeline.test「块 6 复审」 |
+| R6-03 非隔离删自定义导出误删隔离条目 / 合并条目漏前缀 | P2 | 已修 | injection-engine-custom.test「块 6 复审：自定义导出」 |
+| R6-04 导出模板 $ 符号被展开 | P2 | 已修：回调替换 | 同上 |
+| R6-05 改表助手 v3 整表替换丢本地隐藏列/别名 | P2 | 已修 | compiler.test「v3 整表替换保留本地隐藏列与别名」 |
+| R6-06 世界书派生刷新不复核聊天身份 | P2 | 已修：入口固化身份与注入目标并透传，每步前复核，不一致整体放弃；合并刷新切聊天时丢弃结果（stale） | pipeline.test「块 6 复审：世界书派生刷新期间切换聊天」 |
+| R6-07 跟随全局/全局切换后翻转 scope 打到别的聊天 | P2 | 已修：翻转前比对提交前的聊天身份与首楼，不一致放弃并给 postCommitWarning | template-preset-service.test「块 6 复审：协调提交期间切到别的聊天」×2 |
+| R6-08 模板预设库保存失败报成功 | P2 | 已修 | template-preset-service.test「块 6 复审：预设库持久化失败」 |
+| R6-09 seed 迁移三处问题 | P2 | 已修：运行时数据改取 state-manager；回滚只恢复 guide/scoped 两容器且只对已提交计划；提交不再强制 chat_override | template-seed-pollution-migration-flow.test |
+| R6-10 merge 计划重复 row_id | P2 | 已修：preflight 遇 row_id 被占用直接 blocker；落候选前再兜底 | template-data-preflight.test「块 6 复审」 |
+| R6-11 纪要索引 endsWith 改别人的条目 | P2 | 已修：按当前隔离前缀精确匹配 | injection-engine-entries.test「块 6 复审」×2 |
+| R6-12 删除生成条目两份副本 | P3 | 已修：合并为 pipeline 一份 | — |
+| R6-13 绕过协调器的作用域直写函数 | P3 | 已修：删除（含仅供其使用的辅助函数与 import） | — |
+| R6-14 开场白抑制死分支 | P3 | 已修：删除分支 | — |
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
 R2B-08/09（迁移、混合提交、batch 写入的整聊天克隆替换）与上面同一模式但无 await 窗口，未改，留作 P3。
 
-待修：块 5、块 6 全部；R2A-07（多 staging 组汇合后丢 pre 段）、R2A-04 第 2 部分、R2B-04/05/06（待坐实）、R4-06（待坐实）/07/08、各块 P3。
+待修：块 5 全部；R2A-07（多 staging 组汇合后丢 pre 段）、R2A-04 第 2 部分、R2B-04/05/06（待坐实）、R4-06（待坐实）/07/08、各块 P3。
 R4-02 遗留：模型放弃补齐时，草稿（partial）不会阻止水位推进——只在提升路径堵住了「写齐却看不见」，「没写齐就收工」仍按旧口径。
 
 测试稳定性：重型页面套件首个用例冷导入整张 V2 模块图单跑 11–15s，贴着原全局 15s 上限，本机并行全量必超时（发布基线同样失败）；全局 testTimeout 调为 60s。

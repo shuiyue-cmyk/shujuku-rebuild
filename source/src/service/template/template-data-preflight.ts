@@ -275,8 +275,10 @@ export function preflightTemplateDataImport_ACU(options: TemplateDataPreflightOp
     }
 
     const runtimeIdentityByKey = new Map<string, string>();
+    const runtimeRowIds = new Set<string>();
     for (const row of runtimeRows) {
       const identity = toRowIdentity(row);
+      if (identity.rowId) runtimeRowIds.add(identity.rowId);
       if (identity.businessKey) runtimeIdentityByKey.set(identity.businessKey, identity.rowId);
     }
 
@@ -300,6 +302,14 @@ export function preflightTemplateDataImport_ACU(options: TemplateDataPreflightOp
       }
       const existing = runtimeIdentityByKey.get(identity.businessKey);
       if (existing === undefined) {
+        // 业务键没命中，但 row_id 已被当前另一行占用（常见于同源模板、聊天里改过业务键）：
+        // 按原 row_id 插入会造成同表重复身份，直接阻止，不能静默写入。
+        if (runtimeRowIds.has(identity.rowId)) {
+          audit.action = 'blocked';
+          audit.blocker = `表「${sheetName || sheetKey}」模板行（row_id=${identity.rowId}）的业务键在当前数据中不存在，但该 row_id 已被当前另一行占用，无法安全 merge。请改用 replace，或先统一两边的业务键。`;
+          blockers.push(blocker_ACU('cross_pool_row_id_collision', sheetKey, sheetName, audit.blocker));
+          continue;
+        }
         plan.insertRowIds.push(identity.rowId);
         audit.insertedRowCount += 1;
         continue;

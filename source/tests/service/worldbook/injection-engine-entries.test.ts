@@ -245,6 +245,32 @@ describe('updateOutlineTableEntry_ACU', () => {
   });
 });
 
+describe('块 6 复审：纪要索引按当前环境精确匹配', () => {
+  const otherEntries = [
+    { uid: 7, comment: 'ACU-[别的环境]-TavernDB-ACU-CustomExport-纪要索引', enabled: true },
+    { uid: 8, comment: '外部导入-TavernDB-ACU-CustomExport-纪要索引', enabled: true },
+    { uid: 9, comment: 'ACU-[test]-TavernDB-ACU-CustomExport-纪要索引', enabled: true },
+  ];
+
+  it('有大纲数据时，0TK 只切换当前隔离环境自己的纪要索引', async () => {
+    mockGetIsolationPrefix.mockReturnValue('ACU-[test]-');
+    mockGetCurrentWorldbookConfig.mockReturnValue({ zeroTkOccupyMode: true });
+    mockGetLorebookEntries.mockResolvedValue(otherEntries.map(e => ({ ...e })));
+    await updateOutlineTableEntry_ACU({ name: '总体大纲', content: [['', '列1'], ['', '值1']] });
+    const toggled = mockSetLorebookEntries.mock.calls.flatMap((call: any[]) => call[1]).filter((u: any) => 'enabled' in u && u.uid !== undefined);
+    expect(toggled).toEqual([{ uid: 9, enabled: false }]);
+  });
+
+  it('无大纲数据时同样只切换当前环境自己的纪要索引', async () => {
+    mockGetIsolationPrefix.mockReturnValue('ACU-[test]-');
+    mockGetCurrentWorldbookConfig.mockReturnValue({ zeroTkOccupyMode: true });
+    mockGetLorebookEntries.mockResolvedValue(otherEntries.map(e => ({ ...e })));
+    await updateOutlineTableEntry_ACU(null);
+    const toggled = mockSetLorebookEntries.mock.calls.flatMap((call: any[]) => call[1]);
+    expect(toggled).toEqual([{ uid: 9, enabled: false }]);
+  });
+});
+
 // ═══ updateSummaryTableEntries_ACU ═══
 describe('updateSummaryTableEntries_ACU', () => {
   const summaryTable = {

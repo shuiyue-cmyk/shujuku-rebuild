@@ -74,6 +74,8 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
     const isoPrefix = getIsolationPrefix_ACU();
     const baseComment = isImport ? `${IMPORT_PREFIX}TavernDB-ACU-OutlineTable` : 'TavernDB-ACU-OutlineTable';
     const OUTLINE_COMMENT = isoPrefix + baseComment;
+    // 只认当前隔离环境自己的纪要索引（与自定义导出创建时同名），不碰别的环境或外部导入的条目。
+    const SUMMARY_INDEX_COMMENT = `${isoPrefix}TavernDB-ACU-CustomExport-纪要索引`;
 
     try {
         const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
@@ -89,7 +91,7 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
             // [修复] 即使没有outlineTable数据，也要同步更新"纪要索引"条目的enabled状态。
             // 0TK 持续控制该条目是否启用；交火模式不应把它重新打开。
             try {
-                const existingIndexEntry = allEntries.find(e => e.comment && e.comment.endsWith('TavernDB-ACU-CustomExport-纪要索引'));
+                const existingIndexEntry = allEntries.find(e => e.comment === SUMMARY_INDEX_COMMENT);
                 if (existingIndexEntry) {
                     if (existingIndexEntry.enabled !== summaryIndexEntryEnabled) {
                         await setLorebookEntries_ACU(primaryLorebookName, [{
@@ -162,7 +164,7 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
         // [新增] 同步更新"纪要索引"条目的enabled状态。
         // 0TK 持续控制该条目是否启用；交火模式不应把它重新打开。
         try {
-            const existingIndexEntry = allEntries.find(e => e.comment && e.comment.endsWith('TavernDB-ACU-CustomExport-纪要索引'));
+            const existingIndexEntry = allEntries.find(e => e.comment === SUMMARY_INDEX_COMMENT);
             if (existingIndexEntry) {
                 if (existingIndexEntry.enabled !== summaryIndexEntryEnabled) {
                     await setLorebookEntries_ACU(primaryLorebookName, [{

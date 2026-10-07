@@ -223,7 +223,6 @@ import {
   attachSeedRowsToCurrentDataFromGuide_ACU,
   buildChatSheetGuideDataFromData_ACU,
   buildChatSheetGuideDataFromTemplateObj_ACU,
-  overwriteChatSheetGuideFromTemplate_ACU,
   ensureStableRowIdsForSeedRows_ACU,
   ensureStableRowIdsForSheetContent_ACU,
   ensureChatSheetGuideSeeded_ACU,
@@ -734,32 +733,6 @@ describe('buildChatSheetGuideDataFromTemplateObj_ACU', () => {
     expect(result.sheet_0._seedRows).toEqual([['1', '数据']]);
     // 但 content 保留完整（因为 stripSeedRows=false）
     expect(result.sheet_0.content.length).toBeGreaterThanOrEqual(1);
-  });
-});
-
-// ═══ overwriteChatSheetGuideFromTemplate_ACU ═══
-describe('overwriteChatSheetGuideFromTemplate_ACU', () => {
-  it('null 模板返回 false', async () => {
-    const result = await overwriteChatSheetGuideFromTemplate_ACU(null);
-    expect(result).toBe(false);
-  });
-
-  it('有效模板写入 guide 并返回 true', async () => {
-    const firstMsg: any = {};
-    mockGetChatFirstLayerMessage.mockReturnValue(firstMsg);
-    mockGetChatArray.mockReturnValue([firstMsg]);
-    mockGetChatSheetGuideContainer.mockReturnValue({ version: 2, tags: {} });
-    const templateObj = {
-      sheet_0: {
-        uid: 's0',
-        name: '物品表',
-        content: [['row_id', '物品名']],
-        orderNo: 0,
-      },
-    };
-    const result = await overwriteChatSheetGuideFromTemplate_ACU(templateObj, { reason: 'test' });
-    expect(result).toBe(true);
-    expect(mockSaveChatToHost).toHaveBeenCalled();
   });
 });
 

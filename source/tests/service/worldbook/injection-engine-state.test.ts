@@ -140,6 +140,7 @@ vi.mock('../../../src/service/template/chat-scope', () => ({
 
 vi.mock('../../../src/service/worldbook/pipeline', () => ({
   loadAllChatMessages_ACU: mockLoadAllChatMessages,
+  deleteAllGeneratedEntries_ACU: vi.fn(async () => {}),
 }));
 
 vi.mock('../../../src/shared/utils', () => ({

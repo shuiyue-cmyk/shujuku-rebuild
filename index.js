@@ -63249,8 +63249,11 @@ function preflightTemplateDataImport_ACU(options) {
             continue;
         }
         const runtimeIdentityByKey = new Map();
+        const runtimeRowIds = new Set();
         for (const row of runtimeRows) {
             const identity = toRowIdentity(row);
+            if (identity.rowId)
+                runtimeRowIds.add(identity.rowId);
             if (identity.businessKey)
                 runtimeIdentityByKey.set(identity.businessKey, identity.rowId);
         }
@@ -63273,6 +63276,14 @@ function preflightTemplateDataImport_ACU(options) {
             }
             const existing = runtimeIdentityByKey.get(identity.businessKey);
             if (existing === undefined) {
+                // 业务键没命中，但 row_id 已被当前另一行占用（常见于同源模板、聊天里改过业务键）：
+                // 按原 row_id 插入会造成同表重复身份，直接阻止，不能静默写入。
+                if (runtimeRowIds.has(identity.rowId)) {
+                    audit.action = 'blocked';
+                    audit.blocker = `表「${sheetName || sheetKey}」模板行（row_id=${identity.rowId}）的业务键在当前数据中不存在，但该 row_id 已被当前另一行占用，无法安全 merge。请改用 replace，或先统一两边的业务键。`;
+                    blockers.push(blocker_ACU('cross_pool_row_id_collision', sheetKey, sheetName, audit.blocker));
+                    continue;
+                }
                 plan.insertRowIds.push(identity.rowId);
                 audit.insertedRowCount += 1;
                 continue;
@@ -63336,8 +63347,10 @@ function loadTemplatePresetsStore_ACU() {
 function saveTemplatePresetsStore_ACU(obj) {
     try {
         const store = getConfigStorage_ACU();
-        store?.setItem?.(STORAGE_KEY_TEMPLATE_PRESETS_ACU, safeJsonStringify_ACU(obj, '{}'));
-        return true;
+        if (!store?.setItem)
+            return false;
+        // 酒馆设置持久化失败时 setItem 会回滚内存并返回 false，必须如实上报。
+        return store.setItem(STORAGE_KEY_TEMPLATE_PRESETS_ACU, safeJsonStringify_ACU(obj, '{}')) !== false;
     }
     catch (e) {
         logWarn_ACU('[TemplatePresets] Failed to save:', e);
@@ -63686,10 +63699,18 @@ function applyMergePlanToCandidate_ACU(candidateData, templateData, mergePlan) {
             if (rowId)
                 templateRowByRowId.set(rowId, row);
         }
+        const existingCandidateRowIds = new Set(candidateContent.slice(1)
+            .filter(Array.isArray)
+            .map((row) => String(row[0] ?? '').trim())
+            .filter(Boolean));
         for (const rowId of plan.insertRowIds) {
             const templateRow = templateRowByRowId.get(rowId);
             if (!templateRow) {
                 errors.push(`表 ${sheetKey} 的插入计划 row_id=${rowId} 未在模板中找到。`);
+                continue;
+            }
+            if (existingCandidateRowIds.has(rowId)) {
+                errors.push(`表 ${sheetKey} 的插入计划 row_id=${rowId} 已被当前数据占用，拒绝写入重复身份。`);
                 continue;
             }
             const cells = [...templateRow];
@@ -63801,8 +63822,15 @@ function persistTemplateScopeSelectionState_ACU(presetName, { source = 'ui', upd
  * 翻回 inherit_global。刻意不走 persistTemplateScopeSelectionState_ACU 的
  * inherit_global 分支——那条路会顺带清除协调刚写入的聊天指导表。
  * saveChatToHost 失败只降级为警告：容器已在内存更新，将随下次保存落盘。
+ * 协调提交可能耗时数秒；翻转前必须确认当前聊天仍是提交的那个，否则放弃（返回 false），
+ * 不能把别的聊天的作用域改掉。
  */
-async function flipCurrentChatScopeToInheritGlobal_ACU(reason) {
+const CHAT_SWITCHED_BEFORE_SCOPE_FLIP_WARNING_ACU = '模板已提交到原聊天，但提交期间切换了聊天，原聊天未改回「跟随全局」，请回到原聊天后重新操作。';
+async function flipCurrentChatScopeToInheritGlobal_ACU(reason, expected) {
+    if (!chatContextMatches_ACU(expected.identity, expected.firstMessage)) {
+        logWarn_ACU('[TemplateScope] 协调提交期间聊天已切换，放弃 scope 翻转 inherit_global:', reason);
+        return false;
+    }
     setCurrentChatTemplateScopeState_ACU({ mode: 'inherit_global' }, {
         isolationKey: normalizeTemplateScopeIsolationKey_ACU(getCurrentIsolationKey_ACU()),
         reason,
@@ -63813,6 +63841,7 @@ async function flipCurrentChatScopeToInheritGlobal_ACU(reason) {
     catch (error) {
         logWarn_ACU('[TemplateScope] scope 翻转 inherit_global 后保存聊天失败（容器已在内存更新，将随下次保存落盘）:', error);
     }
+    return true;
 }
 async function applyTemplateSnapshotToScope_ACU(templateSource, { scope = 'global', source = 'ui', presetName = '', save = true, persistChatScope = null, registerChatPresetEntry = null, destructiveChangeConfirmed = false, signal = undefined } = {}) {
     const normalizedScope = normalizeTemplateOperationScope_ACU(scope);
@@ -63838,6 +63867,8 @@ async function applyTemplateSnapshotToScope_ACU(templateSource, { scope = 'globa
     // 当前聊天，失败（含 blockers）则原样返回且不碰任何全局状态（fail-closed）；
     // 空聊天或存在 chat_override/preset_link 的聊天不受全局切换影响，走轻路径。
     let reconciledForGlobalSwitch = null;
+    let globalSwitchFlipWarning = '';
+    const chatBeforeGlobalSwitch = getChatContextSnapshot_ACU();
     if (updateGlobal) {
         const chatForGlobalSwitch = getChatArray_ACU();
         const globalAffectsCurrentChat = Array.isArray(chatForGlobalSwitch)
@@ -63861,7 +63892,9 @@ async function applyTemplateSnapshotToScope_ACU(templateSource, { scope = 'globa
     }
     if (reconciledForGlobalSwitch) {
         // 协调提交写了 chat_override；全局切换语义下当前聊天仍应跟随全局。
-        await flipCurrentChatScopeToInheritGlobal_ACU('template_scope_global_switch_reconcile');
+        const flipped = await flipCurrentChatScopeToInheritGlobal_ACU('template_scope_global_switch_reconcile', chatBeforeGlobalSwitch);
+        if (!flipped)
+            globalSwitchFlipWarning = CHAT_SWITCHED_BEFORE_SCOPE_FLIP_WARNING_ACU;
     }
     const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(snapshot.templateObj, { stripSeedRows: false });
     persistTemplateScopeSelectionState_ACU(normalizedPresetName, {
@@ -63889,8 +63922,8 @@ async function applyTemplateSnapshotToScope_ACU(templateSource, { scope = 'globa
         ...(reconciledForGlobalSwitch ? {
             reconciledCurrentChat: true,
             ...('runtimeReady' in reconciledForGlobalSwitch ? { runtimeReady: reconciledForGlobalSwitch.runtimeReady } : {}),
-            ...(typeof reconciledForGlobalSwitch.postCommitWarning === 'string' && reconciledForGlobalSwitch.postCommitWarning
-                ? { postCommitWarning: reconciledForGlobalSwitch.postCommitWarning }
+            ...((globalSwitchFlipWarning || (typeof reconciledForGlobalSwitch.postCommitWarning === 'string' && reconciledForGlobalSwitch.postCommitWarning))
+                ? { postCommitWarning: [reconciledForGlobalSwitch.postCommitWarning, globalSwitchFlipWarning].filter(w => typeof w === 'string' && w).join('\n') }
                 : {}),
         } : {}),
     };
@@ -64439,6 +64472,7 @@ async function followGlobalTemplateForCurrentChat_ACU({ source = 'follow_global'
     if (!globalSnapshot?.templateStr || !globalSnapshot?.templateObj) {
         return { saved: false, error: '无法解析当前全局模板，已取消跟随全局。' };
     }
+    const chatBeforeFollow = getChatContextSnapshot_ACU();
     const result = await applyChatTemplateSnapshotWithReconciliation_ACU(globalSnapshot.templateObj, {
         source,
         presetName: globalPresetName,
@@ -64447,7 +64481,10 @@ async function followGlobalTemplateForCurrentChat_ACU({ source = 'follow_global'
     });
     if (!result || result.saved !== true)
         return result;
-    await flipCurrentChatScopeToInheritGlobal_ACU('template_scope_follow_global');
+    if (!await flipCurrentChatScopeToInheritGlobal_ACU('template_scope_follow_global', chatBeforeFollow)) {
+        const priorWarning = typeof result.postCommitWarning === 'string' ? result.postCommitWarning : '';
+        return { ...result, postCommitWarning: [priorWarning, CHAT_SWITCHED_BEFORE_SCOPE_FLIP_WARNING_ACU].filter(Boolean).join('\n') };
+    }
     applyTemplateScopeForCurrentChat_ACU();
     notifyTemplateRuntimeCommitted_ACU();
     return { ...result, mode: 'inherit_global', presetName: globalPresetName };
@@ -67596,7 +67633,7 @@ async function writeInitialTemplateCheckpoint_ACU(templateObj, { reason = 'initi
     _set_suppressWorldbookInjectionInGreeting_ACU(false);
     if (cleanupWorldbook) {
         try {
-            await deleteAllGeneratedEntries_ACU$1();
+            await deleteAllGeneratedEntries_ACU();
             logDebug_ACU(`[InitialCheckpoint] Deleted generated entries before first real reply. reason=${reason}`);
         }
         catch (e) {
@@ -92024,7 +92061,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261007-11"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261007-16"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92043,7 +92080,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261007-11";
+        const stamp = "20261007-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -92690,7 +92727,7 @@ async function initializeJsonTableInChatHistory_ACU() {
         logWarn_ACU('[SheetGuide] Failed to ensure sheet guide during initialization:', e);
     }
     try {
-        await deleteAllGeneratedEntries_ACU$1();
+        await deleteAllGeneratedEntries_ACU();
         logDebug_ACU('Deleted all generated lorebook entries during initialization.');
     }
     catch (deleteError) {
@@ -96135,25 +96172,17 @@ function getAutoMergedOrderScopeKey_ACU(summaryKey) {
 // pipeline.ts
 // 从 05_core_tail.js 迁入
 async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport = false, targetLorebookOverride = null, dataOverride = null) {
-    // [健全性] 新对话开场白阶段：禁止自动创建/更新世界书条目
-    // - 仅影响非导入流程（isImport=false）
-    // - 仅在“无任何用户消息”的开场白阶段生效
-    // - 用户一旦开始对话，会自动解除抑制
-    if (!isImport) {
-        maybeLiftWorldbookSuppression_ACU();
-        if (shouldSuppressWorldbookInjection_ACU()) {
-            // 注意：这里必须“只抑制注入/创建”，但不能抑制“清理旧条目/回退导致的删除”。
-            // 因此在抑制期间，我们仍然执行一次清理，以确保新开对话会清除旧世界书条目。
-            try {
-                await deleteAllGeneratedEntries_ACU$1();
-                logDebug_ACU('[Worldbook] Greeting-stage suppression: cleanup-only (no create/update).');
-            }
-            catch (e) {
-                logWarn_ACU('[Worldbook] Greeting-stage cleanup-only failed:', e);
-            }
-            return;
-        }
-    }
+    // 本函数全程不持锁，各步骤之间有多次宿主 I/O；期间若切了聊天/隔离标识，
+    // 后续步骤会把旧聊天的表格写进新聊天的世界书。入口固化身份，每步之前复核，不一致整体放弃。
+    const refreshChatKey = String(currentChatFileIdentifier_ACU || '');
+    const refreshIsolationKey = String(getCurrentIsolationKey_ACU() || '');
+    const chatStillCurrent = (stage) => {
+        if (String(currentChatFileIdentifier_ACU || '') === refreshChatKey
+            && String(getCurrentIsolationKey_ACU() || '') === refreshIsolationKey)
+            return true;
+        logDebug_ACU(`[Worldbook] 派生刷新期间聊天身份已变化（${stage}），放弃剩余步骤。`);
+        return false;
+    };
     // [新增] 分别从最新的标准表和总结表数据源中拉取数据并合并
     let mergedData = null;
     if (dataOverride) {
@@ -96172,8 +96201,6 @@ async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport 
         // 本函数全程不持任何锁（世界书更新链无互斥量，让出不会让出到半完成的临界区），
         // 但让出窗口内可能切聊，因此 await 之后必须复检聊天身份：陈旧结果一律丢弃，
         // 既不写内存表数据也不更新任何世界书条目（与可视化器载入的 contextKey 校验同口径）。
-        const mergeChatKey = String(currentChatFileIdentifier_ACU || '');
-        const mergeIsolationKey = String(getCurrentIsolationKey_ACU() || '');
         await loadAllChatMessages_ACU();
         let mergedFromHistory = null;
         try {
@@ -96189,11 +96216,8 @@ async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport 
             }
             throw error;
         }
-        if (String(currentChatFileIdentifier_ACU || '') !== mergeChatKey
-            || String(getCurrentIsolationKey_ACU() || '') !== mergeIsolationKey) {
-            logDebug_ACU('[Worldbook] 冷回放期间聊天身份已变化，丢弃陈旧的世界书派生刷新。');
+        if (!chatStillCurrent('冷回放'))
             return;
-        }
         if (mergedFromHistory) {
             mergedData = mergedFromHistory;
             // 同步内存中的全局数据，确保后续调用保持一致
@@ -96275,22 +96299,33 @@ async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport 
             isDatabaseEmpty = true;
         }
     }
+    // 注入目标只解析一次并透传给所有子步骤，避免切聊天后各步骤各自解析到新角色的书。
+    // [修复] 外部导入时优先使用 targetLorebookOverride 参数，避免临时修改 worldbookConfig 被兜底补齐逻辑覆盖
+    const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
+    if (!chatStillCurrent('解析注入目标'))
+        return;
     // Call all the individual entry updaters
-    await updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, isImport, targetLorebookOverride);
-    await updateSummaryTableEntries_ACU(summaryTable, isImport, targetLorebookOverride);
-    await updateOutlineTableEntry_ACU(outlineTable, isImport, targetLorebookOverride);
+    await updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, isImport, primaryLorebookName);
+    if (!chatStillCurrent('人物条目'))
+        return;
+    await updateSummaryTableEntries_ACU(summaryTable, isImport, primaryLorebookName);
+    if (!chatStillCurrent('总结条目'))
+        return;
+    await updateOutlineTableEntry_ACU(outlineTable, isImport, primaryLorebookName);
+    if (!chatStillCurrent('大纲条目'))
+        return;
     // [修复] 自定义导出/按行拆分条目是否需要注入，应以 mergedData 中是否存在真实单元格数据为准，
     // 不能再依赖 readableText 判空。
     // 否则当所有表格都开启“按行拆分”后，readableText 会为空，进而误判为“数据库为空”，
     // 导致本应创建的拆分世界书条目被整体跳过。
     if (hasNonEmptyCellData_ACU) {
-        await updateCustomTableExports_ACU(mergedData, isImport, targetLorebookOverride);
+        await updateCustomTableExports_ACU(mergedData, isImport, primaryLorebookName);
     }
     else {
-        await updateCustomTableExports_ACU(null, isImport, targetLorebookOverride); // 仅清理旧自定义导出条目，不创建新条目
+        await updateCustomTableExports_ACU(null, isImport, primaryLorebookName); // 仅清理旧自定义导出条目，不创建新条目
     }
-    // [修复] 外部导入时优先使用 targetLorebookOverride 参数，避免临时修改 worldbookConfig 被兜底补齐逻辑覆盖
-    const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
+    if (!chatStillCurrent('自定义导出'))
+        return;
     if (primaryLorebookName) {
         try {
             const IMPORT_PREFIX = getImportBatchPrefix_ACU();
@@ -96583,7 +96618,7 @@ async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport 
         }
     }
 }
-async function deleteAllGeneratedEntries_ACU$1(targetLorebook = null) {
+async function deleteAllGeneratedEntries_ACU(targetLorebook = null) {
     const primaryLorebookName = targetLorebook || (await getInjectionTargetLorebook_ACU());
     if (!primaryLorebookName)
         return;
@@ -96607,20 +96642,8 @@ async function deleteAllGeneratedEntries_ACU$1(targetLorebook = null) {
         ];
         // [修改] 使用 knownCustomEntryNames 增强删除逻辑
         const knownNames = settings_ACU.knownCustomEntryNames || [];
-        // [新增] 获取当前配置的预期前缀作为补充 (防止 knownNames 丢失)
-        const currentConfigPrefixes = new Set();
-        if (currentJsonTableData_ACU) {
-            const tableKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
-            tableKeys.forEach(sheetKey => {
-                const table = currentJsonTableData_ACU[sheetKey];
-                if (table && table.exportConfig && table.exportConfig.enabled) {
-                    const entryName = table.exportConfig.entryName || table.name;
-                    if (entryName) {
-                        currentConfigPrefixes.add(entryName);
-                    }
-                }
-            });
-        }
+        // 不再按「当前表的导出名」做前缀兜底：本插件生成的自定义导出条目都带 TavernDB-ACU-CustomExport 前缀
+        // （上面的基础前缀已覆盖）或是 knownNames 精确名；裸导出名前缀只会误删用户/卡作者自建的同前缀条目（R6-01）。
         const importPrefix = getImportStablePrefix_ACU();
         const uidsToDelete = allEntries
             .filter(entry => {
@@ -96647,11 +96670,6 @@ async function deleteAllGeneratedEntries_ACU$1(targetLorebook = null) {
                 // 2. 已知自定义条目 (Known List) - 必须匹配隔离前缀
                 if (knownNames.includes(entry.comment) && entry.comment.startsWith(isolationPrefix))
                     return true;
-                // 3. 当前配置前缀 (Fallback)
-                for (const customPrefix of currentConfigPrefixes) {
-                    if (entry.comment.startsWith(isolationPrefix + customPrefix))
-                        return true;
-                }
                 return false;
             }
             else {
@@ -96665,11 +96683,6 @@ async function deleteAllGeneratedEntries_ACU$1(targetLorebook = null) {
                 // 其实 knownNames 可能包含带隔离前缀的（如果是切模式过来的）。我们只删非隔离的。
                 if (knownNames.includes(entry.comment) && !entry.comment.startsWith('ACU-['))
                     return true;
-                // 3. 当前配置前缀 (Fallback)
-                for (const customPrefix of currentConfigPrefixes) {
-                    if (entry.comment.startsWith(customPrefix))
-                        return true;
-                }
                 return false;
             }
         })
@@ -96735,8 +96748,27 @@ function migrateLegacyAutoMergedOrderBeforeTailRepair_ACU(data) {
  * 不提供时保持原行为（冷路径全量回放），兼容全部既有调用方。
  */
 async function refreshMergedDataAndNotify_ACU(options = {}) {
+    // 合并期间有多次 await；若切了聊天，旧聊天的合并结果不能设为当前数据，也不能写世界书。
+    const refreshChatKey = String(currentChatFileIdentifier_ACU || '');
+    const refreshIsolationKey = String(getCurrentIsolationKey_ACU() || '');
+    const chatSwitchedSinceStart = () => String(currentChatFileIdentifier_ACU || '') !== refreshChatKey
+        || String(getCurrentIsolationKey_ACU() || '') !== refreshIsolationKey;
+    const staleResult = () => {
+        logDebug_ACU('[数据加载] 合并刷新期间聊天身份已变化，丢弃陈旧结果。');
+        return {
+            mergedData: null,
+            integrityFixed: false,
+            removedNullRowCount: 0,
+            canonicalIssues: [],
+            degraded: true,
+            stale: true,
+            nullRowCleanupPersisted: 'skipped_no_changes',
+        };
+    };
     // 重新加载聊天记录（canonical 快照路径也保留：世界书派生刷新依赖最新聊天数组）
     await loadAllChatMessages_ACU();
+    if (chatSwitchedSinceStart())
+        return staleResult();
     let removedNullRowCount = 0;
     let canonicalIssues = [];
     let integrityFixed = false;
@@ -96762,6 +96794,8 @@ async function refreshMergedDataAndNotify_ACU(options = {}) {
         }
         const mergeWarnings = consumeLastMergeWarnings_ACU();
         mergeWarnings.forEach(w => logWarn_ACU(w));
+        if (chatSwitchedSinceStart())
+            return staleResult();
     }
     catch (error) {
         degraded = true;
@@ -96846,6 +96880,8 @@ async function refreshMergedDataAndNotify_ACU(options = {}) {
         if (integrityFixed) {
             logDebug_ACU('数据完整性已完成受控修复。');
         }
+        if (chatSwitchedSinceStart())
+            return staleResult();
         // [修复] 强制稳定顺序（用户手动顺序优先，否则模板顺序）
         const stableKeys = getSortedSheetKeys_ACU(mergedData);
         mergedData = reorderDataBySheetKeys_ACU(mergedData, stableKeys);
@@ -97540,6 +97576,7 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
     const excludeImportTaggedEntries = options?.excludeImportTaggedEntries === true;
     const includeGeneratedEntries = options?.includeGeneratedEntries === true;
+    const currentIsolationPrefix = settings_ACU.dataIsolationEnabled ? getIsolationPrefix_ACU() : '';
     const agentGreenlightKeySet = new Set((Array.isArray(options?.agentGreenlights) ? options.agentGreenlights : [])
         .map((ref) => `${String(ref?.bookName || '').trim()}\u0000${String(ref?.uid || '').trim()}`)
         .filter((key) => !key.startsWith('\u0000') && !key.endsWith('\u0000')));
@@ -97612,12 +97649,20 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
                 const isAgentGreenlight = agentGreenlightKeySet.has(`${String(entry.bookName || '').trim()}\u0000${String(entry.uid || '').trim()}`);
                 if (isAgentGreenlight)
                     return true;
-                if (!includeGeneratedEntries && comment.startsWith('TavernDB-ACU-'))
-                    return false;
-                if (!includeGeneratedEntries && comment.startsWith('重要人物条目'))
-                    return false;
-                if (!includeGeneratedEntries && comment.startsWith('总结条目'))
-                    return false;
+                if (!includeGeneratedEntries) {
+                    // 隔离模式下生成条目带 ACU-[code]- 前缀：先剥前缀再判定（与 $9 同口径，R6-02）。
+                    // 其他隔离环境（前缀不是本环境）的条目一律不进填表上下文，否则多套数据共用一本书时互相串扰。
+                    const isolationMatch = /^ACU-\[[^\]]+\]-/.exec(comment);
+                    if (isolationMatch && isolationMatch[0] !== currentIsolationPrefix)
+                        return false;
+                    const normalized = isolationMatch ? comment.slice(isolationMatch[0].length) : comment;
+                    if (normalized.startsWith('TavernDB-ACU-'))
+                        return false;
+                    if (normalized.startsWith('重要人物条目'))
+                        return false;
+                    if (normalized.startsWith('总结条目') || normalized.startsWith('小总结条目'))
+                        return false;
+                }
                 if (excludeImportTaggedEntries && isImportTaggedLorebookEntry_ACU(entry))
                     return false;
                 if (isEntryBlocked_ACU(entry))
@@ -97816,118 +97861,7 @@ function getIsolationPrefix_ACU() {
     }
     return '';
 }
-async function deleteAllGeneratedEntries_ACU(targetLorebook = null) {
-    const primaryLorebookName = targetLorebook || (await getInjectionTargetLorebook_ACU());
-    if (!primaryLorebookName)
-        return;
-    try {
-        const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
-        // [修改] 根据隔离状态构建删除逻辑
-        const isolationPrefix = getIsolationPrefix_ACU();
-        const basePrefixes = [
-            'TavernDB-ACU-ReadableDataTable',
-            'TavernDB-ACU-OutlineTable',
-            '重要人物条目',
-            'TavernDB-ACU-ImportantPersonsIndex',
-            '总结条目',
-            '小总结条目',
-            'TavernDB-ACU-CustomExport',
-            'TavernDB-ACU-WrapperStart',
-            'TavernDB-ACU-WrapperEnd',
-            'TavernDB-ACU-MemoryStart',
-            'TavernDB-ACU-MemoryEnd',
-            'TavernDB-ACU-PersonsHeader'
-        ];
-        // [修改] 使用 knownCustomEntryNames 增强删除逻辑
-        const knownNames = settings_ACU.knownCustomEntryNames || [];
-        // [新增] 获取当前配置的预期前缀作为补充 (防止 knownNames 丢失)
-        const currentConfigPrefixes = new Set();
-        if (currentJsonTableData_ACU) {
-            const tableKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
-            tableKeys.forEach(sheetKey => {
-                const table = currentJsonTableData_ACU[sheetKey];
-                if (table && table.exportConfig && table.exportConfig.enabled) {
-                    const entryName = table.exportConfig.entryName || table.name;
-                    if (entryName) {
-                        currentConfigPrefixes.add(entryName);
-                    }
-                }
-            });
-        }
-        const importPrefix = getImportStablePrefix_ACU();
-        const uidsToDelete = allEntries
-            .filter(entry => {
-            if (!entry.comment)
-                return false;
-            // [严重问题修复] 外部导入生成的条目一律不参与"自动清理"
-            // 说明：切回脚本/读不到聊天表格数据时，可能会触发 deleteAllGeneratedEntries_ACU 清理旧条目；
-            // 但外部导入条目应被视为第三方条目，只允许用户手动清理/删除。
-            if (settings_ACU.dataIsolationEnabled) {
-                if (isolationPrefix && entry.comment.startsWith(isolationPrefix + importPrefix))
-                    return false;
-            }
-            else {
-                if (entry.comment.startsWith(importPrefix))
-                    return false;
-            }
-            if (settings_ACU.dataIsolationEnabled) {
-                // 隔离模式：只删除匹配当前标识前缀的
-                if (!isolationPrefix)
-                    return false;
-                // 1. 基础前缀
-                if (basePrefixes.some(prefix => entry.comment.startsWith(isolationPrefix + prefix)))
-                    return true;
-                // 2. 已知自定义条目 (Known List) - 必须匹配隔离前缀
-                if (knownNames.includes(entry.comment) && entry.comment.startsWith(isolationPrefix))
-                    return true;
-                // 3. 当前配置前缀 (Fallback)
-                for (const customPrefix of currentConfigPrefixes) {
-                    if (entry.comment.startsWith(isolationPrefix + customPrefix))
-                        return true;
-                }
-                return false;
-            }
-            else {
-                // 非隔离模式
-                if (entry.comment.startsWith('ACU-['))
-                    return false; // 避开隔离数据
-                // 1. 基础前缀
-                if (basePrefixes.some(prefix => entry.comment.startsWith(prefix)))
-                    return true;
-                // 2. 已知自定义条目 (Known List) - 必须不带隔离前缀(或者说我们假设knownNames存了完整名，这里只需检查它是否不以ACU-[开头)
-                // 其实 knownNames 可能包含带隔离前缀的（如果是切模式过来的）。我们只删非隔离的。
-                if (knownNames.includes(entry.comment) && !entry.comment.startsWith('ACU-['))
-                    return true;
-                // 3. 当前配置前缀 (Fallback)
-                for (const customPrefix of currentConfigPrefixes) {
-                    if (entry.comment.startsWith(customPrefix))
-                        return true;
-                }
-                return false;
-            }
-        })
-            .map(entry => entry.uid);
-        if (uidsToDelete.length > 0) {
-            await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
-            logDebug_ACU(`Successfully deleted ${uidsToDelete.length} generated database entries for new chat.`);
-            // [新增] 清理 knownCustomEntryNames 中属于当前隔离环境的记录
-            // 因为我们已经把它们删了。
-            // 注意：如果是"新聊天"，我们其实是重置。
-            if (settings_ACU.knownCustomEntryNames) {
-                if (settings_ACU.dataIsolationEnabled) {
-                    settings_ACU.knownCustomEntryNames = settings_ACU.knownCustomEntryNames.filter((n) => !n.startsWith(isolationPrefix));
-                }
-                else {
-                    settings_ACU.knownCustomEntryNames = settings_ACU.knownCustomEntryNames.filter((n) => n.startsWith('ACU-[')); // 只保留隔离的
-                }
-                saveSettings_ACU();
-            }
-        }
-    }
-    catch (error) {
-        logError_ACU('Failed to delete generated lorebook entries:', error);
-    }
-}
+// deleteAllGeneratedEntries_ACU 统一用 pipeline 的实现（此前两份逐字复制，修一处漏一处，R6-12）。
 // =========================
 // [可视化删表-硬删除] 追溯整个聊天记录，删除指定 sheetKey 的所有本地表格数据（新版+旧版）
 // 设计目标：即使后续有"按原楼层写回"的流程，也不会把旧表复活
@@ -98050,6 +97984,8 @@ async function updateOutlineTableEntry_ACU(outlineTable, isImport = false, targe
     const isoPrefix = getIsolationPrefix_ACU();
     const baseComment = isImport ? `${IMPORT_PREFIX}TavernDB-ACU-OutlineTable` : 'TavernDB-ACU-OutlineTable';
     const OUTLINE_COMMENT = isoPrefix + baseComment;
+    // 只认当前隔离环境自己的纪要索引（与自定义导出创建时同名），不碰别的环境或外部导入的条目。
+    const SUMMARY_INDEX_COMMENT = `${isoPrefix}TavernDB-ACU-CustomExport-纪要索引`;
     try {
         const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
         const usedOrders = buildUsedOrderSet_ACU(allEntries);
@@ -98063,7 +97999,7 @@ async function updateOutlineTableEntry_ACU(outlineTable, isImport = false, targe
             // [修复] 即使没有outlineTable数据，也要同步更新"纪要索引"条目的enabled状态。
             // 0TK 持续控制该条目是否启用；交火模式不应把它重新打开。
             try {
-                const existingIndexEntry = allEntries.find(e => e.comment && e.comment.endsWith('TavernDB-ACU-CustomExport-纪要索引'));
+                const existingIndexEntry = allEntries.find(e => e.comment === SUMMARY_INDEX_COMMENT);
                 if (existingIndexEntry) {
                     if (existingIndexEntry.enabled !== summaryIndexEntryEnabled) {
                         await setLorebookEntries_ACU(primaryLorebookName, [{
@@ -98130,7 +98066,7 @@ async function updateOutlineTableEntry_ACU(outlineTable, isImport = false, targe
         // [新增] 同步更新"纪要索引"条目的enabled状态。
         // 0TK 持续控制该条目是否启用；交火模式不应把它重新打开。
         try {
-            const existingIndexEntry = allEntries.find(e => e.comment && e.comment.endsWith('TavernDB-ACU-CustomExport-纪要索引'));
+            const existingIndexEntry = allEntries.find(e => e.comment === SUMMARY_INDEX_COMMENT);
             if (existingIndexEntry) {
                 if (existingIndexEntry.enabled !== summaryIndexEntryEnabled) {
                     await setLorebookEntries_ACU(primaryLorebookName, [{
@@ -98493,6 +98429,9 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
             // 用户要求：外部导入每次导入前不清理（允许多批并存）
             if (isImport)
                 return false;
+            // 非隔离模式（isoPrefix 为空，startsWith('') 恒真）不得碰其他隔离环境的条目（R6-03）。
+            if (!isoPrefix && comment.startsWith('ACU-['))
+                return false;
             // 1. 检查旧版前缀 (兼容性)
             // LEGACY_EXPORT_PREFIX 已经包含了 isoPrefix
             if (comment.startsWith(LEGACY_EXPORT_PREFIX))
@@ -98585,7 +98524,8 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
                     finalTemplate = `# ${entryName}\n\n$1`;
                 }
             }
-            return finalTemplate.replace('$1', tableData);
+            // 回调形式：单元格里的 $$ / $' / $& 等不能被当作替换模式展开（R6-04）。
+            return finalTemplate.replace('$1', () => tableData);
         };
         const buildMarkdownTableFromRows_ACU = (headerList, rowList) => {
             if (!Array.isArray(headerList) || headerList.length === 0)
@@ -99019,7 +98959,8 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
             };
             const getMergedEntryComment_ACU = (name, role) => isImport
                 ? getImportEntryName(name, { ...groupMarker, role })
-                : `${exportPrefix}${name}`;
+                // 带生成前缀：裸表名会撞上用户/卡作者的同名条目被刷新删掉，也逃过生成条目过滤（R6-03）。
+                : `${exportPrefix}TavernDB-ACU-CustomExport-${name}`;
             if (useWrapperEntries && wrapperParts?.before) {
                 const wrapperName = getMergedEntryComment_ACU(`${group.entryName}-包裹-上`, 'wrapper_before');
                 newGeneratedNames.push(wrapperName);
@@ -100319,54 +100260,6 @@ function buildChatSheetGuideDataFromTemplateObj_ACU(templateObj, { stripSeedRows
     });
     return normalizeGuideData_ACU(out);
 }
-// [新增] 覆盖式更新：用模板写入当前聊天第一层"空白指导表"
-async function overwriteChatSheetGuideFromTemplate_ACU(templateObj, { reason = 'template_changed', stripSeedRows = true, presetName = '', source = 'ui', syncTemplateScope = false, registerPreset = false } = {}) {
-    const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(templateObj, { stripSeedRows });
-    if (!guideData)
-        return false;
-    const isolationKey = getCurrentIsolationKey_ACU();
-    const templateSnapshot = sanitizeTemplateSnapshotForChat_ACU(templateObj);
-    const normalizedPresetName = deriveTemplatePresetNameForImport_ACU({ presetName });
-    if (registerPreset && normalizedPresetName && templateSnapshot?.templateStr) {
-        try {
-            const savePresetOk = upsertTemplatePreset_ACU(normalizedPresetName, templateSnapshot.templateStr);
-            if (!savePresetOk) {
-                logWarn_ACU(`[TemplateScope] 保存模板预设失败：${normalizedPresetName}`);
-            }
-        }
-        catch (e) {
-            logWarn_ACU('[TemplateScope] 保存模板预设失败:', e);
-        }
-    }
-    const ok = setChatSheetGuideDataForIsolationKey_ACU(isolationKey, guideData, {
-        reason,
-        syncTemplateScope,
-        templateSource: templateSnapshot?.templateStr || templateObj,
-        presetName: normalizedPresetName,
-        source,
-    });
-    if (!ok)
-        return false;
-    if (syncTemplateScope) {
-        try {
-            applyTemplateScopeForCurrentChat_ACU();
-        }
-        catch (e) {
-            logWarn_ACU('[Guide] applyTemplateScope 失败:', e);
-        }
-    }
-    try {
-        await saveChatToHost_ACU();
-    }
-    catch (e) {
-        logWarn_ACU('[Guide] saveChatToHost 失败:', e);
-    }
-    try {
-        await refreshMergedDataAndNotify_ACU();
-    }
-    catch (e) { }
-    return true;
-}
 // [表格顺序新机制] 获取表格 keys：
 // - 若当前聊天已存在"空白指导表"：优先按指导表的 orderNo 顺序（可过滤不在指导表里的表）
 // - 否则：按"编号(orderNo)从小到大"排序；缺编号则回退到模板编号/模板顺序
@@ -100502,20 +100395,6 @@ function upsertChatTemplatePresetEntry_ACU(templateState, { chat = getChatArray_
     setChatScopedConfigContainer_ACU(chat, container);
     return findChatTemplatePresetEntry_ACU(normalizedState.presetName || '', { chat, isolationKey: normalizedKey });
 }
-function ensureCurrentChatTemplatePresetEntry_ACU({ chat = getChatArray_ACU(), isolationKey = getCurrentIsolationKey_ACU() } = {}) {
-    const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(isolationKey);
-    const currentState = getCurrentChatTemplateScopeState_ACU({ chat, isolationKey: normalizedKey }) || migrateLegacyTemplateScopeForCurrentChat_ACU({ chat, isolationKey: normalizedKey });
-    const normalizedState = normalizeChatTemplateScopeState_ACU(currentState, { isolationKey: normalizedKey });
-    if (normalizedState.mode !== 'chat_override' || !normalizedState.templateStr)
-        return null;
-    const existingEntry = findChatTemplatePresetEntry_ACU(normalizedState.presetName || '', { chat, isolationKey: normalizedKey });
-    const currentFingerprint = buildChatTemplateArchiveFingerprint_ACU(normalizedState, { isolationKey: normalizedKey });
-    const existingFingerprint = existingEntry ? buildChatTemplateArchiveFingerprint_ACU(existingEntry, { isolationKey: normalizedKey }) : '';
-    if (existingEntry && currentFingerprint && existingFingerprint === currentFingerprint) {
-        return existingEntry;
-    }
-    return upsertChatTemplatePresetEntry_ACU(normalizedState, { chat, isolationKey: normalizedKey });
-}
 function buildChatTemplatePresetLinkState_ACU({ isolationKey = getCurrentIsolationKey_ACU(), presetName = '', source = 'ui', originGlobalName = '', originGlobalRevision = 0, updatedAt = Date.now() } = {}) {
     const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(isolationKey);
     return normalizeChatTemplateScopeState_ACU({
@@ -100527,82 +100406,6 @@ function buildChatTemplatePresetLinkState_ACU({ isolationKey = getCurrentIsolati
         updatedAt,
         source,
     }, { isolationKey: normalizedKey });
-}
-async function activateChatTemplatePresetSelection_ACU(presetName, { source = 'ui_chat_select', save = true } = {}) {
-    const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(getCurrentIsolationKey_ACU());
-    const normalizedPresetName = normalizeTemplatePresetSelectionValue_ACU(presetName);
-    const localEntry = findChatTemplatePresetEntry_ACU(normalizedPresetName, { isolationKey: normalizedKey });
-    const hasGlobalPreset = !normalizedPresetName || !!getTemplatePreset_ACU(normalizedPresetName)?.templateStr;
-    let appliedFromLocalSnapshot = false;
-    if (localEntry?.templateStr) {
-        persistTemplateScopeSelectionState_ACU(normalizedPresetName, {
-            source,
-            updateGlobal: false,
-            save: false,
-            persistChatScope: true,
-            templateSource: localEntry.templateStr,
-            guideData: localEntry.guideData,
-            scopeMode: 'chat_override',
-            registerChatPresetEntry: false,
-        });
-        if (localEntry.guideData) {
-            setChatSheetGuideDataForIsolationKey_ACU(normalizedKey, localEntry.guideData, {
-                reason: `template_scope_${source}`,
-                syncTemplateScope: false,
-            });
-        }
-        appliedFromLocalSnapshot = true;
-    }
-    else {
-        if (!hasGlobalPreset)
-            return false;
-        const snapshot = !normalizedPresetName
-            ? getDefaultTemplateSnapshot_ACU()
-            : sanitizeTemplateSnapshotForChat_ACU(getTemplatePreset_ACU(normalizedPresetName)?.templateStr || null);
-        if (!snapshot?.templateStr || !snapshot?.templateObj)
-            return false;
-        const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(snapshot.templateObj, { stripSeedRows: false });
-        const templateState = buildChatTemplateScopeStateFromCurrent_ACU({
-            isolationKey: normalizedKey,
-            presetName: normalizedPresetName,
-            source,
-            originGlobalName: getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false }),
-            originGlobalRevision: 0,
-            updatedAt: Date.now(),
-            templateSource: snapshot.templateStr,
-            guideData,
-        });
-        if (!templateState)
-            return false;
-        setCurrentChatTemplateScopeState_ACU(templateState, {
-            isolationKey: normalizedKey,
-            reason: `template_scope_${source}`,
-        });
-        if (guideData) {
-            setChatSheetGuideDataForIsolationKey_ACU(normalizedKey, guideData, {
-                reason: `template_scope_${source}`,
-                syncTemplateScope: false,
-            });
-        }
-    }
-    if (save) {
-        try {
-            await saveChatToHost_ACU();
-        }
-        catch (error) {
-            logWarn_ACU('[TemplateScope] 保存聊天级模板预设快照失败:', error);
-        }
-    }
-    applyTemplateScopeForCurrentChat_ACU({ isolationKey: normalizedKey });
-    try {
-        await refreshMergedDataAndNotify_ACU();
-    }
-    catch (e) { }
-    return {
-        presetName: normalizedPresetName,
-        mode: 'chat_override',
-        fromLocalSnapshot: appliedFromLocalSnapshot,
-    };
 }
 function buildChatTemplateArchiveFingerprint_ACU(templateState, { isolationKey = getCurrentIsolationKey_ACU() } = {}) {
     const normalizedState = normalizeChatTemplateScopeState_ACU(templateState, { isolationKey });
@@ -152295,7 +152098,7 @@ function prepareSeedMigration_ACU(options = {}) {
     const actions = [];
     let hasAction = false;
     const guideClone = clone_ACU$2(guideData);
-    const runtimeData = globalThis.currentJsonTableData_ACU ?? globalThis.__currentJsonTableData_ACU;
+    const runtimeData = currentJsonTableData_ACU;
     for (const sheetKey of Object.keys(guideClone).filter(k => k.startsWith('sheet_'))) {
         const sheet = guideClone[sheetKey];
         if (!sheet || typeof sheet !== 'object')
@@ -152324,7 +152127,7 @@ function prepareSeedMigration_ACU(options = {}) {
     const plan = {
         planId: buildPlanId_ACU(),
         kind: 'seed_pollution_cleanup',
-        chatKey: String(globalThis.currentChatFileIdentifier_ACU ?? '').trim() || 'current-chat',
+        chatKey: String(currentChatFileIdentifier_ACU ?? '').trim() || 'current-chat',
         isolationKey,
         createdAt: Date.now(),
         actions,
@@ -152332,7 +152135,6 @@ function prepareSeedMigration_ACU(options = {}) {
         backup: {
             guideContainer: clone_ACU$2(getChatSheetGuideContainer_ACU(chat)),
             scopedConfigContainer: clone_ACU$2(getChatScopedConfigContainer_ACU(chat)),
-            chatSnapshot: clone_ACU$2(chat),
         },
         chat,
     };
@@ -152351,6 +152153,8 @@ async function commitSeedMigration_ACU(planId, options = {}) {
     const failure = (error) => ({ status: 'commit_failed_rolled_back', planId, error });
     if (!plan)
         return failure('迁移计划不存在或已失效，请重新准备。');
+    if (plan.committed)
+        return failure('该迁移计划已提交；如需撤销请回滚。');
     if (plan.requiresConfirmation && options.confirm !== true) {
         return failure('迁移包含清理动作，必须显式确认（confirm: true）后才能执行。');
     }
@@ -152380,7 +152184,7 @@ async function commitSeedMigration_ACU(planId, options = {}) {
                     return failure('备份 guide 数据缺失，无法执行迁移。');
                 }
                 const nextGuide = clone_ACU$2(guideData);
-                const runtimeData = globalThis.currentJsonTableData_ACU ?? globalThis.__currentJsonTableData_ACU;
+                const runtimeData = currentJsonTableData_ACU;
                 for (const action of plan.actions) {
                     if (action.kind === 'no_change') {
                         appliedActions.push(action);
@@ -152406,12 +152210,14 @@ async function commitSeedMigration_ACU(planId, options = {}) {
                     writeSeedRows_ACU(sheet, nextSeedRows);
                     appliedActions.push(action);
                 }
-                const beforeChat = clone_ACU$2(plan.chat);
+                const beforeGuideContainer = clone_ACU$2(getChatSheetGuideContainer_ACU(plan.chat));
+                const beforeScopedContainer = clone_ACU$2(getChatScopedConfigContainer_ACU(plan.chat));
+                // 不强制 chat_override：guide 写入器会按聊天现有作用域（chat_override/preset_link）自行同步，
+                // 跟随全局的聊天保持跟随全局。
                 const saved = setChatSheetGuideDataForIsolationKey_ACU(plan.isolationKey, nextGuide, {
                     reason: 'seed_pollution_cleanup',
-                    syncTemplateScope: true,
+                    syncTemplateScope: false,
                     source: 'migration',
-                    presetName: String(globalThis.currentTemplatePresetName_ACU ?? ''),
                 });
                 if (!saved) {
                     return failure('guide 写入被拒绝（normalize 失败或空数据），已回滚内存。');
@@ -152420,10 +152226,12 @@ async function commitSeedMigration_ACU(planId, options = {}) {
                     await saveChatToHostStrict_ACU();
                 }
                 catch (error) {
-                    plan.chat.splice(0, plan.chat.length, ...beforeChat);
+                    setChatSheetGuideContainer_ACU(plan.chat, beforeGuideContainer);
+                    setChatScopedConfigContainer_ACU(plan.chat, beforeScopedContainer);
                     return failure(`宿主保存失败，已恢复内存聊天：${getErrorMessage_ACU(error)}`);
                 }
-                seedMigrationPlans_ACU.delete(planId);
+                // 保留计划供回滚。
+                plan.committed = true;
                 return { status: 'committed', planId, appliedActions };
             });
         }
@@ -152448,8 +152256,9 @@ async function commitSeedMigration_ACU(planId, options = {}) {
     }
 }
 /**
- * 回滚：从计划备份恢复 guide container / scoped config / 聊天快照，并重新 hydrate 验证。
- * 仅对尚未失效的计划可用；执行后删除计划。
+ * 回滚：从计划备份恢复 guide container / scoped config，并重新 hydrate 验证。
+ * 只对已提交的计划可用（未提交的计划没有东西可回滚，直接作废）；执行后删除计划。
+ * 迁移只改这两个容器，回滚也只恢复这两个容器，不碰之后新增的楼层、swipe 与表格帧。
  */
 async function rollbackSeedMigration_ACU(planId) {
     if (!isSeedMigrationEnabled_ACU()) {
@@ -152462,18 +152271,21 @@ async function rollbackSeedMigration_ACU(planId) {
         seedMigrationPlans_ACU.delete(planId);
         return { status: 'commit_failed_rolled_back', planId, error: '迁移计划作用域已变化，无法回滚。' };
     }
-    const beforeChat = clone_ACU$2(plan.chat);
+    if (!plan.committed) {
+        seedMigrationPlans_ACU.delete(planId);
+        return { status: 'commit_failed_rolled_back', planId, error: '该迁移计划尚未提交，无需回滚，计划已作废。' };
+    }
+    const beforeGuideContainer = clone_ACU$2(getChatSheetGuideContainer_ACU(plan.chat));
+    const beforeScopedContainer = clone_ACU$2(getChatScopedConfigContainer_ACU(plan.chat));
     try {
-        // 恢复 guide / scoped config 容器到迁移前快照
-        setChatSheetGuideContainer_ACU(plan.chat, plan.backup.guideContainer);
-        setChatScopedConfigContainer_ACU(plan.chat, plan.backup.scopedConfigContainer);
-        // 恢复聊天快照（覆盖内存中已提交的变更）
-        plan.chat.splice(0, plan.chat.length, ...clone_ACU$2(plan.backup.chatSnapshot));
+        setChatSheetGuideContainer_ACU(plan.chat, clone_ACU$2(plan.backup.guideContainer));
+        setChatScopedConfigContainer_ACU(plan.chat, clone_ACU$2(plan.backup.scopedConfigContainer));
         await saveChatToHostStrict_ACU();
         seedMigrationPlans_ACU.delete(planId);
     }
     catch (error) {
-        plan.chat.splice(0, plan.chat.length, ...beforeChat);
+        setChatSheetGuideContainer_ACU(plan.chat, beforeGuideContainer);
+        setChatScopedConfigContainer_ACU(plan.chat, beforeScopedContainer);
         return { status: 'commit_failed_rolled_back', planId, error: `回滚保存失败，已恢复内存：${getErrorMessage_ACU(error)}` };
     }
     try {
@@ -153266,7 +153078,7 @@ function createWorldbookAiApi(_ctx) {
         // 删除注入条目
         deleteInjectedEntries: async function () {
             try {
-                await deleteAllGeneratedEntries_ACU$1();
+                await deleteAllGeneratedEntries_ACU();
                 return true;
             }
             catch (e) {
@@ -154311,7 +154123,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261007-11";
+        const stamp = "20261007-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -177053,6 +176865,17 @@ function compileTemplateAssistantDraftV3_ACU(tempData, sheetOrder, currentSheetK
         const sheet = ensureSheetExists_ACU(candidateData, targetSheetKey);
         const beforeName = String(sheet.name || targetSheetKey);
         const normalized = normalizeV3FullSheet_ACU(result.sheet, targetSheetKey);
+        // 隐藏列集合与列/表别名存在 sourceData 里，模型看到的快照不含它们，回显自然会丢：
+        // 以本地原表为准合并回去，否则休眠列被唤醒、改名继承链断开（R6-05）。
+        const localSourceData = isObject_ACU(sheet?.sourceData) ? sheet.sourceData : {};
+        TEMPLATE_ASSISTANT_V3_AUX_KEYS_ACU.forEach((key) => {
+            if (Object.prototype.hasOwnProperty.call(localSourceData, key) && localSourceData[key] !== undefined) {
+                normalized.sourceData[key] = clone_ACU$1(localSourceData[key]);
+            }
+            else {
+                delete normalized.sourceData[key];
+            }
+        });
         // 物理列重命名：DDL 中物理列名/注释变化但业务表头未变。由 preflight 后续复核，
         // 此处只识别并给出风险标签（不阻断），避免重复实现 preflight 逻辑。
         const beforeDdl = String(sheet?.sourceData?.ddl || '');
@@ -177229,15 +177052,11 @@ function normalizeV3FullSheet_ACU(rawSheet, targetSheetKey) {
         updateConfig: clone_ACU$1(updateConfig),
         exportConfig: clone_ACU$1(exportConfig),
     };
-    TEMPLATE_ASSISTANT_V3_AUX_KEYS_ACU.forEach((key) => {
-        if (Object.prototype.hasOwnProperty.call(rawSheet, key)) {
-            normalized[key] = clone_ACU$1(rawSheet[key]);
-        }
-    });
     // 未目标表的 row_id 集合差异（该表不是 replace 目标时不允许任何 row_id 变化）由调用方在
     // 更高层（service）对比 baseline 与 candidate 判定，见 compileV3 之外的守卫。
     return normalized;
 }
+/** 存在 sheet.sourceData 下、只能由本地维护的辅助字段（全库都放在 sourceData，不在 sheet 顶层）。 */
 const TEMPLATE_ASSISTANT_V3_AUX_KEYS_ACU = ['hiddenPhysicalColumns', 'tableAliases', 'columnAliases'];
 /**
  * v3 未删行保护：对 replace 目标表，若 AI 返回的 row_id 集合是 baseline 的子集（少了行），
@@ -202428,7 +202247,7 @@ async function runCheckpointDerivedRefresh_ACU(checked, isolationKey, vectorMani
     await runDerivedStep('模板作用域应用失败', () => { applyTemplateScopeForCurrentChat_ACU(); });
     if (isSqliteMode())
         await runDerivedStep('SQLite 运行时重载失败', async () => { await reloadStorageProvider(); });
-    await runDerivedStep('旧世界书条目清理触发失败', () => deleteAllGeneratedEntries_ACU$1());
+    await runDerivedStep('旧世界书条目清理触发失败', () => deleteAllGeneratedEntries_ACU());
     await runDerivedStep('聊天运行时与世界书刷新失败', async () => { await refreshMergedDataAndNotify_ACU(); });
     let cleanupWarnings;
     try {
@@ -203098,7 +202917,7 @@ function useDataManagement() {
     async function deleteCurrentIsolationEntries() {
         busyAction.value = 'delete-isolation-entries';
         try {
-            await deleteAllGeneratedEntries_ACU$1();
+            await deleteAllGeneratedEntries_ACU();
             message.value = null;
             toast.success('已删除当前标识对应的数据库注入条目。');
         }
@@ -206526,7 +206345,7 @@ function useFormFillInjectionTarget() {
             if (oldLorebookName) {
                 toast.info(`正在从旧目标 [${oldLorebookName}] 中清除条目...`, { muteable: false });
                 try {
-                    await deleteAllGeneratedEntries_ACU$1(oldLorebookName);
+                    await deleteAllGeneratedEntries_ACU(oldLorebookName);
                     await waitForCleanupSettle();
                 }
                 catch (e) {

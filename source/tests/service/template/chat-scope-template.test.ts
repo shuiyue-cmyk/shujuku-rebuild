@@ -199,7 +199,6 @@ import {
   listChatTemplatePresetEntries_ACU,
   upsertChatTemplatePresetEntry_ACU,
   buildChatTemplatePresetLinkState_ACU,
-  activateChatTemplatePresetSelection_ACU,
   clearCurrentChatTemplateSnapshots_ACU,
   getCurrentChatTemplateScopeState_ACU,
   buildChatTemplateScopeStateFromCurrent_ACU,
@@ -639,14 +638,6 @@ describe('upsertChatTemplatePresetEntry_ACU', () => {
       presetName: '预设A',
     });
     expect(mockSetChatScopedConfigContainer).toHaveBeenCalled();
-  });
-});
-
-// ═══ activateChatTemplatePresetSelection_ACU ═══
-describe('activateChatTemplatePresetSelection_ACU', () => {
-  it('无全局预设且无本地条目返回 false', async () => {
-    const result = await activateChatTemplatePresetSelection_ACU('不存在的预设');
-    expect(result).toBe(false);
   });
 });
 

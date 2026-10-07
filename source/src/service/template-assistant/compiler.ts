@@ -1055,6 +1055,16 @@ function compileTemplateAssistantDraftV3_ACU(
         const sheet = ensureSheetExists_ACU(candidateData, targetSheetKey);
         const beforeName = String(sheet.name || targetSheetKey);
         const normalized = normalizeV3FullSheet_ACU(result.sheet, targetSheetKey);
+        // 隐藏列集合与列/表别名存在 sourceData 里，模型看到的快照不含它们，回显自然会丢：
+        // 以本地原表为准合并回去，否则休眠列被唤醒、改名继承链断开（R6-05）。
+        const localSourceData = isObject_ACU(sheet?.sourceData) ? sheet.sourceData : {};
+        TEMPLATE_ASSISTANT_V3_AUX_KEYS_ACU.forEach((key) => {
+            if (Object.prototype.hasOwnProperty.call(localSourceData, key) && localSourceData[key] !== undefined) {
+                normalized.sourceData[key] = clone_ACU(localSourceData[key]);
+            } else {
+                delete normalized.sourceData[key];
+            }
+        });
 
         // 物理列重命名：DDL 中物理列名/注释变化但业务表头未变。由 preflight 后续复核，
         // 此处只识别并给出风险标签（不阻断），避免重复实现 preflight 逻辑。
@@ -1240,17 +1250,12 @@ function normalizeV3FullSheet_ACU(rawSheet: any, targetSheetKey: string): AnyRec
         updateConfig: clone_ACU(updateConfig),
         exportConfig: clone_ACU(exportConfig),
     };
-    TEMPLATE_ASSISTANT_V3_AUX_KEYS_ACU.forEach((key) => {
-        if (Object.prototype.hasOwnProperty.call(rawSheet, key)) {
-            normalized[key] = clone_ACU(rawSheet[key]);
-        }
-    });
-
     // 未目标表的 row_id 集合差异（该表不是 replace 目标时不允许任何 row_id 变化）由调用方在
     // 更高层（service）对比 baseline 与 candidate 判定，见 compileV3 之外的守卫。
     return normalized;
 }
 
+/** 存在 sheet.sourceData 下、只能由本地维护的辅助字段（全库都放在 sourceData，不在 sheet 顶层）。 */
 const TEMPLATE_ASSISTANT_V3_AUX_KEYS_ACU = ['hiddenPhysicalColumns', 'tableAliases', 'columnAliases'] as const;
 
 /**

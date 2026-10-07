@@ -35,7 +35,11 @@ vi.mock('../../../src/shared/template-preset-utils', () => ({
 vi.mock('../../../src/data/storage/tavern-storage', () => ({
   getConfigStorage_ACU: vi.fn(() => ({
     getItem: (key: string) => mockStore[key] || null,
-    setItem: (key: string, value: string) => { mockStore[key] = value; },
+    setItem: (key: string, value: string) => {
+      if (mockStore.__failWrites) return false;
+      mockStore[key] = value;
+      return true;
+    },
   })),
 }));
 
@@ -65,7 +69,6 @@ vi.mock('../../../src/data/storage/chat-history', () => ({
 }));
 
 vi.mock('../../../src/service/template/chat-scope', () => ({
-  activateChatTemplatePresetSelection_ACU: vi.fn(),
   buildChatSheetGuideDataFromData_ACU: vi.fn((data: any) => data),
   buildChatSheetGuideDataFromTemplateObj_ACU: vi.fn((templateObj: any) => ({ mate: templateObj?.mate, sheets: {} })),
   buildChatTemplatePresetLinkState_ACU: vi.fn(),
@@ -170,7 +173,7 @@ import {
 } from '../../../src/service/template/template-preset-service';
 
 import { saveSettings_ACU } from '../../../src/service/settings/settings-service';
-import { getCurrentChatTemplateScopeState_ACU, sanitizeTemplateSnapshotForChat_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, activateChatTemplatePresetSelection_ACU, normalizeTemplateScopeMode_ACU, setCurrentChatTemplateScopeState_ACU, clearChatSheetGuideDataForIsolationKey_ACU } from '../../../src/service/template/chat-scope';
+import { getCurrentChatTemplateScopeState_ACU, sanitizeTemplateSnapshotForChat_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, normalizeTemplateScopeMode_ACU, setCurrentChatTemplateScopeState_ACU, clearChatSheetGuideDataForIsolationKey_ACU } from '../../../src/service/template/chat-scope';
 import { getCurrentTemplatePresetName_ACU } from '../../../src/shared/template-preset-utils';
 import { ensureSheetOrderNumbers_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../../src/shared/utils';
 import { detectDisplayNameTranslationHazards_ACU, TemplateImportValidationError_ACU, validateImportedTemplateObject_ACU } from '../../../src/service/template/template-import-validator';
@@ -285,6 +288,21 @@ describe('deleteTemplatePreset_ACU', () => {
   });
   it('空名称返回 false', () => {
     expect(deleteTemplatePreset_ACU('')).toBe(false);
+  });
+});
+
+describe('块 6 复审：预设库持久化失败', () => {
+  it('宿主设置写入失败时，增、改名、删都如实报告失败', () => {
+    upsertTemplatePreset_ACU('预设A', '{}');
+    mockStore.__failWrites = true;
+    try {
+      expect(upsertTemplatePreset_ACU('预设B', '{}')).toBe(false);
+      expect(renameTemplatePreset_ACU('预设A', '预设C')).toMatchObject({ ok: false, code: 'storage_error' });
+      expect(deleteTemplatePreset_ACU('预设A')).toBe(false);
+    } finally {
+      delete mockStore.__failWrites;
+    }
+    expect(getTemplatePreset_ACU('预设A')).not.toBeNull();
   });
 });
 
@@ -869,6 +887,21 @@ describe('applyTemplateSnapshotToScope_ACU S1-3 全局切换协调', () => {
     vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockRestore();
   });
 
+  it('块 6 复审：协调提交期间切到别的聊天时，全局切换不翻转新聊天的 scope', async () => {
+    mockSuccessfulReconciliation();
+    vi.mocked(commitCurrentFloorTemplateScopeOnly_ACU).mockImplementation(async () => {
+      mockChatState.current = [{ is_user: false, mes: '另一个聊天' }];
+      vi.mocked(getActiveChatStorageIdentity_ACU).mockReturnValue('chat-b');
+      return { saved: true, mode: 'scope_only' } as any;
+    });
+
+    const result: any = await applyTemplateSnapshotToScope_ACU(candidate, { scope: 'global', source: 'ui_global_select', presetName: '预设A' });
+
+    expect(setCurrentChatTemplateScopeState_ACU).not.toHaveBeenCalledWith({ mode: 'inherit_global' }, expect.anything());
+    expect(result).toMatchObject({ saved: true, postCommitWarning: expect.stringContaining('切换') });
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockRestore();
+  });
+
   it('协调被 blockers 拒绝时返回 saved:false 且不碰任何全局状态（fail-closed）', async () => {
     vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({
       templateStr: JSON.stringify(candidate),
@@ -958,7 +991,6 @@ describe('applyTemplatePresetToCurrent_ACU', () => {
   });
 
   it('聊天选择全局预设时物化为 chat_override 快照而不是 preset_link', async () => {
-    vi.mocked(activateChatTemplatePresetSelection_ACU).mockClear();
     upsertTemplatePreset_ACU('预设A', '{"sheet_0":{"name":"全局表"}}');
     const candidate = { mate: { type: 'chatSheets', version: 1 }, sheet_0: { uid: 'sheet_0', name: '全局表', content: [['row_id']], sourceData: {}, updateConfig: {}, exportConfig: {} } };
     vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({
@@ -975,7 +1007,6 @@ describe('applyTemplatePresetToCurrent_ACU', () => {
     });
 
     expect(result).toMatchObject({ mode: 'chat_override', fromGlobalPreset: true });
-    expect(activateChatTemplatePresetSelection_ACU).not.toHaveBeenCalled();
     expect(commitCurrentFloorTemplateScopeOnly_ACU).toHaveBeenCalledWith(expect.objectContaining({
       baselineData: candidate, candidateData: candidate, templateSource: candidate,
     }));
@@ -1596,6 +1627,24 @@ describe('followGlobalTemplateForCurrentChat_ACU', () => {
     expect(clearChatSheetGuideDataForIsolationKey_ACU).not.toHaveBeenCalled();
     expect(saveChatToHost_ACU).toHaveBeenCalled();
     expect(received).toHaveBeenCalled();
+  });
+
+  it('块 6 复审：协调提交期间切到别的聊天时，不翻转新聊天的 scope', async () => {
+    vi.mocked(getCurrentChatTemplateScopeState_ACU).mockReturnValue(overrideState as any);
+    vi.mocked(getGlobalTemplateSnapshotForCurrentProfile_ACU).mockReturnValue({ templateObj: globalTemplate, templateStr: JSON.stringify(globalTemplate) } as any);
+    vi.mocked(getCurrentTemplatePresetName_ACU).mockReturnValue('全局A');
+    mockSuccessfulReconciliation();
+    vi.mocked(commitCurrentFloorTemplateChanges_ACU).mockImplementation(async () => {
+      // 提交落盘后、返回前用户切到了另一个聊天。
+      mockChatState.current = [{ is_user: false, mes: '另一个聊天' }];
+      vi.mocked(getActiveChatStorageIdentity_ACU).mockReturnValue('chat-b');
+      return { saved: true, mode: 'v2_commit' } as any;
+    });
+
+    const result: any = await followGlobalTemplateForCurrentChat_ACU({ source: 'test_follow' });
+
+    expect(setCurrentChatTemplateScopeState_ACU).not.toHaveBeenCalledWith({ mode: 'inherit_global' }, expect.anything());
+    expect(result?.mode).not.toBe('inherit_global');
   });
 
   it('协调返回 blockers 时不翻 scope、透传结果', async () => {
