@@ -949,11 +949,13 @@ async function disableTakeoverCandidates_ACU(
   return { disabled, failed, report };
 }
 
-async function restoreSnapshotEntries_ACU(snapshot: AgentWorldbookControlSnapshot_ACU): Promise<{ restored: number; skipped: number; failed: number; report: AgentWorldbookEntryPatchReport_ACU }> {
+async function restoreSnapshotEntries_ACU(snapshot: AgentWorldbookControlSnapshot_ACU): Promise<{ restored: number; skipped: number; failed: number; report: AgentWorldbookEntryPatchReport_ACU; missing: AgentWorldbookTakeoverEntryUpdate_ACU[] }> {
   let restored = 0;
   let skipped = 0;
   let failed = 0;
   const report: AgentWorldbookEntryPatchReport_ACU = { applied: [], failed: [] };
+  // 宿主已确认不存在的条目：无可恢复对象，直接视为完成并从账本剔除，否则接管永远无法收敛。
+  const missing: AgentWorldbookTakeoverEntryUpdate_ACU[] = [];
 
   for (const [bookName, snapshotEntries] of Object.entries(snapshot.books || {})) {
     const normalizedBookName = String(bookName || '').trim();
@@ -977,8 +979,8 @@ async function restoreSnapshotEntries_ACU(snapshot: AgentWorldbookControlSnapsho
         }
         const currentEntry = currentByUid.get(String(snapshotEntry.uid));
         if (!currentEntry) {
-          logWarn_ACU(`[Agent世界书] 跳过恢复世界书条目：${normalizedBookName}#${snapshotEntry.uid} 当前条目不存在。`);
-          skipped += 1;
+          logWarn_ACU(`[Agent世界书] 世界书条目 ${normalizedBookName}#${snapshotEntry.uid} 已被删除，从接管账本移除。`);
+          missing.push({ bookName: normalizedBookName, uid: snapshotEntry.uid });
           continue;
         }
         const currentComment = typeof currentEntry.comment === 'string' ? currentEntry.comment : '';
@@ -1048,7 +1050,7 @@ async function restoreSnapshotEntries_ACU(snapshot: AgentWorldbookControlSnapsho
     }
   }
 
-  return { restored, skipped, failed, report };
+  return { restored, skipped, failed, report, missing };
 }
 
 async function collectRecoveredPendingSnapshotUpdates_ACU(
@@ -1062,7 +1064,12 @@ async function collectRecoveredPendingSnapshotUpdates_ACU(
     const entriesByUid = new Map((entries || []).map(entry => [String(entry?.uid), entry]));
     for (const snapshotEntry of pendingEntries) {
       const entry = entriesByUid.get(String(snapshotEntry.uid));
-      if (!entry || hasTakeoverMetaBlock_ACU(entry.comment)) continue;
+      if (!entry) {
+        // 条目已删除：没有可恢复对象，视为已完成。
+        recovered.push({ bookName, uid: snapshotEntry.uid });
+        continue;
+      }
+      if (hasTakeoverMetaBlock_ACU(entry.comment)) continue;
       if (!snapshotEntry.commentHash || !doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, String(entry.comment || ''))) continue;
       const previousKeys = Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [];
       const keys = Array.isArray(entry.keys) ? entry.keys : [];
@@ -1480,10 +1487,11 @@ async function restoreWorldbookGreenlightsExclusive_ACU(options: {
   // [M4] let：清理阶段失败会计入 failed（见下方 deleteInternalEntriesByComment 的 try/catch）。
   let restoreResult = shouldRestoreSnapshot && (cleanupMode !== 'full' || restoreUpdates.length === 0 || pendingSnapshotPersisted)
     ? await restoreSnapshotEntries_ACU(snapshot)
-    : { restored: 0, skipped: 0, failed: 0, report: { applied: [], failed: [] } };
+    : { restored: 0, skipped: 0, failed: 0, report: { applied: [], failed: [] }, missing: [] };
   const completedRestoreUpdates = [
     ...recoveredPendingUpdates,
     ...restoreResult.report.applied,
+    ...restoreResult.missing,
   ];
   const remainingBooks = shouldRestoreSnapshot
     ? excludeSnapshotEntriesByUpdates_ACU(restorePendingSnapshot.books, completedRestoreUpdates)

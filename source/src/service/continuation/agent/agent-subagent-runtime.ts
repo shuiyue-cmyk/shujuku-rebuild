@@ -459,6 +459,10 @@ export function renderWriteSqlRepair_ACU(receipt: AgentModuleFieldReceipt_ACU): 
   if ((receipt.partials ?? []).some(item => item.promotionError?.includes('active') || item.promotionError?.includes('sustainingThreads'))) {
     lines.push('同一时刻只能有一条 volume 的 status 为 active，其余用 planned。scope=story 不要带卷级栏目。');
   }
+  const unpromoted = (receipt.partials ?? []).filter(item => item.promotionError);
+  if (unpromoted.length) {
+    lines.push(`以下条目栏目已保存，但还不能成为正式条目，用 UPDATE 按原因修正（已保存的栏目不要重发）：${unpromoted.map(item => `${item.module}#${item.id}：${item.promotionError}`).join('；')}`);
+  }
   const drafts = (receipt.partials ?? []).filter(item => item.missingFields.length);
   if (drafts.length) {
     const ids = drafts.map(item => item.id).join('、');

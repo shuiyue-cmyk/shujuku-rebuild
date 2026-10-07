@@ -587,10 +587,8 @@ export class ContinuationAgentTurnPlanner_ACU {
           createIdentity: (_agentName, attempt) => ({ ...request.createInternalRequestIdentity(attempt), source: 'agent_subagent' }),
           isCurrent: identity => request.isInternalRequestCurrent(identity),
           signal: request.signal,
-          writeSql: async write => commitAgentModuleFieldWrites_ACU({
-            chat, targetIndex: chat.length - 1, sql: write.sql, role: write.role,
-            resolvePage: write.resolvePage, isCurrent: write.isCurrent,
-          }),
+          // 不开放 write_sql：补足只返回候选，由持租约的编排器复核锚点与资料指纹后统一提交。
+          // 逐栏写会在子代理运行中直接落盘，绕过复核并改变指纹，补足必然判 STALE 失败（R4-03）。
         });
         return mapPayload(result);
       },
@@ -1717,6 +1715,7 @@ export class ContinuationAgentTurnPlanner_ACU {
           writeSql: async write => commitAgentModuleFieldWrites_ACU({
             chat, targetIndex: chat.length - 1, sql: write.sql, role: write.role,
             resolvePage: write.resolvePage, isCurrent: write.isCurrent,
+            completedStageNumbers: context.execution.task.stages.filter(stage => stage.status === 'completed').map(stage => stage.stageNumber),
           }),
         });
         if (call.billing === 'opening') {
@@ -2069,6 +2068,7 @@ export class ContinuationAgentTurnPlanner_ACU {
           writeSql: async write => commitAgentModuleFieldWrites_ACU({
             chat, targetIndex: chat.length - 1, sql: write.sql, role: write.role,
             resolvePage: write.resolvePage, isCurrent: write.isCurrent,
+            completedStageNumbers: context.execution.task.stages.filter(stage => stage.status === 'completed').map(stage => stage.stageNumber),
           }),
         });
         return { delegation, result, error: null as unknown };

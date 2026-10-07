@@ -27,6 +27,7 @@ import {
   type AgentModuleSqlFieldRejection_ACU,
 } from './agent-protocol';
 import { ContinuationValidationError_ACU, createContinuationError_ACU } from '../model';
+import { applyAgentModuleDelta_ACU, applyAgentWebRefsDelta_ACU } from './agent-transaction';
 import {
   AGENT_BLOCK_CHAR_LIMIT_ACU,
   AGENT_CHRONOLOGY_PRECISIONS_ACU,
@@ -56,8 +57,10 @@ import {
   type AgentModuleFieldSnapshot_ACU,
   type AgentModuleFieldUpserts_ACU,
   type AgentModuleSnapshot_ACU,
+  type AgentModuleDelta_ACU,
   type AgentModuleWriterRole_ACU,
   type AgentPendingFix_ACU,
+  type AgentWebRefResolvedItem_ACU,
   type AgentSettlementBoundary_ACU,
   type AgentStoryArcEntry_ACU,
   type AgentSubagentName_ACU,
@@ -879,29 +882,33 @@ function fieldCommitRecord_ACU(value: unknown): value is Record<string, unknown>
 function fieldCommitInList_ACU(value: unknown, list: readonly string[]): boolean { return fieldCommitText_ACU(value) && list.includes(value); }
 
 /** 证据楼层纠错后缀：给模型可核对的楼层清单，不让它为通过校验换号。 */
-function fieldCommitEvidenceRepair_ACU(snapshot: AgentModuleSnapshot_ACU, evidence: ReadonlySet<number>): string {
-  const indexes = [...evidence].filter(item => item <= snapshot.settledThroughIndex).sort((a, b) => a - b);
-  return `；本次引用上限 ${snapshot.settledThroughIndex}，可核对的 AI 正文楼层号：${indexes.join(', ') || '无'}。使用正文标注的原始楼层号，不要按第几条 AI 回复重新计数；须核对对应正文，不得仅为通过校验换号`;
+function fieldCommitEvidenceRepair_ACU(bound: number, evidence: ReadonlySet<number>): string {
+  const indexes = [...evidence].filter(item => item <= bound).sort((a, b) => a - b);
+  return `；本次引用上限 ${bound}，可核对的 AI 正文楼层号：${indexes.join(', ') || '无'}。使用正文标注的原始楼层号，不要按第几条 AI 回复重新计数；须核对对应正文，不得仅为通过校验换号`;
 }
 
-/** 显式栏目逐栏校验；null、合法空值与缺栏不可混淆。 */
-function fieldCommitProblem_ACU(module: FieldCommitModule_ACU, field: string, value: unknown, snapshot: AgentModuleSnapshot_ACU, evidence: ReadonlySet<number>): string | null {
+/**
+ * 显式栏目逐栏校验；null、合法空值与缺栏不可混淆。
+ * bound 是证据楼层上限＝本次结算目标（当轮末楼），与整行事务路径的 settledIndex 同口径；
+ * 不能用旧结算水位，否则本轮要结算的新楼层一律被拒。
+ */
+function fieldCommitProblem_ACU(module: FieldCommitModule_ACU, field: string, value: unknown, bound: number, evidence: ReadonlySet<number>): string | null {
   switch (module) {
     case 'hooks':
       if (field === 'status') return fieldCommitInList_ACU(value, AGENT_HOOK_STATUSES_ACU) ? null : 'status 枚举非法';
       if (field === 'importance') return fieldCommitInList_ACU(value, AGENT_HOOK_IMPORTANCES_ACU) ? null : 'importance 枚举非法';
-      if (field === 'plantedIndex') return fieldCommitIndex_ACU(value) && (value as number) <= snapshot.settledThroughIndex && evidence.has(value as number) ? null : 'plantedIndex 必须引用已结算正文楼层' + fieldCommitEvidenceRepair_ACU(snapshot, evidence);
+      if (field === 'plantedIndex') return fieldCommitIndex_ACU(value) && (value as number) <= bound && evidence.has(value as number) ? null : 'plantedIndex 必须引用已结算正文楼层' + fieldCommitEvidenceRepair_ACU(bound, evidence);
       return field === 'summary' ? (fieldCommitNonempty_ACU(value) ? null : 'summary 必须为非空文本') : (fieldCommitText_ACU(value) ? null : '必须为字符串');
     case 'infoGap':
       if (field === 'revealStatus') return fieldCommitInList_ACU(value, AGENT_REVEAL_STATUSES_ACU) ? null : 'revealStatus 枚举非法';
-      if (field === 'revealIndex') return value === null || (fieldCommitIndex_ACU(value) && (value as number) <= snapshot.settledThroughIndex && evidence.has(value as number)) ? null : 'revealIndex 必须为空或已结算正文楼层' + fieldCommitEvidenceRepair_ACU(snapshot, evidence);
+      if (field === 'revealIndex') return value === null || (fieldCommitIndex_ACU(value) && (value as number) <= bound && evidence.has(value as number)) ? null : 'revealIndex 必须为空或已结算正文楼层' + fieldCommitEvidenceRepair_ACU(bound, evidence);
       if (field === 'characterKnowledge') return Array.isArray(value) && value.every(item => fieldCommitRecord_ACU(item) && fieldCommitNonempty_ACU(item.name) && fieldCommitText_ACU(item.knows)) ? null : 'characterKnowledge 需要带 name / knows 的数组；SQL 列名 character_knowledge，值用单引号包裹完整 JSON 数组，如 \'[{"name":"角色","knows":"亲眼所见"}]\'；JSON 文本内部双引号须用反斜杠转义，SQL 文本内部单引号须写成两个单引号';
       return field === 'topic' ? (fieldCommitNonempty_ACU(value) ? null : 'topic 必须为非空文本') : (fieldCommitText_ACU(value) ? null : '必须为字符串');
     case 'chronology':
       if (field === 'precision') return fieldCommitInList_ACU(value, AGENT_CHRONOLOGY_PRECISIONS_ACU) ? null : 'precision 枚举非法';
       if (field === 'evidenceIndexes') {
         const indexes = normalizeEvidenceIndexes_ACU(value);
-        return indexes?.length && indexes.every(item => item <= snapshot.settledThroughIndex && evidence.has(item)) ? null : 'evidenceIndexes 必须是非空、已结算正文楼层数组' + fieldCommitEvidenceRepair_ACU(snapshot, evidence);
+        return indexes?.length && indexes.every(item => item <= bound && evidence.has(item)) ? null : 'evidenceIndexes 必须是非空、已结算正文楼层数组' + fieldCommitEvidenceRepair_ACU(bound, evidence);
       }
       return fieldCommitNonempty_ACU(value) ? null : '时间事实栏目必须为非空文本';
     case 'storyArc':
@@ -993,6 +1000,114 @@ function fieldCommitStoryArcMeta_ACU(
 
 const fieldCommitQueue_ACU = new WeakMap<unknown[], Promise<void>>();
 
+function emptyPromotionDelta_ACU(): AgentModuleDelta_ACU {
+  return { expectedRevisions: {}, hooks: [], hookPatches: [], infoGap: [], infoGapPatches: [], storyArc: [], storyArcPatches: [], chronology: [], chronologyPatches: [], constraintProposals: [] };
+}
+
+/** 把一条写齐的分栏值转成整行 upsert 写集项（栏名与领域字段同名）。 */
+function fieldCommitPromotionItem_ACU(module: FieldCommitModule_ACU, id: string, values: Record<string, unknown>, existing: Record<string, unknown> | null): unknown {
+  const value = (field: string): unknown => values[field];
+  const has = (field: string): boolean => Object.prototype.hasOwnProperty.call(values, field);
+  switch (module) {
+    case 'hooks':
+      return { action: 'upsert', id, summary: value('summary'), status: value('status'), importance: value('importance'), plantedIndex: value('plantedIndex'), plannedPayoff: value('plannedPayoff'), reason: '' };
+    case 'infoGap':
+      return { action: 'upsert', id, topic: value('topic'), objectiveFact: value('objectiveFact'), readerKnown: value('readerKnown'), characterKnowledge: value('characterKnowledge'), revealStatus: value('revealStatus'), revealIndex: value('revealIndex') ?? null, reason: '' };
+    case 'chronology':
+      return { action: 'upsert', id, anchor: value('anchor'), elapsed: value('elapsed'), precision: value('precision'), transition: value('transition'), evidenceIndexes: value('evidenceIndexes'), reason: '' };
+    case 'storyArc': {
+      const item: Record<string, unknown> = {
+        action: 'upsert', id, scope: value('scope'), title: value('title'), direction: value('direction'), escalation: value('escalation'), withheld: value('withheld'),
+        status: value('status'), statusProvided: true, stageNumbers: value('stageNumbers') ?? [], completionStageNumber: value('completionStageNumber') ?? null,
+        completionState: value('completionState') ?? '', continuationRationale: value('continuationRationale') ?? '', reason: '',
+      };
+      for (const field of ['narrativeRole', 'targetStageRange', 'targetTimeSpan', 'progressCeiling', 'sustainingThreads', 'payoffTargets', 'completionRationale']) {
+        if (has(field)) item[field] = value(field);
+      }
+      return item;
+    }
+    case 'webRefs':
+      return {
+        action: 'upsert', id, title: value('title'), url: value('url'), tags: value('tags') ?? [], brief: value('brief'), summary: value('summary') ?? '',
+        source: value('source') ?? existing?.source ?? 'web', query: value('query') ?? existing?.query ?? '', sourceStatus: value('sourceStatus') ?? existing?.sourceStatus ?? 'ok', reason: '',
+      };
+  }
+}
+
+function fieldCommitApplyPromotion_ACU(
+  snapshot: AgentModuleSnapshot_ACU,
+  module: FieldCommitModule_ACU,
+  items: unknown[],
+  settledIndex: number,
+  completedStageNumbers: readonly number[],
+  evidence: ReadonlySet<number>,
+  now: number,
+): AgentModuleSnapshot_ACU {
+  if (module === 'webRefs') {
+    return applyAgentWebRefsDelta_ACU(snapshot, { summary: '', expectedRevision: undefined, items: items as AgentWebRefResolvedItem_ACU[], patches: [] }, undefined, now).snapshot;
+  }
+  const delta = emptyPromotionDelta_ACU();
+  (delta[module] as unknown[]).push(...items);
+  return applyAgentModuleDelta_ACU(snapshot, delta, [module], settledIndex, completedStageNumbers, evidence).snapshot;
+}
+
+/**
+ * 逐栏写齐（complete）的记录提升为正式领域条目（R4-02）。
+ *
+ * 帧层仍按 T2 锁定：fieldUpserts 本身不投影领域数组。提升在提交层完成——把写齐的记录转成整行
+ * upsert，走与整行契约同一个事务（同一套校验、证据门、卷生命周期与修订号推进），再以普通快照写入落盘。
+ * 否则 $HOOKS_LEDGER 等读口与下游结算永远看不到逐栏结果，而工作流照样推进结算水位。
+ * hooks / infoGap / chronology / webRefs 逐条试提升，单条不合规只留草稿；storyArc 有跨条约束（唯一 active 卷等），整批提升。
+ * 提升不改 pendingFixes：缺口清账由工作流/纠正流程按自己的口径处理。
+ */
+function fieldCommitPromote_ACU(input: {
+  snapshot: AgentModuleSnapshot_ACU;
+  /** 本次写入前的分栏视图：领域行即领域值，草稿即已存栏目。不能用写后视图——折叠对账会让领域值盖掉同批栏目改写。 */
+  baseFields: AgentModuleFieldSnapshot_ACU;
+  touched: AgentModuleFieldUpserts_ACU;
+  settledIndex: number;
+  completedStageNumbers: readonly number[];
+  evidence: ReadonlySet<number>;
+  now: number;
+}): { snapshot: AgentModuleSnapshot_ACU; changed: boolean; errors: Array<{ module: FieldCommitModule_ACU; id: string; reason: string }> } {
+  let snapshot = input.snapshot;
+  let changed = false;
+  const errors: Array<{ module: FieldCommitModule_ACU; id: string; reason: string }> = [];
+  for (const module of ['hooks', 'infoGap', 'chronology', 'webRefs', 'storyArc'] as const) {
+    const ids = Object.keys(input.touched[module] ?? {});
+    const candidates: Array<{ id: string; item: unknown }> = [];
+    for (const id of ids) {
+      const values: Record<string, unknown> = Object.fromEntries(Object.entries(input.baseFields.records[module]?.[id]?.fields ?? {}).map(([field, entry]) => [field, entry.value]));
+      for (const [field, write] of Object.entries(input.touched[module]?.[id] ?? {})) {
+        if (write.unset === true) delete values[field];
+        else if (Object.prototype.hasOwnProperty.call(write, 'value')) values[field] = write.value;
+      }
+      if (AGENT_MODULE_FIELD_MATRIX_ACU[module].required.some(field => !Object.prototype.hasOwnProperty.call(values, field))) continue;
+      candidates.push({ id, item: fieldCommitPromotionItem_ACU(module, id, values, fieldCommitDomainRow_ACU(snapshot, module, id)) });
+    }
+    if (!candidates.length) continue;
+    const apply = (base: AgentModuleSnapshot_ACU, items: unknown[]) => fieldCommitApplyPromotion_ACU(base, module, items, input.settledIndex, input.completedStageNumbers, input.evidence, input.now);
+    const reasonOf = (error: unknown) => error instanceof ContinuationValidationError_ACU ? error.error.message : (error instanceof Error ? error.message : String(error));
+    let accepted = candidates;
+    if (module !== 'storyArc') {
+      accepted = [];
+      for (const candidate of candidates) {
+        try { apply(snapshot, [candidate.item]); accepted.push(candidate); }
+        catch (error) { errors.push({ module, id: candidate.id, reason: reasonOf(error) }); }
+      }
+      if (!accepted.length) continue;
+    }
+    try {
+      const next = apply(snapshot, accepted.map(candidate => candidate.item));
+      snapshot = { ...next, pendingFixes: input.snapshot.pendingFixes };
+      changed = true;
+    } catch (error) {
+      for (const candidate of accepted) errors.push({ module, id: candidate.id, reason: reasonOf(error) });
+    }
+  }
+  return { snapshot, changed, errors };
+}
+
 /**
  * 融合提交（S11-TT 双模 Mode F 生产入口）。
  *
@@ -1012,6 +1127,8 @@ export function commitAgentModuleFieldWrites_ACU(input: {
   role: AgentModuleWriterRole_ACU;
   resolvePage?: (handle: string) => AgentFieldPage_ACU | null;
   isCurrent?: () => boolean;
+  /** 真实完成的阶段号；写齐的卷条目提升为正式条目时按它校验阶段登记。缺省视为没有完成阶段。 */
+  completedStageNumbers?: readonly number[];
 }): Promise<AgentModuleFieldReceipt_ACU> {
   const prior = fieldCommitQueue_ACU.get(input.chat) ?? Promise.resolve();
   const run = prior.catch(() => {}).then(async (): Promise<AgentModuleFieldReceipt_ACU> => {
@@ -1137,7 +1254,7 @@ export function commitAgentModuleFieldWrites_ACU(input: {
           });
           continue;
         }
-        const problem = fieldCommitProblem_ACU(module, field, raw, folded.snapshot, evidence);
+        const problem = fieldCommitProblem_ACU(module, field, raw, input.targetIndex, evidence);
         if (problem) { receipt.rejected.push({ path: fieldPath, reason: problem }); continue; }
         writable[field] = raw;
       }
@@ -1148,11 +1265,12 @@ export function commitAgentModuleFieldWrites_ACU(input: {
           if (!page || page.sourceStatus !== 'ok' || !fieldCommitNonempty_ACU(page.url) || !fieldCommitNonempty_ACU(page.title)) {
             receipt.rejected.push({ path: `${path}.pageRef`, reason: '页面句柄未在本次派工成功抓取' });
           } else {
-            const urlProblem = fieldCommitProblem_ACU(module, 'title', page.title, folded.snapshot, evidence);
+            const urlProblem = fieldCommitProblem_ACU(module, 'title', page.title, input.targetIndex, evidence);
             if (urlProblem) receipt.rejected.push({ path: `${path}.pageRef`, reason: urlProblem });
             else {
               writable.title = writable.title ?? page.title.trim();
               (writable as Record<string, unknown>).__pageUrl_ACU = page.url.trim();
+              (writable as Record<string, unknown>).__page_ACU = page;
             }
           }
         }
@@ -1197,13 +1315,18 @@ export function commitAgentModuleFieldWrites_ACU(input: {
       const bucket = (upserts[module] ??= {});
       const cell = (bucket[id] ??= {});
       for (const [field, value] of Object.entries(writable)) {
-        if (field === '__pageUrl_ACU') continue;
+        if (field === '__pageUrl_ACU' || field === '__page_ACU') continue;
         cell[field] = { value };
         accepted.push({ module, id, field, revision: 0 });
       }
       // pageRef 回填的 url 随 title 同批落栏（来源仍以工具回执为准，不信任模型手写）。
       if (typeof (writable as Record<string, unknown>).__pageUrl_ACU === 'string') {
         cell.url = { value: (writable as Record<string, unknown>).__pageUrl_ACU as string };
+        // 来源元数据同批落栏，提升为正式条目时不丢失来源站点与抓取状态。
+        const page = (writable as Record<string, unknown>).__page_ACU as AgentFieldPage_ACU;
+        cell.source = { value: page.source };
+        cell.query = { value: page.query };
+        cell.sourceStatus = { value: page.sourceStatus };
         accepted.push({ module, id, field: 'url', revision: 0 });
       }
       if (intent.kind === 'insert') reserved.add(key);
@@ -1299,8 +1422,27 @@ export function commitAgentModuleFieldWrites_ACU(input: {
       return receipt;
     }
     receipt.status = 'committed';
-    receipt.revisions = confirmed.snapshot.revisions;
-    receipt.partials = fieldCommitConfirmedPartials_ACU(confirmed.fields);
+    // 写齐的记录提升为正式领域条目；提升失败只留草稿，原因经 partials[].promotionError 回给模型
+    // （不进 rejected：栏目已保存，进 rejected 会让模型以为没写入而原样重发）。
+    let settled = confirmed;
+    const promotion = fieldCommitPromote_ACU({
+      snapshot: confirmed.snapshot, baseFields: folded.fields, touched: upserts, settledIndex: input.targetIndex,
+      completedStageNumbers: input.completedStageNumbers ?? [], evidence, now,
+    });
+    if (promotion.changed) {
+      try {
+        if (input.isCurrent?.() === false || getChatArray_ACU() !== input.chat) throw new Error('当前聊天已变化');
+        await writeAgentModuleSnapshot_ACU(input.chat, input.targetIndex, promotion.snapshot);
+        settled = readAgentModuleFoldState_ACU(input.chat);
+      } catch (error) {
+        receipt.rejected.push({ path: 'promotion', reason: `栏目已保存，但未能提升为正式条目：${error instanceof Error ? error.message : String(error)}` });
+      }
+    }
+    receipt.revisions = settled.snapshot.revisions;
+    receipt.partials = fieldCommitConfirmedPartials_ACU(settled.fields);
+    for (const error of promotion.errors) {
+      receipt.partials.push({ module: error.module, id: error.id, missingFields: [], promotionError: error.reason });
+    }
     receipt.accepted = accepted.map(item => ({ ...item, revision: confirmed.fields.records[item.module]?.[item.id]?.fields[item.field]?.revision ?? 0 }));
     return receipt;
   });

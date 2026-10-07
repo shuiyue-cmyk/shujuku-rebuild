@@ -1269,6 +1269,38 @@ describe('processUpdatesBatch_ACU', () => {
     expect(mockExecute).toHaveBeenCalled();
   });
 
+  it('外层调度已持有「正在填表」标志时（并发分组），本批结束不得清掉标志与用户停止信号', async () => {
+    // 曾每组结束都把全局标志置 false：并发组下先结束的组让外部写入闸门失效、可开新填表。
+    const { _set_wasStoppedByUser_ACU } = await import('../../../src/service/runtime/state-manager');
+    const mockExecute = vi.fn().mockResolvedValue({ success: true, modifiedKeys: ['sheet_0'] } as CardUpdateResult);
+    mockCurrentJsonTableData = { sheet_0: { name: '测试' } };
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: true }, { is_user: false, mes: '这是AI回复' }]);
+    mockIsAutoUpdating = true;
+
+    const result = await processUpdatesBatch_ACU([1], 'auto_independent', {}, mockExecute);
+
+    expect(result.success).toBe(true);
+    expect(mockIsAutoUpdating).toBe(true);
+    expect(_set_wasStoppedByUser_ACU).not.toHaveBeenCalled();
+  });
+
+  it('本批自己持有标志时：开始置 true，结束复位', async () => {
+    const mockExecute = vi.fn().mockImplementation(async () => {
+      expect(mockIsAutoUpdating).toBe(true);
+      return { success: true, modifiedKeys: ['sheet_0'] } as CardUpdateResult;
+    });
+    mockCurrentJsonTableData = { sheet_0: { name: '测试' } };
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: true }, { is_user: false, mes: '这是AI回复' }]);
+
+    const result = await processUpdatesBatch_ACU([1], 'auto_standard', {}, mockExecute);
+
+    expect(result.success).toBe(true);
+    expect(mockExecute).toHaveBeenCalled();
+    expect(mockIsAutoUpdating).toBe(false);
+  });
+
   it('更新失败时返回 success: false 和 error', async () => {
     const mockExecute = vi.fn().mockResolvedValue({ success: false, modifiedKeys: [], error: '更新失败' } as CardUpdateResult);
     mockCurrentJsonTableData = { sheet_0: { name: '测试' } };

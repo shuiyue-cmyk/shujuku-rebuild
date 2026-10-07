@@ -1831,3 +1831,26 @@ describe('clearFinalGenerationGreenlights_ACU with strict readContext (T1 baseli
 });
 
 });
+
+describe('接管期间条目被删除后的恢复收敛', () => {
+  it('被接管条目已删除：一次 restore 即收敛为非 active，不留 pending', async () => {
+    await takeoverWorldbookGreenlights_ACU();
+    mockEntriesByBook.set('角色A世界书', []);
+    await restoreWorldbookGreenlights_ACU({ cleanupMode: 'full' });
+    expect(mockStateSnapshot.current.active).not.toBe(true);
+    expect(getPlotAgentWorldbookSnapshot_ACU().active).not.toBe(true);
+  });
+
+  it('旧版本残留的已删除 pending 条目：再次 restore 也能收敛', async () => {
+    await takeoverWorldbookGreenlights_ACU();
+    const books = mockStateSnapshot.current.books;
+    const pendingBooks = Object.fromEntries(Object.entries(books).map(([book, entries]: [string, any]) => [
+      book, entries.map((entry: any) => ({ ...entry, takeoverStatus: 'pending' })),
+    ]));
+    mockStateSnapshot.current = { ...mockStateSnapshot.current, books: pendingBooks };
+    setPlotAgentWorldbookSnapshot_ACU(mockStateSnapshot.current);
+    mockEntriesByBook.set('角色A世界书', []);
+    await restoreWorldbookGreenlights_ACU({ cleanupMode: 'full' });
+    expect(mockStateSnapshot.current.active).not.toBe(true);
+  });
+});

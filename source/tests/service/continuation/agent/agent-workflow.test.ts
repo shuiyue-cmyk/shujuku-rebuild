@@ -380,3 +380,20 @@ describe('续写固定工作流（TT）', () => {
     expect(result.pendingFixes[0].lastError).toContain('AI 正文楼层');
   });
 });
+
+describe('定向补足的写集裁剪（R4-05）', () => {
+  it('只补 hooks 时，模型顺手带的 chronologyPatches 被裁掉，hooks 照常入库', async () => {
+    const { runContinuationMaterialRepair_ACU } = await import('../../../../src/service/continuation/agent/agent-workflow');
+    const base = { ...buildEmptyAgentModuleSnapshot_ACU(), settledThroughIndex: 1,
+      chronology: [{ id: 'T001', anchor: 'a', elapsed: 'e', precision: 'exact', transition: 't', evidenceIndexes: [1], updatedIndex: 1, retired: false, retiredReason: '' }],
+      pendingFixes: [{ module: 'hooks', agentName: 'x', violations: [{ path: 'hooks', message: 'm' }], attempts: 1, firstFailedAtIndex: 1, lastError: 'm', source: 'invoke_failed', completion: 'failed', rangeStartIndex: 1, rangeEndIndex: 1, acceptedKeys: [], createdAt: 1, updatedAt: 1 }] } as any;
+    const result = await runContinuationMaterialRepair_ACU({
+      snapshot: base, targetModules: ['hooks'], settledIndex: 1, completedStageNumbers: [], allowedEvidenceIndexes: new Set([0, 1]),
+      runAgent: async () => ({ ok: true, summary: 'ok', writes: ['hooks', 'infoGap', 'chronology'],
+        maintainer: { summary: '', delta: { hooks: [{ action: 'upsert', id: 'H001', summary: '玉佩', status: 'planted', importance: 'high', plantedIndex: 1, plannedPayoff: '', reason: '' }], hookPatches: [], infoGap: [], infoGapPatches: [], storyArc: [], storyArcPatches: [], chronology: [], chronologyPatches: [{ id: 'T001', elapsed: '三天' }], constraintProposals: [], expectedRevisions: {} } } } as any),
+    } as any);
+    expect(result.failedModules).not.toContain('hooks');
+    expect(result.snapshot.hooks.map((hook: { id: string }) => hook.id)).toEqual(['H001']);
+    expect(result.snapshot.chronology[0].elapsed).toBe('e');
+  });
+});

@@ -3815,8 +3815,13 @@ export async function processUpdatesBatch_ACU(
     }
     await flushRuntimeOnlyChangesBeforeFill_ACU('processUpdatesBatch');
 
-    _set_wasStoppedByUser_ACU(false);
-    _set_isAutoUpdatingCard_ACU(true);
+    // 外层（调度层并发分组、手动编排）已持有「正在填表」标志时由外层负责复位：
+    // 本批只在自己置位时才复位标志与用户停止信号，否则先结束的组会让其余组失去保护。
+    const ownsAutoUpdatingFlag = !isAutoUpdatingCard_ACU;
+    if (ownsAutoUpdatingFlag) {
+        _set_wasStoppedByUser_ACU(false);
+        _set_isAutoUpdatingCard_ACU(true);
+    }
 
     try {
         const isSummaryMode = (mode && (mode.includes('summary') || mode === 'manual_summary')) || false;
@@ -3941,8 +3946,10 @@ export async function processUpdatesBatch_ACU(
 
         return { success: true };
     } finally {
-        _set_isAutoUpdatingCard_ACU(false);
-        _set_wasStoppedByUser_ACU(false);
+        if (ownsAutoUpdatingFlag) {
+            _set_isAutoUpdatingCard_ACU(false);
+            _set_wasStoppedByUser_ACU(false);
+        }
     }
 }
 

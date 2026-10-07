@@ -612,6 +612,19 @@ describe('逐栏提交的证据楼白名单（与 SQL 事务路径同判据）',
     expect(receipt.accepted.some((item: { id: string; field: string }) => item.id === 'HF2' && item.field === 'plantedIndex')).toBe(true);
   });
 
+  it('planted_index 指向本轮结算窗口内的新 AI 楼必须通过（上限是当轮末楼，与事务路径同口径）', async () => {
+    const chat = threeFloorChat().slice(0, 2);
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(1));
+    chat.push({ mes: '新正文', is_user: false });
+
+    const receipt = await commitAgentModuleFieldWrites_ACU({
+      chat, targetIndex: 2, role: 'hook-cognition-maintainer', sql: hooksInsert('HF4', 2),
+    } as any);
+    expect(receipt.rejected).toEqual([]);
+    expect(receipt.accepted.some((item: { id: string; field: string }) => item.id === 'HF4' && item.field === 'plantedIndex')).toBe(true);
+  });
+
   it('被 /hide 的隐藏楼同样不得作为伏笔锚点（is_system 是隐藏位，不是角色事实）', async () => {
     const chat = threeFloorChat();
     chat[1] = { mes: '（用户已隐藏）', is_user: false, is_system: true };
@@ -744,5 +757,113 @@ describe('用户手动保存资料的落点门', () => {
       .rejects.toThrow(ContinuationValidationError_ACU);
     expect(chat[0][AGENT_MODULE_FIELD_ACU]).toBeUndefined();
     expect(chat[1][AGENT_MODULE_FIELD_ACU]).toBeUndefined();
+  });
+});
+
+/**
+ * R4-02：逐栏写齐的记录必须提升为正式领域条目（走整行事务同一套校验与修订号推进），
+ * 否则 $HOOKS_LEDGER 等读口与下游结算永远看不到逐栏结果。
+ */
+describe('逐栏写齐的记录提升为正式领域条目', () => {
+  function twoFloorChat(): any[] {
+    const chat: any[] = [{ mes: 'a', is_user: false }];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    return chat;
+  }
+
+  it('写齐的伏笔进入领域数组并推进修订号；缺栏草稿不进入', async () => {
+    const chat = twoFloorChat();
+    await writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt_ACU(0));
+    chat.push({ mes: '主角埋下玉佩伏笔', is_user: false });
+    const receipt = await commitAgentModuleFieldWrites_ACU({
+      chat, targetIndex: 1, role: 'hook-cognition-maintainer',
+      sql: "INSERT INTO hooks (id, summary, status, importance, planted_index, planned_payoff) VALUES ('H001', '玉佩', 'planted', 'high', 1, '后期揭示'); INSERT INTO hooks (id, summary) VALUES ('H002', '草稿')",
+    });
+    expect(receipt.status).toBe('committed');
+    expect(receipt.rejected).toEqual([]);
+    const snapshot = readAgentModuleSnapshot_ACU(chat);
+    expect(snapshot.hooks.map(hook => hook.id)).toEqual(['H001']);
+    expect(snapshot.hooks[0]).toMatchObject({ summary: '玉佩', plantedIndex: 1, updatedIndex: 1, plannedPayoff: '后期揭示' });
+    expect(snapshot.revisions.hooks).toBe(1);
+    expect(receipt.revisions?.hooks).toBe(1);
+    expect(receipt.partials?.map(item => item.id)).toEqual(['H002']);
+    expect(renderAgentHooksLedger_ACU(snapshot)).toContain('玉佩');
+  });
+
+  it('逐栏 UPDATE 既有正式条目会更新领域数组，而不是只留在视图里被领域值盖掉', async () => {
+    const chat = twoFloorChat();
+    await writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt_ACU(0, { hooks: [hook_ACU('H1', { plantedIndex: 0, updatedIndex: 0 }) as any], revisions: { ...buildEmptyAgentModuleSnapshot_ACU().revisions, hooks: 3 } }));
+    chat.push({ mes: '伏笔回收', is_user: false });
+    const receipt = await commitAgentModuleFieldWrites_ACU({
+      chat, targetIndex: 1, role: 'hook-cognition-maintainer',
+      sql: "UPDATE hooks SET status = 'paid' WHERE id = 'H1'",
+    });
+    expect(receipt.rejected).toEqual([]);
+    const snapshot = readAgentModuleSnapshot_ACU(chat);
+    expect(snapshot.hooks[0]).toMatchObject({ id: 'H1', status: 'paid', updatedIndex: 1 });
+    expect(snapshot.revisions.hooks).toBe(4);
+  });
+
+  it('不满足整行契约的卷只留草稿，原因经 partials[].promotionError 回给模型，不进 rejected', async () => {
+    const chat = twoFloorChat();
+    await writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt_ACU(0));
+    chat.push({ mes: '正文', is_user: false });
+    const receipt = await commitAgentModuleFieldWrites_ACU({
+      chat, targetIndex: 1, role: 'arc-architect',
+      sql: "INSERT INTO story_arc (id, scope, title, direction, escalation, withheld, status) VALUES ('VOL-01', 'volume', '卷一', '方向', '台阶', '底', 'active')",
+    });
+    expect(receipt.rejected).toEqual([]);
+    expect(readAgentModuleSnapshot_ACU(chat).storyArc).toEqual([]);
+    expect(receipt.partials).toEqual([expect.objectContaining({ module: 'storyArc', id: 'VOL-01', promotionError: expect.stringContaining('narrativeRole') })]);
+  });
+
+  it('百科条目经 pageRef 写齐后提升，来源站点与抓取状态取自已抓取页面', async () => {
+    const chat = twoFloorChat();
+    await writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt_ACU(0));
+    chat.push({ mes: '正文', is_user: false });
+    const receipt = await commitAgentModuleFieldWrites_ACU({
+      chat, targetIndex: 1, role: 'web-researcher',
+      sql: "INSERT INTO web_refs (page_ref, name, brief, detail) VALUES ('P1', '实体', '简介', '详情')",
+      resolvePage: handle => handle === 'P1' ? { title: '页面', source: 'moegirl', url: 'https://zh.moegirl.org.cn/x', query: '实体', sourceStatus: 'ok' } : null,
+    });
+    expect(receipt.rejected).toEqual([]);
+    const refs = readAgentModuleSnapshot_ACU(chat).webRefs;
+    expect(refs).toHaveLength(1);
+    expect(refs[0]).toMatchObject({ title: '实体', brief: '简介', url: 'https://zh.moegirl.org.cn/x', source: 'moegirl', query: '实体', sourceStatus: 'ok' });
+  });
+});
+
+describe('固定工作流：维护子代理只用 write_sql 结算', () => {
+  it('写齐的伏笔对下游可见，步骤记为有变化，水位推进（R4-02 端到端）', async () => {
+    const chat: any[] = [{ mes: 'a', is_user: false }];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const { runContinuationAgentWorkflow_ACU } = await import('../../../../src/service/continuation/agent/agent-workflow');
+    const { buildDefaultContinuationSettings_ACU } = await import('../../../../src/service/continuation/defaults');
+    await writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt_ACU(0));
+    chat.push({ mes: '主角在第1楼埋下玉佩伏笔', is_user: false });
+    const settings = buildDefaultContinuationSettings_ACU();
+    settings.finalReview.enabled = false;
+    const emptyDelta = { hooks: [], hookPatches: [], infoGap: [], infoGapPatches: [], storyArc: [], storyArcPatches: [], chronology: [], chronologyPatches: [], constraintProposals: [], expectedRevisions: {} };
+    const result = await runContinuationAgentWorkflow_ACU({
+      settings,
+      snapshot: readAgentModuleSnapshot_ACU(chat),
+      opening: { focus: 'f', summary: '', dispatchWebResearcher: false },
+      hasUnsettledHistory: true, beatObligation: false, turnNumber: 1, settledIndex: 1,
+      completedStageNumbers: [], allowedEvidenceIndexes: new Set([0, 1]),
+      readCommittedSnapshot: () => readAgentModuleSnapshot_ACU(chat),
+      runAgent: async (call: any) => {
+        if (call.agentName !== 'hook-cognition-maintainer') return { ok: true, summary: 'plan', planner: { summary: 's', recommendation: 'r', mustPreserve: [], risks: [] } } as any;
+        await commitAgentModuleFieldWrites_ACU({ chat, targetIndex: 1, role: 'hook-cognition-maintainer',
+          sql: "INSERT INTO hooks (id, summary, status, importance, planted_index, planned_payoff) VALUES ('H001', '玉佩', 'planted', 'high', 1, '后期揭示')" });
+        return { ok: true, summary: '已逐栏保存', usedFieldWrites: true, completion: 'complete_no_change', moduleCompletion: { hooks: 'complete_no_change', infoGap: 'complete_no_change', chronology: 'complete_no_change' }, writes: ['hooks', 'infoGap', 'chronology'], maintainer: { summary: '', delta: emptyDelta } } as any;
+      },
+      runComposer: async () => ({ instruction: 'go', summary: 's', constraints: null }),
+      runFinalReview: async () => ({ verdict: 'pass' } as any),
+    } as any);
+    expect(result.snapshot.hooks.map(hook => hook.id)).toEqual(['H001']);
+    expect(renderAgentHooksLedger_ACU(result.snapshot)).toContain('玉佩');
+    expect(result.snapshot.materialCompletion.modules.hooks).toBe('complete_changed');
+    expect(result.steps.find(step => step.agentName === 'hook-cognition-maintainer')?.status).not.toBe('no_change');
+    expect(result.snapshot.settledThroughIndex).toBe(1);
   });
 });

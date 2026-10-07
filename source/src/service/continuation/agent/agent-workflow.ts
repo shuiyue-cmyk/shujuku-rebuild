@@ -255,6 +255,7 @@ function restrictMaintainerOutput_ACU(
       storyArc: allowed.has('storyArc') ? output.delta.storyArc : [],
       storyArcPatches: allowed.has('storyArc') ? output.delta.storyArcPatches : [],
       chronology: allowed.has('chronology') ? output.delta.chronology : [],
+      chronologyPatches: allowed.has('chronology') ? (output.delta.chronologyPatches ?? []) : [],
       constraintProposals: allowed.has('constraints') ? output.delta.constraintProposals : [],
     },
   };
@@ -645,6 +646,9 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
         for (const module of writes) {
           if ((snapshot.revisions as any)[module] > (before.revisions as any)[module]) appliedModules.push(module);
         }
+        // 逐栏写齐的条目已提升为正式条目（修订号推进）：最终契约为空不代表「无变化」。
+        for (const module of appliedModules) if (modules[module] === 'complete_no_change') modules[module] = 'complete_changed';
+        if (appliedModules.length && completion === 'complete_no_change') completion = 'complete_changed';
       }
     } else {
       appliedModules = maintainer.ok

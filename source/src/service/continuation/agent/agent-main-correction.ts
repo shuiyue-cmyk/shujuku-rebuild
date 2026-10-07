@@ -63,7 +63,7 @@ export async function correctAgentMaterials_ACU(input: {
   }
   if (action.sql) {
     sqlReceipt = await commitAgentModuleFieldWrites_ACU({ chat, targetIndex,
-      sql: action.sql, role: 'main', isCurrent: current });
+      sql: action.sql, role: 'main', isCurrent: current, completedStageNumbers: input.completedStages });
     if (sqlReceipt.status !== 'committed') return { status: sqlReceipt.status, sqlReceipt };
     folded = readAgentModuleFoldState_ACU(chat);
     if (!current() || folded.salvaged || folded.candidates.some(item => !item.valid)) return reject('纠正后权威资料状态无法确认');

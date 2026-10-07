@@ -56,7 +56,8 @@ describe('restoreAgentWorldbookSnapshotEntries_ACU', () => {
     expect(mockSetEntries).not.toHaveBeenCalled();
   });
 
-  it('skips missing or invalid snapshot entries without patching unrelated entries', async () => {
+  // 已删除条目没有可恢复对象，不计 skipped，否则 scope 变更会永远被拒绝；无效 uid 仍计 skipped。
+  it('skips invalid snapshot entries, ignores deleted ones, and patches nothing unrelated', async () => {
     entriesByBook.set('世界书', [{ uid: 'present', comment: '普通条目', enabled: false }]);
 
     const result = await restoreAgentWorldbookSnapshotEntries_ACU(activeSnapshot([
@@ -66,7 +67,7 @@ describe('restoreAgentWorldbookSnapshotEntries_ACU', () => {
 
     expect(result).toEqual({
       restored: 0,
-      skipped: 2,
+      skipped: 1,
       failed: 0,
       signatureMatched: true,
       rollbackPatchesByBook: {},

@@ -153,13 +153,13 @@ export async function restoreAgentWorldbookSnapshotEntries_ACU(
           continue;
         }
         const current = currentByUid.get(String(snapshotEntry.uid));
-        if (!current || !isCommentHashMatched_ACU(snapshotEntry.commentHash, current.comment)) {
-          if (current) {
-            const strippedComment = stripTakeoverMeta_ACU(current.comment);
-            if (strippedComment !== String(current.comment || '')) {
-              patches.push({ uid: snapshotEntry.uid, comment: strippedComment });
-              rollbackPatches.push({ uid: snapshotEntry.uid, comment: current.comment });
-            }
+        // 条目已被宿主删除：无可恢复对象，不算 skipped（否则 scope 变更永远被拒）。
+        if (!current) continue;
+        if (!isCommentHashMatched_ACU(snapshotEntry.commentHash, current.comment)) {
+          const strippedComment = stripTakeoverMeta_ACU(current.comment);
+          if (strippedComment !== String(current.comment || '')) {
+            patches.push({ uid: snapshotEntry.uid, comment: strippedComment });
+            rollbackPatches.push({ uid: snapshotEntry.uid, comment: current.comment });
           }
           skipped += 1;
           continue;

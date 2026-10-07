@@ -18,8 +18,8 @@
 | 1 | data/（storage、sqlite、repositories、gateways、models） | 9.7k | 完成（向量存储并入块 5） |
 | 2A | service/table 填表流水线（orchestrator、sql-table-service、事务、调度） | 15k | 子代理完成 → `docs/review/block2a-fill-pipeline.md`；P1 已修，P2 待修 |
 | 2B | service/table 存储帧/回放/迁移 | 15k | 子代理完成 → `docs/review/block2b-storage-replay.md`；P1 已修，P2 待修 |
-| 3 | service/chat + service/runtime + service/settings | 10.8k | 未开始 |
-| 4 | service/continuation + service/agent | 12.7k | 未开始 |
+| 3 | service/chat + service/runtime + service/settings | 17.8k | 子代理完成 → `docs/review/block3-chat-runtime-settings.md`；P1 待修 |
+| 4 | service/continuation + service/agent | 30k | 子代理完成 → `docs/review/block4-continuation-agent.md`；P1 与 R4-05 已修 |
 | 5 | service/vector + data/storage 向量部分 | 12.4k+ | 未开始 |
 | 6 | service/template + template-assistant + worldbook | 13.3k | 未开始 |
 | 7 | shared/ | 9.8k | 未开始 |
@@ -88,8 +88,15 @@
 | R2A-06 legacy 首次初始化用模板覆盖运行时 | P2 | 已修：先克隆共享视图；仅运行时缺表时用模板补 | update-orchestrator.test「首次初始化：AI 未改动」 |
 | R2B-02 in-flight 等待方丢兼容诊断字段 | P2 | 已修：等待方返回完整结果深拷贝；去重 key 改为仅显式 updateRuntimeState:false | replay.test「等待方拿到」「未显式声明」 |
 | R2B-03 回放重算 random()/now | P2 | 已修：涉及非确定性函数（含 DDL DEFAULT）的表改以执行后快照 sheet_replace 落盘 | update-orchestrator.test「随机/当前时间」 |
+| R2A-08 并发组提前清全局填表标志 | P2 | 已修：processUpdatesBatch 只在自己置位时复位标志与停止信号 | update-orchestrator.test「外层调度已持有」「本批自己持有」 |
+| R4-01 逐栏写证据楼层上限用旧水位 | P1 | 已修：上限改为本次结算目标（当轮末楼），与整行事务同口径 | agent-module-store.test「结算窗口内的新 AI 楼」 |
+| R4-02 逐栏写齐的条目不进领域数组 | P1 | 已修：提交层把写齐记录转整行 upsert，走同一事务校验/修订号推进后落快照；不合规留草稿并经 partials[].promotionError 回给模型；工作流按修订号增长记 complete_changed。帧层 T2 锁定不变 | agent-module-store.test「提升为正式领域条目」×4、「固定工作流：维护子代理只用 write_sql」 |
+| R4-03 资料补足开放 write_sql 必然 STALE | P1 | 已修：补足通道不再开放 write_sql，只收整行契约由编排器提交 | agent-material-repair-channel.test |
+| R4-04 接管期间删条目后恢复永不收敛 | P1 | 已修：宿主已删除的条目直接从接管账本剔除（含旧版残留 pending）；scope 恢复不再把已删除计入 skipped | agent-worldbook-takeover.test「条目被删除」×2、snapshot-restore.test |
+| R4-05 补足裁剪漏 chronologyPatches | P2 | 已修 | agent-workflow.test「R4-05」 |
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
 R2B-08/09（迁移、混合提交、batch 写入的整聊天克隆替换）与上面同一模式但无 await 窗口，未改，留作 P3。
 
-待修：R2A-07（多 staging 组汇合后丢 pre 段）、R2A-08（并发组提前清全局填表标志）、R2B-04/05/06（待坐实）、各块 P3。
+待修：R2A-07（多 staging 组汇合后丢 pre 段）、R2B-04/05/06（待坐实）、R3-01/02（P1，模板变量 SQL/JS 白名单可绕过）及块 3 P2、R4-06（待坐实）/07/08、各块 P3。
+R4-02 遗留：模型放弃补齐时，草稿（partial）不会阻止水位推进——只在提升路径堵住了「写齐却看不见」，「没写齐就收工」仍按旧口径。
