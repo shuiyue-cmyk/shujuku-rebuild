@@ -103,6 +103,25 @@ export function readProfileTemplateFromStorage_ACU(code: string): string | null 
     return (typeof raw === 'string' && raw.trim()) ? raw : null;
 }
 
+/**
+ * 模板损坏防丢备份（R3-08，与设置的 H1 旁路备份同款）：模板原串存在但读不出来、即将用默认模板
+ * 覆盖写回同一键之前，把原串复制到 `.bak` 旁路键。内容相同时跳过重复写。
+ */
+export function backupProfileTemplateRawBeforeDegradation_ACU(code: string, reason: string): void {
+    try {
+        const store = getConfigStorage_ACU();
+        const key = getProfileTemplateKey_ACU(code);
+        const raw = store?.getItem?.(key);
+        if (typeof raw !== 'string' || !raw.trim()) return;
+        const backupKey = `${key}.bak`;
+        if (store.getItem(backupKey) === raw) return;
+        store.setItem(backupKey, raw);
+        logWarn_ACU(`[Profile] 模板数据无法可信读取（${reason}），已把原始内容备份到旁路键后再降级默认模板：${backupKey}`);
+    } catch (e) {
+        logWarn_ACU('[Profile] 模板原始串旁路备份失败（继续按默认模板降级）:', e);
+    }
+}
+
 export function writeProfileTemplateToStorage_ACU(code: string, templateStr: string): void {
     const store = getConfigStorage_ACU();
     store.setItem(getProfileTemplateKey_ACU(code), String(templateStr || ''));

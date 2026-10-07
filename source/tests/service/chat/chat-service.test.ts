@@ -128,7 +128,6 @@ import {
   clearManualRefillIncrementalDataInRange_ACU,
   clearManualRefillSheetDataInRange_ACU,
   rollbackManualRefillRangeSnapshotAtomic_ACU,
-  clearTableDataAtFloors_ACU,
   deleteLocalDataInChatCore_ACU,
   deleteLocalDataWithScope_ACU,
   isFullRangeDeletionRequest_ACU,
@@ -2733,145 +2732,6 @@ describe('deleteLocalDataWithScope_ACU', () => {
 
 });
 
-// ═══ clearTableDataAtFloors_ACU ═══
-describe('clearTableDataAtFloors_ACU', () => {
-  it('按目标楼层和 selected sheet 精确清理 V2 storageFrame，保留同层其他表和范围外基底', async () => {
-    const chat = [
-      {
-        is_user: false,
-        mes: 'AI范围外基底',
-        TavernDB_ACU_IsolatedData: {
-          '': {
-            _acu_storage_version: 2,
-            storageFrame: {
-              version: 2,
-              checkpoint: {
-                kind: 'full',
-                reason: 'compaction',
-                data: {
-                  sheet_0: { name: '范围外表', content: [['row_id'], ['base']] },
-                },
-              },
-              logEntries: [],
-            },
-          },
-        },
-      },
-      { is_user: true, mes: '用户消息跳过' },
-      {
-        is_user: false,
-        mes: 'AI目标层',
-        TavernDB_ACU_IsolatedData: {
-          '': {
-            _acu_storage_version: 2,
-            independentData: {
-              sheet_0: { name: '旧目标表' },
-              sheet_1: { name: '保留表' },
-            },
-            modifiedKeys: ['sheet_0', 'sheet_1'],
-            updateGroupKeys: ['sheet_0', 'sheet_1'],
-            storageFrame: {
-              version: 2,
-              checkpoint: {
-                kind: 'full',
-                reason: 'manual',
-                data: {
-                  sheet_0: { name: '旧目标表', content: [['row_id'], ['old']] },
-                  sheet_1: { name: '保留表', content: [['row_id'], ['keep']] },
-                },
-                scheduleSummary: {
-                  sheet_0: { lastFilledAiFloor: 1 },
-                  sheet_1: { lastFilledAiFloor: 1 },
-                },
-                event: {
-                  filledSheetKeys: ['sheet_0', 'sheet_1'],
-                  changedSheetKeys: ['sheet_0', 'sheet_1'],
-                  groupKeys: ['sheet_0', 'sheet_1'],
-                },
-              },
-              logEntries: [
-                {
-                  seq: 1,
-                  operations: [
-                    { kind: 'data_replace', data: { sheet_0: { name: '旧目标表' }, sheet_1: { name: '保留表' } } },
-                  ],
-                  filledSheetKeys: ['sheet_0', 'sheet_1'],
-                  changedSheetKeys: ['sheet_0', 'sheet_1'],
-                  groupKeys: ['sheet_0', 'sheet_1'],
-                },
-              ],
-            },
-            spv79TransitionCheckpoint: {
-              version: 1,
-              kind: 'spv79_duplicate_row_id_transition',
-              createdAt: 2,
-              data: {
-                sheet_0: { name: '旧目标表', content: [['row_id'], ['legacy-target']] },
-                sheet_1: { name: '保留表', content: [['row_id'], ['legacy-keep']] },
-              },
-              cutoff: { messageIndex: 2, seq: 0, operationIndex: -1 },
-              scheduleSummary: { sheet_0: { lastFilledAiFloor: 1 }, sheet_1: { lastFilledAiFloor: 1 } },
-            },
-          },
-        },
-      },
-    ];
-    mockGetChatArray.mockReturnValue(chat);
-
-    const count = await clearTableDataAtFloors_ACU([1, 2], ['sheet_0']);
-
-    expect(count).toBe(1);
-    expect(chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data.sheet_0).toBeDefined();
-    expect(chat[1]).toEqual({ is_user: true, mes: '用户消息跳过' });
-    const targetTag = chat[2].TavernDB_ACU_IsolatedData[''];
-    expect(targetTag.independentData.sheet_0).toBeUndefined();
-    expect(targetTag.independentData.sheet_1).toEqual({ name: '保留表' });
-    expect(targetTag.modifiedKeys).toEqual(['sheet_1']);
-    expect(targetTag.updateGroupKeys).toEqual(['sheet_1']);
-    // 私有根本身就是 canonical 完整状态；删除只裁剪目标表，不再要求 cutoff artifact
-    // 仍存在，也不通过“先收敛成功才允许删除”的门禁阻断旧聊天。
-    expect(targetTag.spv79TransitionCheckpoint).toEqual(expect.objectContaining({
-      kind: 'spv79_duplicate_row_id_transition',
-      data: { sheet_1: { name: '保留表', content: [['row_id'], ['legacy-keep']] } },
-      scheduleSummary: { sheet_1: { lastFilledAiFloor: 1 } },
-    }));
-    expect(targetTag.storageFrame.checkpoint.data.sheet_0).toBeUndefined();
-    expect(targetTag.storageFrame.logEntries).toEqual([expect.objectContaining({
-      seq: 1,
-      operations: [{ kind: 'data_replace', data: { sheet_1: { name: '保留表' } } }],
-      filledSheetKeys: ['sheet_1'],
-      changedSheetKeys: ['sheet_1'],
-      groupKeys: ['sheet_1'],
-    })]);
-    expect(mockSaveChatToHost).toHaveBeenCalledTimes(1);
-  });
-
-  it('清空过渡根仅剩的表时删除私有 root，避免后续 replay 从已删除表复活', async () => {
-    const chat = [{
-      is_user: false,
-      TavernDB_ACU_IsolatedData: {
-        '': {
-          _acu_storage_version: 2,
-          storageFrame: { version: 2, logEntries: [] },
-          spv79TransitionCheckpoint: {
-            version: 1,
-            kind: 'spv79_duplicate_row_id_transition',
-            createdAt: 1,
-            data: { sheet_0: { name: '唯一表', content: [['row_id'], ['1']] } },
-            cutoff: { messageIndex: 0, seq: 0, operationIndex: -1 },
-          },
-        },
-      },
-    }];
-    mockGetChatArray.mockReturnValue(chat);
-
-    const count = await clearTableDataAtFloors_ACU([0], ['sheet_0']);
-
-    expect(count).toBe(1);
-    expect(chat[0].TavernDB_ACU_IsolatedData[''].spv79TransitionCheckpoint).toBeUndefined();
-    expect(mockSaveChatToHost).toHaveBeenCalledTimes(1);
-  });
-});
 
 
 describe('clearManualRefillIncrementalDataInRange_ACU', () => {
@@ -4635,12 +4495,22 @@ describe('向量外置文件删除必须晚于聊天保存', () => {
     const manifest = makeVectorManifest('idx-local-delete-save-fail');
     const chat = [makeMessageWithVectorManifest(manifest)];
     mockGetChatArray.mockReturnValue(chat);
-    mockSaveChatToHost.mockRejectedValueOnce(new Error('save failed'));
+    mockSaveChatToHostStrict.mockRejectedValueOnce(new Error('save failed'));
 
     await expect(deleteLocalDataInChatCore_ACU('all')).rejects.toThrow('save failed');
 
-    expect(mockSaveChatToHost).toHaveBeenCalledTimes(1);
+    expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
     expect(mockDeleteSummaryVectorIndexExternal).not.toHaveBeenCalled();
+  });
+
+  // R3-11：要删外置向量文件时必须严格保存——非严格保存在宿主 saveChat 缺失时只告警就返回，
+  // 聊天引用其实没落盘，文件却被删了。
+  it('deleteLocalDataInChat：有外置向量文件待删时走严格保存', async () => {
+    const manifest = makeVectorManifest('idx-local-delete-strict');
+    mockGetChatArray.mockReturnValue([makeMessageWithVectorManifest(manifest)]);
+    await deleteLocalDataInChatCore_ACU('all');
+    expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
+    expect(mockSaveChatToHost).not.toHaveBeenCalled();
   });
 
   it('deleteLocalDataInChat：保存成功后才删除，且顺序在 save 之后', async () => {
@@ -4651,58 +4521,12 @@ describe('向量外置文件删除必须晚于聊天保存', () => {
     const count = await deleteLocalDataInChatCore_ACU('all');
 
     expect(count).toBe(1);
-    expect(mockSaveChatToHost).toHaveBeenCalledTimes(1);
+    expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
     expect(mockDeleteSummaryVectorIndexExternal).toHaveBeenCalledWith(manifest);
-    expect(mockSaveChatToHost.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mockSaveChatToHostStrict.mock.invocationCallOrder[0]).toBeLessThan(
       mockDeleteSummaryVectorIndexExternal.mock.invocationCallOrder[0],
     );
     expect(chat[0].TavernDB_ACU_IsolatedData).toBeUndefined();
-  });
-
-  it('clearTableDataAtFloors：宿主保存失败时不删除外置向量文件', async () => {
-    const manifest = makeVectorManifest('idx-clear-floors-save-fail');
-    const chat = [makeMessageWithVectorManifestAndKeptSheet(manifest)];
-    mockGetChatArray.mockReturnValue(chat);
-    mockSaveChatToHost.mockRejectedValueOnce(new Error('save failed'));
-
-    await expect(clearTableDataAtFloors_ACU([0], ['sheet_1'])).rejects.toThrow('save failed');
-
-    expect(mockSaveChatToHost).toHaveBeenCalledTimes(1);
-    expect(mockDeleteSummaryVectorIndexExternal).not.toHaveBeenCalled();
-    expect(chat[0].TavernDB_ACU_IsolatedData[''].summaryVectorIndexManifest).toBeUndefined();
-  });
-
-  it('clearTableDataAtFloors：保存成功后才删除外置向量文件', async () => {
-    const manifest = makeVectorManifest('idx-clear-floors-save-ok');
-    const chat = [makeMessageWithVectorManifestAndKeptSheet(manifest)];
-    mockGetChatArray.mockReturnValue(chat);
-
-    const count = await clearTableDataAtFloors_ACU([0], ['sheet_1']);
-
-    expect(count).toBe(1);
-    expect(mockDeleteSummaryVectorIndexExternal).toHaveBeenCalledWith(manifest);
-    expect(mockSaveChatToHost.mock.invocationCallOrder[0]).toBeLessThan(
-      mockDeleteSummaryVectorIndexExternal.mock.invocationCallOrder[0],
-    );
-    const tagData = chat[0].TavernDB_ACU_IsolatedData[''];
-    expect(tagData.summaryVectorIndexManifest).toBeUndefined();
-    expect(tagData.summaryVectorIndexState).toBeUndefined();
-  });
-
-  it('clearTableDataAtFloors 整槽模式：先收集向量 manifest 再清槽，保存成功后删除外置文件', async () => {
-    // 曾先删整个隔离槽再读槽收集 manifest，读到的恒为 null，外置文件只能等 GC 兜底。
-    const manifest = makeVectorManifest('idx-clear-floors-whole-slot');
-    const chat = [makeMessageWithVectorManifest(manifest)];
-    mockGetChatArray.mockReturnValue(chat);
-
-    const count = await clearTableDataAtFloors_ACU([0]);
-
-    expect(count).toBe(1);
-    expect(chat[0].TavernDB_ACU_IsolatedData).toBeUndefined();
-    expect(mockDeleteSummaryVectorIndexExternal).toHaveBeenCalledWith(manifest);
-    expect(mockSaveChatToHost.mock.invocationCallOrder[0]).toBeLessThan(
-      mockDeleteSummaryVectorIndexExternal.mock.invocationCallOrder[0],
-    );
   });
 
   it('clearManualRefillIncrementalDataInRange：宿主保存失败时不删除外置向量文件', async () => {
@@ -4931,5 +4755,99 @@ describe('clearManualRefillSheetDataInRange_ACU 的可回滚句柄与外置向�
 
     expect(rollback.success).toBe(false);
     expect(rollback.error).toContain('rollback save failed');
+  });
+});
+
+describe('块 3 复审：删除/清理不得越过隔离标识，删除后状态必须自洽', () => {
+  const ai = (extra: any = {}) => ({ is_user: false, mes: 'a', send_date: `d${Math.random()}`, swipe_id: 0, ...extra });
+  const user = () => ({ is_user: true, mes: 'u' });
+
+  it('R3-04 隔离关闭时「删除当前」不删归属其他标识的旧版顶层数据与 Identity', async () => {
+    mockSettings.dataIsolationEnabled = false;
+    mockGetCurrentIsolationKey.mockReturnValue('');
+    const chat: any[] = [ai({ TavernDB_ACU_Data: { sheet_0: { content: [['row_id'], ['1']] } }, TavernDB_ACU_Identity: 'tag_B' })];
+    mockGetChatArray.mockReturnValue(chat);
+    await deleteLocalDataInChatCore_ACU('current');
+    expect(chat[0].TavernDB_ACU_Data).toBeTruthy();
+    expect(chat[0].TavernDB_ACU_Identity).toBe('tag_B');
+  });
+
+  it('R3-04 隔离 tag_A「删除当前」只删 tag_A 槽，同楼 tag_B 的旧版顶层数据保留', async () => {
+    mockSettings.dataIsolationEnabled = true;
+    mockSettings.dataIsolationCode = 'tag_A';
+    mockGetCurrentIsolationKey.mockReturnValue('tag_A');
+    const chat: any[] = [ai({ TavernDB_ACU_IsolatedData: { tag_A: { storageFrame: { version: 2, logEntries: [] }, _acu_storage_version: 2 } }, TavernDB_ACU_IndependentData: { sheet_0: { content: [['row_id'], ['1']] } }, TavernDB_ACU_Identity: 'tag_B' })];
+    mockGetChatArray.mockReturnValue(chat);
+    await deleteLocalDataInChatCore_ACU('current');
+    expect(chat[0].TavernDB_ACU_IsolatedData?.tag_A).toBeUndefined();
+    expect(chat[0].TavernDB_ACU_IndependentData).toBeTruthy();
+    expect(chat[0].TavernDB_ACU_Identity).toBe('tag_B');
+  });
+
+  it('R3-04 对照：归属当前标识的旧版顶层数据照常删除', async () => {
+    mockSettings.dataIsolationEnabled = false;
+    mockGetCurrentIsolationKey.mockReturnValue('');
+    const chat: any[] = [ai({ TavernDB_ACU_Data: { sheet_0: { content: [['row_id'], ['1']] } } })];
+    mockGetChatArray.mockReturnValue(chat);
+    await deleteLocalDataInChatCore_ACU('current');
+    expect(chat[0].TavernDB_ACU_Data).toBeUndefined();
+  });
+
+  it('R3-05 保留层清理遇到其他标识的旧版顶层数据同样 fail-closed，不删', async () => {
+    mockSettings.retainRecentLayers = 3;
+    mockSettings.dataIsolationEnabled = false;
+    mockGetCurrentIsolationKey.mockReturnValue('');
+    const chat: any[] = [];
+    for (let i = 0; i < 24; i++) { chat.push(user()); chat.push(ai()); }
+    chat[1] = ai({ TavernDB_ACU_Data: { sheet_9: { content: [['row_id'], ['1']] } }, TavernDB_ACU_Identity: 'tag_B' });
+    mockGetChatArray.mockReturnValue(chat);
+    await purgeOldLayerData_ACU();
+    expect(chat[1].TavernDB_ACU_Data).toBeTruthy();
+    expect(chat[1].TavernDB_ACU_Identity).toBe('tag_B');
+  });
+
+  it('R3-06 模板临时根建立后零提交回滚：撤掉临时根，单根不变量成立', async () => {
+    mockSettings.dataIsolationEnabled = false;
+    mockGetCurrentIsolationKey.mockReturnValue('');
+    const sheet = { name: '物品表', content: [['row_id', '物品名'], ['1', '剑']] };
+    const frame = (extra: any) => ({ TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: { version: 2, logEntries: [], ...extra } } } });
+    const chat: any[] = [
+      user(),
+      ai(frame({ logEntries: [{ seq: 1, entryId: 'e1', createdAt: 1, source: 'ai', targetMessageIndex: 1, operations: [{ kind: 'data_replace', data: { sheet_0: sheet }, reason: 'checkpoint_fallback' }], writeSet: [{ kind: 'all' }] }] })),
+      user(),
+      ai(frame({ checkpoint: { kind: 'full', createdAt: 2, reason: 'periodic', data: { mate: { type: 'chatSheets', version: 1 }, sheet_0: sheet } } })),
+      user(),
+      ai(frame({})),
+    ];
+    const before = JSON.stringify(chat);
+    mockGetChatArray.mockReturnValue(chat);
+    let handle: any = null;
+    await clearManualRefillSheetDataInRange_ACU([3, 5], ['sheet_0'], { onRollbackSnapshot: (h: any) => { handle = h; }, deferExternalVectorCleanup: () => {} } as any);
+    const established = await establishManualRefillTemplateRoot_ACU({ isolationKey: '', targetSheetKeys: ['sheet_0'], targetMessageIndices: [3, 5], templateData: { mate: { type: 'chatSheets', version: 1 }, sheet_0: { name: '物品表', content: [['row_id', '物品名']] } }, rollbackHandle: handle } as any);
+    expect(established.success).toBe(true);
+    expect(established.changed).toBe(true);
+    const rolledBack = await rollbackManualRefillRangeSnapshotAtomic_ACU(handle);
+    expect(rolledBack.success).toBe(true);
+    expect(assertSingleActiveFullCheckpointV2_ACU(chat, '', 'test:r3-06')).toBeNull();
+    expect(JSON.stringify(chat)).toBe(before);
+  });
+
+  it('R3-07 按表删除选中全部表并覆盖根：不留无根空帧，回到从未填表状态', async () => {
+    mockSettings.dataIsolationEnabled = false;
+    mockGetCurrentIsolationKey.mockReturnValue('');
+    const root = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { uid: 'sheet_0', name: '物品表', content: [['row_id', '物品名'], ['1', '剑']], sourceData: {}, updateConfig: {}, exportConfig: {}, orderNo: 0 },
+      sheet_1: { uid: 'sheet_1', name: '地点表', content: [['row_id', '地点'], ['1', '城']], sourceData: {}, updateConfig: {}, exportConfig: {}, orderNo: 1 },
+    };
+    const chat: any[] = [
+      { is_user: false, TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: { version: 2, checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: root }, logEntries: [] } } } },
+      { is_user: true },
+      { is_user: false, TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: { version: 2, logEntries: [{ seq: 1, entryId: 'e1', createdAt: 2, source: 'system', targetMessageIndex: 2, aiFloor: 2, filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [], operations: [{ kind: 'row_upsert', sheetKey: 'sheet_0', rowId: '2', cells: ['2', '盾'], reason: 'system' }] }] } } } },
+    ];
+    mockGetChatArray.mockReturnValue(chat);
+    await deleteLocalDataWithScope_ACU('all', null, null, 'range', ['sheet_0', 'sheet_1']);
+    expect(chat.some(message => message?.TavernDB_ACU_IsolatedData?.['']?.storageFrame)).toBe(false);
+    expect(resolveTableStorageStrategy_ACU(chat, '', { enabled: false, code: '' } as any).mode).not.toBe('v2');
   });
 });

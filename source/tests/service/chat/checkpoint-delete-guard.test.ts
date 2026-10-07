@@ -175,6 +175,26 @@ describe('captureCheckpointVaultForCurrentChat_ACU · 产物克隆记忆化', ()
     expect(__getCheckpointVaultForTests_ACU()?.entryCounts['']).toBe(3);
   });
 
+  // R3-09：chat 在锁外取得，等锁期间宿主换了聊天数组就必须放弃，不得把旧聊天产物嫁接进新聊天。
+  it('等锁期间聊天数组被替换：放弃恢复，旧数组与新数组都不改写', async () => {
+    const rootMsg = aiMsg('root', rootFrame());
+    const incMsg = aiMsg('inc', logFrame());
+    const chat = [userMsg('u'), rootMsg, incMsg];
+    mockGetChatArray.mockReturnValue(chat);
+    captureCheckpointVaultForCurrentChat_ACU();
+    chat.splice(1, 1);
+    const otherChat = [userMsg('x'), aiMsg('other')];
+    mockRunTableWriteTransaction.mockImplementationOnce(async (_options: any, task: any) => {
+      mockGetChatArray.mockReturnValue(otherChat);
+      return task();
+    });
+    const before = JSON.stringify(incMsg);
+    const result = await recoverLostCheckpointsAfterMessageDeletion_ACU();
+    expect(result.recovered).toBe(false);
+    expect(JSON.stringify(incMsg)).toBe(before);
+    expect(mockRunTableWriteTransaction.mock.calls[0][0].guardChatSwitch).toBe(true);
+  });
+
   it('帧产物换新后重新深克隆，且嫁接读回的是新产物而非记忆化旧值', async () => {
     const rootMsg = aiMsg('root', rootFrame());
     const incMsg = aiMsg('inc', logFrame());

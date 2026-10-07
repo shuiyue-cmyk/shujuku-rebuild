@@ -19,6 +19,7 @@ const {
   mockReadProfileTemplate,
   mockWriteProfileSettings,
   mockWriteProfileTemplate,
+  mockBackupProfileTemplate,
   mockSanitizeSettingsForProfileSave,
   mockEnsureProfileExists,
   mockSetSettings,
@@ -90,6 +91,7 @@ const {
     mockReadProfileTemplate: vi.fn(() => null),
     mockWriteProfileSettings: vi.fn(),
     mockWriteProfileTemplate: vi.fn(),
+    mockBackupProfileTemplate: vi.fn(),
     mockSanitizeSettingsForProfileSave: vi.fn((obj: any) => ({ ...obj })),
     mockEnsureProfileExists: vi.fn(),
     mockSetSettings: vi.fn((newSettings: any) => {
@@ -217,6 +219,7 @@ vi.mock('../../../src/data/repositories/profile-repo', () => ({
   saveGlobalMeta_ACU: mockSaveGlobalMeta,
   writeProfileSettingsToStorage_ACU: mockWriteProfileSettings,
   writeProfileTemplateToStorage_ACU: mockWriteProfileTemplate,
+  backupProfileTemplateRawBeforeDegradation_ACU: mockBackupProfileTemplate,
 }));
 
 vi.mock('../../../src/shared/template-preset-utils', () => ({
@@ -310,6 +313,7 @@ import {
   applyCombinedSettingsImport_ACU,
   _set_settingsStorageReadyForSave_ACU,
   summarizeSettingsForLog_ACU,
+  loadTemplateFromStorage_ACU,
 } from '../../../src/service/settings/settings-service';
 
 beforeEach(() => {
@@ -1152,4 +1156,20 @@ describe('loadSettings_ACU', () => {
     expect(JSON.stringify(summary)).not.toContain('sk-');
   });
 
+});
+
+describe('loadTemplateFromStorage_ACU 损坏模板防丢（R3-08）', () => {
+  it('模板解析失败：先备份原串，再写默认模板', () => {
+    mockReadProfileTemplate.mockReturnValueOnce('{坏掉的模板');
+    loadTemplateFromStorage_ACU('code_1');
+    expect(mockBackupProfileTemplate).toHaveBeenCalledWith('code_1', 'json_parse_failed');
+    expect(mockBackupProfileTemplate.mock.invocationCallOrder[0])
+      .toBeLessThan(mockWriteProfileTemplate.mock.invocationCallOrder.at(-1)!);
+  });
+
+  it('模板格式不符：同样先备份', () => {
+    mockReadProfileTemplate.mockReturnValueOnce('{"hello":1}');
+    loadTemplateFromStorage_ACU('code_1');
+    expect(mockBackupProfileTemplate).toHaveBeenCalledWith('code_1', 'format_invalid');
+  });
 });

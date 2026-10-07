@@ -821,6 +821,7 @@ export async function ensureV2BoundaryCheckpointForRetainedBuffer_ACU(
         isolationKey: getCurrentIsolationKey_ACU(),
         writeSet: [{ kind: 'all' }],
         maintenanceMode: 'exclusive',
+        guardChatSwitch: true,
     }, async () => {
         const retainCount = settings_ACU.retainRecentLayers || 0;
 
@@ -1382,6 +1383,14 @@ async function purgeOldLayerDataCore_ACU() {
     }
 
     let purgedCount = 0;
+    const LEGACY_TOP_LEVEL_TABLE_KEYS_ACU = new Set([
+        'TavernDB_ACU_Data',
+        'TavernDB_ACU_SummaryData',
+        'TavernDB_ACU_IndependentData',
+        'TavernDB_ACU_ModifiedKeys',
+        'TavernDB_ACU_UpdateGroupKeys',
+        'TavernDB_ACU_Identity',
+    ]);
     const keysToDelete = [
         'TavernDB_ACU_Data',
         'TavernDB_ACU_SummaryData',
@@ -1411,7 +1420,14 @@ async function purgeOldLayerDataCore_ACU() {
         purgedVectorManifestCount += collectVectorIndexGcScopesFromMessage_ACU(msg, vectorGcScopes);
 
         let modified = false;
+        // 顶层旧版载荷与 Identity 只属于其 Identity 对应的隔离域；上面的孤儿检查只覆盖当前标识，
+        // 其他标识的旧版数据没有经过检查，清理时原样保留，不得静默删除（R3-05）。
+        const ownsLegacy = isLegacyMatchForIsolation_ACU(msg, {
+            enabled: !!settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode || '',
+        });
         for (const key of keysToDelete) {
+            if (!ownsLegacy && LEGACY_TOP_LEVEL_TABLE_KEYS_ACU.has(key)) continue;
             if (Object.prototype.hasOwnProperty.call(msg, key)) {
                 delete msg[key];
                 modified = true;
@@ -1467,6 +1483,7 @@ export async function purgeOldLayerData_ACU() {
         isolationKey: getCurrentIsolationKey_ACU(),
         writeSet: [{ kind: 'all' }],
         maintenanceMode: 'exclusive',
+        guardChatSwitch: true,
     }, () => purgeOldLayerDataCore_ACU());
 }
 
@@ -1712,6 +1729,7 @@ export async function ensureManualCatchUpAnchorBeforeTarget_ACU(
         isolationKey,
         writeSet: [{ kind: 'all' }],
         maintenanceMode: 'exclusive',
+        guardChatSwitch: true,
     }, async () => {
         const chat = getChatArray_ACU();
         if (!Array.isArray(chat) || chat.length === 0) {
@@ -1977,20 +1995,26 @@ async function deleteLocalDataInChatCoreInner_ACU(
 
         if (shouldDelete) {
             let modified = false;
+            // 顶层旧版载荷只属于其 Identity 对应的隔离域：「删除当前」不得连带删掉其他标识的旧数据
+            // （与 clearAllAiTableDataForCheckpointRestore_ACU 同口径）。mode=all 才全删。
+            const ownsLegacy = mode === 'all' || isLegacyMatchForIsolation_ACU(msg, {
+                enabled: !!settings_ACU.dataIsolationEnabled,
+                code: settings_ACU.dataIsolationCode || '',
+            });
 
-            if (msg.TavernDB_ACU_Data) {
+            if (ownsLegacy && msg.TavernDB_ACU_Data) {
                 delete msg.TavernDB_ACU_Data;
                 modified = true;
             }
-            if (msg.TavernDB_ACU_SummaryData) {
+            if (ownsLegacy && msg.TavernDB_ACU_SummaryData) {
                 delete msg.TavernDB_ACU_SummaryData;
                 modified = true;
             }
-            if (msg.TavernDB_ACU_IndependentData) {
+            if (ownsLegacy && msg.TavernDB_ACU_IndependentData) {
                 delete msg.TavernDB_ACU_IndependentData;
                 modified = true;
             }
-            if (msg.TavernDB_ACU_Identity !== undefined) {
+            if (ownsLegacy && msg.TavernDB_ACU_Identity !== undefined) {
                 delete msg.TavernDB_ACU_Identity;
                 modified = true;
             }
@@ -2024,10 +2048,10 @@ async function deleteLocalDataInChatCoreInner_ACU(
                     }
                 }
             }
-            if (msg.TavernDB_ACU_ModifiedKeys) {
+            if (ownsLegacy && msg.TavernDB_ACU_ModifiedKeys) {
                 delete msg.TavernDB_ACU_ModifiedKeys;
             }
-            if (msg.TavernDB_ACU_UpdateGroupKeys) {
+            if (ownsLegacy && msg.TavernDB_ACU_UpdateGroupKeys) {
                 delete msg.TavernDB_ACU_UpdateGroupKeys;
             }
 
@@ -2064,7 +2088,10 @@ async function deleteLocalDataInChatCoreInner_ACU(
     }
 
     if (deletedCount > 0) {
-        await saveChatToHost_ACU();
+        // 有外置向量文件待删时必须严格保存：非严格保存在宿主 saveChat 缺失时只告警就返回，
+        // 引用没落盘文件却被删（R3-11）。
+        if (vectorManifestsToDeleteAfterCommit.length > 0) await saveChatToHostStrict_ACU();
+        else await saveChatToHost_ACU();
         // 聊天引用已提交后才物理删除外置向量文件；保存抛错时不执行，引用保持原样。
         await cleanupVectorIndexManifestsAfterCommit_ACU(vectorManifestsToDeleteAfterCommit);
     }
@@ -2083,6 +2110,7 @@ export async function deleteLocalDataInChatCore_ACU(
         isolationKey: getCurrentIsolationKey_ACU(),
         writeSet: [{ kind: 'all' }],
         maintenanceMode: 'exclusive',
+        guardChatSwitch: true,
     }, () => deleteLocalDataInChatCoreInner_ACU(mode, startFloor, endFloor));
 }
 
@@ -2136,6 +2164,7 @@ export async function deleteLocalDataWithScope_ACU(
         if (targetMessageIndices.length === 0) return { path: 'range', deletedCount: 0, sheetKeys: normalizedSheetKeys };
         // 复用手动重填的按表范围清理：候选克隆上裁剪 → strict save 成功才落地，失败原位回滚。
         const deletedCount = await clearManualRefillSheetDataInRange_ACU(targetMessageIndices, normalizedSheetKeys);
+        if (deletedCount > 0) await dropRootlessEmptyFramesAfterSheetDeletion_ACU();
         return { path: 'range', deletedCount, sheetKeys: normalizedSheetKeys };
     }
     const aiMessageCount = countAiFloors_ACU(chat);
@@ -2156,6 +2185,63 @@ export async function deleteLocalDataWithScope_ACU(
     return { path: 'range', deletedCount: await deleteLocalDataInChatCore_ACU(mode, startFloor, endFloor) };
 }
 
+
+function isEmptyStorageFrameV2_ACU(frame: any): boolean {
+    if (!frame || typeof frame !== 'object' || frame.version !== 2) return false;
+    if (frame.checkpoint) return false;
+    if (Array.isArray(frame.logEntries) && frame.logEntries.length > 0) return false;
+    if (frame.perSheetCheckpoints && typeof frame.perSheetCheckpoints === 'object' && Object.keys(frame.perSheetCheckpoints).length > 0) return false;
+    return Object.keys(frame).every(key => ['version', 'logEntries', 'headRevision'].includes(key));
+}
+
+/**
+ * 按表删除选中全部表并覆盖根楼层后，当前隔离键会只剩没有根的空 V2 信封：存储策略仍判为 v2，
+ * 却没有任何整库根，此后一切填表写入都被隐式迁移守卫拒绝（R3-07）。
+ * 仅当已无整库根、且剩余帧全部为空信封时，把空信封一并移除，回到「从未填表」状态（与整楼删除同口径）。
+ * 帧里还有日志/分表快照时不动——那不是本函数能安全判定的状态。
+ */
+async function dropRootlessEmptyFramesAfterSheetDeletion_ACU(): Promise<void> {
+    const isolationKey = getCurrentIsolationKey_ACU();
+    await runTableWriteTransaction_ACU({
+        source: 'system_cleanup',
+        reason: 'dropRootlessEmptyFramesAfterSheetDeletion',
+        isolationKey,
+        writeSet: [{ kind: 'all' }],
+        maintenanceMode: 'exclusive',
+        guardChatSwitch: true,
+    }, async () => {
+        const chat = getChatArray_ACU();
+        if (!Array.isArray(chat)) return;
+        const frameIndices: number[] = [];
+        for (let index = 0; index < chat.length; index++) {
+            const tagData = readIsolatedTagData_ACU(chat[index], isolationKey);
+            const frame = tagData?.storageFrame;
+            if (!frame) continue;
+            if (!isEmptyStorageFrameV2_ACU(frame)) return;
+            frameIndices.push(index);
+        }
+        if (frameIndices.length === 0) return;
+        const snapshots = new Map(frameIndices.map(index => [index, messageFieldSnapshot_ACU(chat[index])]));
+        try {
+            for (const index of frameIndices) {
+                const msg = chat[index];
+                const container = { ...readIsolatedDataContainer_ACU(msg) };
+                const tagData = { ...container[isolationKey] };
+                delete tagData.storageFrame;
+                delete tagData._acu_storage_version;
+                if (Object.keys(tagData).length === 0) delete container[isolationKey];
+                else container[isolationKey] = tagData;
+                if (Object.keys(container).length === 0) delete msg.TavernDB_ACU_IsolatedData;
+                else msg.TavernDB_ACU_IsolatedData = container;
+            }
+            await saveChatToHostStrict_ACU();
+            logDebug_ACU(`[按表删除] 已无整库根，移除 ${frameIndices.length} 个空 V2 信封，回到从未填表状态。`);
+        } catch (error) {
+            snapshots.forEach((snapshot, index) => restoreMessageFieldSnapshot_ACU(chat[index], snapshot));
+            logWarn_ACU('[按表删除] 移除无根空信封保存失败，已原位恢复：', error);
+        }
+    });
+}
 
 /**
  * 使用模板覆盖最新层的表格数据（核心业务逻辑）
@@ -2250,89 +2336,6 @@ export async function overrideLatestLayerWithTemplateCore_ACU(templateData: any)
     return commitResult.value || 0;
 }
 
-/**
- * 按消息索引列表清空指定 AI 楼层上的当前隔离标签表格数据，并保存聊天。
- *
- * 用于手动填表前的"预清空"步骤：先清除目标楼层上的旧表格数据，
- * 再执行新的手动填表，防止 SQL 严格填表逻辑因旧数据残留导致写入失败。
- *
- * 清理范围：当前隔离标签下的新版 IsolatedData 槽 + 旧版兼容字段。
- * 不影响同一消息上其他隔离标签的数据。
- * 不删除消息正文或非表格业务字段。
- *
- * @param targetMessageIndices 需要清空的目标 AI 消息物理索引列表（已去重）
- * @returns 实际被清空的消息数量
- */
-async function clearTableDataAtFloorsCore_ACU(targetMessageIndices: number[], targetSheetKeys: string[] | null = null): Promise<number> {
-    if (!targetMessageIndices || targetMessageIndices.length === 0) return 0;
-
-    const chat = getChatArray_ACU();
-    if (!chat || chat.length === 0) return 0;
-
-    const isolationKey = getCurrentIsolationKey_ACU();
-    const isolationConfig = {
-        enabled: settings_ACU.dataIsolationEnabled,
-        code: settings_ACU.dataIsolationCode,
-    };
-    const hasTargetSheetKeys = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0;
-    // 按表清空要覆盖该表在历史里的全部 key 代（同名扩展），否则旧 key 的数据会留下。
-    const targetAliases = hasTargetSheetKeys
-        ? resolveSheetIdentityAliasesForClear_ACU(chat, isolationKey, targetSheetKeys!, '清空楼层')
-        : null;
-    const clearsSummaryOrOutline = targetAliases
-        ? tableListContainsSummaryOrOutline_ACU(targetAliases.sheetKeys)
-        : true;
-
-    let clearedCount = 0;
-    // 外置向量文件删除推迟到聊天保存成功后：保存失败时引用仍在，删除会造成悬空指针。
-    const vectorManifestsToDeleteAfterCommit: any[] = [];
-
-    for (const idx of targetMessageIndices) {
-        if (idx < 0 || idx >= chat.length) continue;
-        const msg = chat[idx];
-        // 只处理 AI 消息（跳过用户消息）
-        if (!msg || msg.is_user) continue;
-
-        // 整槽清空会连同向量指针一起删掉，必须在清之前取槽收集 manifest。
-        const tagDataBeforeClear = readIsolatedTagData_ACU(msg, isolationKey);
-        const changed = targetAliases
-            ? purgeTargetSheetKeysFromMessage_ACU(msg, targetAliases.sheetKeys, idx)
-            : clearTableFieldsForIsolation_ACU(msg, isolationKey, isolationConfig);
-        if (clearsSummaryOrOutline) {
-            const tagData = readIsolatedTagData_ACU(msg, isolationKey) ?? tagDataBeforeClear;
-            // 只剥离 tagData 上的引用并收集 manifest，聊天保存成功后才物理删除外置文件。
-            if (await deleteVectorIndexManifestFromTagData_ACU(tagData, { deleteExternal: false, onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest) })) {
-                logDebug_ACU(`[清空楼层] 已标记消息索引 ${idx} 上的交火向量索引外置文件引用待删除。`);
-            }
-        }
-        if (changed) {
-            clearedCount++;
-            logDebug_ACU(`[清空楼层] 已清空消息索引 ${idx} 上的表格数据 (标签: ${isolationKey || '无'})`);
-        }
-    }
-
-    if (clearedCount > 0) {
-        await saveChatToHost_ACU();
-        // 聊天引用已提交后才物理删除外置向量文件；保存抛错时不执行，宁可泄漏不误删。
-        await cleanupVectorIndexManifestsAfterCommit_ACU(vectorManifestsToDeleteAfterCommit);
-        logDebug_ACU(`[清空楼层] 共清空 ${clearedCount} 条消息的表格数据，聊天已保存。`);
-    }
-
-    return clearedCount;
-}
-
-export async function clearTableDataAtFloors_ACU(targetMessageIndices: number[], targetSheetKeys: string[] | null = null): Promise<number> {
-    const writeSet = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0
-        ? targetSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey }))
-        : [{ kind: 'all' as const }];
-    return runTableWriteTransaction_ACU({
-        source: 'system_cleanup',
-        reason: 'clearTableDataAtFloors',
-        isolationKey: getCurrentIsolationKey_ACU(),
-        writeSet,
-        maintenanceMode: 'exclusive',
-    }, () => clearTableDataAtFloorsCore_ACU(targetMessageIndices, targetSheetKeys));
-}
 
 async function clearManualRefillIncrementalDataInRangeCore_ACU(targetMessageIndices: number[], targetSheetKeys: string[] | null = null): Promise<number> {
     if (!targetMessageIndices || targetMessageIndices.length === 0) return 0;
@@ -2439,6 +2442,7 @@ export async function clearManualRefillIncrementalDataInRange_ACU(targetMessageI
         isolationKey: getCurrentIsolationKey_ACU(),
         writeSet,
         maintenanceMode: 'exclusive',
+        guardChatSwitch: true,
     }, () => clearManualRefillIncrementalDataInRangeCore_ACU(targetMessageIndices, targetSheetKeys));
 }
 
@@ -2641,6 +2645,7 @@ export async function commitManualRefillSheetSnapshotInRangeAtomic_ACU(
         isolationKey: options.isolationKey,
         writeSet,
         maintenanceMode: 'exclusive',
+        guardChatSwitch: true,
     }, async () => {
         const chat = getChatArray_ACU();
         if (!Array.isArray(chat) || chat.length === 0) {
@@ -2826,8 +2831,13 @@ export async function establishManualRefillTemplateRoot_ACU(options: {
     targetSheetKeys: string[];
     targetMessageIndices: number[];
     templateData: Record<string, any> | null;
+    /**
+     * 清理阶段交出的回滚句柄。临时根可能落在重填范围之外（最早的 V2 帧），清理快照里没有这一楼；
+     * 必须把建根前的字段快照并入句柄，零提交回滚时才能一并撤掉临时根，否则留下两个 full checkpoint（R3-06）。
+     */
+    rollbackHandle?: ManualRefillRangeRollbackHandle_ACU | null;
 }): Promise<{ success: boolean; changed: boolean; targetMessageIndex: number; error?: string }> {
-    const { isolationKey, targetSheetKeys, targetMessageIndices, templateData } = options;
+    const { isolationKey, targetSheetKeys, targetMessageIndices, templateData, rollbackHandle } = options;
     if (!Array.isArray(targetSheetKeys) || targetSheetKeys.length === 0) {
         return { success: false, changed: false, targetMessageIndex: -1, error: '手动重填临时根建立必须指定目标表。' };
     }
@@ -2912,8 +2922,13 @@ export async function establishManualRefillTemplateRoot_ACU(options: {
         rootFrame.checkpoint = checkpointBuild.checkpoint;
         writeMessageIdentity_ACU(rootMessage, { enabled: settings_ACU.dataIsolationEnabled, code: settings_ACU.dataIsolationCode });
 
+        const rootFingerprint = buildMessageIdentityFingerprint_ACU(chat[rootMessageIndex]);
         applyCandidateMessageFields_ACU(chat[rootMessageIndex], candidateChat[rootMessageIndex]);
         await saveChatToHostStrict_ACU();
+        if (rollbackHandle && Array.isArray(rollbackHandle.entries)
+            && !rollbackHandle.entries.some(entry => entry.index === rootMessageIndex)) {
+            rollbackHandle.entries.push({ index: rootMessageIndex, snapshot: snapshots.get(rootMessageIndex)!, fingerprint: rootFingerprint });
+        }
         logDebug_ACU(`[手动重填临时根] 已在 AI 楼层 #${rootMessageIndex} 为 ${targetSheetKeys.join(', ')} 建立模板临时根（runId=${fallbackRunId}）。`);
         return { success: true, changed: true, targetMessageIndex: rootMessageIndex };
     } catch (error: any) {
@@ -2948,6 +2963,7 @@ export async function replaceManualRefillSheetBaselineInRangeAtomic_ACU(
         isolationKey: options.isolationKey,
         writeSet,
         maintenanceMode: 'exclusive',
+        guardChatSwitch: true,
     }, async () => {
         const chat = getChatArray_ACU();
         if (!Array.isArray(chat) || chat.length === 0) {
@@ -3121,6 +3137,7 @@ export async function clearManualRefillSheetDataInRange_ACU(
         isolationKey: getCurrentIsolationKey_ACU(),
         writeSet,
         maintenanceMode: 'exclusive',
+        guardChatSwitch: true,
     }, () => clearManualRefillSheetDataInRangeCore_ACU(targetMessageIndices, targetSheetKeys, options));
 }
 
@@ -3153,6 +3170,7 @@ export async function rollbackManualRefillRangeSnapshotAtomic_ACU(
         isolationKey: getCurrentIsolationKey_ACU(),
         writeSet,
         maintenanceMode: 'exclusive',
+        guardChatSwitch: true,
     }, async () => {
         let restoredCount = 0;
         const skippedIndexes: number[] = [];
@@ -3173,6 +3191,11 @@ export async function rollbackManualRefillRangeSnapshotAtomic_ACU(
         try {
             await saveChatToHostStrict_ACU();
             logDebug_ACU(`[手动重填回滚] 已按清理前快照恢复 ${restoredCount} 条消息的选中表数据并严格保存。`);
+            // 回滚后复核单根不变量：任何遗留的临时根都必须如实报失败，不得谎报成功（R3-06）。
+            const rootProblem = assertSingleActiveFullCheckpointV2_ACU(chat, getCurrentIsolationKey_ACU(), 'rollbackManualRefillRangeSnapshotAtomic');
+            if (rootProblem && allRestored) {
+                return { success: false, restoredCount, skippedIndexes, error: `回滚后整库根状态异常：${rootProblem}` };
+            }
             return allRestored
                 ? { success: true, restoredCount, skippedIndexes }
                 : {

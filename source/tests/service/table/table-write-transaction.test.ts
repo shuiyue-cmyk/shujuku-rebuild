@@ -33,6 +33,27 @@ describe('table-write-transaction', () => {
     _set_currentJsonTableData_ACU({ mate: { type: 'acu', version: 1 }, sheet_0: { name: 'A', content: [['row_id']] } });
   });
 
+  // R3-09：维护类事务等锁期间切换了聊天，恢复后不得在新聊天上执行旧聊天里确认过的操作。
+  it('guardChatSwitch：等锁期间切换聊天则拒绝执行任务', async () => {
+    const holding = deferred_ACU();
+    const first = runTableWriteTransaction_ACU({ source: 'system_cleanup', reason: 'hold', writeSet: [{ kind: 'all' }] }, () => holding.promise);
+    let ran = false;
+    const second = runTableWriteTransaction_ACU({
+      source: 'system_cleanup', reason: 'maintenance', writeSet: [{ kind: 'all' }], maintenanceMode: 'exclusive', guardChatSwitch: true,
+    }, () => { ran = true; });
+    _set_currentChatFileIdentifier_ACU('chat-b');
+    holding.resolve();
+    await first;
+    await expect(second).rejects.toThrow(/聊天已切换/);
+    expect(ran).toBe(false);
+  });
+
+  it('guardChatSwitch：聊天未变时照常执行', async () => {
+    await expect(runTableWriteTransaction_ACU({
+      source: 'system_cleanup', reason: 'maintenance', writeSet: [{ kind: 'all' }], maintenanceMode: 'exclusive', guardChatSwitch: true,
+    }, () => 'ok')).resolves.toBe('ok');
+  });
+
   it('构造 maintenance / sheet / commit scope key', () => {
     expect(buildTableMaintenanceScopeKey_ACU({ chatKey: ' chat ', isolationKey: ' iso ' })).toBe('chat::iso::maintenance');
     expect(buildTableSheetMutationScopeKey_ACU({ chatKey: 'chat', isolationKey: 'iso', sheetKey: 'sheet_0' })).toBe('chat::iso::sheet::sheet_0');

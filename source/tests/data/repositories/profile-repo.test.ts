@@ -52,6 +52,7 @@ import {
   writeProfileSettingsToStorage_ACU,
   readProfileTemplateFromStorage_ACU,
   writeProfileTemplateToStorage_ACU,
+  backupProfileTemplateRawBeforeDegradation_ACU,
   saveCurrentProfileTemplate_ACU,
   sanitizeSettingsForProfileSave_ACU,
 } from '../../../src/data/repositories/profile-repo';
@@ -176,6 +177,20 @@ describe('readProfileTemplateFromStorage_ACU', () => {
   it('空字符串返回 null', () => {
     mockStore._store.set('acu_template_code_1', '   ');
     expect(readProfileTemplateFromStorage_ACU('code_1')).toBeNull();
+  });
+});
+
+// R3-08：模板读不出来、即将被默认模板覆盖前，原始串先备份到旁路键。
+describe('backupProfileTemplateRawBeforeDegradation_ACU', () => {
+  it('把原始模板串复制到 .bak 旁路键', () => {
+    mockStore._store.set('acu_template_code_1', '{坏掉的模板');
+    backupProfileTemplateRawBeforeDegradation_ACU('code_1', 'json_parse_failed');
+    expect(mockStore._store.get('acu_template_code_1.bak')).toBe('{坏掉的模板');
+  });
+
+  it('没有原始串时不写备份', () => {
+    backupProfileTemplateRawBeforeDegradation_ACU('code_1', 'json_parse_failed');
+    expect(mockStore._store.has('acu_template_code_1.bak')).toBe(false);
   });
 });
 

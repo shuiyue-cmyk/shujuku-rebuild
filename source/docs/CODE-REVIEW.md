@@ -18,10 +18,10 @@
 | 1 | data/（storage、sqlite、repositories、gateways、models） | 9.7k | 完成（向量存储并入块 5） |
 | 2A | service/table 填表流水线（orchestrator、sql-table-service、事务、调度） | 15k | 子代理完成 → `docs/review/block2a-fill-pipeline.md`；P1 已修，P2 待修 |
 | 2B | service/table 存储帧/回放/迁移 | 15k | 子代理完成 → `docs/review/block2b-storage-replay.md`；P1 已修，P2 待修 |
-| 3 | service/chat + service/runtime + service/settings | 17.8k | 子代理完成 → `docs/review/block3-chat-runtime-settings.md`；P1 与 R3-03 已修，其余 P2 待修 |
+| 3 | service/chat + service/runtime + service/settings | 17.8k | 子代理完成 → `docs/review/block3-chat-runtime-settings.md`；P1/P2 全部已修（R3-08 只做备份，「合法但零表模板」仍按损坏处理），P3 部分修 |
 | 4 | service/continuation + service/agent | 30k | 子代理完成 → `docs/review/block4-continuation-agent.md`；P1 与 R4-05 已修 |
-| 5 | service/vector + data/storage 向量部分 | 12.4k+ | 未开始 |
-| 6 | service/template + template-assistant + worldbook | 13.3k | 未开始 |
+| 5 | service/vector + data/storage 向量部分 | 12.4k+ | 子代理完成 → `docs/review/block5-vector.md`；待修 |
+| 6 | service/template + template-assistant + worldbook | 13.3k | 子代理完成 → `docs/review/block6-template-worldbook.md`；待修 |
 | 7 | shared/ | 9.8k | 未开始 |
 | 8 | service/ai、plot、optimization、flight-mode、其余小模块 | 5k | 未开始 |
 | 9 | presentation（旧 bootstrap/triggers/api-groups） | 5.4k | 未开始 |
@@ -97,11 +97,19 @@
 | R3-01 模板只读 SQL 可用 [方括号] 绕过并执行写语句 | P1 | 已修：校验器认 [..] 标识符；executeQuery（模板/控制台/对外 API 唯一只读入口）在引擎层只允许单语句并以 query_only 执行 | read-only-sql-validation.test「方括号」、sqlite-engine.test「readOnly」、sql-table-service.test「executeQuery 拒绝」 |
 | R3-02 ORM 表达式 JS 白名单可绕过执行任意 JS | P1 | 已修：弃用 new Function，改为自带解释器（方法链 + 字面量参数 + 末尾比较），只能调 db 静态函数与构建器公开方法 | sql-query-var.test「绕过载荷」「只能调用构建器公开方法」「解释器支持的合法语法」 |
 | R3-03 CASE…END / REPLACE() 被当写语句拒 | P2 | 已修：词表去掉 END/REPLACE，WITH 按顶层主语句判定；写入兜底在引擎层 | read-only-sql-validation.test「R3-03」 |
+| R3-04 删除当前连带删别的标识旧数据 | P2 | 已修：顶层旧版字段与 Identity 按 isLegacyMatchForIsolation 把关（mode=all 除外） | chat-service.test「块 3 复审」R3-04×3 |
+| R3-05 保留层清理删别的标识旧数据 | P2 | 已修：非当前标识的顶层旧版字段与 Identity 原样保留（不中止整次清理） | chat-service.test R3-05 |
+| R3-06 重填临时根零提交回滚留双根 | P2 | 已修：建根前快照并入回滚句柄；回滚后复核单根，不成立如实报失败 | chat-service.test R3-06 |
+| R3-07 按表全删后无根空帧挡住填表 | P2 | 已修：无整库根且剩余帧全空时移除空信封 | chat-service.test R3-07 |
+| R3-08 模板解析失败被默认覆盖无备份 | P2 | 已修：覆盖前备份到 .bak | profile-repo.test、settings-service.test「R3-08」 |
+| R3-09 维护事务等锁跨切聊 | P2 | 已修：事务新增 guardChatSwitch（chat-service 维护类与删楼恢复启用）；删楼恢复另复核聊天数组身份 | table-write-transaction.test「guardChatSwitch」、checkpoint-delete-guard.test「聊天数组被替换」 |
+| R3-10 死代码跨标识清表 | P3 | 部分：删除 clearTableDataAtFloors_ACU 及用例；另三个无害死代码保留（saveCurrentDataForTable 仍在对外 API） | — |
+| R3-11 删向量文件前非严格保存 | P3 | 已修：有向量文件待删时严格保存 | chat-service.test「走严格保存」 |
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
 R2B-08/09（迁移、混合提交、batch 写入的整聊天克隆替换）与上面同一模式但无 await 窗口，未改，留作 P3。
 
-待修：R2A-07（多 staging 组汇合后丢 pre 段）、R2B-04/05/06（待坐实）、块 3 P2（R3-04..09）、R4-06（待坐实）/07/08、各块 P3。
+待修：块 5、块 6 全部；R2A-07（多 staging 组汇合后丢 pre 段）、R2A-04 第 2 部分、R2B-04/05/06（待坐实）、R4-06（待坐实）/07/08、各块 P3。
 R4-02 遗留：模型放弃补齐时，草稿（partial）不会阻止水位推进——只在提升路径堵住了「写齐却看不见」，「没写齐就收工」仍按旧口径。
 
-测试稳定性：bootstrap/index、data-mgmt-page 首个用例冷导入整张 V2 模块图约 14s，贴着全局 15s 上限，本机并行全量必超时（发布基线同样失败），已单独放宽到 60s。
+测试稳定性：重型页面套件首个用例冷导入整张 V2 模块图单跑 11–15s，贴着原全局 15s 上限，本机并行全量必超时（发布基线同样失败）；全局 testTimeout 调为 60s。

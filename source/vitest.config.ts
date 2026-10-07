@@ -54,7 +54,9 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     globals: true,
-    testTimeout: 15000,
+    // 重型页面套件（bootstrap、data-mgmt、form-fill、plot 等）首个用例要冷导入整张 V2 模块图，单跑即 11–15s；
+    // 全量 8 并行下必然越过 15s。卡死的用例仍会失败，只是晚一些暴露。
+    testTimeout: 60000,
     // 全量 8 并行/verify-parallel 三线并行下，重型 jsdom 套件（如 open-visualizer-surface，
     // 每用例 resetModules 冷编译全 app 图）首用例 beforeEach 实测贴 10s 默认线；留 2 倍余量。
     hookTimeout: 20000,

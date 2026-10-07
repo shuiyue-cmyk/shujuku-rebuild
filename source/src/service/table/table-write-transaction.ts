@@ -299,6 +299,19 @@ export interface RunTableWriteTransactionOptions_ACU {
   initialData?: TableDataObject_ACU | null;
   /** 已在事务外构建不可变结果、task 不读取 workingData 时跳过完整数据克隆。 */
   workingDataMode?: 'clone' | 'none';
+  /**
+   * 维护类事务：拿到锁后复核当前聊天仍是发起时的聊天，否则拒绝执行（R3-09）。
+   * 锁按发起时刻的聊天取键；等锁期间切换聊天，任务恢复后读到的却是新聊天，
+   * 会把用户在旧聊天里确认过的删除/恢复执行到新聊天上。仅在未显式指定 chatKey 时生效。
+   */
+  guardChatSwitch?: boolean;
+}
+
+export class TableWriteChatSwitchedError_ACU extends Error {
+  constructor(reason: string, from: string, to: string) {
+    super(`聊天已切换，已拒绝执行维护操作（${reason}：${from} → ${to}）。`);
+    this.name = 'TableWriteChatSwitchedError_ACU';
+  }
 }
 
 function generateTransactionId_ACU(): string {
@@ -428,6 +441,13 @@ export async function runTableWriteTransaction_ACU<T>(
   const revisionImpact: TableWriteRevisionImpact_ACU = options.revisionImpact === 'derived_metadata' ? 'derived_metadata' : 'source_table';
   const maintenanceMode = options.maintenanceMode || 'shared';
   const releases = await acquireTransactionLocks_ACU({ chatKey, isolationKey, writeSet, maintenanceMode });
+  if (options.guardChatSwitch && options.chatKey === undefined) {
+    const currentChatKey = normalizeScopePart_ACU(currentChatFileIdentifier_ACU, 'current-chat');
+    if (currentChatKey !== chatKey) {
+      for (const release of releases.reverse()) release();
+      throw new TableWriteChatSwitchedError_ACU(options.reason, chatKey, currentChatKey);
+    }
+  }
   const transactionId = generateTransactionId_ACU();
   const runtimeScopeKey = getRuntimeScopeKey_ACU({ chatKey, isolationKey });
   const baseRevision = options.baseRevision ?? captureRuntimeRevisionSnapshotForScope_ACU(runtimeScopeKey, writeSet);

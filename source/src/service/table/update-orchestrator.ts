@@ -5522,6 +5522,7 @@ export async function orchestrateManualUpdate_ACU(
                     targetSheetKeys: targetKeys,
                     targetMessageIndices: contextScopeIndices,
                     templateData: frozenManualRefillTemplateData,
+                    rollbackHandle: refillRollbackHandle,
                 });
                 if (!rootEstablish.success) {
                     logError_ACU('[Manual Refill] 清理后建立模板临时根失败:', rootEstablish.error);

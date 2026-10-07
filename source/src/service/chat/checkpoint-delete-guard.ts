@@ -397,7 +397,12 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
         isolationKey: getCurrentIsolationKey_ACU(),
         writeSet: [{ kind: 'all' }],
         maintenanceMode: 'exclusive',
+        guardChatSwitch: true,
     }, async (): Promise<CheckpointDeleteRecoveryResult_ACU> => {
+        // chat 在锁外取得：等锁期间宿主换了聊天数组就放弃，不得把旧聊天的产物嫁接进新聊天（R3-09）。
+        if (getChatArray_ACU() !== chat || String(currentChatFileIdentifier_ACU || '') !== chatKey) {
+            return { recovered: false, graftedCount: 0 };
+        }
         // 只快照将被改写的消息的 IsolatedData 字段，失败时整体还原。
         const snapshots = new Map<any, string | undefined>();
         const snapshotTarget = (message: any): void => {

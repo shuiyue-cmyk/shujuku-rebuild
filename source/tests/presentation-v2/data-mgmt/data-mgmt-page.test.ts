@@ -389,8 +389,7 @@ describe('DataMgmtPage', () => {
     expect(titles).toEqual(['备份与恢复', '休眠数据', '删除与清理']);
 
     mount.__resetAcuV2MountForTests();
-    // 首个用例承担整页模块图的冷导入（单跑约 14s，贴着全局 15s 上限），给足余量。
-  }, 60_000);
+  });
 
   it('删除与清理分节分为自动清理与手动删除，含保留层数与恢复默认配置', async () => {
     const { mount } = await mountDataMgmtPage();
