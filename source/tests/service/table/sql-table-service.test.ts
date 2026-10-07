@@ -1558,6 +1558,16 @@ describe('SqlTableService', () => {
     });
 
 
+    // R3-01：executeQuery 是只读入口（模板变量、SQL 控制台、对外 API 都走它），引擎层必须拒绝写与多语句，
+    // 不能只靠文本校验器——校验器被绕过时，这里是最后一道门。
+    it('executeQuery 拒绝写语句与多语句，数据不变', async () => {
+      mockMergeAll.mockResolvedValue(JSON.parse(JSON.stringify(testTableData)));
+      await service.loadFromChat();
+      expect(() => service.executeQuery('DELETE FROM inventory')).toThrow();
+      expect(() => service.executeQuery("SELECT 1 AS [a'];DELETE FROM inventory;SELECT 1 AS [']")).toThrow();
+      expect(service.executeQuery('SELECT * FROM inventory').rowCount).toBe(2);
+    });
+
     it('仅有基底状态数据时也写入运行时 SQLite，但不保留内部标记', async () => {
       const baseStateData = JSON.parse(JSON.stringify(testTableData));
       baseStateData.sheet_0._acu_from_base_state = true;

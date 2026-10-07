@@ -19,6 +19,7 @@ import { logDebug_ACU, logWarn_ACU, logError_ACU } from '../../../shared/utils';
 import { resolveReadQuerySql_ACU } from '../../../shared/sql-read-resolver';
 import { resolveCurrentRuntimeReadSql_ACU } from '../read-query-resolver';
 import { validateReadOnlySql_ACU } from './read-only-sql-validation';
+import { evaluateDbExpression_ACU } from './db-expression-interpreter';
 
 // ═══════════════════════════════════════════════════════════════
 // 模板变量 SQL/ORM 表达式安全校验（H1/H2 加固）
@@ -608,6 +609,26 @@ export class TableQueryBuilder {
  * 特殊属性名 expr/rand/calc 返回对应的静态方法
  * 让 JS 引擎原生处理链式调用、括号嵌套、引号转义
  */
+const DB_STATIC_METHODS_ACU = new Set(['expr', 'rand', 'calc', 'max', 'min']);
+const TABLE_QUERY_BUILDER_METHODS_ACU = new Set([
+  'where', 'orWhere', 'whereIn', 'whereBetween', 'groupBy', 'distinct', 'whereNotIn', 'whereNull', 'whereNotNull',
+  'whereLike', 'having', 'offset', 'orderBy', 'limit', 'get', 'first', 'list', 'all', 'count', 'sum', 'avg', 'max',
+  'min', 'value', 'exists', 'toSQL',
+]);
+
+/**
+ * 求值 db 表达式：自带解释器只认方法链 + 字面量参数 + 末尾比较，不把文本交给 JS 引擎（R3-02）。
+ * 只能调用 db 静态函数与表查询构建器的公开方法。
+ */
+function evaluateDbExpressionText_ACU(fullExpr: string): unknown {
+  const root = createDbProxy();
+  return evaluateDbExpression_ACU(fullExpr, {
+    root,
+    isCallable: (target, name) => (target === root && DB_STATIC_METHODS_ACU.has(name))
+      || (target instanceof TableQueryBuilder && TABLE_QUERY_BUILDER_METHODS_ACU.has(name)),
+  });
+}
+
 function createDbProxy(): Record<string, any> {
   return new Proxy({} as Record<string, any>, {
     get(_target, propName: string) {
@@ -756,7 +777,7 @@ function execCalc(expression: string): number | null {
  * 示例：
  *   db.max(3, 7, 1)  → 7
  *   db.max($v:a, $v:b, $v:c)  → 最大值
- *   注意：在 new Function 执行时，$v: 已经被替换为实际值（如果在 {[db...]} 中使用）
+ *   注意：求值时 $v: 已经被替换为实际值（如果在 {[db...]} 中使用）
  *   但如果直接调用，需要传入数字
  */
 function execMax(...values: any[]): number | null {
@@ -815,8 +836,7 @@ function execMin(...values: any[]): number | null {
  * 输入: "db.重要人物表.where('姓名', '角色A').get('状态')"
  * 输出: 执行结果字符串
  *
- * 通过 Proxy + new Function 让 JS 引擎直接执行链式调用，
- * 不再手动用正则解析方法链。
+ * 由 db-expression-interpreter 解析方法链并在 Proxy 上逐步调用；不经 JS 引擎执行文本。
  */
 export function evaluateOrmExpression(expr: string): string {
   try {
@@ -833,9 +853,7 @@ export function evaluateOrmExpression(expr: string): string {
       return '';
     }
 
-    const db = createDbProxy();
-    const fn = new Function('db', `return ${fullExpr}`);
-    const result = fn(db);
+    const result = evaluateDbExpressionText_ACU(fullExpr);
     return formatResult(result);
   } catch (e: any) {
     warnTemplateExprFailure_ACU('ORM', `${expr} → ${e?.message}`, e);
@@ -961,7 +979,7 @@ export function replaceDbSqlVariables(content: string): string {
  * 求值 <if db="..."> 条件
  * 返回布尔值：结果非零/非空/非false = true
  *
- * 通过 Proxy + new Function 直接执行整个表达式（含比较运算），
+ * 由 db-expression-interpreter 求值整个表达式（含比较运算），
  * 例如 db.重要人物表.where('阵营','敌方').count() > 3 直接返回布尔值。
  * 纯 ORM 表达式（无比较运算）则对结果做 truthy 判断。
  */
@@ -981,9 +999,7 @@ export function evaluateDbCondition(expression: string): boolean {
       return false;
     }
 
-    const db = createDbProxy();
-    const fn = new Function('db', `return ${fullExpr}`);
-    const result = fn(db);
+    const result = evaluateDbExpressionText_ACU(fullExpr);
 
     // 如果表达式本身包含比较运算（如 > 3），result 已经是布尔值
     if (typeof result === 'boolean') return result;

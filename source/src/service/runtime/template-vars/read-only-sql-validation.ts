@@ -3,11 +3,28 @@ export interface ReadOnlySqlValidationResult_ACU {
   reason?: string;
 }
 
+// END（CASE … END）与 REPLACE（REPLACE() 函数）不在词表：它们在只读查询里很常见；作为语句开头
+// （END TRANSACTION / REPLACE INTO）时过不了下面的首关键字判定，WITH 后的主语句另有顶层判定。
+// 真正的写入兜底在引擎层：executeQuery 以单语句 + query_only 执行。
 const FORBIDDEN_SQL_KEYWORDS_ACU = new Set([
   'ALTER', 'ANALYZE', 'ATTACH', 'BEGIN', 'COMMIT', 'CREATE', 'DELETE', 'DETACH',
-  'DROP', 'END', 'INSERT', 'REINDEX', 'RELEASE', 'REPLACE', 'ROLLBACK', 'SAVEPOINT',
+  'DROP', 'INSERT', 'REINDEX', 'RELEASE', 'ROLLBACK', 'SAVEPOINT',
   'TRUNCATE', 'UPDATE', 'VACUUM',
 ]);
+
+/** WITH 语句的主语句（括号深度 0 的首个 DML/SELECT 关键字）必须是 SELECT 或 VALUES。 */
+function withMainStatementIsRead_ACU(normalized: string): boolean {
+  let depth = 0;
+  const tokens = normalized.toUpperCase().match(/[A-Z_]+|[()]/g) || [];
+  for (const token of tokens) {
+    if (token === '(') { depth++; continue; }
+    if (token === ')') { depth = Math.max(0, depth - 1); continue; }
+    if (depth > 0) continue;
+    if (token === 'SELECT' || token === 'VALUES') return true;
+    if (token === 'INSERT' || token === 'UPDATE' || token === 'DELETE' || token === 'REPLACE') return false;
+  }
+  return false;
+}
 
 const ALLOWED_PRAGMAS_ACU = new Set([
   'table_info', 'table_xinfo', 'index_list', 'index_info', 'index_xinfo', 'foreign_key_list',
@@ -29,6 +46,14 @@ function stripSqlCommentsAndStrings_ACU(sql: string): string {
       index += 2;
       while (index < sql.length && !(sql[index] === '*' && sql[index + 1] === '/')) index++;
       index = Math.min(sql.length, index + 2);
+      result += ' ';
+      continue;
+    }
+    // SQLite 的 [方括号] 标识符：内部没有转义，读到 ] 结束；里面的引号不是字符串开头。
+    if (char === '[') {
+      index++;
+      while (index < sql.length && sql[index] !== ']') index++;
+      index = Math.min(sql.length, index + 1);
       result += ' ';
       continue;
     }
@@ -80,8 +105,9 @@ export function validateReadOnlySql_ACU(sql: unknown): ReadOnlySqlValidationResu
     return { valid: true };
   }
 
-  if (/^EXPLAIN\s+(?:QUERY\s+PLAN\s+)?(?:SELECT\b|WITH\b)/i.test(normalized)) return { valid: true };
-  if (/^(?:SELECT\b|WITH\b)/i.test(normalized)) return { valid: true };
+  const body = normalized.replace(/^EXPLAIN\s+(?:QUERY\s+PLAN\s+)?/i, '');
+  if (/^WITH\b/i.test(body)) return withMainStatementIsRead_ACU(body) ? { valid: true } : { valid: false, reason: 'statement_not_read_only' };
+  if (/^SELECT\b/i.test(body)) return { valid: true };
   return { valid: false, reason: 'statement_not_read_only' };
 }
 

@@ -50,5 +50,6 @@ describe('bootstrapAcuV2', () => {
     expect(h.openShell).toHaveBeenCalledTimes(1);
     expect(h.openVisualizer).toHaveBeenCalledWith({ source: 'external-api' });
     expect(h.refreshVisualizer).toHaveBeenCalledTimes(1);
-  });
+    // 冷启动动态导入整张 V2 模块图，单跑即约 14s，贴着全局 15s 上限；并行全量下必超时，给足余量。
+  }, 60_000);
 });

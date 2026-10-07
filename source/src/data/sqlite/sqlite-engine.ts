@@ -41,6 +41,11 @@ export interface QueryResult {
 /** 查询执行诊断选项 */
 export interface SqliteQueryOptions_ACU {
   suppressErrorLog?: boolean;
+  /**
+   * 只读入口：只允许单条语句，并在 SQLite query_only 下执行（任何写入都被引擎拒绝）。
+   * 模板变量/控制台/对外 API 的 SQL 来自聊天正文等不可信文本，文本校验器之外必须有这道引擎级门。
+   */
+  readOnly?: boolean;
 }
 
 /** INSERT/UPDATE/DELETE 执行结果 */
@@ -202,7 +207,7 @@ export class SqliteEngine {
   query(sql: string, params?: SqlJsBindParams, options: SqliteQueryOptions_ACU = {}): QueryResult {
     this._ensureDb();
     try {
-      const results = this.db!.exec(sql, params);
+      const results = options.readOnly === true ? this._execReadOnly(sql, params) : this.db!.exec(sql, params);
       if (results.length === 0) {
         return { columns: [], values: [] };
       }
@@ -224,6 +229,26 @@ export class SqliteEngine {
         }
       }
       throw e;
+    }
+  }
+
+  private _execReadOnly(sql: string, params?: SqlJsBindParams): SqlJsQueryExecResult[] {
+    const db = this.db!;
+    // 先数语句：编译不执行；第二条能编译出来就说明是多语句。
+    const iterator = db.iterateStatements(sql);
+    const first = iterator.next();
+    if (!first.done) first.value.free();
+    const second = first.done ? first : iterator.next();
+    if (!second.done) {
+      second.value.free();
+      throw new Error('只读查询只允许单条语句');
+    }
+    const previous = Number(db.exec('PRAGMA query_only;')[0]?.values[0]?.[0] ?? 0);
+    db.run('PRAGMA query_only = 1;');
+    try {
+      return db.exec(sql, params);
+    } finally {
+      db.run(`PRAGMA query_only = ${previous ? 1 : 0};`);
     }
   }
 

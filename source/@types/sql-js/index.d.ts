@@ -70,6 +70,13 @@ interface SqlJsDatabase {
   prepare(sql: string): SqlJsStatement;
 
   /**
+   * 逐条编译（不执行）SQL 字符串中的语句
+   * @param sql 可含多条语句的 SQL
+   * @returns 语句迭代器；取出的语句需调用方 free
+   */
+  iterateStatements(sql: string): SqlJsStatementIterator;
+
+  /**
    * 迭代执行 SQL 语句（逐条执行回调）
    * @param sql 包含多条 SQL 的字符串
    * @param callback 每条语句执行后的回调
@@ -100,6 +107,13 @@ interface SqlJsDatabase {
    * @param func 函数实现
    */
   create_function(name: string, func: (...args: SqlJsValueType[]) => SqlJsValueType): void;
+}
+
+/** sql.js 语句迭代器 */
+interface SqlJsStatementIterator {
+  next(): { done: true; value: undefined } | { done: false; value: SqlJsStatement };
+  /** 尚未编译的剩余 SQL 文本 */
+  getRemainingSQL(): string;
 }
 
 /** sql.js 预编译语句 */

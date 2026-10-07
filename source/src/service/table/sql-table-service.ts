@@ -2028,7 +2028,8 @@ export class SqlTableService implements ITableStorageProvider {
     options?: SqlQueryExecutionOptions_ACU,
   ): SqlQueryResult {
     this._ensureInitialized();
-    const result = this.engine.query(sql, params, options);
+    // 只读入口（模板变量、SQL 控制台、对外 API）：引擎级单语句 + query_only，不只靠文本校验器。
+    const result = this.engine.query(sql, params, { ...options, readOnly: true });
     return {
       columns: result.columns,
       values: result.values,

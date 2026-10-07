@@ -18,7 +18,7 @@
 | 1 | data/（storage、sqlite、repositories、gateways、models） | 9.7k | 完成（向量存储并入块 5） |
 | 2A | service/table 填表流水线（orchestrator、sql-table-service、事务、调度） | 15k | 子代理完成 → `docs/review/block2a-fill-pipeline.md`；P1 已修，P2 待修 |
 | 2B | service/table 存储帧/回放/迁移 | 15k | 子代理完成 → `docs/review/block2b-storage-replay.md`；P1 已修，P2 待修 |
-| 3 | service/chat + service/runtime + service/settings | 17.8k | 子代理完成 → `docs/review/block3-chat-runtime-settings.md`；P1 待修 |
+| 3 | service/chat + service/runtime + service/settings | 17.8k | 子代理完成 → `docs/review/block3-chat-runtime-settings.md`；P1 与 R3-03 已修，其余 P2 待修 |
 | 4 | service/continuation + service/agent | 30k | 子代理完成 → `docs/review/block4-continuation-agent.md`；P1 与 R4-05 已修 |
 | 5 | service/vector + data/storage 向量部分 | 12.4k+ | 未开始 |
 | 6 | service/template + template-assistant + worldbook | 13.3k | 未开始 |
@@ -94,9 +94,14 @@
 | R4-03 资料补足开放 write_sql 必然 STALE | P1 | 已修：补足通道不再开放 write_sql，只收整行契约由编排器提交 | agent-material-repair-channel.test |
 | R4-04 接管期间删条目后恢复永不收敛 | P1 | 已修：宿主已删除的条目直接从接管账本剔除（含旧版残留 pending）；scope 恢复不再把已删除计入 skipped | agent-worldbook-takeover.test「条目被删除」×2、snapshot-restore.test |
 | R4-05 补足裁剪漏 chronologyPatches | P2 | 已修 | agent-workflow.test「R4-05」 |
+| R3-01 模板只读 SQL 可用 [方括号] 绕过并执行写语句 | P1 | 已修：校验器认 [..] 标识符；executeQuery（模板/控制台/对外 API 唯一只读入口）在引擎层只允许单语句并以 query_only 执行 | read-only-sql-validation.test「方括号」、sqlite-engine.test「readOnly」、sql-table-service.test「executeQuery 拒绝」 |
+| R3-02 ORM 表达式 JS 白名单可绕过执行任意 JS | P1 | 已修：弃用 new Function，改为自带解释器（方法链 + 字面量参数 + 末尾比较），只能调 db 静态函数与构建器公开方法 | sql-query-var.test「绕过载荷」「只能调用构建器公开方法」「解释器支持的合法语法」 |
+| R3-03 CASE…END / REPLACE() 被当写语句拒 | P2 | 已修：词表去掉 END/REPLACE，WITH 按顶层主语句判定；写入兜底在引擎层 | read-only-sql-validation.test「R3-03」 |
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
 R2B-08/09（迁移、混合提交、batch 写入的整聊天克隆替换）与上面同一模式但无 await 窗口，未改，留作 P3。
 
-待修：R2A-07（多 staging 组汇合后丢 pre 段）、R2B-04/05/06（待坐实）、R3-01/02（P1，模板变量 SQL/JS 白名单可绕过）及块 3 P2、R4-06（待坐实）/07/08、各块 P3。
+待修：R2A-07（多 staging 组汇合后丢 pre 段）、R2B-04/05/06（待坐实）、块 3 P2（R3-04..09）、R4-06（待坐实）/07/08、各块 P3。
 R4-02 遗留：模型放弃补齐时，草稿（partial）不会阻止水位推进——只在提升路径堵住了「写齐却看不见」，「没写齐就收工」仍按旧口径。
+
+测试稳定性：bootstrap/index、data-mgmt-page 首个用例冷导入整张 V2 模块图约 14s，贴着全局 15s 上限，本机并行全量必超时（发布基线同样失败），已单独放宽到 60s。

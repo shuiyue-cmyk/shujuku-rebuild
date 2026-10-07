@@ -731,6 +731,30 @@ describe('sql-query-var', () => {
     it('无效表达式返回空字符串（不抛出）', () => {
       expect(evaluateOrmExpression('invalid.syntax.here')).toBe('');
     });
+
+    // R3-02：表达式来自聊天正文等不可信文本，不得被当作 JS 执行。
+    it('计算属性 + 标签模板的绕过载荷不执行任何 JS', () => {
+      // 反斜杠用字符码拼，保证 u0067 转义原样到达白名单（白名单不规范化转义，globalThis 黑名单因此被绕过）。
+      const payload = 'db.背包物品表.where(""[`con`+`structor`][`con`+`structor`]`' + String.fromCharCode(92) + 'u0067lobalThis.PWNED_R302=1```)';
+      expect(evaluateOrmExpression(payload)).toBe('');
+      expect(evaluateDbCondition(payload)).toBe(false);
+      expect((globalThis as Record<string, unknown>).PWNED_R302).toBeUndefined();
+    });
+
+    it('只能调用构建器公开方法：私有方法、constructor 与非字面量参数一律拒绝', () => {
+      expect(evaluateOrmExpression("db.背包物品表._executeQuery('DELETE FROM inventory')")).toBe('');
+      expect(evaluateOrmExpression('db.背包物品表.constructor')).toBe('');
+      expect(evaluateOrmExpression("db.背包物品表.where('物品名称', self).count()")).toBe('');
+      expect(evaluateOrmExpression("db.背包物品表.where('物品名称', '铁剑').count()")).toBe('1');
+    });
+
+    it('解释器支持的合法语法：数组参数、负数、双引号与转义、比较', () => {
+      expect(evaluateOrmExpression("db.背包物品表.whereIn('物品名称', ['铁剑', '魔法书']).count()")).toBe('2');
+      expect(evaluateOrmExpression('db.max(-5, -1, -10)')).toBe('-1');
+      expect(evaluateOrmExpression('db.背包物品表.where("物品名称", "\u94c1剑").get("数量")')).toBe('3');
+      expect(evaluateDbCondition("db.背包物品表.where('物品名称', '铁剑').get('数量') === 3")).toBe(true);
+      expect(evaluateDbCondition('db.背包物品表.count() >= 100')).toBe(false);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════

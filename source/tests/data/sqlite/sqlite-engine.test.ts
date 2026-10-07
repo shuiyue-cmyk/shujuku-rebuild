@@ -64,6 +64,17 @@ describe('SqliteEngine', () => {
   // query
   // ═══════════════════════════════════════════════════════════════
   describe('query', () => {
+    it('readOnly：拒绝多语句与写语句，结束后恢复可写', () => {
+      engine.run('CREATE TABLE test (id INTEGER);');
+      engine.run('INSERT INTO test VALUES (1);');
+      expect(() => engine.query('SELECT 1; DELETE FROM test', undefined, { readOnly: true })).toThrow(/单条/);
+      expect(() => engine.query('DELETE FROM test', undefined, { readOnly: true })).toThrow();
+      expect(engine.query('SELECT COUNT(*) FROM test', undefined, { readOnly: true }).values).toEqual([[1]]);
+      expect(engine.query('SELECT 1;  -- 尾注释', undefined, { readOnly: true }).values).toEqual([[1]]);
+      engine.run('INSERT INTO test VALUES (2);');
+      expect(engine.query('SELECT COUNT(*) FROM test').values).toEqual([[2]]);
+    });
+
     it('执行 SELECT 返回列名和值', () => {
       engine.run('CREATE TABLE test (id INTEGER, name TEXT);');
       engine.run("INSERT INTO test VALUES (1, '张三');");

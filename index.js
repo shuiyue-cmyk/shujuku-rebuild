@@ -8127,7 +8127,7 @@ class SqliteEngine {
     query(sql, params, options = {}) {
         this._ensureDb();
         try {
-            const results = this.db.exec(sql, params);
+            const results = options.readOnly === true ? this._execReadOnly(sql, params) : this.db.exec(sql, params);
             if (results.length === 0) {
                 return { columns: [], values: [] };
             }
@@ -8150,6 +8150,27 @@ class SqliteEngine {
                 }
             }
             throw e;
+        }
+    }
+    _execReadOnly(sql, params) {
+        const db = this.db;
+        // 先数语句：编译不执行；第二条能编译出来就说明是多语句。
+        const iterator = db.iterateStatements(sql);
+        const first = iterator.next();
+        if (!first.done)
+            first.value.free();
+        const second = first.done ? first : iterator.next();
+        if (!second.done) {
+            second.value.free();
+            throw new Error('只读查询只允许单条语句');
+        }
+        const previous = Number(db.exec('PRAGMA query_only;')[0]?.values[0]?.[0] ?? 0);
+        db.run('PRAGMA query_only = 1;');
+        try {
+            return db.exec(sql, params);
+        }
+        finally {
+            db.run(`PRAGMA query_only = ${previous ? 1 : 0};`);
         }
     }
     /**
@@ -70417,7 +70438,8 @@ class SqlTableService {
      */
     executeQuery(sql, params, options) {
         this._ensureInitialized();
-        const result = this.engine.query(sql, params, options);
+        // 只读入口（模板变量、SQL 控制台、对外 API）：引擎级单语句 + query_only，不只靠文本校验器。
+        const result = this.engine.query(sql, params, { ...options, readOnly: true });
         return {
             columns: result.columns,
             values: result.values,
@@ -93193,11 +93215,36 @@ function resolveCurrentRuntimeReadSql_ACU(sql) {
     return resolveReadQuerySql_ACU(sql, currentJsonTableData_ACU, mapper.translateSql.bind(mapper));
 }
 
+// END（CASE … END）与 REPLACE（REPLACE() 函数）不在词表：它们在只读查询里很常见；作为语句开头
+// （END TRANSACTION / REPLACE INTO）时过不了下面的首关键字判定，WITH 后的主语句另有顶层判定。
+// 真正的写入兜底在引擎层：executeQuery 以单语句 + query_only 执行。
 const FORBIDDEN_SQL_KEYWORDS_ACU = new Set([
     'ALTER', 'ANALYZE', 'ATTACH', 'BEGIN', 'COMMIT', 'CREATE', 'DELETE', 'DETACH',
-    'DROP', 'END', 'INSERT', 'REINDEX', 'RELEASE', 'REPLACE', 'ROLLBACK', 'SAVEPOINT',
+    'DROP', 'INSERT', 'REINDEX', 'RELEASE', 'ROLLBACK', 'SAVEPOINT',
     'TRUNCATE', 'UPDATE', 'VACUUM',
 ]);
+/** WITH 语句的主语句（括号深度 0 的首个 DML/SELECT 关键字）必须是 SELECT 或 VALUES。 */
+function withMainStatementIsRead_ACU(normalized) {
+    let depth = 0;
+    const tokens = normalized.toUpperCase().match(/[A-Z_]+|[()]/g) || [];
+    for (const token of tokens) {
+        if (token === '(') {
+            depth++;
+            continue;
+        }
+        if (token === ')') {
+            depth = Math.max(0, depth - 1);
+            continue;
+        }
+        if (depth > 0)
+            continue;
+        if (token === 'SELECT' || token === 'VALUES')
+            return true;
+        if (token === 'INSERT' || token === 'UPDATE' || token === 'DELETE' || token === 'REPLACE')
+            return false;
+    }
+    return false;
+}
 const ALLOWED_PRAGMAS_ACU = new Set([
     'table_info', 'table_xinfo', 'index_list', 'index_info', 'index_xinfo', 'foreign_key_list',
 ]);
@@ -93219,6 +93266,15 @@ function stripSqlCommentsAndStrings_ACU$1(sql) {
             while (index < sql.length && !(sql[index] === '*' && sql[index + 1] === '/'))
                 index++;
             index = Math.min(sql.length, index + 2);
+            result += ' ';
+            continue;
+        }
+        // SQLite 的 [方括号] 标识符：内部没有转义，读到 ] 结束；里面的引号不是字符串开头。
+        if (char === '[') {
+            index++;
+            while (index < sql.length && sql[index] !== ']')
+                index++;
+            index = Math.min(sql.length, index + 1);
             result += ' ';
             continue;
         }
@@ -93270,15 +93326,277 @@ function validateReadOnlySql_ACU(sql) {
             return { valid: false, reason: 'pragma_assignment_not_allowed' };
         return { valid: true };
     }
-    if (/^EXPLAIN\s+(?:QUERY\s+PLAN\s+)?(?:SELECT\b|WITH\b)/i.test(normalized))
-        return { valid: true };
-    if (/^(?:SELECT\b|WITH\b)/i.test(normalized))
+    const body = normalized.replace(/^EXPLAIN\s+(?:QUERY\s+PLAN\s+)?/i, '');
+    if (/^WITH\b/i.test(body))
+        return withMainStatementIsRead_ACU(body) ? { valid: true } : { valid: false, reason: 'statement_not_read_only' };
+    if (/^SELECT\b/i.test(body))
         return { valid: true };
     return { valid: false, reason: 'statement_not_read_only' };
 }
 /** Shared read-path classifier. Callers that need a diagnostic should use validateReadOnlySql_ACU directly. */
 function isReadOnlySqlStatement_ACU(sql) {
     return validateReadOnlySql_ACU(sql).valid;
+}
+
+/**
+ * ORM 模板表达式解释器（R3-02）。
+ *
+ * {[db....]} / <if db="..."> 的表达式来自聊天正文、世界书等不可信文本；此前用 `new Function`
+ * 执行、只靠正则白名单把关，标签模板 + 计算属性即可绕过并执行任意 JS。这里改为自己解析：
+ * 只认「db 方法链 + 字面量参数 + 可选的末尾比较」，从不把文本交给 JS 引擎执行。
+ *
+ * 语法：
+ *   expr    := chain (compareOp literal)?
+ *   chain   := 'db' ( '.' ident ( '(' args? ')' )? | '[' literal ']' )*
+ *   args    := value (',' value)*
+ *   value   := literal | '[' (literal (',' literal)*)? ']'
+ *   literal := string | number | true | false | null
+ */
+const COMPARE_OPERATORS_ACU = ['===', '!==', '==', '!=', '>=', '<=', '&&', '||', '>', '<'];
+const FORBIDDEN_NAMES_ACU = new Set(['__proto__', 'prototype', 'constructor', '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__']);
+const IDENT_START_RE_ACU = /[A-Za-z_$一-龥]/;
+const IDENT_PART_RE_ACU = /[\w$一-龥]/;
+function fail_ACU$4(message) {
+    throw new Error(`db 表达式不合法：${message}`);
+}
+function readEscape_ACU(source, index) {
+    const char = source[index];
+    const simple = { n: '\n', t: '\t', r: '\r', '0': '\0', b: '\b', f: '\f', v: '\v' };
+    if (char in simple)
+        return { char: simple[char], next: index + 1 };
+    if (char === 'u') {
+        const hex = source.slice(index + 1, index + 5);
+        if (!/^[0-9a-fA-F]{4}$/.test(hex))
+            fail_ACU$4('非法的 \\u 转义');
+        return { char: String.fromCharCode(parseInt(hex, 16)), next: index + 5 };
+    }
+    if (char === 'x') {
+        const hex = source.slice(index + 1, index + 3);
+        if (!/^[0-9a-fA-F]{2}$/.test(hex))
+            fail_ACU$4('非法的 \\x 转义');
+        return { char: String.fromCharCode(parseInt(hex, 16)), next: index + 3 };
+    }
+    if (char === undefined)
+        fail_ACU$4('字符串未闭合');
+    return { char, next: index + 1 };
+}
+function tokenize_ACU(source) {
+    const tokens = [];
+    let index = 0;
+    while (index < source.length) {
+        const char = source[index];
+        if (/\s/.test(char)) {
+            index++;
+            continue;
+        }
+        if (char === "'" || char === '"') {
+            let value = '';
+            index++;
+            while (true) {
+                if (index >= source.length)
+                    fail_ACU$4('字符串未闭合');
+                const current = source[index];
+                if (current === char) {
+                    index++;
+                    break;
+                }
+                if (current === '\\') {
+                    const escaped = readEscape_ACU(source, index + 1);
+                    value += escaped.char;
+                    index = escaped.next;
+                    continue;
+                }
+                value += current;
+                index++;
+            }
+            tokens.push({ kind: 'string', value });
+            continue;
+        }
+        const numberMatch = /^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(source.slice(index));
+        if (numberMatch) {
+            tokens.push({ kind: 'number', value: Number(numberMatch[0]) });
+            index += numberMatch[0].length;
+            continue;
+        }
+        if (IDENT_START_RE_ACU.test(char)) {
+            let text = char;
+            index++;
+            while (index < source.length && IDENT_PART_RE_ACU.test(source[index]))
+                text += source[index++];
+            tokens.push({ kind: 'ident', text });
+            continue;
+        }
+        const operator = COMPARE_OPERATORS_ACU.find(op => source.startsWith(op, index));
+        if (operator) {
+            tokens.push({ kind: 'punct', text: operator });
+            index += operator.length;
+            continue;
+        }
+        if ('.()[],-'.includes(char)) {
+            tokens.push({ kind: 'punct', text: char });
+            index++;
+            continue;
+        }
+        fail_ACU$4(`不支持的字符 ${JSON.stringify(char)}`);
+    }
+    return tokens;
+}
+function parse_ACU(tokens) {
+    let position = 0;
+    const peek = () => tokens[position];
+    const isPunct = (text) => { const token = peek(); return token?.kind === 'punct' && token.text === text; };
+    const expectPunct = (text) => { if (!isPunct(text))
+        fail_ACU$4(`缺少 ${text}`); position++; };
+    const parseLiteral = () => {
+        const token = peek();
+        if (!token)
+            fail_ACU$4('缺少值');
+        if (token.kind === 'punct' && token.text === '-') {
+            position++;
+            const next = peek();
+            if (next?.kind !== 'number')
+                fail_ACU$4('负号后必须是数字');
+            position++;
+            return -next.value;
+        }
+        if (token.kind === 'string' || token.kind === 'number') {
+            position++;
+            return token.value;
+        }
+        if (token.kind === 'ident' && ['true', 'false', 'null'].includes(token.text)) {
+            position++;
+            return token.text === 'true' ? true : token.text === 'false' ? false : null;
+        }
+        return fail_ACU$4('参数只能是字符串、数字、true/false/null 或它们组成的数组');
+    };
+    const parseValue = () => {
+        if (!isPunct('['))
+            return parseLiteral();
+        position++;
+        const items = [];
+        if (!isPunct(']')) {
+            items.push(parseLiteral());
+            while (isPunct(',')) {
+                position++;
+                items.push(parseLiteral());
+            }
+        }
+        expectPunct(']');
+        return items;
+    };
+    const head = peek();
+    if (head?.kind !== 'ident' || head.text !== 'db')
+        fail_ACU$4('必须以 db. 开头');
+    position++;
+    const steps = [];
+    while (isPunct('.') || isPunct('[')) {
+        if (isPunct('[')) {
+            position++;
+            const key = parseLiteral();
+            if (typeof key !== 'string' && typeof key !== 'number')
+                fail_ACU$4('下标只能是字符串或数字');
+            expectPunct(']');
+            steps.push({ kind: 'index', key });
+            continue;
+        }
+        position++;
+        const name = peek();
+        if (name?.kind !== 'ident')
+            fail_ACU$4('. 后必须是名称');
+        position++;
+        if (!isPunct('(')) {
+            steps.push({ kind: 'member', name: name.text });
+            continue;
+        }
+        position++;
+        const args = [];
+        if (!isPunct(')')) {
+            args.push(parseValue());
+            while (isPunct(',')) {
+                position++;
+                args.push(parseValue());
+            }
+        }
+        expectPunct(')');
+        steps.push({ kind: 'call', name: name.text, args });
+    }
+    if (!steps.length)
+        fail_ACU$4('db 后缺少表名或方法');
+    let compare;
+    const operatorToken = peek();
+    if (operatorToken?.kind === 'punct' && COMPARE_OPERATORS_ACU.includes(operatorToken.text)) {
+        position++;
+        compare = { operator: operatorToken.text, right: parseLiteral() };
+    }
+    if (position !== tokens.length)
+        fail_ACU$4('表达式末尾有多余内容');
+    return { steps, compare };
+}
+function readMember_ACU(target, name, env, isRoot) {
+    if (typeof name === 'string' && FORBIDDEN_NAMES_ACU.has(name))
+        fail_ACU$4(`禁止访问 ${name}`);
+    if (isRoot)
+        return env.root[String(name)];
+    if (Array.isArray(target)) {
+        if (name === 'length')
+            return target.length;
+        const index = typeof name === 'number' ? name : Number(name);
+        return Number.isInteger(index) && index >= 0 && index < target.length ? target[index] : undefined;
+    }
+    if (typeof target === 'string' && name === 'length')
+        return target.length;
+    if (target && typeof target === 'object' && Object.getPrototypeOf(target) === Object.prototype) {
+        return Object.prototype.hasOwnProperty.call(target, name) ? target[String(name)] : undefined;
+    }
+    return fail_ACU$4(`不能读取 ${String(name)}`);
+}
+function compare_ACU(left, operator, right) {
+    /* eslint-disable eqeqeq */
+    switch (operator) {
+        case '===': return left === right;
+        case '!==': return left !== right;
+        case '==': return left == right;
+        case '!=': return left != right;
+        case '>=': return left >= right;
+        case '<=': return left <= right;
+        case '>': return left > right;
+        case '<': return left < right;
+        case '&&': return left && right;
+        case '||': return left || right;
+    }
+    /* eslint-enable eqeqeq */
+}
+/**
+ * 解析并求值一条 db 表达式。语法不合法、访问禁止成员或调用未授权方法时抛错。
+ * @param expression 以 db. 开头的表达式（$v: 引用须已替换）
+ * @param env db 根对象与可调用方法判定
+ * @returns 求值结果
+ */
+function evaluateDbExpression_ACU(expression, env) {
+    const parsed = parse_ACU(tokenize_ACU(String(expression ?? '')));
+    let current = env.root;
+    let isRoot = true;
+    for (const step of parsed.steps) {
+        if (step.kind === 'index') {
+            current = readMember_ACU(current, step.key, env, isRoot);
+        }
+        else if (step.kind === 'member') {
+            current = readMember_ACU(current, step.name, env, isRoot);
+            if (typeof current === 'function')
+                fail_ACU$4(`${step.name} 是方法，需要加括号调用`);
+        }
+        else {
+            if (FORBIDDEN_NAMES_ACU.has(step.name))
+                fail_ACU$4(`禁止调用 ${step.name}`);
+            const owner = current;
+            const method = isRoot ? env.root[step.name] : owner?.[step.name];
+            if (typeof method !== 'function' || !env.isCallable(isRoot ? env.root : owner, step.name))
+                fail_ACU$4(`不允许调用 ${step.name}`);
+            current = method.apply(isRoot ? undefined : owner, step.args);
+        }
+        isRoot = false;
+    }
+    return parsed.compare ? compare_ACU(current, parsed.compare.operator, parsed.compare.right) : current;
 }
 
 /**
@@ -93830,6 +94148,24 @@ class TableQueryBuilder {
  * 特殊属性名 expr/rand/calc 返回对应的静态方法
  * 让 JS 引擎原生处理链式调用、括号嵌套、引号转义
  */
+const DB_STATIC_METHODS_ACU = new Set(['expr', 'rand', 'calc', 'max', 'min']);
+const TABLE_QUERY_BUILDER_METHODS_ACU = new Set([
+    'where', 'orWhere', 'whereIn', 'whereBetween', 'groupBy', 'distinct', 'whereNotIn', 'whereNull', 'whereNotNull',
+    'whereLike', 'having', 'offset', 'orderBy', 'limit', 'get', 'first', 'list', 'all', 'count', 'sum', 'avg', 'max',
+    'min', 'value', 'exists', 'toSQL',
+]);
+/**
+ * 求值 db 表达式：自带解释器只认方法链 + 字面量参数 + 末尾比较，不把文本交给 JS 引擎（R3-02）。
+ * 只能调用 db 静态函数与表查询构建器的公开方法。
+ */
+function evaluateDbExpressionText_ACU(fullExpr) {
+    const root = createDbProxy();
+    return evaluateDbExpression_ACU(fullExpr, {
+        root,
+        isCallable: (target, name) => (target === root && DB_STATIC_METHODS_ACU.has(name))
+            || (target instanceof TableQueryBuilder && TABLE_QUERY_BUILDER_METHODS_ACU.has(name)),
+    });
+}
 function createDbProxy() {
     return new Proxy({}, {
         get(_target, propName) {
@@ -93993,7 +94329,7 @@ function execCalc(expression) {
  * 示例：
  *   db.max(3, 7, 1)  → 7
  *   db.max($v:a, $v:b, $v:c)  → 最大值
- *   注意：在 new Function 执行时，$v: 已经被替换为实际值（如果在 {[db...]} 中使用）
+ *   注意：求值时 $v: 已经被替换为实际值（如果在 {[db...]} 中使用）
  *   但如果直接调用，需要传入数字
  */
 function execMax(...values) {
@@ -94054,8 +94390,7 @@ function execMin(...values) {
  * 输入: "db.重要人物表.where('姓名', '角色A').get('状态')"
  * 输出: 执行结果字符串
  *
- * 通过 Proxy + new Function 让 JS 引擎直接执行链式调用，
- * 不再手动用正则解析方法链。
+ * 由 db-expression-interpreter 解析方法链并在 Proxy 上逐步调用；不经 JS 引擎执行文本。
  */
 function evaluateOrmExpression(expr) {
     try {
@@ -94071,9 +94406,7 @@ function evaluateOrmExpression(expr) {
             logWarn_ACU(`[ORM] 拒绝执行非白名单表达式: ${fullExpr.slice(0, 120)}`);
             return '';
         }
-        const db = createDbProxy();
-        const fn = new Function('db', `return ${fullExpr}`);
-        const result = fn(db);
+        const result = evaluateDbExpressionText_ACU(fullExpr);
         return formatResult(result);
     }
     catch (e) {
@@ -94180,7 +94513,7 @@ function replaceDbSqlVariables(content) {
  * 求值 <if db="..."> 条件
  * 返回布尔值：结果非零/非空/非false = true
  *
- * 通过 Proxy + new Function 直接执行整个表达式（含比较运算），
+ * 由 db-expression-interpreter 求值整个表达式（含比较运算），
  * 例如 db.重要人物表.where('阵营','敌方').count() > 3 直接返回布尔值。
  * 纯 ORM 表达式（无比较运算）则对结果做 truthy 判断。
  */
@@ -94199,9 +94532,7 @@ function evaluateDbCondition(expression) {
             logWarn_ACU(`[<if db>] 拒绝执行非白名单表达式: ${fullExpr.slice(0, 120)}`);
             return false;
         }
-        const db = createDbProxy();
-        const fn = new Function('db', `return ${fullExpr}`);
-        const result = fn(db);
+        const result = evaluateDbExpressionText_ACU(fullExpr);
         // 如果表达式本身包含比较运算（如 > 3），result 已经是布尔值
         if (typeof result === 'boolean')
             return result;
