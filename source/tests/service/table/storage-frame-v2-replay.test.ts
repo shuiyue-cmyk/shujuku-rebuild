@@ -5073,6 +5073,55 @@ describe('SPv7.9 duplicate row_id transition checkpoint', () => {
     }
   });
 
+  it('块 2B 复审 R2B-06：固化等锁期间聊天楼层被删改时放弃固化，不写错位的 cutoff', async () => {
+    const { runTableWriteTransaction_ACU, _resetTableWriteTransactionLocksForTest_ACU } = await import('../../../src/service/table/table-write-transaction');
+    _resetTableWriteTransactionLocksForTest_ACU();
+    const checkpointData = makeCheckpointData();
+    checkpointData.sheet_0.content = [['row_id', 'name'], ['1', '原始行']];
+    const duplicateSheet = structuredClone(checkpointData.sheet_0);
+    duplicateSheet.content.push([' 1 ', '重复行']);
+    const chat: any[] = [
+      {
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: checkpointData },
+              logEntries: [{
+                seq: 1, entryId: 'legacy-duplicate-replace', createdAt: 2, source: 'system', targetMessageIndex: 0, aiFloor: 1,
+                filledSheetKeys: [], changedSheetKeys: [], groupKeys: [],
+                operations: [{ kind: 'sheet_replace', sheetKey: 'sheet_0', sheet: duplicateSheet, reason: 'system' }],
+              }],
+            },
+          },
+        },
+      },
+      { is_user: false, mes: '后一层 AI' },
+    ];
+    const saveChat = vi.fn(async () => undefined);
+    const previousHostApi = SillyTavern_API_ACU;
+    try {
+      _set_SillyTavern_API_ACU({ chat, saveChat } as any);
+      let releaseHolder!: () => void;
+      const holderGate = new Promise<void>((resolve) => { releaseHolder = resolve; });
+      const holder = runTableWriteTransaction_ACU({
+        source: 'manual_crud' as any, reason: 'holder', isolationKey: '', writeSet: [{ kind: 'all' }], workingDataMode: 'none',
+      }, async () => { await holderGate; });
+      const fixation = createCompatTransitionCheckpointFromTolerantReplay_ACU(chat, '');
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      chat.splice(0, 0, { is_user: false, mes: '插入的楼层' }); // 等锁期间在前面插了一层，楼层号整体后移
+      releaseHolder();
+      await holder;
+      expect(await fixation).toBe(false);
+      expect(chat.some((m) => m.TavernDB_ACU_IsolatedData?.['']?.compatTransitionCheckpoint)).toBe(false);
+      expect(saveChat).not.toHaveBeenCalled();
+    } finally {
+      _set_SillyTavern_API_ACU(previousHostApi);
+    }
+  });
+
   it('旧重复行 SQL 回放保留 SQL INSERT/DELETE/params 语义，固化后通用过渡根 cutoff 覆盖全部 operation', async () => {
     const checkpointData = makeCheckpointData();
     const duplicateSheet = structuredClone(checkpointData.sheet_0);

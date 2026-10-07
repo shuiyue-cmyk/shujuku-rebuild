@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   currentChatKey: 'chat-a',
   currentIsolationKey: 'scope-a',
   isAutoUpdating: false,
+  hydrate: vi.fn(),
+  storageMode: 'native' as 'native' | 'sqlite',
 }));
 
 vi.mock('../../../src/shared/utils', () => ({
@@ -30,6 +32,12 @@ vi.mock('../../../src/service/table/table-service', () => ({
 vi.mock('../../../src/service/table/table-storage-strategy', () => ({
   ensureStorageProviderReady_ACU: mocks.ensureProvider,
   reloadStorageProvider: mocks.reload,
+  hydrateStorageProviderFromSnapshot_ACU: mocks.hydrate,
+  getRuntimeLifecycleEpoch_ACU: () => 7,
+}));
+vi.mock('../../../src/service/table/storage-mode', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  getCurrentStorageMode: () => mocks.storageMode,
 }));
 vi.mock('../../../src/service/table/table-write-transaction', () => ({
   runTableWriteTransaction_ACU: mocks.transaction,
@@ -42,6 +50,7 @@ import { runSqliteRuntimeMutationCommit_ACU, runTableUpdateCommit_ACU } from '..
 import { logError_ACU, logWarn_ACU } from '../../../src/shared/utils';
 import {
   clearRuntimeOnlyPendingSheets_ACU,
+  markRuntimeOnlyPendingSheets_ACU,
   readRuntimeOnlyPendingSheets_ACU,
   registerRuntimeOnlyPendingFlusher_ACU,
 } from '../../../src/service/table/runtime-only-pending-state';
@@ -642,3 +651,58 @@ describe('runTableUpdateCommit_ACU 运行时已变更但未落盘时的收敛', 
     expect(mocks.reload).not.toHaveBeenCalled();
   });
 });
+
+describe('块 2A 复审 R2A-04：提交失败回滚保住尚未落盘的运行时写入', () => {
+  const pendingScope = { chatKey: 'chat-a', isolationKey: 'scope-a' };
+  const before: any = {
+    mate: { type: 'acu', version: 1 },
+    sheet_script: { uid: 'sheet_script', name: '脚本表', content: [['row_id'], ['script-row']] },
+    sheet_target: { uid: 'sheet_target', name: '目标表', content: [['row_id'], ['r1']] },
+  };
+  const after: any = JSON.parse(JSON.stringify(before));
+  after.sheet_target.content.push(['r2']);
+
+  beforeEach(() => {
+    mocks.currentChatKey = 'chat-a';
+    mocks.currentIsolationKey = 'scope-a';
+    mocks.migration.mockReset().mockResolvedValue({ success: true, migrated: false });
+    mocks.reload.mockReset();
+    mocks.persist.mockReset().mockResolvedValue({ saved: false, error: 'disk full' });
+    mocks.setCurrentData.mockReset();
+    mocks.hydrate.mockReset().mockResolvedValue({ ok: true, degraded: false, source: 'merged' });
+    mocks.transaction.mockReset().mockImplementation(async (_options: any, task: any) => task({
+      runCommit: async (commitTask: any) => commitTask(),
+    }, JSON.parse(JSON.stringify(before))));
+    registerRuntimeOnlyPendingFlusher_ACU(null);
+    clearRuntimeOnlyPendingSheets_ACU();
+  });
+
+  it('有未落盘的脚本写入时，不整体重载，而是把运行时恢复到本次提交前（含未落盘行）', async () => {
+    mocks.storageMode = 'native';
+    markRuntimeOnlyPendingSheets_ACU(pendingScope, { all: false, sheetKeys: ['sheet_script'] });
+    const result = await runTableUpdateCommit_ACU({ ...options('fill'), targetSheetKeys: ['sheet_target'] }, async () => ({ success: true, tableData: after }));
+    expect(result.success).toBe(false);
+    expect(mocks.reload).not.toHaveBeenCalled();
+    expect(mocks.setCurrentData).toHaveBeenCalledWith(before);
+    expect(readRuntimeOnlyPendingSheets_ACU(pendingScope)?.sheetKeys).toEqual(['sheet_script']);
+  });
+
+  it('SQLite 下用提交前快照重建运行时；重建失败时退回整体重载', async () => {
+    mocks.storageMode = 'sqlite';
+    markRuntimeOnlyPendingSheets_ACU(pendingScope, { all: false, sheetKeys: ['sheet_script'] });
+    await runTableUpdateCommit_ACU({ ...options('fill'), targetSheetKeys: ['sheet_target'] }, async () => ({ success: true, tableData: after }));
+    expect(mocks.hydrate).toHaveBeenCalledWith(expect.objectContaining({ data: before, storageMode: 'sqlite' }));
+    expect(mocks.reload).not.toHaveBeenCalled();
+
+    mocks.hydrate.mockResolvedValueOnce({ ok: false, degraded: false, failureCode: 'provider_init_failed' });
+    await runTableUpdateCommit_ACU({ ...options('fill'), targetSheetKeys: ['sheet_target'] }, async () => ({ success: true, tableData: after }));
+    expect(mocks.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('没有未落盘写入时维持原行为：整体重载', async () => {
+    mocks.storageMode = 'native';
+    await runTableUpdateCommit_ACU({ ...options('fill'), targetSheetKeys: ['sheet_target'] }, async () => ({ success: true, tableData: after }));
+    expect(mocks.reload).toHaveBeenCalledTimes(1);
+  });
+});
+

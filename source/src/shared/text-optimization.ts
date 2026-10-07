@@ -184,37 +184,6 @@ export function trimPunctuation_ACU(text: string): { trimmed: string; prefix: st
 }
 
 /**
- * 处理单引号
- */
-export function processSingleQuotes_ACU(text: string): string {
-  if (!text) return text;
-
-  let result = text;
-
-  result = result.replace(/\u2018([^\u2019]*)\u2019/g, (match: string, content: string, offset: number, string: string) => {
-    const endPos = offset + match.length;
-    const afterMatch = string.substring(endPos).trim();
-    if (afterMatch === '' || /^[^\u4e00-\u9fa5a-zA-Z0-9]*$/.test(afterMatch)) {
-      return `\u201C${content}`;
-    } else {
-      return `\u201C${content}\u201D`;
-    }
-  });
-
-  result = result.replace(/'([^']*)'/g, (match: string, content: string, offset: number, string: string) => {
-    const endPos = offset + match.length;
-    const afterMatch = string.substring(endPos).trim();
-    if (afterMatch === '' || /^[^\u4e00-\u9fa5a-zA-Z0-9]*$/.test(afterMatch)) {
-      return `\u201C${content}`;
-    } else {
-      return `\u201C${content}\u201D`;
-    }
-  });
-
-  return result;
-}
-
-/**
  * 正文替换页「标签排除规则」在写回阶段的选项。
  * 语义（用户拍板 B 方案）= 写回保护：建议命中的原文区间与排除区间重叠时整条丢弃，
  * 不参与写回、不计入替换统计；发送链仍按原文发送，不做发送前剥离。
@@ -365,8 +334,9 @@ export function applyOptimizationsWithStats_ACU(
         const originalPunct = trimPunctuation_ACU(matchedText);
         const optimizedPunct = trimPunctuation_ACU(opt.optimized);
 
-        let finalContent = originalPunct.prefix + optimizedPunct.trimmed + originalPunct.suffix;
-        finalContent = processSingleQuotes_ACU(finalContent);
+        // 优化后的正文原样写回（R7-01）：过去这里会把单引号对改成双引号，段末嵌套引用会丢闭合引号、
+        // 英文撇号会被改成弯引号，直接改坏用户正文。引号风格交给提示词约束。
+        const finalContent = originalPunct.prefix + optimizedPunct.trimmed + originalPunct.suffix;
 
         result = result.substring(0, match.start) + finalContent + result.substring(match.end);
         replaced = true;

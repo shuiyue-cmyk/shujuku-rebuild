@@ -8763,6 +8763,28 @@ describe('executeAutoFillStagingGroups_ACU', () => {
     expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(2);
   });
 
+  it('块 2A 复审 R2A-07：多个跨边界组时，所有组的边界前段都进入汇合后才跑边界后段', async () => {
+    const { executeAutoFillStagingGroups_ACU } = await import('../../../src/service/table/update-orchestrator');
+    let aiCallsAtSettle = -1;
+    mockCommitStagedSheetsAtFullBoundaryAtomic.mockImplementation(async () => {
+      aiCallsAtSettle = mockCallCustomOpenAI.mock.calls.length;
+      return { ok: true, boundaryCommitSummary: { selectedSheetKeys: ['sheet_0'], originalFullCheckpointIndex: 3 } };
+    });
+    const result = await executeAutoFillStagingGroups_ACU([
+      { ...stagingGroup([1, 5]), key: 'group-a', groupId: 1 },
+      { ...stagingGroup([1, 5]), key: 'group-b', groupId: 2 },
+    ], 'auto_independent', {
+      boundary: { fullCheckpointIndices: [3], requiresBoundaryStaging: true },
+    });
+    expect(result.success).toBe(true);
+    expect(mockCommitStagedSheetsAtFullBoundaryAtomic).toHaveBeenCalledTimes(1);
+    // 两组的边界前段（各 1 次 AI 调用）都已 staged 后才汇合。
+    expect(aiCallsAtSettle).toBe(2);
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(4);
+    // 边界后段各自普通持久化
+    expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(2);
+  });
+
   it('边界汇合失败时返回失败并保留 staging 组为失败组', async () => {
     const { executeAutoFillStagingGroups_ACU } = await import('../../../src/service/table/update-orchestrator');
     mockCommitStagedSheetsAtFullBoundaryAtomic.mockResolvedValue({

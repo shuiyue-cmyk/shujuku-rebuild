@@ -910,6 +910,7 @@ async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateD
     hardDeleteMissingSheets = false,
     signal,
     requestId = createTemplateReconciliationRequestId_ACU(),
+    expectedChatContext,
 }: {
     source?: string;
     presetName?: string;
@@ -923,6 +924,7 @@ async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateD
     hardDeleteMissingSheets?: boolean;
     signal?: AbortSignal;
     requestId?: string;
+    expectedChatContext?: { firstMessage: unknown };
 } = {}) {
     const snapshot = sanitizeTemplateSnapshotForChat_ACU(templateData);
     if (!snapshot?.templateObj) return { saved: false, error: '模板结构无效，无法生成聊天模板提交。' };
@@ -930,6 +932,9 @@ async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateD
     const entryContext = getChatContextSnapshot_ACU();
     if (!entryContext.firstMessage) {
         return { saved: false, error: '当前没有可绑定的目标聊天，已取消模板提交。' };
+    }
+    if (expectedChatContext && entryContext.firstMessage !== expectedChatContext.firstMessage) {
+        return { saved: false, error: '目标聊天已切换，已取消模板提交。' };
     }
     const chatStorageWait = await waitForActiveChatStorageContext_ACU({ expectedIdentity: entryContext.identity, expectedFirstMessage: entryContext.firstMessage, signal });
     if (chatStorageWait.status === 'switched') return { saved: false, error: '目标聊天已切换，已取消模板提交。' };
@@ -1240,6 +1245,8 @@ export async function applyChatTemplateSnapshotWithReconciliation_ACU(templateDa
     hardDeleteMissingSheets?: boolean;
     signal?: AbortSignal;
     requestId?: string;
+    /** 调用方锁定的目标聊天（按首楼对象认定）；当前聊天不是它时 fail-closed，用于异步回滚类调用。 */
+    expectedChatContext?: { firstMessage: unknown };
 } = {}) {
     const chat = getChatArray_ACU();
     const firstMessage = Array.isArray(chat) ? chat[0] : null;

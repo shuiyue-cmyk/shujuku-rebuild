@@ -31,6 +31,7 @@ import {
   type AgentConversationMessageKind_ACU,
   type AgentConversationSnapshot_ACU,
 } from './agent-model';
+import { isAiFloor_ACU } from '../../../shared/ai-floor';
 
 /** 单条会话消息的字符上限。模型原始输出与工具结果都可能很长，超出即截断并如实标注。 */
 export const AGENT_CONVERSATION_TEXT_LIMIT_ACU = 8000;
@@ -427,6 +428,27 @@ async function writeFloorRecord_ACU(chat: any[], targetIndex: number, record: Ag
 }
 
 /**
+ * 会话记录的承载楼（R4-08）：与资料帧同口径，取 ≤ 物理末楼的最近 AI 楼。
+ * TT 的工具楼 / 隐藏楼可被用户单独删除，会话挂上去会随之丢失。
+ * 例外：最近 AI 楼之后已有挂着会话记录的旧楼（旧版本写在物理末楼的遗留），仍写物理末楼，
+ * 否则按楼层顺序拼接时新消息会排到旧消息前面。
+ */
+function resolveConversationFloor_ACU(chat: any[]): number {
+  const tail = chat.length - 1;
+  if (tail < 0) return -1;
+  let aiFloor = -1;
+  for (let index = tail; index >= 0; index -= 1) {
+    if (isAiFloor_ACU(chat[index])) { aiFloor = index; break; }
+  }
+  if (aiFloor < 0) return tail;
+  for (let index = aiFloor + 1; index <= tail; index += 1) {
+    const message = chat[index];
+    if (message && typeof message === 'object' && Object.prototype.hasOwnProperty.call(message, AGENT_CONVERSATION_FIELD_ACU)) return tail;
+  }
+  return aiFloor;
+}
+
+/**
  * 把已分配 id 的消息追加进末楼的段并落盘。
  * @param chat 聊天数组
  * @param prepared 待落盘的消息（id 由调用方从拼接视图的 nextId 起分配）
@@ -434,7 +456,7 @@ async function writeFloorRecord_ACU(chat: any[], targetIndex: number, record: Ag
  */
 export async function appendPreparedAgentConversationMessages_ACU(chat: any[], prepared: readonly AgentConversationMessage_ACU[]): Promise<boolean> {
   if (!prepared.length) return false;
-  const targetIndex = chat.length - 1;
+  const targetIndex = resolveConversationFloor_ACU(chat);
   if (targetIndex < 0) return false;
   const container = chat[targetIndex];
   if (!container || typeof container !== 'object') return false;
@@ -453,7 +475,7 @@ export async function appendPreparedAgentConversationMessages_ACU(chat: any[], p
  * @returns 是否真的写入
  */
 export async function writeAgentConversationCompactionMark_ACU(chat: any[], mark: AgentConversationCompactionMark_ACU): Promise<boolean> {
-  const targetIndex = chat.length - 1;
+  const targetIndex = resolveConversationFloor_ACU(chat);
   if (targetIndex < 0) return false;
   const container = chat[targetIndex];
   if (!container || typeof container !== 'object') return false;

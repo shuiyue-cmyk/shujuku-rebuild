@@ -56,7 +56,6 @@ import {
   mapCleanPositionToOriginal_ACU,
   findParagraphMatch_ACU,
   trimPunctuation_ACU,
-  processSingleQuotes_ACU,
   applyOptimizations_ACU,
   applyOptimizationsWithStats_ACU,
   filterOptimizationsByExcludeRules_ACU,
@@ -210,34 +209,6 @@ describe('trimPunctuation_ACU', () => {
   it('纯标点返回空 trimmed', () => {
     const result = trimPunctuation_ACU('，。！');
     expect(result.trimmed).toBe('');
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// processSingleQuotes_ACU
-// ═══════════════════════════════════════════════════════════════
-describe('processSingleQuotes_ACU', () => {
-  it('中文单引号转双引号', () => {
-    const result = processSingleQuotes_ACU('\u2018你好\u2019世界');
-    expect(result).toContain('\u201C');
-    expect(result).toContain('\u201D');
-  });
-
-  it('英文单引号转双引号', () => {
-    const result = processSingleQuotes_ACU("'你好'世界");
-    expect(result).toContain('\u201C');
-  });
-
-  it('空字符串返回空', () => {
-    expect(processSingleQuotes_ACU('')).toBe('');
-  });
-
-  it('null 返回 null', () => {
-    expect(processSingleQuotes_ACU(null as any)).toBeNull();
-  });
-
-  it('无引号的文本不变', () => {
-    expect(processSingleQuotes_ACU('普通文本')).toBe('普通文本');
   });
 });
 
@@ -459,5 +430,19 @@ describe('排除规则写回保护（filterOptimizationsByExcludeRules_ACU + app
 
     expect(outcome.kept).toHaveLength(2);
     expect(outcome.dropped).toHaveLength(0);
+  });
+});
+
+describe('块 7 复审 R7-01：写回不改动引号', () => {
+  it('段末嵌套中文引号原样保留', () => {
+    const original = '他回头看了一眼，说：“她说‘别等我’。”';
+    const { content } = applyOptimizationsWithStats_ACU(original, [{ type: 'replace', original, optimized: '他回头望了一眼，说：“她说‘别等我’。”' }]);
+    expect(content).toBe('他回头望了一眼，说：“她说‘别等我’。”');
+  });
+
+  it('英文撇号不被改成弯引号', () => {
+    const original = "Tom's sword and Ann's shield were left behind.";
+    const { content } = applyOptimizationsWithStats_ACU(original, [{ type: 'replace', original, optimized: "Tom's blade and Ann's shield were left behind." }]);
+    expect(content).toBe("Tom's blade and Ann's shield were left behind.");
   });
 });

@@ -694,6 +694,24 @@ async function validateAppendedOperationsReplayCandidate_ACU(
   if (replay?.baseKind === 'compat_tolerant_replay') {
     return buildAppendedOperationsWriteRejectionMessage_ACU(replay.legacyToleranceDiagnosis?.strictError || '严格回放失败');
   }
+  // R2B-05：写到早期楼层时，目标之后的表格帧会叠加在新 entry 之上；只校验到目标楼层，
+  // 后缀里同 row_id 的 INSERT / 依赖旧行的 UPDATE 就可能在头部回放出错，整段聊天随之进入只读兼容态。
+  // 写入前历史本就能严格回放（否则兼容只读门闸已拦下），所以后缀失败必然是本次写入造成的。
+  const hasLaterFrame = candidateChat.some((message, index) => (
+    index > targetMessageIndex && !!message?.TavernDB_ACU_IsolatedData?.[isolationKey]?.storageFrame
+  ));
+  if (!hasLaterFrame) return null;
+  try {
+    const suffixReplay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
+      updateRuntimeState: false,
+      compatibilityMode: 'disabled',
+    });
+    if (suffixReplay?.baseKind === 'compat_tolerant_replay') {
+      return buildAppendedOperationsWriteRejectionMessage_ACU(suffixReplay.legacyToleranceDiagnosis?.strictError || '后缀严格回放失败');
+    }
+  } catch (error) {
+    return buildAppendedOperationsWriteRejectionMessage_ACU(error instanceof Error ? error.message : String(error));
+  }
   return null;
 }
 
@@ -3609,6 +3627,11 @@ function assertValidTemplateSheetChanges_ACU(sheetChanges: TemplateSheetChange_A
   if (sheetKeys.some(sheetKey => deletedSheetKeys.includes(sheetKey))) {
     throw new Error('当前楼层模板提交不能同时删除和变更同一 sheetKey。');
   }
+  // R2B-04：硬删分支以模板重写整库基底且不再保留 per-sheet checkpoint，同批 hide 的退出快照无处安放，只能拒绝；
+  // reveal/rebase 的结果数据在硬删分支里直接并入新基底（飞行模式停用即「删大总结 + 唤醒/重建纪要」同批）。
+  if (deletedSheetKeys.length > 0 && sheetChanges.some(change => change.kind === 'hide')) {
+    throw new Error('当前楼层模板提交不能同时硬删表和隐藏其他表：硬删会以模板重写整库基底，隐藏快照不会写入。请分两次提交。');
+  }
   for (const change of sheetChanges) {
     if (change.kind === 'introduction' || change.kind === 'rebase' || change.kind === 'reveal' || change.kind === 'hide') {
       if (!isObjectRecord_ACU(change.sheetData)) throw new Error(`当前楼层模板提交缺少可恢复 Sheet：${change.sheetKey}。`);
@@ -4261,6 +4284,15 @@ export async function commitCurrentFloorTemplateChanges_ACU(
           ? deepClone_ACU(options.templateSource as TableDataObject_ACU)
           : deepClone_ACU(activeReplayState);
         deletedSheetKeys.forEach(sheetKey => delete (terminalData as Record<string, unknown>)[sheetKey]);
+        // R2B-04：模板源对唤醒表只带结构（数据由 persist 层恢复）。新基底必须带上本批 reveal/rebase
+        // checkpoint 的最终数据（唤醒已按当前模板列集协调），否则休眠表在新基底上变成空壳，
+        // 旧数据只剩新基底之前的帧里，compaction 后永久丢失。introduction 命中历史时同样已转成 reveal。
+        for (const checkpoint of checkpoints) {
+          const timelineKind = (checkpoint as any)?.timeline?.kind;
+          if (timelineKind === 'sheet_reveal' || timelineKind === 'sheet_rebase') {
+            (terminalData as Record<string, unknown>)[checkpoint.sheetKey] = deepClone_ACU(checkpoint.data);
+          }
+        }
         const terminalScheduleSummary = Object.fromEntries(
           Object.entries(scheduleSummaryBySheet).filter(([sheetKey]) => !deletedSheetKeys.includes(sheetKey)),
         );

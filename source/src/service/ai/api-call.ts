@@ -731,10 +731,19 @@ function assertNotAborted_ACU(signal?: AbortSignal | null): void {
  * 内部 AI（续写规划 / 主 Agent / 子代理）单次请求的传输超时兜底。
  * 背景：本入口跑在续写租约内，transport hang（后端代理挂起、半开连接）时 fetch 永不返回
  * → 租约被无限占用 → 一切续写操作以 CONTINUATION_OPERATION_BUSY 死锁，只能手动 stop。
- * 取值宽松（120s）：续写正文是全链路最长的一次生成，短超时会误杀正常的慢响应；
- * 它只兜「永远等不到结果」的挂死，不兜「慢但有结果」。对照 vector-rerank-gateway 的 30s 兜底。
+ * 它只兜「永远等不到结果」的挂死，不兜「慢但有结果」（R8-02）：
+ * - 流式：120s 是空闲超时——等响应头、以及响应体相邻两块数据之间各最多 120s，持续出字就一直续期；
+ * - 非流式：没有进度信号，整段生成完才返回，上限按输出 token 上限放宽（按 20 tok/s 估），不低于 120s。
  */
 const INTERNAL_AI_FETCH_TIMEOUT_MS_ACU = 120_000;
+const INTERNAL_AI_NON_STREAM_MIN_TOKENS_PER_SECOND_ACU = 20;
+
+function resolveNonStreamTimeoutMs_ACU(maxTokens: number): number {
+  const budget = Number.isFinite(maxTokens) && maxTokens > 0
+    ? Math.ceil(maxTokens / INTERNAL_AI_NON_STREAM_MIN_TOKENS_PER_SECOND_ACU) * 1000
+    : 0;
+  return Math.max(INTERNAL_AI_FETCH_TIMEOUT_MS_ACU, budget);
+}
 
 /**
  * 把外部取消信号并入超时控制器：外部 abort 或超时到期都会中断 fetch。
@@ -805,8 +814,17 @@ export async function callAIWithResolvedPreset_ACU(
     }
     // 超时可中断：本调用在续写租约内，挂起的 transport 不允许无限占用租约（见常量注释）。
     // 计时器覆盖到响应体读完为止——流式路径的悬挂发生在 body 读取阶段，只包 fetch 兜不住。
+    const requestWantsStream = (body as any)?.stream === true;
     const timeoutController = new AbortController();
-    const timeoutTimer = setTimeout(() => timeoutController.abort(), INTERNAL_AI_FETCH_TIMEOUT_MS_ACU);
+    let timeoutMs = 0;
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    const armTimeout = (ms: number) => {
+      if (timeoutController.signal.aborted) return;
+      clearTimeout(timeoutTimer);
+      timeoutMs = ms;
+      timeoutTimer = setTimeout(() => timeoutController.abort(), ms);
+    };
+    armTimeout(requestWantsStream ? INTERNAL_AI_FETCH_TIMEOUT_MS_ACU : resolveNonStreamTimeoutMs_ACU(maxTokens));
     const detachExternalAbort = attachTimeoutAndExternalAbort_ACU(timeoutController, signal);
     try {
       let response: Response;
@@ -827,7 +845,7 @@ export async function callAIWithResolvedPreset_ACU(
         if (error?.name === 'AbortError') {
             // 超时计时器掐断的 fetch：挂 TimeoutError 名，使 isRetryable 按名判为可重试。
             // 不依赖中文文案正则；外部取消已在上方按 AbortError 先行返回，走不到这里。
-            const timeout = new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s 无响应），已中断。`);
+            const timeout = new Error(`内部 AI 请求超时（${timeoutMs / 1000}s 无响应），已中断。`);
             timeout.name = 'TimeoutError';
             throw timeout;
         }
@@ -839,8 +857,11 @@ export async function callAIWithResolvedPreset_ACU(
             throw new Error(`API 请求失败: ${response.status} ${errTxt}`);
         }
         assertNotAborted_ACU(signal);
-        const requestWantsStream = (body as any)?.stream === true;
-        const content = await handleApiResponse_ACU(response, requestWantsStream, lifecycle?.onUsage);
+        // 响应头已到：转入空闲计时，流式每收到一块数据续期一次。
+        armTimeout(INTERNAL_AI_FETCH_TIMEOUT_MS_ACU);
+        const content = await handleApiResponse_ACU(response, requestWantsStream, lifecycle?.onUsage, {
+          onProgress: () => armTimeout(INTERNAL_AI_FETCH_TIMEOUT_MS_ACU),
+        });
         return typeof content === 'string' && content.trim() ? content.trim() : null;
       } catch (error: any) {
         // 响应体读取阶段被外部 signal 取消时，与 fetch 阶段使用同一用户取消语义。
@@ -852,7 +873,7 @@ export async function callAIWithResolvedPreset_ACU(
         // 响应体读取阶段被超时计时器掐断：报超时而不是底层网络错文。
         // 挂 TimeoutError 名，走 isRetryable 的按名放行分支。
         if (error?.name === 'AbortError' && timeoutController.signal.aborted) {
-            const timeout = new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s），已中断。`);
+            const timeout = new Error(`内部 AI 请求超时（${timeoutMs / 1000}s 未收到新数据），已中断。`);
             timeout.name = 'TimeoutError';
             throw timeout;
         }

@@ -134,10 +134,37 @@ async function persistFlightModeState_ACU(next: FlightModeState_ACU): Promise<vo
   }
 }
 
+type FlightModeChatAnchor_ACU = { chat: any[]; firstMessage: unknown; chatKey: string; isolationKey: string };
+
+function captureFlightModeChatAnchor_ACU(): FlightModeChatAnchor_ACU {
+  const chat = getChatArray_ACU();
+  return {
+    chat,
+    firstMessage: Array.isArray(chat) ? chat[0] : undefined,
+    chatKey: String(currentChatFileIdentifier_ACU || ''),
+    isolationKey: String(getCurrentIsolationKey_ACU() || ''),
+  };
+}
+
+function isSameFlightModeChat_ACU(anchor: FlightModeChatAnchor_ACU): boolean {
+  const chat = getChatArray_ACU();
+  return chat === anchor.chat
+    && (Array.isArray(chat) ? chat[0] : undefined) === anchor.firstMessage
+    && String(currentChatFileIdentifier_ACU || '') === anchor.chatKey
+    && String(getCurrentIsolationKey_ACU() || '') === anchor.isolationKey;
+}
+
+const FLIGHT_MODE_CHAT_SWITCHED_ERROR_ACU = '操作期间已切换聊天，未在当前聊天上做任何模板回滚。原聊天的模板可能已改动但飞行模式状态未保存，请回到原聊天检查后重试。';
+
+/**
+ * 补偿只能作用在发起操作的那个聊天上（R8-01）：补偿内部按「当前聊天」解析目标，
+ * 切聊天后会把原聊天的模板（可能带硬删）提交到新聊天。身份不一致直接放弃补偿。
+ */
 async function compensateTemplateCommit_ACU(
   originalTemplate: Record<string, any> | null,
-  options: { source: string; presetName?: string; hardDeleteMissingSheets?: boolean },
+  options: { source: string; presetName?: string; hardDeleteMissingSheets?: boolean; anchor: FlightModeChatAnchor_ACU },
 ): Promise<{ ok: boolean; error?: string; blockers?: string[] }> {
+  if (!isSameFlightModeChat_ACU(options.anchor)) return { ok: false, error: FLIGHT_MODE_CHAT_SWITCHED_ERROR_ACU };
   if (!originalTemplate) return { ok: false, error: '没有可验证的原始模板，无法补偿模板提交。' };
   try {
     const result: any = await applyChatTemplateSnapshotWithReconciliation_ACU(originalTemplate, {
@@ -145,6 +172,7 @@ async function compensateTemplateCommit_ACU(
       presetName: options.presetName || '',
       hardDeleteMissingSheets: options.hardDeleteMissingSheets,
       destructiveChangeConfirmed: options.hardDeleteMissingSheets === true,
+      expectedChatContext: { firstMessage: options.anchor.firstMessage },
     });
     if (!result?.saved) {
       return {
@@ -168,6 +196,7 @@ export async function enableFlightMode_ACU(): Promise<FlightModeTransitionResult
 
   const template = parseEffectiveTemplate_ACU();
   if (!template) return { ok: false, reason: 'template_unavailable' };
+  const chatAnchor = captureFlightModeChatAnchor_ACU();
 
   const chronicleEntry = findSheetByName_ACU(template, '纪要表');
   if (!chronicleEntry) return { ok: false, reason: 'chronicle_not_found', visibleChronicleRowCount: check.visibleChronicleRowCount };
@@ -203,12 +232,16 @@ export async function enableFlightMode_ACU(): Promise<FlightModeTransitionResult
   }
 
   // 协调层按显示名派生真实 key（大总结 → sheet_da_zong_jie），提交后必须重新解析。
-  const resolved = findSheetByName_ACU(currentJsonTableData_ACU, FLIGHT_MODE_BIG_SUMMARY_SHEET_NAME_ACU);
+  // 切了聊天时 currentJsonTableData 已是新聊天的数据，找不到大总结并不代表原聊天提交有问题。
+  const resolved = isSameFlightModeChat_ACU(chatAnchor)
+    ? findSheetByName_ACU(currentJsonTableData_ACU, FLIGHT_MODE_BIG_SUMMARY_SHEET_NAME_ACU)
+    : null;
   if (!resolved) {
     const compensation = await compensateTemplateCommit_ACU(template, {
       source: 'flight_mode_enable_key_resolution_rollback',
       presetName: effectiveScopeBeforeEnable?.presetName || '',
       hardDeleteMissingSheets: true,
+      anchor: chatAnchor,
     });
     return {
       ok: false,
@@ -237,6 +270,7 @@ export async function enableFlightMode_ACU(): Promise<FlightModeTransitionResult
       source: 'flight_mode_enable_state_rollback',
       presetName: effectiveScopeBeforeEnable?.presetName || '',
       hardDeleteMissingSheets: true,
+      anchor: chatAnchor,
     });
     return {
       ok: false,
@@ -283,6 +317,7 @@ export async function disableFlightMode_ACU(options: DisableFlightModeOptions_AC
   }
 
   const bigSummaryKey = currentState.bigSummarySheetKey;
+  const chatAnchor = captureFlightModeChatAnchor_ACU();
   // 大总结内容只是被隐藏纪要行的摘要。停用会把那些纪要行全部恢复可见，摘要随即失去意义，
   // 因此这里显式硬删而非隐藏保留；hardDeleteMissingSheets 必须与破坏性确认成对出现。
   const committed: any = await applyChatTemplateSnapshotWithReconciliation_ACU(restoreTemplate, {
@@ -312,6 +347,7 @@ export async function disableFlightMode_ACU(options: DisableFlightModeOptions_AC
       source: 'flight_mode_disable_state_rollback',
       presetName: restorePresetName,
       hardDeleteMissingSheets: false,
+      anchor: chatAnchor,
     });
     return {
       ok: false,

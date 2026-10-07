@@ -505,6 +505,43 @@ describe('persistTableMutationLogV2_ACU incremental replacement', () => {
     expect(mocks.saveChatStrict).not.toHaveBeenCalled();
   });
 
+  it('块 2B 复审 R2B-05：写到早期楼层且后面还有表格帧时，整段历史也必须能严格回放', async () => {
+    const message = seedFrame({ logEntries: [] });
+    mocks.chat.push({ is_user: true, mes: 'u' });
+    mocks.chat.push({ is_user: false, TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: { version: 2, logEntries: [makeEntry({ operations: [] })] } } } });
+    const messageBefore = JSON.parse(JSON.stringify(message));
+    const probeCalls: any[] = [];
+    mocks.loadReplayDetailed.mockImplementation(async (_chat: any[], _key: string, options: any) => {
+      if (options?.compatibilityMode === 'disabled') {
+        probeCalls.push(options);
+        if (options.maxMessageIndex === undefined) {
+          throw new Error('[V2 Replay] operation failed: messageIndex=2, seq=1: UNIQUE constraint failed: a.row_id');
+        }
+        return { baseKind: 'full_checkpoint', data: { mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: sheetB } };
+      }
+      return undefined;
+    });
+    const { persistTableMutationLogV2_ACU } = await import('../../../src/service/table/storage-frame-v2-persist');
+
+    const result = await persistTableMutationLogV2_ACU({
+      targetMessageIndex: 0,
+      source: 'manual_fill',
+      afterData: { mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: sheetB } as any,
+      filledSheetKeys: [],
+      candidateChangedSheetKeys: ['sheet_a'],
+      operations: [{ kind: 'sql_sheet_batch', sheetKey: 'sheet_a', tableName: 'a', reason: 'system', statements: ["INSERT INTO a (row_id, value) VALUES (9, 'early')"] }] as any,
+      transactionContext: makeTransaction(),
+      assumeCommitLock: true,
+    });
+
+    expect(result.saved).toBe(false);
+    expect(result.error).toContain('UNIQUE constraint failed');
+    expect(probeCalls.some((options) => options.maxMessageIndex === undefined)).toBe(true);
+    expect(message).toEqual(messageBefore);
+    expect(mocks.saveChat).not.toHaveBeenCalled();
+    expect(mocks.saveChatStrict).not.toHaveBeenCalled();
+  });
+
   it('双身份写入口门闸：新引入表与既有活跃表物理表名冲突时拒绝补写 per-sheet 锚点', async () => {
     // 既有活跃表 sheet_a（名 A）已在回放基底；本次要引入 sheet_new（同名 A）→ 同一物理表名。
     mocks.loadReplayDetailed.mockImplementation(async () => ({
@@ -1457,6 +1494,55 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
       expect(mocks.scopeContainer).toEqual(originalScope);
       expect(mocks.guideContainer).toEqual(originalGuide);
     });
+  });
+
+  it('块 2B 复审 R2B-04：硬删表与重建其他表同批时，新基底带上重建后的真实数据而不是模板空壳', async () => {
+    const message = seedFrame({ logEntries: [] });
+    mocks.loadReplayState.mockResolvedValue({ mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: sheetB });
+    const rebased = { ...sheetA, content: [['row_id', 'value'], ['1', 'kept']] };
+    const templateShell = { ...sheetA, content: [['row_id', 'value']] };
+    // 候选回放（硬删校验）应得到「重建后的数据」：与新基底一致才放行。
+    mocks.loadReplayDetailed.mockImplementation(async (candidateChat: any[], _key: string, opts: any) => ({
+      baseKind: 'full_checkpoint',
+      data: candidateChat[opts.maxMessageIndex].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data,
+    }));
+
+    const result = await commitCurrentFloorTemplateChanges_ACU({
+      isolationKey: '',
+      sheetChanges: [{ kind: 'rebase', sheetKey: 'sheet_a', sheetData: rebased }],
+      deletedSheetKeys: ['sheet_b'],
+      guideData: { sheet_a: { name: 'A' } },
+      templateSource: { mate: { type: 'acu' }, sheet_a: templateShell },
+      expectedChatIdentity: 'chat-a',
+      expectedFirstMessage: message,
+      createdAt: 30,
+    } as any);
+
+    expect((result as any).error).toBeUndefined();
+    expect(result).toMatchObject({ saved: true, hardDeleteCheckpointCreated: true });
+    const frame = message.TavernDB_ACU_IsolatedData[''].storageFrame;
+    expect(frame.checkpoint.data.sheet_b).toBeUndefined();
+    expect(frame.checkpoint.data.sheet_a.content).toEqual([['row_id', 'value'], ['1', 'kept']]);
+  });
+
+  it('块 2B 复审 R2B-04：同一次模板提交里既硬删表又隐藏表时拒绝提交，不改动聊天', async () => {
+    const message = seedFrame({ logEntries: [] });
+    const frameBefore = JSON.parse(JSON.stringify(message.TavernDB_ACU_IsolatedData));
+    mocks.loadReplayState.mockResolvedValue({ mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: sheetB });
+
+    const result = await commitCurrentFloorTemplateChanges_ACU({
+      isolationKey: '',
+      sheetChanges: [{ kind: 'hide', sheetKey: 'sheet_a', sheetData: sheetA }],
+      deletedSheetKeys: ['sheet_b'],
+      guideData: { sheet_a: { name: 'A' } },
+      templateSource: { mate: { type: 'acu' } },
+      expectedChatIdentity: 'chat-a',
+      expectedFirstMessage: message,
+    } as any);
+
+    expect(result).toMatchObject({ saved: false, error: expect.stringContaining('分两次') });
+    expect(message.TavernDB_ACU_IsolatedData).toEqual(frameBefore);
+    expect(mocks.saveChatStrict).not.toHaveBeenCalled();
   });
 
   it('structural commit 在异步 replay 期间取消时不修改 frame、guide 或保存', async () => {

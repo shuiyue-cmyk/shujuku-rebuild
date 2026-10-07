@@ -986,6 +986,8 @@ describe('callAIWithResolvedPreset_ACU 传输超时', () => {
   it('transport 挂死时按 120s 超时兜底中断，错误文案区分超时', async () => {
     vi.useFakeTimers();
     try {
+      // 流式请求的 fetch 阶段只等响应头：120s 内没有响应头即判挂死（R8-02 后非流式另按输出上限计时）。
+      mockSettings.streamingEnabled = true;
       mockFetch.mockImplementation((_url: string, init: any) => new Promise((_resolve, reject) => {
         init.signal.addEventListener('abort', () => {
           const err = new Error('aborted');
@@ -1041,6 +1043,65 @@ describe('callAIWithResolvedPreset_ACU 传输超时', () => {
       expect(failure.name).toBe('TimeoutError');
       expect(failure.message).toContain('内部 AI 请求超时');
       expect(isRetryableAiRequestError_ACU(failure)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('R8-02：流式持续出字时 120s 是空闲超时而非墙钟上限，长生成不被掐断', async () => {
+    vi.useFakeTimers();
+    try {
+      mockSettings.streamingEnabled = true;
+      mockFetch.mockResolvedValue({ ok: true });
+      let resolveBody!: (value: string) => void;
+      let onProgress: (() => void) | undefined;
+      mockHandleApiResponse.mockImplementation((_res: unknown, _stream: unknown, _usage: unknown, opts?: { onProgress?: () => void }) => {
+        onProgress = opts?.onProgress;
+        return new Promise((resolve) => { resolveBody = resolve; });
+      });
+
+      const pending = callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved);
+      await vi.waitFor(() => expect(mockHandleApiResponse).toHaveBeenCalled());
+      expect(typeof onProgress).toBe('function');
+      for (let elapsed = 0; elapsed < 300_000; elapsed += 30_000) {
+        await vi.advanceTimersByTimeAsync(30_000);
+        onProgress?.();
+      }
+      resolveBody('很长的正文');
+      await expect(pending).resolves.toBe('很长的正文');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('R8-02：非流式请求的超时按输出上限放宽，8192 token 的慢生成 130s 返回不被掐断', async () => {
+    vi.useFakeTimers();
+    try {
+      mockSettings.streamingEnabled = false;
+      let resolveFetch!: (value: unknown) => void;
+      const abortableFetch = (_url: string, init: any) => new Promise((resolve, reject) => {
+        resolveFetch = resolve;
+        init.signal.addEventListener('abort', () => {
+          const err = new Error('aborted');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      });
+      mockFetch.mockImplementation(abortableFetch);
+      mockHandleApiResponse.mockResolvedValue('慢正文');
+      const slow = { ...resolved, apiConfig: { ...resolved.apiConfig, max_tokens: 8192 } };
+
+      const pending = callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], slow);
+      await vi.waitFor(() => expect(mockFetch).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(130_000);
+      resolveFetch({ ok: true });
+      await expect(pending).resolves.toBe('慢正文');
+
+      // 真挂死仍有上限：远超输出上限所需时长后按超时中断。
+      const hung = callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], slow).catch((error: Error) => error);
+      await vi.advanceTimersByTimeAsync(600_000);
+      const failure = await hung;
+      expect((failure as Error).name).toBe('TimeoutError');
     } finally {
       vi.useRealTimers();
     }

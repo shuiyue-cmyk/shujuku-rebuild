@@ -1669,6 +1669,29 @@ describe('固定工作流开局（open_round）', () => {
     expect(typeof h.written[0].snapshot.settledPrefixFingerprint).toBe('string');
   });
 
+  it('块 4 复审 R4-06：固定工作流在途期间末楼被原地编辑时拒绝落盘，不把旧结算挂到新正文上', async () => {
+    let edited = false;
+    const h = harness_ACU({
+      mainReplies: ['{"thought":"开局","action":"open_round","focus":"守门人的回避"}'],
+      subReplies: [
+        JSON.stringify({
+          summary: '结算了黑色晶屑',
+          delta: { hooks: [{ action: 'upsert', id: 'H1', summary: '守门人手中的黑色晶屑', status: 'planted', importance: 'high', plantedIndex: 3 }] },
+        }),
+        JSON.stringify({ summary: '主线建议', recommendation: '安静地问一句', mustPreserve: [], risks: [] }),
+        JSON.stringify({ summary: '本轮无节拍操作', recommendation: 'no_change', mustPreserve: [], risks: [] }),
+        JSON.stringify({ instruction: '从守门人的回避写起', summary: '试探' }),
+      ],
+      mutateChatDuringSubagent: (chat) => {
+        if (edited) return;
+        edited = true;
+        chat[chat.length - 1].mes = '用户在工作流途中改写了末楼正文';
+      },
+    });
+    await expect(h.planner.plan(h.request)).rejects.toThrow(/聊天楼层/);
+    expect(h.written).toHaveLength(0);
+  });
+
   it('主 Agent 不能直接 delegate instruction-composer 与 final-reviewer', async () => {
     const h = harness_ACU({
       mainReplies: [

@@ -20,10 +20,10 @@
 | 2B | service/table 存储帧/回放/迁移 | 15k | 子代理完成 → `docs/review/block2b-storage-replay.md`；P1 已修，P2 待修 |
 | 3 | service/chat + service/runtime + service/settings | 17.8k | 子代理完成 → `docs/review/block3-chat-runtime-settings.md`；P1/P2 全部已修（R3-08 只做备份，「合法但零表模板」仍按损坏处理），P3 部分修 |
 | 4 | service/continuation + service/agent | 30k | 子代理完成 → `docs/review/block4-continuation-agent.md`；P1 与 R4-05 已修 |
-| 5 | service/vector + data/storage 向量部分 | 12.4k+ | 子代理完成 → `docs/review/block5-vector.md`；待修 |
-| 6 | service/template + template-assistant + worldbook | 13.3k | 子代理完成 → `docs/review/block6-template-worldbook.md`；待修 |
-| 7 | shared/ | 9.8k | 未开始 |
-| 8 | service/ai、plot、optimization、flight-mode、其余小模块 | 5k | 未开始 |
+| 5 | service/vector + data/storage 向量部分 | 12.4k+ | 子代理完成 → `docs/review/block5-vector.md`；已修（R5-04 按产品决定不修，R5-12 rowId 部分未改） |
+| 6 | service/template + template-assistant + worldbook | 13.3k | 子代理完成 → `docs/review/block6-template-worldbook.md`；已修 |
+| 7 | shared/ | 9.8k | 子代理完成 → `docs/review/block7-shared.md`；P1 已修，P2/P3 待修 |
+| 8 | service/ai、plot、optimization、flight-mode、其余小模块 | 5k | 子代理完成 → `docs/review/block8-small-services.md`；P1 已修，P2/P3 待修 |
 | 9 | presentation（旧 bootstrap/triggers/api-groups） | 5.4k | 未开始 |
 | 10 | presentation-v2 逻辑层（stores/composables）+ presentation-v3 | 28k | 未开始 |
 
@@ -84,7 +84,7 @@
 | R2A-02 边界汇合/临时桥整体替换聊天 | P1 | 已修：boundary 只回写原根楼层隔离槽；bridge 三处按「表格字段有变化的楼层」回写并校验窗口内未变，资料随迁改在 live 上做并可回滚 | boundary-staging.integration「宿主追加消息」、provisional-bridge.integration「窗口内宿主」 |
 | R2A-05 legacy 路径绕过隐藏列守卫 | P2 | 已修：守卫移入 applyEditsWithSystemRowIds，对去标记+重绑后的最终语句校验 | update-orchestrator.test「隐藏物理列守卫」 |
 | R2A-03 SQL 已入引擎后抛异常留孤儿行 | P2 | 已修：apply 成功后至落盘成功前任何失败都重载；apply 返回 runtimeMutated 时也重载 | table-update-commit.test「收敛」×2 |
-| R2A-04 flush 失败重载冲掉待写回行 | P2 | 部分修：flush 提交声明 applyMutatesRuntime:false，不再重载。普通提交失败重载仍会冲掉未 flush 的行（未修） | table-update-commit.test「不得重载」 |
+| R2A-04 flush 失败重载冲掉待写回行 | P2 | 已修：flush 提交声明 applyMutatesRuntime:false，不再重载；普通提交失败时若有未写回的 runtime-only 登记且聊天未变，按提交前快照恢复运行时（sqlite 另行 hydrate），恢复不了才整体重载 | table-update-commit.test「不得重载」「R2A-04」×3 |
 | R2A-06 legacy 首次初始化用模板覆盖运行时 | P2 | 已修：先克隆共享视图；仅运行时缺表时用模板补 | update-orchestrator.test「首次初始化：AI 未改动」 |
 | R2B-02 in-flight 等待方丢兼容诊断字段 | P2 | 已修：等待方返回完整结果深拷贝；去重 key 改为仅显式 updateRuntimeState:false | replay.test「等待方拿到」「未显式声明」 |
 | R2B-03 回放重算 random()/now | P2 | 已修：涉及非确定性函数（含 DDL DEFAULT）的表改以执行后快照 sheet_replace 落盘 | update-orchestrator.test「随机/当前时间」 |
@@ -122,7 +122,7 @@
 | R5-01 镜像 flush/重建失败整块回滚吞掉并发提交 | P1 | 已修：改为锁内登记的字段级撤销日志，只撤销仍是自己写入值的镜像/legacy 字段；旧镜像对象不再原地改动 | summary-vector-mirror-review-block5.test「R5-01」×3 |
 | R5-02 每次 flush 全表重嵌、召回下载全部历史 pack | P2 | 已修：refresh 前比对写入时源文本哈希（manifest 行与 row_add 记录哈希，旧 manifest 回读 pack textHash），只重嵌变化行；resolver 只输出 head 行仍引用的 pack | 同上「R5-02」×3、resolver.test 期望更新 |
 | R5-03 重建失败回收删掉在用 manifest | P2 | 已修：manifest 与 pack 同口径先读后写，已存在则复用（createdNew:false），不降级、不回收 | summary-vector-mirror-manifest-reuse.test |
-| R5-04 GC 可达性只看当前聊天（分支/改名聊天的引用被删） | P2 | 未修：需产品取舍（宁可多占存储 vs 及时回收），待定 | — |
+| R5-04 GC 可达性只看当前聊天（分支/改名聊天的引用被删） | P2 | 不修（产品决定）：选省空间，保持及时回收；分支/改名聊天的向量索引被回收后需重建（向量化费用很低） | — |
 | R5-05 镜像不可用时 fold 抛错阻塞 compaction | P2 | 已修：head 非 ok / pack 或 chunk 读不到时剥掉镜像让下次 flush 自动 initial 重建，不再抛错 | summary-vector-mirror-fold-degrade.test |
 | R5-06 迁移旧交火索引写出召回不读的旧指针 | P2 | 已修：对外 API 与 v2 页面入口改为按当前纪要表重建新版镜像（会清旧字段） | data-admin-ui-legacy-vector.test |
 | R5-07 writer 与 rebuild 无互斥 | P2 | 已修：提交前比对镜像结构签名，embedding 期间被改写即放弃交回队列 | 同上「R5-07」 |
@@ -131,11 +131,20 @@
 | R5-10 flush 代次墓碑在新链路失效 | P3 | 已修：提交前校验代次，失效按 flush_scope_invalidated 跳过 | 同上「R5-10」 |
 | R5-11 删除索引在纯 V2 楼层回滚为空操作 | P3 | 已修：写时复制后整体赋值 | chat-service.test「R5-11」 |
 | R5-12 纪要表选取依赖键顺序 / rowId 口径 | P3 | 部分：选取改为纪要表>总结表>总体大纲并全仓共用；rowId 口径未改（缺 row_id 的行已在加载时被清理，实际影响小） | scope-resolver-priority.test |
+| R2A-07 多 staging 组汇合后丢 pre 段 | P2 | 已修：三阶段——所有组边界前段先全部进 staging，统一汇合一次，再跑所有组边界后段 | update-orchestrator.test「R2A-07」 |
+| R2B-04 删表与唤醒/重建/隐藏同批提交丢数据 | P2 | 已修：硬删新基底并入本批唤醒/重建表的最终数据（飞行模式停用即此组合）；与隐藏同批仍拒绝（隐藏快照无处安放，提示分两次提交） | persist.test「R2B-04」×2、flight-mode-lifecycle 集成 |
+| R2B-05 追加操作只校验到当前楼层，后续楼层回放坏掉 | P2 | 已修：后面还有本隔离槽帧时追加一次全量严格回放，失败即拒 | persist.test「R2B-05」 |
+| R2B-06 兼容过渡 checkpoint 等锁期间聊天变化仍落盘 | P2 | 已修：计划前记录聊天形状（长度+head 摘要），提交时不一致即放弃 | replay.test「R2B-06」 |
+| R4-06 固定工作流在途期间楼层变化仍落盘 | P2 | 已修：准备阶段后锚定各楼层引用/swipe/正文，前缀刷新与落盘前复核，变化即按 STALE 中止 | agent-main-loop.test「R4-06」 |
+| R4-08 会话段写在工具/隐藏楼层 | P2 | 已修：落在尾部及以前最近的 AI 楼；后面已有会话段的楼时仍写尾部，保持顺序 | agent-conversation-store.test「R4-08」×2 |
+| R7-01 正文单引号被改写 | P1 | 已修：删除单引号处理，正文原样写回 | text-optimization.test「R7-01」×2 |
+| R8-01 飞行模式补偿切聊后打到新聊天（硬删） | P1 | 已修：入口锚定聊天（数组/首楼/文件标识/隔离键），补偿前不一致直接放弃并报可操作错误；协调提交新增 expectedChatContext，首楼不符 fail-closed | flight-mode-transition-chat-switch.test |
+| R8-02 内部 AI 120s 墙钟超时掐断长生成 | P1 | 已修：流式改为空闲超时（等响应头、相邻数据块之间各 120s，逐块读取续期）；非流式按输出上限 20 tok/s 估算放宽，不低于 120s | api-call.test「R8-02」×2、prompt-api-call.test「R8-02」 |
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
 R2B-08/09（迁移、混合提交、batch 写入的整聊天克隆替换）与上面同一模式但无 await 窗口，未改，留作 P3。
 
-待修：R5-04（待产品取舍）；R2A-07（多 staging 组汇合后丢 pre 段）、R2A-04 第 2 部分、R2B-04/05/06（待坐实）、R4-06（待坐实）/07/08、各块 P3。
+待修：R4-07（两套世界书恢复实现，P2 重构，当前无错误结果）；块 7 P2（R7-02~05）、块 8 P2（R8-03~07）；各块 P3；块 9、10 未复审。
 R4-02 遗留：模型放弃补齐时，草稿（partial）不会阻止水位推进——只在提升路径堵住了「写齐却看不见」，「没写齐就收工」仍按旧口径。
 
 测试稳定性：重型页面套件首个用例冷导入整张 V2 模块图单跑 11–15s，贴着原全局 15s 上限，本机并行全量必超时（发布基线同样失败）；全局 testTimeout 调为 60s。

@@ -444,9 +444,27 @@ export class RetryableAiResponseError_ACU extends Error {
   // 兼容 Claude Messages 原样透传的 Anthropic SSE（接口协议=claude_messages 时 TT 不归一化流）：
   // content_block_delta(text_delta).delta.text 拼内容，message_stop 视为流结束（等价 [DONE]）。
   // usage 出现在流末尾的独立 chunk（choices 为空数组），需开启 stream_options.include_usage 才会下发。
-  async function parseStreamResponse_ACU(response: any, onUsage?: (usage: AiUsageMetadata_ACU) => void) {
+  /**
+   * 读完流式响应体。调用方要进度信号时逐块读并在每块到达时回调（空闲超时据此续期，R8-02）；
+   * 宿主不给 reader 时退回整段 text()。
+   */
+  async function readStreamBodyText_ACU(response: any, onProgress?: () => void): Promise<string> {
+    const reader = onProgress && typeof response?.body?.getReader === 'function' ? response.body.getReader() : null;
+    if (!reader) return await response.text();
+    const decoder = new TextDecoder();
+    let text = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      try { onProgress!(); } catch { /* 进度回调异常不允许影响读取。 */ }
+      text += typeof value === 'string' ? value : decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+  }
+
+  async function parseStreamResponse_ACU(response: any, onUsage?: (usage: AiUsageMetadata_ACU) => void, onProgress?: () => void) {
     try {
-      const text = await response.text();
+      const text = await readStreamBodyText_ACU(response, onProgress);
       let result = '';
       let sawDone = false;
       let capturedUsage: AiUsageMetadata_ACU | null = null;
@@ -504,12 +522,17 @@ export class RetryableAiResponseError_ACU extends Error {
    * 预设级流式开关可能与全局不同，若按全局判断会把 SSE 当 JSON（或反之）解析失败。
    * requestWantsStream 缺省时回退全局 settings_ACU.streamingEnabled（兼容旧调用方）。
    */
-  export async function handleApiResponse_ACU(response: any, requestWantsStream?: boolean, onUsage?: (usage: AiUsageMetadata_ACU) => void) {
+  export async function handleApiResponse_ACU(
+    response: any,
+    requestWantsStream?: boolean,
+    onUsage?: (usage: AiUsageMetadata_ACU) => void,
+    options?: { onProgress?: () => void },
+  ) {
     const wantsStream = requestWantsStream !== undefined
       ? requestWantsStream === true
       : settings_ACU.streamingEnabled === true;
     if (wantsStream) {
-      return await parseStreamResponse_ACU(response, onUsage);
+      return await parseStreamResponse_ACU(response, onUsage, options?.onProgress);
     }
     return await parseNonStreamResponse_ACU(response, onUsage);
   }

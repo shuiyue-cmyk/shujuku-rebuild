@@ -422,3 +422,31 @@ describe('会话追加与渲染', () => {
     expect(lastRuntimeSnapshotText_ACU(snapshot)).toBe('新快照');
   });
 });
+
+describe('块 4 复审 R4-08：会话记录落在最近的 AI 楼', () => {
+  it('物理末楼是工具楼时，会话段与压缩标记写到它之前最近的 AI 楼', async () => {
+    const chat: any[] = [
+      { is_user: true, mes: '用户' },
+      { is_user: false, mes: 'AI 正文' },
+      { is_user: false, is_system: true, role: 'tool', mes: '工具结果' },
+    ];
+    useChat(chat);
+    expect(await appendPreparedAgentConversationMessages_ACU(chat, [message_ACU(1, 'user', '插话')])).toBe(true);
+    expect(chat[1][AGENT_CONVERSATION_FIELD_ACU]?.segment?.map((item: any) => item.id)).toEqual([1]);
+    expect(chat[2][AGENT_CONVERSATION_FIELD_ACU]).toBeUndefined();
+
+    expect(await writeAgentConversationCompactionMark_ACU(chat, v2Mark_ACU(1))).toBe(true);
+    expect(chat[1][AGENT_CONVERSATION_FIELD_ACU]?.compaction?.compactedThroughId).toBe(1);
+    expect(chat[2][AGENT_CONVERSATION_FIELD_ACU]).toBeUndefined();
+  });
+
+  it('后面的非 AI 楼已经挂着旧会话段时仍写物理末楼，保持楼层顺序', async () => {
+    const chat: any[] = [
+      { is_user: false, mes: 'AI 正文' },
+      { is_user: false, is_system: true, role: 'tool', mes: '工具结果', [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([message_ACU(1, 'user', '旧')]) },
+    ];
+    useChat(chat);
+    expect(await appendPreparedAgentConversationMessages_ACU(chat, [message_ACU(2, 'agent', '新')])).toBe(true);
+    expect(readAgentConversation_ACU(chat).messages.map((item) => item.id)).toEqual([1, 2]);
+  });
+});

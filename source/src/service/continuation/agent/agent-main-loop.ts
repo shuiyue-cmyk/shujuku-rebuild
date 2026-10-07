@@ -1650,6 +1650,16 @@ export class ContinuationAgentTurnPlanner_ACU {
     apiDependencies?: ContinuationApiPresetDependencies_ACU,
   ): Promise<ContinuationWorkflowResult_ACU> {
     await this.prepareFixedWorkflowStructure_ACU(action, request, context, budget, chat, apiDependencies);
+    // R4-06：工作流可能持续数分钟。原地编辑或 swipe 末楼不会改变楼层引用，租约也看不见；
+    // 记下每楼的引用、swipe 与正文，落盘前复核，变了就按 STALE 拒绝，不把旧结算挂到新内容上。
+    const chatAnchor = chat.map(message => ({ message, swipeId: message?.swipe_id, mes: message?.mes }));
+    const assertChatUnchangedForWorkflow_ACU = (): void => {
+      if (chat.length !== chatAnchor.length || chatAnchor.some((anchor, index) => (
+        chat[index] !== anchor.message || chat[index]?.swipe_id !== anchor.swipeId || chat[index]?.mes !== anchor.mes
+      ))) {
+        throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '固定工作流在途期间聊天楼层或正文发生变化，拒绝用旧内容结算', false));
+      }
+    };
     const unsettledSelection = resolveAgentUnsettledStoryWindow_ACU(context);
     const mapPayload = (result: AgentSubagentRunResult_ACU): ContinuationWorkflowAgentPayload_ACU => ({
       ok: true,
@@ -1758,6 +1768,8 @@ export class ContinuationAgentTurnPlanner_ACU {
     });
     // P1 与派工结算路径同强度：水位推进后刷新前缀指纹，否则写盘被指纹门拒绝；
     // 落盘前复核租约，在途停止时楼层扩展字段绝不能照常写入。
+    // 先复核楼层与正文未变，再刷新前缀指纹：此时按当前聊天算出的指纹就是工作流开始时的值，不会把在途编辑「洗白」。
+    assertChatUnchangedForWorkflow_ACU();
     let nextSnapshot = workflow.snapshot;
     if (nextSnapshot.settledThroughIndex !== incomingWaterline) {
       nextSnapshot = refreshAgentModuleSnapshotChatPrefix_ACU(nextSnapshot, chat);

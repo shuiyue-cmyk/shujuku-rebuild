@@ -3263,35 +3263,6 @@ function trimPunctuation_ACU(text) {
     }
     return { trimmed, prefix, suffix };
 }
-/**
- * 处理单引号
- */
-function processSingleQuotes_ACU(text) {
-    if (!text)
-        return text;
-    let result = text;
-    result = result.replace(/\u2018([^\u2019]*)\u2019/g, (match, content, offset, string) => {
-        const endPos = offset + match.length;
-        const afterMatch = string.substring(endPos).trim();
-        if (afterMatch === '' || /^[^\u4e00-\u9fa5a-zA-Z0-9]*$/.test(afterMatch)) {
-            return `\u201C${content}`;
-        }
-        else {
-            return `\u201C${content}\u201D`;
-        }
-    });
-    result = result.replace(/'([^']*)'/g, (match, content, offset, string) => {
-        const endPos = offset + match.length;
-        const afterMatch = string.substring(endPos).trim();
-        if (afterMatch === '' || /^[^\u4e00-\u9fa5a-zA-Z0-9]*$/.test(afterMatch)) {
-            return `\u201C${content}`;
-        }
-        else {
-            return `\u201C${content}\u201D`;
-        }
-    });
-    return result;
-}
 /** 是否真的配置了排除规则（空数组/空标签视为未配置，用于回归锁早退）。 */
 function hasExcludeRuleInput_ACU(options) {
     if (!options || typeof options !== 'object')
@@ -3383,8 +3354,9 @@ function applyOptimizationsWithStats_ACU(originalContent, optimizations, options
                 const matchedText = result.substring(match.start, match.end);
                 const originalPunct = trimPunctuation_ACU(matchedText);
                 const optimizedPunct = trimPunctuation_ACU(opt.optimized);
-                let finalContent = originalPunct.prefix + optimizedPunct.trimmed + originalPunct.suffix;
-                finalContent = processSingleQuotes_ACU(finalContent);
+                // 优化后的正文原样写回（R7-01）：过去这里会把单引号对改成双引号，段末嵌套引用会丢闭合引号、
+                // 英文撇号会被改成弯引号，直接改坏用户正文。引号风格交给提示词约束。
+                const finalContent = originalPunct.prefix + optimizedPunct.trimmed + originalPunct.suffix;
                 result = result.substring(0, match.start) + finalContent + result.substring(match.end);
                 replaced = true;
                 logDebug_ACU(`[正文优化] 优化项 ${i + 1} 使用${match.method}成功，位置: ${match.start}-${match.end}`);
@@ -47267,6 +47239,8 @@ async function createCompatTransitionCheckpointFromTolerantReplay_ACU(chat, isol
         notifyCompatFixationAbandoned_ACU(isolationKey, 'no_writable_floor', '兼容过渡根未固化：当前聊天没有可写入的 AI 楼层，数据仍按兼容读取结果可用。');
         return false;
     }
+    // 锁外计算 cutoff 与目标楼层（R2B-06）：记下当时的聊天形状，锁内复核，变了就放弃固化。
+    const chatShapeAtPlan = `${chat.length}|${computeReplayHeadRevisionDigest_ACU(chat, isolationKey)}`;
     const tolerant = await replayWithLegacyTolerances_ACU(chat, isolationKey);
     // 身份归并不是可自动固化的容忍项：mergeLegacySheetIdentities_ACU 按模板 key /
     // 稳定 key / 字典序选赢家，同 row_id 直接丢弃 loser 行，不做列身份转换。把这样的
@@ -47304,6 +47278,7 @@ async function createCompatTransitionCheckpointFromTolerantReplay_ACU(chat, isol
         scheduleSummary = undefined;
     }
     const tolerances = summarizeLegacyToleranceReport_ACU(tolerant.toleranceReport);
+    let abandonedForChatChange = false;
     await runTableWriteTransaction_ACU({
         source: 'system_cleanup',
         reason: 'createCompatTransitionCheckpointFromTolerantReplay',
@@ -47312,6 +47287,12 @@ async function createCompatTransitionCheckpointFromTolerantReplay_ACU(chat, isol
         maintenanceMode: 'exclusive',
         workingDataMode: 'none',
     }, async (ctx) => ctx.runCommit(async () => {
+        // 等锁期间切了聊天、删/插了楼层或帧有新写入：cutoff.messageIndex 与目标楼层可能已错位，放弃固化。
+        if (getChatArray_ACU() !== chat
+            || `${chat.length}|${computeReplayHeadRevisionDigest_ACU(chat, isolationKey)}` !== chatShapeAtPlan) {
+            abandonedForChatChange = true;
+            return;
+        }
         const target = chat[targetMessageIndex];
         if (!target || target.is_user)
             throw new Error('兼容过渡 checkpoint 的目标 AI 楼层在提交前已变化。');
@@ -47358,6 +47339,10 @@ async function createCompatTransitionCheckpointFromTolerantReplay_ACU(chat, isol
             throw error;
         }
     }));
+    if (abandonedForChatChange) {
+        logWarn_ACU('[V2 Compat Replay] 放弃固化兼容过渡根：计算期间聊天已变化（切换、删改楼层或有新写入），下次加载重试。数据仍按兼容读取结果可用。');
+        return false;
+    }
     logWarn_ACU(`[V2 Compat Replay] 已把兼容读取结果固化为过渡根：cutoff=${JSON.stringify(tolerant.cutoff)}, tolerances=${tolerances.join(', ')}。后续加载将走严格快路径。`);
     lastFixationAbandonToastKey_ACU = '';
     return true;
@@ -59561,6 +59546,24 @@ async function validateAppendedOperationsReplayCandidate_ACU(candidateChat, isol
     if (replay?.baseKind === 'compat_tolerant_replay') {
         return buildAppendedOperationsWriteRejectionMessage_ACU(replay.legacyToleranceDiagnosis?.strictError || '严格回放失败');
     }
+    // R2B-05：写到早期楼层时，目标之后的表格帧会叠加在新 entry 之上；只校验到目标楼层，
+    // 后缀里同 row_id 的 INSERT / 依赖旧行的 UPDATE 就可能在头部回放出错，整段聊天随之进入只读兼容态。
+    // 写入前历史本就能严格回放（否则兼容只读门闸已拦下），所以后缀失败必然是本次写入造成的。
+    const hasLaterFrame = candidateChat.some((message, index) => (index > targetMessageIndex && !!message?.TavernDB_ACU_IsolatedData?.[isolationKey]?.storageFrame));
+    if (!hasLaterFrame)
+        return null;
+    try {
+        const suffixReplay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
+            updateRuntimeState: false,
+            compatibilityMode: 'disabled',
+        });
+        if (suffixReplay?.baseKind === 'compat_tolerant_replay') {
+            return buildAppendedOperationsWriteRejectionMessage_ACU(suffixReplay.legacyToleranceDiagnosis?.strictError || '后缀严格回放失败');
+        }
+    }
+    catch (error) {
+        return buildAppendedOperationsWriteRejectionMessage_ACU(error instanceof Error ? error.message : String(error));
+    }
     return null;
 }
 async function validateProvisionalConvergenceCandidate_ACU(candidateChat, isolationKey, targetMessageIndex) {
@@ -62192,6 +62195,11 @@ function assertValidTemplateSheetChanges_ACU(sheetChanges, deletedSheetKeys) {
     if (sheetKeys.some(sheetKey => deletedSheetKeys.includes(sheetKey))) {
         throw new Error('当前楼层模板提交不能同时删除和变更同一 sheetKey。');
     }
+    // R2B-04：硬删分支以模板重写整库基底且不再保留 per-sheet checkpoint，同批 hide 的退出快照无处安放，只能拒绝；
+    // reveal/rebase 的结果数据在硬删分支里直接并入新基底（飞行模式停用即「删大总结 + 唤醒/重建纪要」同批）。
+    if (deletedSheetKeys.length > 0 && sheetChanges.some(change => change.kind === 'hide')) {
+        throw new Error('当前楼层模板提交不能同时硬删表和隐藏其他表：硬删会以模板重写整库基底，隐藏快照不会写入。请分两次提交。');
+    }
     for (const change of sheetChanges) {
         if (change.kind === 'introduction' || change.kind === 'rebase' || change.kind === 'reveal' || change.kind === 'hide') {
             if (!isObjectRecord_ACU$2(change.sheetData))
@@ -62803,6 +62811,15 @@ async function commitCurrentFloorTemplateChanges_ACU(options) {
                         ? deepClone_ACU(options.templateSource)
                         : deepClone_ACU(activeReplayState);
                     deletedSheetKeys.forEach(sheetKey => delete terminalData[sheetKey]);
+                    // R2B-04：模板源对唤醒表只带结构（数据由 persist 层恢复）。新基底必须带上本批 reveal/rebase
+                    // checkpoint 的最终数据（唤醒已按当前模板列集协调），否则休眠表在新基底上变成空壳，
+                    // 旧数据只剩新基底之前的帧里，compaction 后永久丢失。introduction 命中历史时同样已转成 reveal。
+                    for (const checkpoint of checkpoints) {
+                        const timelineKind = checkpoint?.timeline?.kind;
+                        if (timelineKind === 'sheet_reveal' || timelineKind === 'sheet_rebase') {
+                            terminalData[checkpoint.sheetKey] = deepClone_ACU(checkpoint.data);
+                        }
+                    }
                     const terminalScheduleSummary = Object.fromEntries(Object.entries(scheduleSummaryBySheet).filter(([sheetKey]) => !deletedSheetKeys.includes(sheetKey)));
                     const terminalCheckpoint = buildCanonicalFullCheckpoint_ACU({
                         createdAt,
@@ -64219,13 +64236,16 @@ async function loadConsistentTemplateBaseline_ACU(isolationKey, signal) {
     }
     return { error: '当前表格状态在读取模板基线时发生变化，请稍后重试。' };
 }
-async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateData, { source = 'ui', presetName = '', dataMode, conflictPolicy, destructiveChangeConfirmed = false, hardDeleteMissingSheets = false, signal, requestId = createTemplateReconciliationRequestId_ACU(), } = {}) {
+async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateData, { source = 'ui', presetName = '', dataMode, conflictPolicy, destructiveChangeConfirmed = false, hardDeleteMissingSheets = false, signal, requestId = createTemplateReconciliationRequestId_ACU(), expectedChatContext, } = {}) {
     const snapshot = sanitizeTemplateSnapshotForChat_ACU(templateData);
     if (!snapshot?.templateObj)
         return { saved: false, error: '模板结构无效，无法生成聊天模板提交。' };
     const entryContext = getChatContextSnapshot_ACU();
     if (!entryContext.firstMessage) {
         return { saved: false, error: '当前没有可绑定的目标聊天，已取消模板提交。' };
+    }
+    if (expectedChatContext && entryContext.firstMessage !== expectedChatContext.firstMessage) {
+        return { saved: false, error: '目标聊天已切换，已取消模板提交。' };
     }
     const chatStorageWait = await waitForActiveChatStorageContext_ACU({ expectedIdentity: entryContext.identity, expectedFirstMessage: entryContext.firstMessage, signal });
     if (chatStorageWait.status === 'switched')
@@ -84377,9 +84397,31 @@ async function parseNonStreamResponse_ACU(response, onUsage) {
 // 兼容 Claude Messages 原样透传的 Anthropic SSE（接口协议=claude_messages 时 TT 不归一化流）：
 // content_block_delta(text_delta).delta.text 拼内容，message_stop 视为流结束（等价 [DONE]）。
 // usage 出现在流末尾的独立 chunk（choices 为空数组），需开启 stream_options.include_usage 才会下发。
-async function parseStreamResponse_ACU(response, onUsage) {
+/**
+ * 读完流式响应体。调用方要进度信号时逐块读并在每块到达时回调（空闲超时据此续期，R8-02）；
+ * 宿主不给 reader 时退回整段 text()。
+ */
+async function readStreamBodyText_ACU(response, onProgress) {
+    const reader = onProgress && typeof response?.body?.getReader === 'function' ? response.body.getReader() : null;
+    if (!reader)
+        return await response.text();
+    const decoder = new TextDecoder();
+    let text = '';
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done)
+            break;
+        try {
+            onProgress();
+        }
+        catch { /* 进度回调异常不允许影响读取。 */ }
+        text += typeof value === 'string' ? value : decoder.decode(value, { stream: true });
+    }
+    return text + decoder.decode();
+}
+async function parseStreamResponse_ACU(response, onUsage, onProgress) {
     try {
-        const text = await response.text();
+        const text = await readStreamBodyText_ACU(response, onProgress);
         let result = '';
         let sawDone = false;
         let capturedUsage = null;
@@ -84447,12 +84489,12 @@ async function parseStreamResponse_ACU(response, onUsage) {
  * 预设级流式开关可能与全局不同，若按全局判断会把 SSE 当 JSON（或反之）解析失败。
  * requestWantsStream 缺省时回退全局 settings_ACU.streamingEnabled（兼容旧调用方）。
  */
-async function handleApiResponse_ACU(response, requestWantsStream, onUsage) {
+async function handleApiResponse_ACU(response, requestWantsStream, onUsage, options) {
     const wantsStream = requestWantsStream !== undefined
         ? requestWantsStream === true
         : settings_ACU.streamingEnabled === true;
     if (wantsStream) {
-        return await parseStreamResponse_ACU(response, onUsage);
+        return await parseStreamResponse_ACU(response, onUsage, options?.onProgress);
     }
     return await parseNonStreamResponse_ACU(response, onUsage);
 }
@@ -86868,10 +86910,18 @@ function assertNotAborted_ACU(signal) {
  * 内部 AI（续写规划 / 主 Agent / 子代理）单次请求的传输超时兜底。
  * 背景：本入口跑在续写租约内，transport hang（后端代理挂起、半开连接）时 fetch 永不返回
  * → 租约被无限占用 → 一切续写操作以 CONTINUATION_OPERATION_BUSY 死锁，只能手动 stop。
- * 取值宽松（120s）：续写正文是全链路最长的一次生成，短超时会误杀正常的慢响应；
- * 它只兜「永远等不到结果」的挂死，不兜「慢但有结果」。对照 vector-rerank-gateway 的 30s 兜底。
+ * 它只兜「永远等不到结果」的挂死，不兜「慢但有结果」（R8-02）：
+ * - 流式：120s 是空闲超时——等响应头、以及响应体相邻两块数据之间各最多 120s，持续出字就一直续期；
+ * - 非流式：没有进度信号，整段生成完才返回，上限按输出 token 上限放宽（按 20 tok/s 估），不低于 120s。
  */
 const INTERNAL_AI_FETCH_TIMEOUT_MS_ACU = 120000;
+const INTERNAL_AI_NON_STREAM_MIN_TOKENS_PER_SECOND_ACU = 20;
+function resolveNonStreamTimeoutMs_ACU(maxTokens) {
+    const budget = Number.isFinite(maxTokens) && maxTokens > 0
+        ? Math.ceil(maxTokens / INTERNAL_AI_NON_STREAM_MIN_TOKENS_PER_SECOND_ACU) * 1000
+        : 0;
+    return Math.max(INTERNAL_AI_FETCH_TIMEOUT_MS_ACU, budget);
+}
 /**
  * 把外部取消信号并入超时控制器：外部 abort 或超时到期都会中断 fetch。
  * 手写转发而非 AbortSignal.any：目标库为 ES2020（类型面里没有 AbortSignal.any），
@@ -86944,8 +86994,18 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
     }
     // 超时可中断：本调用在续写租约内，挂起的 transport 不允许无限占用租约（见常量注释）。
     // 计时器覆盖到响应体读完为止——流式路径的悬挂发生在 body 读取阶段，只包 fetch 兜不住。
+    const requestWantsStream = body?.stream === true;
     const timeoutController = new AbortController();
-    const timeoutTimer = setTimeout(() => timeoutController.abort(), INTERNAL_AI_FETCH_TIMEOUT_MS_ACU);
+    let timeoutMs = 0;
+    let timeoutTimer;
+    const armTimeout = (ms) => {
+        if (timeoutController.signal.aborted)
+            return;
+        clearTimeout(timeoutTimer);
+        timeoutMs = ms;
+        timeoutTimer = setTimeout(() => timeoutController.abort(), ms);
+    };
+    armTimeout(requestWantsStream ? INTERNAL_AI_FETCH_TIMEOUT_MS_ACU : resolveNonStreamTimeoutMs_ACU(maxTokens));
     const detachExternalAbort = attachTimeoutAndExternalAbort_ACU(timeoutController, signal);
     try {
         let response;
@@ -86967,7 +87027,7 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
             if (error?.name === 'AbortError') {
                 // 超时计时器掐断的 fetch：挂 TimeoutError 名，使 isRetryable 按名判为可重试。
                 // 不依赖中文文案正则；外部取消已在上方按 AbortError 先行返回，走不到这里。
-                const timeout = new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s 无响应），已中断。`);
+                const timeout = new Error(`内部 AI 请求超时（${timeoutMs / 1000}s 无响应），已中断。`);
                 timeout.name = 'TimeoutError';
                 throw timeout;
             }
@@ -86979,8 +87039,11 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
                 throw new Error(`API 请求失败: ${response.status} ${errTxt}`);
             }
             assertNotAborted_ACU(signal);
-            const requestWantsStream = body?.stream === true;
-            const content = await handleApiResponse_ACU(response, requestWantsStream, lifecycle?.onUsage);
+            // 响应头已到：转入空闲计时，流式每收到一块数据续期一次。
+            armTimeout(INTERNAL_AI_FETCH_TIMEOUT_MS_ACU);
+            const content = await handleApiResponse_ACU(response, requestWantsStream, lifecycle?.onUsage, {
+                onProgress: () => armTimeout(INTERNAL_AI_FETCH_TIMEOUT_MS_ACU),
+            });
             return typeof content === 'string' && content.trim() ? content.trim() : null;
         }
         catch (error) {
@@ -86993,7 +87056,7 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
             // 响应体读取阶段被超时计时器掐断：报超时而不是底层网络错文。
             // 挂 TimeoutError 名，走 isRetryable 的按名放行分支。
             if (error?.name === 'AbortError' && timeoutController.signal.aborted) {
-                const timeout = new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s），已中断。`);
+                const timeout = new Error(`内部 AI 请求超时（${timeoutMs / 1000}s 未收到新数据），已中断。`);
                 timeout.name = 'TimeoutError';
                 throw timeout;
             }
@@ -93006,6 +93069,7 @@ function isCanonicalSnapshotEnvelope_ACU(value) {
         && (candidate.source === 'merged_refresh'
             || candidate.source === 'post_save_replay'
             || candidate.source === 'system_reload_replay'
+            || candidate.source === 'failed_commit_rollback'
             || candidate.source === 'boundary_commit_head')
         && typeof candidate.fingerprint === 'string'
         && typeof candidate.createdAt === 'number';
@@ -103973,6 +104037,46 @@ async function flushRuntimeOnlyPendingBeforeCommit_ACU(options) {
         logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 运行时未落盘变更写回聊天失败，继续本次提交。`, error);
     }
 }
+/**
+ * 提交失败后的运行时收敛（R2A-04）：整体重载会从聊天重放，把只存在于运行时、尚未写回聊天的
+ * 脚本写入（runtime-only 登记）一起冲掉。有这类登记时改为用本次提交前的快照恢复运行时——
+ * 这份快照恰好是「撤销本次提交、保留未落盘写入」的状态。恢复不了（无快照、换了聊天、重建失败）
+ * 才退回整体重载。
+ */
+async function restoreRuntimeKeepingPendingWrites_ACU(options, preApplySnapshot) {
+    if (!preApplySnapshot)
+        return false;
+    const scope = resolvePendingScope_ACU(options);
+    if (!hasRuntimeOnlyPendingSheets_ACU(scope))
+        return false;
+    if (String(currentChatFileIdentifier_ACU ?? '') !== scope.chatKey || String(getCurrentIsolationKey_ACU() ?? '') !== scope.isolationKey) {
+        return false;
+    }
+    try {
+        if (getCurrentStorageMode() === 'sqlite') {
+            const envelope = createCanonicalSnapshotEnvelope_ACU({
+                data: preApplySnapshot,
+                chatIdentity: scope.chatKey,
+                isolationKey: scope.isolationKey,
+                storageMode: 'sqlite',
+                lifecycleEpoch: getRuntimeLifecycleEpoch_ACU(),
+                source: 'failed_commit_rollback',
+            });
+            if (!envelope)
+                return false;
+            const hydrated = await hydrateStorageProviderFromSnapshot_ACU(envelope);
+            if (!hydrated.ok)
+                return false;
+        }
+        _set_currentJsonTableData_ACU(cloneTableData_ACU(preApplySnapshot));
+        logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 提交失败，已把运行时恢复到提交前（保留尚未写回聊天的脚本写入）。`);
+        return true;
+    }
+    catch (error) {
+        logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 按提交前快照恢复运行时失败，改为整体重载。`, error);
+        return false;
+    }
+}
 function assertNoActiveFillForExternalMutation_ACU(options) {
     if (!EXTERNAL_MUTATION_SOURCES_ACU.has(options.source))
         return;
@@ -103993,6 +104097,7 @@ function assertExpectedCommitScope_ACU(options, phase) {
 }
 async function runTableUpdateCommit_ACU(options, apply) {
     let requiresRuntimeReload = false;
+    let preApplySnapshotForRollback = null;
     try {
         assertNoActiveFillForExternalMutation_ACU(options);
         assertExpectedCommitScope_ACU(options, '提交前');
@@ -104079,6 +104184,7 @@ async function runTableUpdateCommit_ACU(options, apply) {
                         : options.initialData
                             ? cloneTableData_ACU(options.initialData)
                             : null;
+                    preApplySnapshotForRollback = preApplyData;
                     const reloadOnFailure = options.applyMutatesRuntime !== false && !options.skipChatSave;
                     const applied = await apply({ transactionContext, workingData });
                     if (!applied.success || !applied.tableData) {
@@ -104156,7 +104262,7 @@ async function runTableUpdateCommit_ACU(options, apply) {
         });
     }
     catch (error) {
-        if (requiresRuntimeReload) {
+        if (requiresRuntimeReload && !(await restoreRuntimeKeepingPendingWrites_ACU(options, preApplySnapshotForRollback))) {
             try {
                 await reloadStorageProvider();
             }
@@ -116808,18 +116914,22 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
     // schema introduction/rebase/reveal/hide 边界拆段，避免跨结构切换的补写在
     // 单一批次内用错误旧结构生成增量。
     const schemaBoundaries = collectV2SchemaBoundaryIndices_ACU(getChatArray_ACU(), getCurrentIsolationKey_ACU());
-    for (const group of normalizedGroups) {
-        if (options.abortController?.signal.aborted) {
-            return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
-        }
+    // 三阶段（R2A-07）：先跑完所有组的边界前段（全部进 staging），再统一汇合一次，最后跑所有组的边界后段。
+    // 逐组「pre → 汇合 → post」时，第一组汇合后 session 已清空，后续组的边界前结果会被静默丢弃。
+    const abortedResult = () => ({ success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount });
+    const plannedGroups = normalizedGroups.map((group) => {
         const groupIndices = [...(group.indices || [])].sort((a, b) => a - b);
         const segments = splitMessageIndicesAtSchemaBoundaries_ACU(groupIndices, originalFullIndex, schemaBoundaries);
-        const preSegments = segments.filter(segment => segment.indices.length > 0 && segment.indices[0] < originalFullIndex);
-        const postSegments = segments.filter(segment => segment.indices.length > 0 && segment.indices[0] >= originalFullIndex);
+        return {
+            group,
+            preSegments: segments.filter(segment => segment.indices.length > 0 && segment.indices[0] < originalFullIndex),
+            postSegments: segments.filter(segment => segment.indices.length > 0 && segment.indices[0] >= originalFullIndex),
+        };
+    });
+    for (const { group, preSegments } of plannedGroups) {
         for (const preSegment of preSegments) {
-            if (options.abortController?.signal.aborted) {
-                return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
-            }
+            if (options.abortController?.signal.aborted)
+                return abortedResult();
             const preGroups = [{
                     ...group,
                     indices: [...preSegment.indices],
@@ -116843,22 +116953,23 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
                 return failFastAfterSegmentError(firstError);
             }
         }
-        // 首个 post 段提交前收敛 staging：边界前累计快照原子折叠回原根；零 staging 则丢弃。
-        if (postSegments.length > 0) {
-            if (options.abortController?.signal.aborted) {
-                return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
-            }
-            const settleResult = await settleStagingBoundary();
-            if (!settleResult.ok) {
-                failedGroups.add(group.key);
-                firstError = firstError || `跨根 staging 汇合失败：${settleResult.error}`;
-                return failFastAfterSegmentError(firstError);
-            }
+    }
+    // 首个 post 段提交前收敛 staging：边界前累计快照原子折叠回原根；零 staging 则丢弃。
+    const firstGroupWithPost = plannedGroups.find(planned => planned.postSegments.length > 0);
+    if (firstGroupWithPost) {
+        if (options.abortController?.signal.aborted)
+            return abortedResult();
+        const settleResult = await settleStagingBoundary();
+        if (!settleResult.ok) {
+            failedGroups.add(firstGroupWithPost.group.key);
+            firstError = firstError || `跨根 staging 汇合失败：${settleResult.error}`;
+            return failFastAfterSegmentError(firstError);
         }
+    }
+    for (const { group, postSegments } of plannedGroups) {
         for (const postSegment of postSegments) {
-            if (options.abortController?.signal.aborted) {
-                return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
-            }
+            if (options.abortController?.signal.aborted)
+                return abortedResult();
             const postGroups = [{
                     ...group,
                     indices: [...postSegment.indices],
@@ -138183,6 +138294,32 @@ async function writeFloorRecord_ACU(chat, targetIndex, record) {
     }
 }
 /**
+ * 会话记录的承载楼（R4-08）：与资料帧同口径，取 ≤ 物理末楼的最近 AI 楼。
+ * TT 的工具楼 / 隐藏楼可被用户单独删除，会话挂上去会随之丢失。
+ * 例外：最近 AI 楼之后已有挂着会话记录的旧楼（旧版本写在物理末楼的遗留），仍写物理末楼，
+ * 否则按楼层顺序拼接时新消息会排到旧消息前面。
+ */
+function resolveConversationFloor_ACU(chat) {
+    const tail = chat.length - 1;
+    if (tail < 0)
+        return -1;
+    let aiFloor = -1;
+    for (let index = tail; index >= 0; index -= 1) {
+        if (isAiFloor_ACU(chat[index])) {
+            aiFloor = index;
+            break;
+        }
+    }
+    if (aiFloor < 0)
+        return tail;
+    for (let index = aiFloor + 1; index <= tail; index += 1) {
+        const message = chat[index];
+        if (message && typeof message === 'object' && Object.prototype.hasOwnProperty.call(message, AGENT_CONVERSATION_FIELD_ACU))
+            return tail;
+    }
+    return aiFloor;
+}
+/**
  * 把已分配 id 的消息追加进末楼的段并落盘。
  * @param chat 聊天数组
  * @param prepared 待落盘的消息（id 由调用方从拼接视图的 nextId 起分配）
@@ -138191,7 +138328,7 @@ async function writeFloorRecord_ACU(chat, targetIndex, record) {
 async function appendPreparedAgentConversationMessages_ACU(chat, prepared) {
     if (!prepared.length)
         return false;
-    const targetIndex = chat.length - 1;
+    const targetIndex = resolveConversationFloor_ACU(chat);
     if (targetIndex < 0)
         return false;
     const container = chat[targetIndex];
@@ -138212,7 +138349,7 @@ async function appendPreparedAgentConversationMessages_ACU(chat, prepared) {
  * @returns 是否真的写入
  */
 async function writeAgentConversationCompactionMark_ACU(chat, mark) {
-    const targetIndex = chat.length - 1;
+    const targetIndex = resolveConversationFloor_ACU(chat);
     if (targetIndex < 0)
         return false;
     const container = chat[targetIndex];
@@ -145899,6 +146036,14 @@ class ContinuationAgentTurnPlanner_ACU {
     }
     async runFixedWorkflow_ACU(action, request, context, ledger, budget, chat, apiDependencies) {
         await this.prepareFixedWorkflowStructure_ACU(action, request, context, budget, chat, apiDependencies);
+        // R4-06：工作流可能持续数分钟。原地编辑或 swipe 末楼不会改变楼层引用，租约也看不见；
+        // 记下每楼的引用、swipe 与正文，落盘前复核，变了就按 STALE 拒绝，不把旧结算挂到新内容上。
+        const chatAnchor = chat.map(message => ({ message, swipeId: message?.swipe_id, mes: message?.mes }));
+        const assertChatUnchangedForWorkflow_ACU = () => {
+            if (chat.length !== chatAnchor.length || chatAnchor.some((anchor, index) => (chat[index] !== anchor.message || chat[index]?.swipe_id !== anchor.swipeId || chat[index]?.mes !== anchor.mes))) {
+                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '固定工作流在途期间聊天楼层或正文发生变化，拒绝用旧内容结算', false));
+            }
+        };
         const unsettledSelection = resolveAgentUnsettledStoryWindow_ACU(context);
         const mapPayload = (result) => ({
             ok: true,
@@ -146008,6 +146153,8 @@ class ContinuationAgentTurnPlanner_ACU {
         });
         // P1 与派工结算路径同强度：水位推进后刷新前缀指纹，否则写盘被指纹门拒绝；
         // 落盘前复核租约，在途停止时楼层扩展字段绝不能照常写入。
+        // 先复核楼层与正文未变，再刷新前缀指纹：此时按当前聊天算出的指纹就是工作流开始时的值，不会把在途编辑「洗白」。
+        assertChatUnchangedForWorkflow_ACU();
         let nextSnapshot = workflow.snapshot;
         if (nextSnapshot.settledThroughIndex !== incomingWaterline) {
             nextSnapshot = refreshAgentModuleSnapshotChatPrefix_ACU(nextSnapshot, chat);
@@ -200729,7 +200876,30 @@ async function persistFlightModeState_ACU(next) {
         throw error;
     }
 }
+function captureFlightModeChatAnchor_ACU() {
+    const chat = getChatArray_ACU();
+    return {
+        chat,
+        firstMessage: Array.isArray(chat) ? chat[0] : undefined,
+        chatKey: String(currentChatFileIdentifier_ACU || ''),
+        isolationKey: String(getCurrentIsolationKey_ACU() || ''),
+    };
+}
+function isSameFlightModeChat_ACU(anchor) {
+    const chat = getChatArray_ACU();
+    return chat === anchor.chat
+        && (Array.isArray(chat) ? chat[0] : undefined) === anchor.firstMessage
+        && String(currentChatFileIdentifier_ACU || '') === anchor.chatKey
+        && String(getCurrentIsolationKey_ACU() || '') === anchor.isolationKey;
+}
+const FLIGHT_MODE_CHAT_SWITCHED_ERROR_ACU = '操作期间已切换聊天，未在当前聊天上做任何模板回滚。原聊天的模板可能已改动但飞行模式状态未保存，请回到原聊天检查后重试。';
+/**
+ * 补偿只能作用在发起操作的那个聊天上（R8-01）：补偿内部按「当前聊天」解析目标，
+ * 切聊天后会把原聊天的模板（可能带硬删）提交到新聊天。身份不一致直接放弃补偿。
+ */
 async function compensateTemplateCommit_ACU(originalTemplate, options) {
+    if (!isSameFlightModeChat_ACU(options.anchor))
+        return { ok: false, error: FLIGHT_MODE_CHAT_SWITCHED_ERROR_ACU };
     if (!originalTemplate)
         return { ok: false, error: '没有可验证的原始模板，无法补偿模板提交。' };
     try {
@@ -200738,6 +200908,7 @@ async function compensateTemplateCommit_ACU(originalTemplate, options) {
             presetName: options.presetName || '',
             hardDeleteMissingSheets: options.hardDeleteMissingSheets,
             destructiveChangeConfirmed: options.hardDeleteMissingSheets === true,
+            expectedChatContext: { firstMessage: options.anchor.firstMessage },
         });
         if (!result?.saved) {
             return {
@@ -200762,6 +200933,7 @@ async function enableFlightMode_ACU() {
     const template = parseEffectiveTemplate_ACU();
     if (!template)
         return { ok: false, reason: 'template_unavailable' };
+    const chatAnchor = captureFlightModeChatAnchor_ACU();
     const chronicleEntry = findSheetByName_ACU(template, '纪要表');
     if (!chronicleEntry)
         return { ok: false, reason: 'chronicle_not_found', visibleChronicleRowCount: check.visibleChronicleRowCount };
@@ -200794,12 +200966,16 @@ async function enableFlightMode_ACU() {
         };
     }
     // 协调层按显示名派生真实 key（大总结 → sheet_da_zong_jie），提交后必须重新解析。
-    const resolved = findSheetByName_ACU(currentJsonTableData_ACU, FLIGHT_MODE_BIG_SUMMARY_SHEET_NAME_ACU);
+    // 切了聊天时 currentJsonTableData 已是新聊天的数据，找不到大总结并不代表原聊天提交有问题。
+    const resolved = isSameFlightModeChat_ACU(chatAnchor)
+        ? findSheetByName_ACU(currentJsonTableData_ACU, FLIGHT_MODE_BIG_SUMMARY_SHEET_NAME_ACU)
+        : null;
     if (!resolved) {
         const compensation = await compensateTemplateCommit_ACU(template, {
             source: 'flight_mode_enable_key_resolution_rollback',
             presetName: effectiveScopeBeforeEnable?.presetName || '',
             hardDeleteMissingSheets: true,
+            anchor: chatAnchor,
         });
         return {
             ok: false,
@@ -200828,6 +201004,7 @@ async function enableFlightMode_ACU() {
             source: 'flight_mode_enable_state_rollback',
             presetName: effectiveScopeBeforeEnable?.presetName || '',
             hardDeleteMissingSheets: true,
+            anchor: chatAnchor,
         });
         return {
             ok: false,
@@ -200871,6 +201048,7 @@ async function disableFlightMode_ACU(options = {}) {
         return { ok: false, reason: 'template_scope_changed' };
     }
     const bigSummaryKey = currentState.bigSummarySheetKey;
+    const chatAnchor = captureFlightModeChatAnchor_ACU();
     // 大总结内容只是被隐藏纪要行的摘要。停用会把那些纪要行全部恢复可见，摘要随即失去意义，
     // 因此这里显式硬删而非隐藏保留；hardDeleteMissingSheets 必须与破坏性确认成对出现。
     const committed = await applyChatTemplateSnapshotWithReconciliation_ACU(restoreTemplate, {
@@ -200900,6 +201078,7 @@ async function disableFlightMode_ACU(options = {}) {
             source: 'flight_mode_disable_state_rollback',
             presetName: restorePresetName,
             hardDeleteMissingSheets: false,
+            anchor: chatAnchor,
         });
         return {
             ok: false,

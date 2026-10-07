@@ -3109,19 +3109,22 @@ export async function executeAutoFillStagingGroups_ACU(
     // 单一批次内用错误旧结构生成增量。
     const schemaBoundaries = collectV2SchemaBoundaryIndices_ACU(getChatArray_ACU(), getCurrentIsolationKey_ACU());
 
-    for (const group of normalizedGroups) {
-        if (options.abortController?.signal.aborted) {
-            return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
-        }
+    // 三阶段（R2A-07）：先跑完所有组的边界前段（全部进 staging），再统一汇合一次，最后跑所有组的边界后段。
+    // 逐组「pre → 汇合 → post」时，第一组汇合后 session 已清空，后续组的边界前结果会被静默丢弃。
+    const abortedResult = () => ({ success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount });
+    const plannedGroups = normalizedGroups.map((group) => {
         const groupIndices = [...(group.indices || [])].sort((a, b) => a - b);
         const segments = splitMessageIndicesAtSchemaBoundaries_ACU(groupIndices, originalFullIndex, schemaBoundaries);
-        const preSegments = segments.filter(segment => segment.indices.length > 0 && segment.indices[0] < originalFullIndex);
-        const postSegments = segments.filter(segment => segment.indices.length > 0 && segment.indices[0] >= originalFullIndex);
+        return {
+            group,
+            preSegments: segments.filter(segment => segment.indices.length > 0 && segment.indices[0] < originalFullIndex),
+            postSegments: segments.filter(segment => segment.indices.length > 0 && segment.indices[0] >= originalFullIndex),
+        };
+    });
 
+    for (const { group, preSegments } of plannedGroups) {
         for (const preSegment of preSegments) {
-            if (options.abortController?.signal.aborted) {
-                return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
-            }
+            if (options.abortController?.signal.aborted) return abortedResult();
             const preGroups: GroupedRuntimeUpdateGroup_ACU[] = [{
                 ...group,
                 indices: [...preSegment.indices],
@@ -3145,24 +3148,23 @@ export async function executeAutoFillStagingGroups_ACU(
                 return failFastAfterSegmentError(firstError);
             }
         }
+    }
 
-        // 首个 post 段提交前收敛 staging：边界前累计快照原子折叠回原根；零 staging 则丢弃。
-        if (postSegments.length > 0) {
-            if (options.abortController?.signal.aborted) {
-                return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
-            }
-            const settleResult = await settleStagingBoundary();
-            if (!settleResult.ok) {
-                failedGroups.add(group.key);
-                firstError = firstError || `跨根 staging 汇合失败：${(settleResult as { ok: false; error: string }).error}`;
-                return failFastAfterSegmentError(firstError);
-            }
+    // 首个 post 段提交前收敛 staging：边界前累计快照原子折叠回原根；零 staging 则丢弃。
+    const firstGroupWithPost = plannedGroups.find(planned => planned.postSegments.length > 0);
+    if (firstGroupWithPost) {
+        if (options.abortController?.signal.aborted) return abortedResult();
+        const settleResult = await settleStagingBoundary();
+        if (!settleResult.ok) {
+            failedGroups.add(firstGroupWithPost.group.key);
+            firstError = firstError || `跨根 staging 汇合失败：${(settleResult as { ok: false; error: string }).error}`;
+            return failFastAfterSegmentError(firstError);
         }
+    }
 
+    for (const { group, postSegments } of plannedGroups) {
         for (const postSegment of postSegments) {
-            if (options.abortController?.signal.aborted) {
-                return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
-            }
+            if (options.abortController?.signal.aborted) return abortedResult();
             const postGroups: GroupedRuntimeUpdateGroup_ACU[] = [{
                 ...group,
                 indices: [...postSegment.indices],

@@ -3,7 +3,9 @@ import type { SqlMutationResult } from '../../shared/table-storage-provider';
 import { logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, isAutoUpdatingCard_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
 import { ensureLegacyStorageMigratedBeforeWrite_ACU, persistTablesToChatMessage_ACU } from './table-service';
-import { ensureStorageProviderReady_ACU, reloadStorageProvider } from './table-storage-strategy';
+import { ensureStorageProviderReady_ACU, getRuntimeLifecycleEpoch_ACU, hydrateStorageProviderFromSnapshot_ACU, reloadStorageProvider } from './table-storage-strategy';
+import { getCurrentStorageMode } from './storage-mode';
+import { createCanonicalSnapshotEnvelope_ACU } from './canonical-snapshot-envelope';
 import { runTableWriteTransaction_ACU, type TableWriteTransactionContext_ACU } from './table-write-transaction';
 import { ensureNoActiveProvisionalBridgeForCurrentScope_ACU } from './manual-catch-up-provisional-bridge';
 import { isAppendedOperationsWriteRejection_ACU, isCompatReadonlyWriteRejection_ACU } from './storage-frame-v2-replay';
@@ -12,6 +14,7 @@ import type { ManualRefillProgressV2_ACU, TableCheckpointV2_ACU, TableMutationOp
 import { buildSqlSheetBatchOperations_ACU, rebindSqlMutationIdentifiers_ACU } from './sql-table-service';
 import {
   extractPendingSheetKeysFromWriteSet_ACU,
+  hasRuntimeOnlyPendingSheets_ACU,
   markRuntimeOnlyPendingSheets_ACU,
   runRegisteredRuntimeOnlyPendingFlush_ACU,
 } from './runtime-only-pending-state';
@@ -245,6 +248,45 @@ async function flushRuntimeOnlyPendingBeforeCommit_ACU(options: RunTableUpdateCo
   }
 }
 
+/**
+ * 提交失败后的运行时收敛（R2A-04）：整体重载会从聊天重放，把只存在于运行时、尚未写回聊天的
+ * 脚本写入（runtime-only 登记）一起冲掉。有这类登记时改为用本次提交前的快照恢复运行时——
+ * 这份快照恰好是「撤销本次提交、保留未落盘写入」的状态。恢复不了（无快照、换了聊天、重建失败）
+ * 才退回整体重载。
+ */
+async function restoreRuntimeKeepingPendingWrites_ACU(
+  options: RunTableUpdateCommitOptions_ACU,
+  preApplySnapshot: TableDataObject_ACU | null,
+): Promise<boolean> {
+  if (!preApplySnapshot) return false;
+  const scope = resolvePendingScope_ACU(options);
+  if (!hasRuntimeOnlyPendingSheets_ACU(scope)) return false;
+  if (String(currentChatFileIdentifier_ACU ?? '') !== scope.chatKey || String(getCurrentIsolationKey_ACU() ?? '') !== scope.isolationKey) {
+    return false;
+  }
+  try {
+    if (getCurrentStorageMode() === 'sqlite') {
+      const envelope = createCanonicalSnapshotEnvelope_ACU({
+        data: preApplySnapshot,
+        chatIdentity: scope.chatKey,
+        isolationKey: scope.isolationKey,
+        storageMode: 'sqlite',
+        lifecycleEpoch: getRuntimeLifecycleEpoch_ACU(),
+        source: 'failed_commit_rollback',
+      });
+      if (!envelope) return false;
+      const hydrated = await hydrateStorageProviderFromSnapshot_ACU(envelope);
+      if (!hydrated.ok) return false;
+    }
+    _set_currentJsonTableData_ACU(cloneTableData_ACU(preApplySnapshot));
+    logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 提交失败，已把运行时恢复到提交前（保留尚未写回聊天的脚本写入）。`);
+    return true;
+  } catch (error) {
+    logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 按提交前快照恢复运行时失败，改为整体重载。`, error);
+    return false;
+  }
+}
+
 function assertNoActiveFillForExternalMutation_ACU(options: RunTableUpdateCommitOptions_ACU): void {
   if (!EXTERNAL_MUTATION_SOURCES_ACU.has(options.source)) return;
   if (!isAutoUpdatingCard_ACU) return;
@@ -273,6 +315,7 @@ export async function runTableUpdateCommit_ACU<T>(
   apply: (context: TableUpdateCommitApplyContext_ACU) => Promise<TableUpdateCommitApplyResult_ACU<T>> | TableUpdateCommitApplyResult_ACU<T>,
 ): Promise<RunTableUpdateCommitResult_ACU<T>> {
   let requiresRuntimeReload = false;
+  let preApplySnapshotForRollback: TableDataObject_ACU | null = null;
   try {
     assertNoActiveFillForExternalMutation_ACU(options);
     assertExpectedCommitScope_ACU(options, '提交前');
@@ -360,6 +403,7 @@ export async function runTableUpdateCommit_ACU<T>(
             : options.initialData
               ? cloneTableData_ACU(options.initialData)
               : null;
+          preApplySnapshotForRollback = preApplyData;
           const reloadOnFailure = options.applyMutatesRuntime !== false && !options.skipChatSave;
           const applied = await apply({ transactionContext, workingData });
           if (!applied.success || !applied.tableData) {
@@ -436,7 +480,7 @@ export async function runTableUpdateCommit_ACU<T>(
       }, () => commitRevisionWriteSet);
     });
   } catch (error: any) {
-    if (requiresRuntimeReload) {
+    if (requiresRuntimeReload && !(await restoreRuntimeKeepingPendingWrites_ACU(options, preApplySnapshotForRollback))) {
       try {
         await reloadStorageProvider();
       } catch (reloadError) {

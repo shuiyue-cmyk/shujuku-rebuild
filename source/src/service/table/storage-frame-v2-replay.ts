@@ -3338,6 +3338,8 @@ export async function createCompatTransitionCheckpointFromTolerantReplay_ACU(
     return false;
   }
 
+  // 锁外计算 cutoff 与目标楼层（R2B-06）：记下当时的聊天形状，锁内复核，变了就放弃固化。
+  const chatShapeAtPlan = `${chat.length}|${computeReplayHeadRevisionDigest_ACU(chat, isolationKey)}`;
   const tolerant = await replayWithLegacyTolerances_ACU(chat, isolationKey);
   // 身份归并不是可自动固化的容忍项：mergeLegacySheetIdentities_ACU 按模板 key /
   // 稳定 key / 字典序选赢家，同 row_id 直接丢弃 loser 行，不做列身份转换。把这样的
@@ -3379,6 +3381,7 @@ export async function createCompatTransitionCheckpointFromTolerantReplay_ACU(
   }
   const tolerances = summarizeLegacyToleranceReport_ACU(tolerant.toleranceReport);
 
+  let abandonedForChatChange = false;
   await runTableWriteTransaction_ACU({
     source: 'system_cleanup',
     reason: 'createCompatTransitionCheckpointFromTolerantReplay',
@@ -3387,6 +3390,12 @@ export async function createCompatTransitionCheckpointFromTolerantReplay_ACU(
     maintenanceMode: 'exclusive',
     workingDataMode: 'none',
   }, async ctx => ctx.runCommit(async () => {
+    // 等锁期间切了聊天、删/插了楼层或帧有新写入：cutoff.messageIndex 与目标楼层可能已错位，放弃固化。
+    if (getChatArray_ACU() !== chat
+      || `${chat.length}|${computeReplayHeadRevisionDigest_ACU(chat, isolationKey)}` !== chatShapeAtPlan) {
+      abandonedForChatChange = true;
+      return;
+    }
     const target = chat[targetMessageIndex];
     if (!target || target.is_user) throw new Error('兼容过渡 checkpoint 的目标 AI 楼层在提交前已变化。');
     const latest = findLatestTransitionCheckpoint_ACU(chat, isolationKey);
@@ -3426,6 +3435,10 @@ export async function createCompatTransitionCheckpointFromTolerantReplay_ACU(
       throw error;
     }
   }));
+  if (abandonedForChatChange) {
+    logWarn_ACU('[V2 Compat Replay] 放弃固化兼容过渡根：计算期间聊天已变化（切换、删改楼层或有新写入），下次加载重试。数据仍按兼容读取结果可用。');
+    return false;
+  }
   logWarn_ACU(`[V2 Compat Replay] 已把兼容读取结果固化为过渡根：cutoff=${JSON.stringify(tolerant.cutoff)}, tolerances=${tolerances.join(', ')}。后续加载将走严格快路径。`);
   lastFixationAbandonToastKey_ACU = '';
   return true;

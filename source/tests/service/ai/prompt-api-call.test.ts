@@ -814,6 +814,22 @@ describe('handleApiResponse_ACU 响应解析', () => {
     expect(result).toBeNull();
   });
 
+  it('R8-02：给了进度回调时逐块读取响应体，每块到达回调一次（含跨块切开的多字节字符）', async () => {
+    const encoder = new TextEncoder();
+    const full = encoder.encode(['data: {"choices":[{"delta":{"content":"你好"}}]}', 'data: [DONE]', ''].join('\n'));
+    const cut = full.indexOf(0xe4) + 1; // 切在「你」的 UTF-8 中间
+    const chunks = [full.slice(0, cut), full.slice(cut)];
+    const text = vi.fn();
+    const onProgress = vi.fn();
+    const result = await handleApiResponse_ACU({
+      text,
+      body: { getReader: () => ({ read: async () => (chunks.length ? { done: false, value: chunks.shift() } : { done: true, value: undefined }) }) },
+    }, true, undefined, { onProgress });
+    expect(result).toBe('你好');
+    expect(onProgress).toHaveBeenCalledTimes(2);
+    expect(text).not.toHaveBeenCalled();
+  });
+
   it('流式模式：响应体读取 AbortError 必须原样重抛', async () => {
     const abortError = new DOMException('stream body read aborted', 'AbortError');
 
