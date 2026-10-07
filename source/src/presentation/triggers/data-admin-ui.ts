@@ -81,9 +81,8 @@ import {
 import {
   updateCardUpdateStatusDisplay_ACU
 } from '../components/update-status-display';
-import {
-  migrateLegacySummaryVectorIndexToContentAddressed_ACU
-} from '../../service/vector/summary-vector-index-archive-service';
+import { rebuildCurrentSummaryVectorIndexNow_ACU } from '../../service/vector/summary-vector-index-rebuild-service';
+import { chatHasLegacySummaryVectorFields_ACU } from '../../service/vector/summary-vector-mirror-rebuild';
 import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
 /**
  * presentation/triggers/data-admin-ui.ts — 导入/导出/重置 UI
@@ -257,18 +256,21 @@ import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
 
 
 
+  // 召回链路只读新版镜像（R5-06）：旧版指针迁移写出的仍是旧字段，召回照样要求重建。
+  // 因此「迁移」直接按当前纪要表重建新版镜像，重建会顺带清掉旧版向量字段。
   export async function migrateLegacySummaryVectorIndex_ACU() {
     try {
-        const result = await migrateLegacySummaryVectorIndexToContentAddressed_ACU();
+        if (!chatHasLegacySummaryVectorFields_ACU(getChatArray_ACU())) {
+            showToastr_ACU('info', '当前聊天没有可迁移的旧交火索引。');
+            return { success: true, skipped: true, indexedRowCount: 0, skippedRowCount: 0, chunkCount: 0, reason: 'no_legacy_vector_index', errors: [] as string[] };
+        }
+        const result = await rebuildCurrentSummaryVectorIndexNow_ACU({ reason: 'initial' });
         if (result.success && !result.skipped) {
-            showToastr_ACU('success', `旧交火索引已非破坏迁移：${result.indexedRowCount || 0} 行，${result.chunkCount || 0} 个 chunks。旧外置文件仍保留给历史楼层回退使用。`);
+            showToastr_ACU('success', `旧交火索引已按当前纪要表重建为新版索引：${result.indexedRowCount || 0} 行，${result.chunkCount || 0} 个 chunks。`);
             return result;
         }
         if (result.success && result.skipped) {
-            const reason = result.reason === 'already_content_addressed'
-                ? '当前交火索引已经是内容寻址协议，无需迁移。'
-                : '当前聊天没有可迁移的旧交火索引。';
-            showToastr_ACU('info', reason);
+            showToastr_ACU('info', `交火索引未重建：${result.reason || '没有可索引的纪要'}`);
             return result;
         }
         const reasonText = result.errors?.length ? result.errors.join('；') : (result.reason || '未知原因');

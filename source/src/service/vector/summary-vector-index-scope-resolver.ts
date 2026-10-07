@@ -7,7 +7,7 @@
  * 因此三方都能安全引用，也保证 scopeKey 口径与 flush 队列完全一致。
  */
 import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
-import { isSummaryOrOutlineTable_ACU } from '../../shared/utils';
+import { pickSummarySheetKeyByPriority_ACU } from '../../shared/utils';
 import { normalizeSummaryVectorIndexScope_ACU, type SummaryVectorIndexCanonicalScope_ACU } from '../../shared/summary-vector-index-scope';
 
 export interface SummaryTableSelection_ACU {
@@ -30,10 +30,7 @@ export function findSummaryTableSelection_ACU(sourceTableKey?: string): SummaryT
 
     const requestedKey = normalizeText_ACU(sourceTableKey);
     const candidateKeys = requestedKey ? [requestedKey] : Object.keys(currentJsonTableData_ACU);
-    const summaryKey = candidateKeys.find((key) => {
-        const table = currentJsonTableData_ACU[key];
-        return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
-    });
+    const summaryKey = pickSummarySheetKeyByPriority_ACU(candidateKeys, (key) => currentJsonTableData_ACU[key]?.name);
 
     if (!summaryKey) return null;
     const table = currentJsonTableData_ACU[summaryKey];

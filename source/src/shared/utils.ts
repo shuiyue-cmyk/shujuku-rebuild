@@ -106,6 +106,25 @@ export function isSummaryOrOutlineTable_ACU(tableName: string): boolean {
   return trimmedName === '总结表' || trimmedName === '总体大纲' || trimmedName === '纪要表';
 }
 
+const SUMMARY_SHEET_NAME_PRIORITY_ACU = ['纪要表', '总结表', '总体大纲'];
+
+/**
+ * 从候选表中选出纪要表：按「纪要表 > 总结表 > 总体大纲」优先级，同级取先出现者。
+ * 不能按对象键顺序取第一张——模板同时有大纲和总结表时，选中大纲会因缺概要列让整个向量功能停用。
+ */
+export function pickSummarySheetKeyByPriority_ACU(keys: string[], getName: (key: string) => unknown): string | null {
+  let best: string | null = null;
+  let bestRank = SUMMARY_SHEET_NAME_PRIORITY_ACU.length;
+  for (const key of keys) {
+    const rank = SUMMARY_SHEET_NAME_PRIORITY_ACU.indexOf(String(getName(key) ?? '').trim());
+    if (rank >= 0 && rank < bestRank) {
+      best = key;
+      bestRank = rank;
+    }
+  }
+  return best;
+}
+
 // 标签列表解析：支持英文逗号/中文逗号/空格分隔
 function parseTagList_ACU(input: string) {
     if (!input || typeof input !== 'string') return [];

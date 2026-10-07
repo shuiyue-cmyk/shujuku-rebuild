@@ -379,3 +379,50 @@ describe('clearSummaryVectorIndexLayerFromChat_ACU', () => {
     expect(chat[0].TavernDB_ACU_IsolatedData).toBe(original);
   });
 });
+
+describe('块 5 复审 R5-11：删除索引在纯 V2 楼层上的回滚', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it('严格保存失败时，纯 V2 楼层上的镜像 frame 也被恢复', async () => {
+    const mirror = { version: 3, sourceTableKey: 'sheet_summary', logEntries: [], checkpoint: { kind: 'vector_full', vectorRevision: 'r' } };
+    const chat: any[] = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        alpha: {
+          _acu_storage_version: 2,
+          storageFrame: { version: 2, checkpoint: { kind: 'full', createdAt: 1, reason: 't', data: {} }, logEntries: [], summaryVectorIndexFrame: mirror },
+        },
+      },
+    }];
+    vi.doMock('../../../src/service/chat/chat-service', () => ({ getChatArray_ACU: () => chat, saveChatToHost_ACU: vi.fn() }));
+    vi.doMock('../../../src/data/gateways/chat-gateway', () => ({
+      getChatArray_ACU: () => chat,
+      saveChatToHost_ACU: vi.fn(),
+      saveChatToHostStrict_ACU: vi.fn(async () => { throw new Error('disk full'); }),
+    }));
+    vi.doMock('../../../src/service/runtime/state-manager', () => ({
+      currentChatFileIdentifier_ACU: 'chat-data',
+      currentJsonTableData_ACU: { sheet_summary: { name: '纪要表' } },
+      getCurrentIsolationKey_ACU: () => 'alpha',
+    }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-state-service', () => ({
+      getAggregatedSummaryVectorIndexSnapshot_ACU: () => ({ summaryVectorIndexState: null, layers: [], rowOwners: new Map() }),
+      assignSummaryVectorIndexStateToTagData_ACU: vi.fn(),
+    }));
+    vi.doMock('../../../src/data/storage/vector-index-hot-cache', () => ({
+      deleteSummaryVectorHotCacheByScope_ACU: vi.fn(async () => true),
+      clearSummaryVectorFlushTasksByScope_ACU: vi.fn(async () => true),
+    }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-storage-service', () => ({
+      cleanupUnreachableSummaryVectorIndexFiles_ACU: vi.fn(async () => ({ deletedPaths: [], retainedPaths: [], failedDeletes: [] })),
+    }));
+
+    const { deleteCurrentSummaryVectorIndexFromChat_ACU } = await import('../../../src/service/vector/summary-vector-index-chat-service');
+    await deleteCurrentSummaryVectorIndexFromChat_ACU().catch(() => undefined);
+
+    expect(chat[0].TavernDB_ACU_IsolatedData.alpha.storageFrame.summaryVectorIndexFrame).toBe(mirror);
+  });
+});

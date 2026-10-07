@@ -2447,6 +2447,23 @@ function isSummaryOrOutlineTable_ACU(tableName) {
     const trimmedName = tableName.trim();
     return trimmedName === '总结表' || trimmedName === '总体大纲' || trimmedName === '纪要表';
 }
+const SUMMARY_SHEET_NAME_PRIORITY_ACU = ['纪要表', '总结表', '总体大纲'];
+/**
+ * 从候选表中选出纪要表：按「纪要表 > 总结表 > 总体大纲」优先级，同级取先出现者。
+ * 不能按对象键顺序取第一张——模板同时有大纲和总结表时，选中大纲会因缺概要列让整个向量功能停用。
+ */
+function pickSummarySheetKeyByPriority_ACU(keys, getName) {
+    let best = null;
+    let bestRank = SUMMARY_SHEET_NAME_PRIORITY_ACU.length;
+    for (const key of keys) {
+        const rank = SUMMARY_SHEET_NAME_PRIORITY_ACU.indexOf(String(getName(key) ?? '').trim());
+        if (rank >= 0 && rank < bestRank) {
+            best = key;
+            bestRank = rank;
+        }
+    }
+    return best;
+}
 // 标签列表解析：支持英文逗号/中文逗号/空格分隔
 function parseTagList_ACU(input) {
     if (!input || typeof input !== 'string')
@@ -2922,6 +2939,7 @@ var utils = /*#__PURE__*/Object.freeze({
     normalizeNonNegativeInteger_ACU: normalizeNonNegativeInteger_ACU$2,
     normalizePositiveInteger_ACU: normalizePositiveInteger_ACU$2,
     parseTableTemplateJson_ACU: parseTableTemplateJson_ACU,
+    pickSummarySheetKeyByPriority_ACU: pickSummarySheetKeyByPriority_ACU,
     stripSeedRowsFromTemplate_ACU: stripSeedRowsFromTemplate_ACU
 });
 
@@ -47593,7 +47611,7 @@ function getActiveChunkRefs_ACU(manifest) {
         return chunkKey && (activeChunkKeys.size === 0 || activeChunkKeys.has(chunkKey));
     });
 }
-function isSingleFileSnapshotManifest_ACU$2(manifest) {
+function isSingleFileSnapshotManifest_ACU$1(manifest) {
     return manifest.snapshot?.mode === 'single_file_snapshot';
 }
 /**
@@ -47739,7 +47757,7 @@ async function putSummaryVectorHotCacheChunks_ACU(options) {
             console.warn('[交火向量热缓存] 写入前清理同 scope 旧缓存失败，残留将在预算淘汰时回收');
         }
         // ── 单文件快照模式：直接写入所有 chunks，不依赖 contentAddressed.chunkRefs ──
-        if (isSingleFileSnapshotManifest_ACU$2(manifest)) {
+        if (isSingleFileSnapshotManifest_ACU$1(manifest)) {
             const db = await openDb_ACU$1();
             await new Promise((resolve, reject) => {
                 const tx = db.transaction(STORE_NAME_ACU$1, 'readwrite');
@@ -47852,7 +47870,7 @@ async function getSummaryVectorHotCacheChunks_ACU(options) {
         if (isImmutableV2SnapshotManifest_ACU(manifest))
             return null;
         // ── 单文件快照模式：通过 indexId 索引扫描所有匹配记录 ──
-        if (isSingleFileSnapshotManifest_ACU$2(manifest)) {
+        if (isSingleFileSnapshotManifest_ACU$1(manifest)) {
             const targetIndexId = normalizeKeyPart_ACU(manifest.indexId);
             const targetCheckpointId = getManifestCheckpointId_ACU(manifest);
             const targetChatKey = normalizeKeyPart_ACU(manifest.chatKey);
@@ -49805,10 +49823,7 @@ function findSummaryTableSelection_ACU(sourceTableKey) {
     }
     const requestedKey = normalizeText_ACU$3(sourceTableKey);
     const candidateKeys = requestedKey ? [requestedKey] : Object.keys(currentJsonTableData_ACU);
-    const summaryKey = candidateKeys.find((key) => {
-        const table = currentJsonTableData_ACU[key];
-        return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
-    });
+    const summaryKey = pickSummarySheetKeyByPriority_ACU(candidateKeys, (key) => currentJsonTableData_ACU[key]?.name);
     if (!summaryKey)
         return null;
     const table = currentJsonTableData_ACU[summaryKey];
@@ -51162,6 +51177,7 @@ async function resolveSummaryVectorMirrorHead_ACU(options) {
         return buildEmptyResult_ACU('manifest_unavailable', sourceTableKey, base.messageIndex, checkpoint, diagnostics);
     }
     const head = new Map();
+    const rowSourceHashes = new Map();
     for (const row of manifest.rows) {
         if (!isPlainObject_ACU(row) || !isNonEmptyString_ACU(row.rowId) || !Array.isArray(row.chunks))
             continue;
@@ -51174,6 +51190,10 @@ async function resolveSummaryVectorMirrorHead_ACU(options) {
             });
         }
         head.set(row.rowId, row.chunks.filter(isChunkRef_ACU).map((chunk) => ({ ...chunk })));
+        if (isNonEmptyString_ACU(row.vectorSourceHash))
+            rowSourceHashes.set(row.rowId, row.vectorSourceHash);
+        else
+            rowSourceHashes.delete(row.rowId);
     }
     const packRefsByHash = new Map();
     checkpoint.packRefs.forEach((ref) => packRefsByHash.set(ref.packHash, { ...ref }));
@@ -51267,9 +51287,14 @@ async function resolveSummaryVectorMirrorHead_ACU(options) {
             for (const operation of delta.operations) {
                 if (operation.kind === 'row_add') {
                     head.set(operation.rowId, operation.chunks.map((chunk) => ({ ...chunk })));
+                    if (isNonEmptyString_ACU(operation.vectorSourceHash))
+                        rowSourceHashes.set(operation.rowId, operation.vectorSourceHash);
+                    else
+                        rowSourceHashes.delete(operation.rowId);
                 }
                 else {
                     head.delete(operation.rowId);
+                    rowSourceHashes.delete(operation.rowId);
                 }
             }
             delta.packRefs.forEach((packRef) => {
@@ -51280,6 +51305,8 @@ async function resolveSummaryVectorMirrorHead_ACU(options) {
             appliedTableEntryIds.push(delta.sourceTableEntry.entryId);
         }
     }
+    const usedPackHashes = new Set();
+    head.forEach((chunks) => chunks.forEach((chunk) => usedPackHashes.add(chunk.packHash)));
     return {
         status: 'ok',
         sourceTableKey,
@@ -51287,7 +51314,10 @@ async function resolveSummaryVectorMirrorHead_ACU(options) {
         checkpoint,
         head,
         vectorRevision: computeSummaryVectorMirrorHeadRevision_ACU(checkpoint.vectorRevision, appliedDeltaEntryIds),
-        packRefs: Array.from(packRefsByHash.values()),
+        // 只列 head 行实际引用的 pack：被 refresh 取代的旧 pack 召回时不必再下载（R5-02）。
+        // GC 可达性另按原始 frame 收集，不受此处影响。
+        packRefs: Array.from(packRefsByHash.values()).filter((ref) => usedPackHashes.has(ref.packHash)),
+        rowSourceHashes,
         appliedDeltaEntryIds,
         appliedTableEntryIds,
         stale,
@@ -51471,6 +51501,37 @@ async function persistSummaryVectorMirrorManifestPrepared_ACU(params) {
         ...scope,
         manifestHash,
     });
+    // 与 pack 同口径：内容寻址路径已存在且内容一致时复用既有对象（R5-03）。
+    // 不得重新上传并降级成 prepared，失败回收也不能删除它——旧 checkpoint 可能正引用这份 manifest。
+    const existing = await readVectorIndexJsonFile_ACU(path);
+    if (existing.ok && existing.data) {
+        const existingJson = JSON.stringify({
+            schema: existing.data.schema,
+            version: existing.data.version,
+            sourceTableKey: existing.data.sourceTableKey,
+            rows: existing.data.rows,
+        });
+        if (await sha256Text_ACU(existingJson) !== manifestHash) {
+            throw new Error(`镜像 manifest 路径冲突：path=${path} 已存在但内容与 manifestHash=${manifestHash} 不一致。`);
+        }
+        const now = new Date().toISOString();
+        return {
+            ref: { manifestHash, path, byteLength: existingJson.length },
+            file: {
+                role: 'manifest',
+                path,
+                byteSize: existingJson.length,
+                checksum: await sha256Text_ACU(existingJson),
+                rowCount: payload.rows.length,
+                createdAt: now,
+                updatedAt: now,
+                status: 'ready',
+                scope,
+                publicationState: 'prepared',
+            },
+            createdNew: false,
+        };
+    }
     const uploaded = await uploadVectorIndexJsonFile_ACU({
         path,
         role: 'manifest',
@@ -51491,6 +51552,7 @@ async function persistSummaryVectorMirrorManifestPrepared_ACU(params) {
             byteLength: Number(uploaded.ref.byteSize) || JSON.stringify(payload).length,
         },
         file: uploaded.ref,
+        createdNew: true,
     };
 }
 async function loadSummaryVectorMirrorPack_ACU(ref) {
@@ -53756,7 +53818,7 @@ function validateSingleFileSnapshotIdentity_ACU(manifest, blob, snapshotPath) {
     assertSingleSnapshotFieldMatches_ACU(snapshotPath, 'blob.manifest.snapshot.revision', manifest.snapshot.revision, embeddedManifest.snapshot?.revision);
     assertSingleSnapshotFieldMatches_ACU(snapshotPath, 'blob.manifest.snapshot.revision/storageIdentity.revision', expectedIdentity.revision, embeddedManifest.snapshot?.revision);
 }
-function isSingleFileSnapshotManifest_ACU$1(manifest) {
+function isSingleFileSnapshotManifest_ACU(manifest) {
     if (!manifest || typeof manifest !== 'object')
         return false;
     const explicitMode = manifest.snapshot?.mode;
@@ -53770,7 +53832,7 @@ function isLegacySingleFileHealthTarget_ACU(file) {
         return false;
     if (isVectorIndexMirrorManifestPathV2_ACU(file.path))
         return false;
-    return isSingleFileSnapshotManifest_ACU$1(file.manifest);
+    return isSingleFileSnapshotManifest_ACU(file.manifest);
 }
 async function loadChunksFromSingleFileSnapshot_ACU(manifest, options = {}) {
     const snapshotPath = String(manifest.manifestFile || manifest.files?.[0]?.path || '').trim();
@@ -53942,7 +54004,7 @@ function isLegacySummaryVectorIndexManifest_ACU(manifest) {
     const normalized = normalizeSummaryVectorIndexManifestForRead_ACU(manifest);
     if (!normalized)
         return false;
-    if (isSingleFileSnapshotManifest_ACU$1(normalized)) {
+    if (isSingleFileSnapshotManifest_ACU(normalized)) {
         return !normalized.storageIdentity;
     }
     if (normalized.contentAddressed?.chunkRefs?.length)
@@ -53954,7 +54016,7 @@ async function loadSummaryVectorIndexChunksFromManifest_ACU(manifest, options = 
     manifest = normalizeSummaryVectorIndexManifestForRead_ACU(manifest);
     if (!manifest)
         return [];
-    if (isSingleFileSnapshotManifest_ACU$1(manifest)) {
+    if (isSingleFileSnapshotManifest_ACU(manifest)) {
         // V2 immutable snapshot 的 authority 是外置 blob：存储内容逐字节不可变，
         // 外部文件本身就是权威，热缓存查询与回填只会产生无效 IDB 扫描与虚假日志。
         const immutableV2 = isImmutableV2SnapshotManifest_ACU(manifest);
@@ -56112,6 +56174,52 @@ async function collectSummarySheetRowIdTimelineV2_ACU(options) {
 }
 
 /**
+ * 向量镜像写入的字段级撤销日志（R5-01）。
+ *
+ * 镜像 flush / 重建失败时，过去在事务外深拷贝整个 TavernDB_ACU_IsolatedData，失败后整块覆盖回去，
+ * 会把等锁期间并发写入方已提交的表格 entry（以及其他隔离槽的写入）一起抹掉。
+ * 这里改为只记录本次亲手改过的字段：写入时记下旧值与写入值，回滚时仅当字段仍是自己写入的那份
+ * 才恢复旧值；已被别人改过的字段原样保留，交给 resolver / rebuild_repair 收敛。
+ *
+ * 约定：调用方不得原地修改旧值对象（需要改就先浅拷贝再整体赋值），否则旧值无法恢复。
+ */
+function createSummaryVectorMirrorUndoLog_ACU() {
+    const entries = [];
+    const has = (target, key) => Object.prototype.hasOwnProperty.call(target, key);
+    return {
+        set(target, key, value) {
+            entries.push({ target, key, had: has(target, key), previous: target[key], removed: false, written: value });
+            target[key] = value;
+        },
+        remove(target, key) {
+            if (!has(target, key))
+                return;
+            entries.push({ target, key, had: true, previous: target[key], removed: true, written: undefined });
+            delete target[key];
+        },
+        rollback() {
+            let skipped = 0;
+            for (let index = entries.length - 1; index >= 0; index -= 1) {
+                const entry = entries[index];
+                const untouched = entry.removed
+                    ? !has(entry.target, entry.key)
+                    : has(entry.target, entry.key) && entry.target[entry.key] === entry.written;
+                if (!untouched) {
+                    skipped += 1;
+                    continue;
+                }
+                if (entry.had)
+                    entry.target[entry.key] = entry.previous;
+                else
+                    delete entry.target[entry.key];
+            }
+            entries.length = 0;
+            return skipped;
+        },
+    };
+}
+
+/**
  * service/vector/summary-vector-mirror-writer.ts — 纪要向量镜像 flush runner
  *
  * 流程：resolver → rowId 时间线 → 未镜像 entry 集合差分 → 批量 embedding →
@@ -56146,21 +56254,11 @@ function findTouchedSummarySheetKey_ACU(options) {
         : [];
     const candidates = [...new Set([...fromKeys, ...fromWriteSet].map((key) => String(key || '').trim()).filter(Boolean))];
     if (options.writeSet?.some((unit) => unit?.kind === 'all')) {
-        for (const [sheetKey, sheet] of Object.entries(tableData)) {
-            if (!sheetKey.startsWith('sheet_'))
-                continue;
-            if (sheet && typeof sheet === 'object' && isSummaryOrOutlineTable_ACU(String(sheet.name || ''))) {
-                return sheetKey;
-            }
-        }
+        const picked = pickSummarySheetKeyByPriority_ACU(Object.keys(tableData).filter((key) => key.startsWith('sheet_')), (key) => tableData[key]?.name);
+        if (picked)
+            return picked;
     }
-    for (const sheetKey of candidates) {
-        const sheet = tableData[sheetKey];
-        if (sheet && typeof sheet === 'object' && isSummaryOrOutlineTable_ACU(String(sheet.name || ''))) {
-            return sheetKey;
-        }
-    }
-    return null;
+    return pickSummarySheetKeyByPriority_ACU(candidates, (key) => tableData[key]?.name);
 }
 function planUnmirroredEntryDeltasV2_ACU(timelineEntries, appliedTableEntryIds, rowIdsAtCheckpoint, alreadyMirroredRowIds = []) {
     const mirrored = new Set(appliedTableEntryIds);
@@ -56211,26 +56309,76 @@ function tableEntryStillExists_ACU(frame, entryId) {
 function generateVectorDeltaEntryId_ACU() {
     return `vdelta_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
-function snapshotIsolatedData_ACU(chat, messageIndices) {
-    return [...new Set(messageIndices)].map((index) => {
-        const message = chat[index];
-        const existed = !!message && Object.prototype.hasOwnProperty.call(message, 'TavernDB_ACU_IsolatedData');
-        return {
-            message,
-            existed,
-            value: existed ? JSON.parse(JSON.stringify(message.TavernDB_ACU_IsolatedData)) : undefined,
-        };
-    });
+/**
+ * 当前隔离槽全部镜像 frame 的结构签名（checkpoint 修订号 + 各层 delta entryId）。
+ * writer 与 rebuild 之间没有互斥，派生写入也不 bump 表格修订号（R5-07）：
+ * 提交前比对签名，镜像在 embedding 期间被改写过就放弃本次计划，交回队列按新 head 重放。
+ */
+function computeSummaryVectorMirrorFramesSignature_ACU(chat, isolationKey) {
+    return collectSummaryVectorMirrorFrameRefs_ACU(chat, isolationKey)
+        .map((ref) => {
+        const mirror = ref.frame.summaryVectorIndexFrame;
+        const deltaIds = (mirror?.logEntries || []).map((entry) => String(entry?.entryId || '')).join(',');
+        return `${ref.messageIndex}:${mirror?.checkpoint?.vectorRevision || ''}:${deltaIds}`;
+    })
+        .join('|');
 }
-function restoreIsolatedData_ACU(snapshots) {
-    for (const snapshot of snapshots) {
-        if (!snapshot.message)
-            continue;
-        if (snapshot.existed)
-            snapshot.message.TavernDB_ACU_IsolatedData = snapshot.value;
+async function collectKnownHeadRowHashes_ACU(head, rowIds) {
+    const known = new Map();
+    const unknown = [];
+    for (const rowId of rowIds) {
+        const hash = head.rowSourceHashes?.get(rowId);
+        if (hash)
+            known.set(rowId, hash);
         else
-            delete snapshot.message.TavernDB_ACU_IsolatedData;
+            unknown.push(rowId);
     }
+    if (unknown.length === 0)
+        return known;
+    // 旧 manifest 未记录哈希：回读该行引用的 pack chunk，用写入时的 textHash 判定。读不到按未知处理（照常重嵌）。
+    const packRefsByHash = new Map(head.packRefs.map((ref) => [ref.packHash, ref]));
+    const packCache = new Map();
+    for (const rowId of unknown) {
+        const refs = head.head.get(rowId) || [];
+        const hashes = new Set();
+        for (const ref of refs) {
+            if (!packCache.has(ref.packHash)) {
+                const packRef = packRefsByHash.get(ref.packHash);
+                let pack = null;
+                try {
+                    pack = packRef ? await loadSummaryVectorMirrorPack_ACU(packRef) : null;
+                }
+                catch {
+                    pack = null;
+                }
+                packCache.set(ref.packHash, pack);
+            }
+            hashes.add(String(packCache.get(ref.packHash)?.chunks?.[ref.chunkIndex]?.textHash || ''));
+        }
+        const [only] = [...hashes];
+        if (hashes.size === 1 && only)
+            known.set(rowId, only);
+    }
+    return known;
+}
+async function dropUnchangedRefreshes_ACU(plans, head, rowsById) {
+    const refreshCandidates = [...new Set(plans.flatMap((plan) => plan.refreshed || []))];
+    if (refreshCandidates.length === 0)
+        return plans;
+    const known = await collectKnownHeadRowHashes_ACU(head, refreshCandidates);
+    const unchanged = new Set(refreshCandidates.filter((rowId) => {
+        const liveHash = String(rowsById.get(rowId)?.vectorSourceHash || '');
+        return !!liveHash && known.get(rowId) === liveHash;
+    }));
+    if (unchanged.size === 0)
+        return plans;
+    return plans
+        .map((plan) => {
+        const refreshed = (plan.refreshed || []).filter((rowId) => !unchanged.has(rowId));
+        const { refreshed: _dropped, ...rest } = plan;
+        return refreshed.length > 0 ? { ...rest, refreshed } : rest;
+    })
+        .filter((plan) => plan.added.length > 0 || plan.removed.length > 0 || (plan.refreshed?.length || 0) > 0);
 }
 async function flushSummaryVectorMirrorNow_ACU(options = {}) {
     const chat = getChatArray_ACU();
@@ -56333,7 +56481,8 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
             retryability: 'retryable',
         });
     }
-    const plans = planUnmirroredEntryDeltasV2_ACU(timeline.entries, head.appliedTableEntryIds, timeline.rowIdsAtCheckpoint, head.head.keys());
+    const mirrorSignature = computeSummaryVectorMirrorFramesSignature_ACU(chat, isolationKey);
+    let plans = planUnmirroredEntryDeltasV2_ACU(timeline.entries, head.appliedTableEntryIds, timeline.rowIdsAtCheckpoint, head.head.keys());
     if (plans.length === 0) {
         return emptyResult_ACU$1({
             success: true,
@@ -56351,6 +56500,16 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
     }
     const baseRevision = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'sheet', sheetKey: selected.summaryKey }], { isolationKey });
     const rowsById = new Map(prepared.rows.map((row) => [row.rowId, row]));
+    // 时间线只看 rowId，看不出正文是否变化：refresh 前比对 head 中该行写入时的源文本哈希，
+    // 只重嵌真正变了的行（R5-02），否则每次 flush 都会把整张表重嵌一遍。
+    plans = await dropUnchangedRefreshes_ACU(plans, head, rowsById);
+    if (plans.length === 0) {
+        return emptyResult_ACU$1({
+            success: true,
+            skipped: true,
+            reason: 'no_changed_rows',
+        });
+    }
     const addedRowIds = [...new Set(plans.flatMap((plan) => [
             ...plan.added,
             ...(plan.refreshed || []),
@@ -56456,7 +56615,9 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
             chunkRefsByRowId.set(source.rowId, list);
         });
     }
-    const snapshots = snapshotIsolatedData_ACU(chat, plans.map((plan) => plan.messageIndex));
+    // 只撤销本次亲手写入的镜像字段（在锁内登记），不能整块覆盖楼层数据：
+    // 等锁期间别的写入方可能已向同一楼层提交了表格 entry。
+    const undo = createSummaryVectorMirrorUndoLog_ACU();
     let writtenDeltaCount = 0;
     try {
         await runTableWriteTransaction_ACU({
@@ -56469,6 +56630,13 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
             workingDataMode: 'none',
         }, async (ctx) => {
             ctx.assertFresh?.('vector_mirror:before_delta_write');
+            // 队列墓碑协议（R5-10）：删除索引 / 清空队列后，在飞的 flush 不得再提交。
+            if (options.expectedFlushScopeKey && options.expectedFlushGeneration != null) {
+                await assertSummaryVectorFlushGenerationCurrent_ACU(options.expectedFlushScopeKey, options.expectedFlushGeneration);
+            }
+            if (computeSummaryVectorMirrorFramesSignature_ACU(chat, isolationKey) !== mirrorSignature) {
+                throw new Error('summary_vector_mirror_stale_head：embedding 期间镜像已被改写（重建或其他 flush），放弃本次计划。');
+            }
             await ctx.runCommit(async () => {
                 for (const plan of plans) {
                     const frame = getStorageFrame_ACU(chat, isolationKey, plan.messageIndex);
@@ -56476,8 +56644,12 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
                         logDebug_ACU(`[向量镜像] 丢弃已失效来源 entry 的 delta：entryId=${plan.entryId}, messageIndex=${plan.messageIndex}`);
                         continue;
                     }
-                    const mirror = frame.summaryVectorIndexFrame && typeof frame.summaryVectorIndexFrame === 'object'
+                    // 浅拷贝后再改，旧镜像对象保持原样以便回滚。
+                    const existingMirror = frame.summaryVectorIndexFrame && typeof frame.summaryVectorIndexFrame === 'object'
                         ? frame.summaryVectorIndexFrame
+                        : null;
+                    const mirror = existingMirror
+                        ? { ...existingMirror, logEntries: [...(existingMirror.logEntries || [])] }
                         : { version: 3, sourceTableKey: selected.summaryKey, logEntries: [] };
                     let nextSeq = Math.max(0, ...(mirror.logEntries || []).map((entry) => Number(entry.seq) || 0));
                     const appendDelta = (operations, deltaPack = null, skippedRowCount) => {
@@ -56522,11 +56694,11 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
                                 vectorSourceHash: row?.vectorSourceHash || '',
                             }];
                     }), packPersist, additions.filter((rowId) => !chunkRefsByRowId.has(rowId)).length || undefined);
-                    frame.summaryVectorIndexFrame = {
+                    undo.set(frame, 'summaryVectorIndexFrame', {
                         ...mirror,
                         sourceTableKey: selected.summaryKey,
                         logEntries: [...(mirror.logEntries || [])],
-                    };
+                    });
                 }
                 if (writtenDeltaCount === 0)
                     return;
@@ -56535,11 +56707,15 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
         });
     }
     catch (error) {
-        restoreIsolatedData_ACU(snapshots);
+        undo.rollback();
         // 提交失败 → 本次不会再 finalize，prepared pack 永远不会被引用（GC 出于保护 finalize 窗口
         // 而保留所有 prepared pack），不主动回收就会永久累积。走统一回收（含 ok 检查与 registry 注销）。
         if (packPersist?.file && packPersist.createdNew !== false) {
             await discardSummaryVectorMirrorPreparedFiles_ACU([packPersist.file], 'delta 提交失败');
+        }
+        if (error instanceof SummaryVectorFlushGenerationInvalidatedError_ACU) {
+            // 与队列墓碑协议一致：任务已被作废，按跳过处理，不记失败、不重试。
+            return emptyResult_ACU$1({ success: true, skipped: true, reason: 'flush_scope_invalidated' });
         }
         return emptyResult_ACU$1({
             reason: 'vector_mirror_commit_failed',
@@ -56927,11 +57103,8 @@ async function publishSummaryVectorMirrorRowRemovalSnapshot_ACU(snapshot) {
         manifestRef: manifestPersist.ref,
         packRefs,
     };
-    const snapshots = chat.map((message) => ({
-        message,
-        existed: !!message && Object.prototype.hasOwnProperty.call(message, 'TavernDB_ACU_IsolatedData'),
-        value: message && Object.prototype.hasOwnProperty.call(message, 'TavernDB_ACU_IsolatedData') ? JSON.parse(JSON.stringify(message.TavernDB_ACU_IsolatedData)) : undefined,
-    }));
+    // 字段级撤销（R5-01）：只回滚本次写过的镜像字段，不覆盖整段聊天。
+    const undo = createSummaryVectorMirrorUndoLog_ACU();
     try {
         await runTableWriteTransaction_ACU({
             source: 'vector_mirror',
@@ -56954,9 +57127,7 @@ async function publishSummaryVectorMirrorRowRemovalSnapshot_ACU(snapshot) {
             }
             await ctx.runCommit(async () => {
                 for (const ref of collectSummaryVectorMirrorFrameRefs_ACU(chat, isolationKey)) {
-                    if (ref.frame.summaryVectorIndexFrame) {
-                        delete ref.frame.summaryVectorIndexFrame;
-                    }
+                    undo.remove(ref.frame, 'summaryVectorIndexFrame');
                 }
                 const tagData = chat[base.messageIndex]?.TavernDB_ACU_IsolatedData?.[isolationKey];
                 if (!isV2TagData_ACU(tagData))
@@ -56968,7 +57139,7 @@ async function publishSummaryVectorMirrorRowRemovalSnapshot_ACU(snapshot) {
                     checkpoint,
                     logEntries: [],
                 };
-                frame.summaryVectorIndexFrame = mirror;
+                undo.set(frame, 'summaryVectorIndexFrame', mirror);
                 const violation = assertSummaryVectorMirrorFrameInvariantsV2_ACU(chat, isolationKey, 'publishSummaryVectorMirrorRowRemoval');
                 if (violation)
                     throw new Error(violation);
@@ -56977,14 +57148,7 @@ async function publishSummaryVectorMirrorRowRemovalSnapshot_ACU(snapshot) {
         });
     }
     catch (error) {
-        for (const item of snapshots) {
-            if (!item.message)
-                continue;
-            if (item.existed)
-                item.message.TavernDB_ACU_IsolatedData = item.value;
-            else
-                delete item.message.TavernDB_ACU_IsolatedData;
-        }
+        undo.rollback();
         return emptyResult_ACU({
             reason: 'rebuild_commit_failed',
             errors: [error?.message || String(error || '剩余行镜像落盘失败')],
@@ -57010,7 +57174,7 @@ function frameHasUsableVectorMirror_ACU(tagData) {
     const checkpoint = tagData?.storageFrame?.summaryVectorIndexFrame?.checkpoint;
     return checkpoint?.kind === 'vector_full' && Number(checkpoint.rowCount) > 0;
 }
-function clearLegacyVectorFields_ACU(chat) {
+function clearLegacyVectorFields_ACU(chat, undo) {
     for (const message of chat) {
         const isolated = message?.TavernDB_ACU_IsolatedData;
         if (!isolated || typeof isolated !== 'object')
@@ -57018,9 +57182,9 @@ function clearLegacyVectorFields_ACU(chat) {
         for (const tagData of Object.values(isolated)) {
             if (!tagData || typeof tagData !== 'object')
                 continue;
-            delete tagData.summaryVectorIndexState;
-            delete tagData.summaryVectorIndexManifest;
-            delete tagData.vectorMemoryState;
+            undo.remove(tagData, 'summaryVectorIndexState');
+            undo.remove(tagData, 'summaryVectorIndexManifest');
+            undo.remove(tagData, 'vectorMemoryState');
         }
     }
 }
@@ -57067,6 +57231,7 @@ async function rebuildSummaryVectorMirror_ACU(options) {
     const preparedById = new Map(prepared.rows.map((row) => [row.rowId, row]));
     const reusable = new Map();
     const reusablePackRefsByHash = new Map();
+    let reusedVectorDimension = 0;
     if (options.reason === 'rebuild_repair') {
         const head = await resolveSummaryVectorMirrorHead_ACU({
             chat,
@@ -57090,6 +57255,8 @@ async function rebuildSummaryVectorMirror_ACU(options) {
                         valid = false;
                         break;
                     }
+                    if (!reusedVectorDimension && Number(pack?.dimension) > 0)
+                        reusedVectorDimension = Number(pack.dimension);
                 }
                 if (valid) {
                     reusable.set(rowId, refs.map((ref) => ({ ...ref })));
@@ -57148,10 +57315,9 @@ async function rebuildSummaryVectorMirror_ACU(options) {
             });
         }
     }
-    else if (reusable.size > 0) {
-        const first = [...reusable.values()][0]?.[0];
-        if (first)
-            embedding.dimension = embedding.dimension;
+    else if (reusable.size > 0 && reusedVectorDimension > 0) {
+        // 全部复用、本轮没有新嵌：维度以复用向量的实际维度为准，不能沿用（可能写错的）配置值（R5-09）。
+        embedding.dimension = reusedVectorDimension;
     }
     const scope = normalizeSummaryVectorIndexScope_ACU({
         chatKey: currentChatFileIdentifier_ACU,
@@ -57189,9 +57355,11 @@ async function rebuildSummaryVectorMirror_ACU(options) {
             newRefsByRow.set(source.rowId, list);
         });
     }
+    // 复用行只在 textHash 与实时哈希一致时复用，新嵌行直接取实时哈希：两者都等于实时行的源文本哈希。
     const rows = source.rowIds.map((rowId) => ({
         rowId,
         chunks: newRefsByRow.get(rowId) || [],
+        vectorSourceHash: String(preparedById.get(rowId)?.vectorSourceHash || ''),
     })).filter((row) => row.chunks.length > 0);
     const requiredPackHashes = [...new Set(rows.flatMap((row) => row.chunks.map((chunk) => chunk.packHash)))];
     const missingPackRefs = requiredPackHashes.filter((packHash) => !packRefsByHash.has(packHash));
@@ -57241,7 +57409,11 @@ async function rebuildSummaryVectorMirror_ACU(options) {
                 schema: 'summary_vector_mirror_manifest',
                 version: 1,
                 sourceTableKey: selected.summaryKey,
-                rows: rows.map((row) => ({ rowId: row.rowId, chunks: row.chunks })),
+                rows: rows.map((row) => ({
+                    rowId: row.rowId,
+                    chunks: row.chunks,
+                    ...(row.vectorSourceHash ? { vectorSourceHash: row.vectorSourceHash } : {}),
+                })),
             },
         });
     }
@@ -57252,7 +57424,9 @@ async function rebuildSummaryVectorMirror_ACU(options) {
             errors: [error?.message || String(error || '重建 manifest 上传失败')],
         });
     }
-    files.push(manifestPersist.file);
+    // 复用的既有 manifest 不进回收/发布列表：失败时不能删，成功时它本来就已发布。
+    if (manifestPersist.createdNew !== false)
+        files.push(manifestPersist.file);
     const checkpoint = {
         kind: 'vector_full',
         createdAt: Date.now(),
@@ -57265,11 +57439,8 @@ async function rebuildSummaryVectorMirror_ACU(options) {
         manifestRef: manifestPersist.ref,
         packRefs,
     };
-    const snapshots = chat.map((message) => ({
-        message,
-        existed: !!message && Object.prototype.hasOwnProperty.call(message, 'TavernDB_ACU_IsolatedData'),
-        value: message && Object.prototype.hasOwnProperty.call(message, 'TavernDB_ACU_IsolatedData') ? JSON.parse(JSON.stringify(message.TavernDB_ACU_IsolatedData)) : undefined,
-    }));
+    // 字段级撤销（R5-01）：只回滚本次写过的镜像/legacy 向量字段，不覆盖整段聊天与其他隔离槽。
+    const undo = createSummaryVectorMirrorUndoLog_ACU();
     try {
         await runTableWriteTransaction_ACU({
             source: 'vector_mirror',
@@ -57283,11 +57454,7 @@ async function rebuildSummaryVectorMirror_ACU(options) {
             ctx.assertFresh?.('vector_mirror_rebuild:before_write');
             await ctx.runCommit(async () => {
                 for (const ref of collectSummaryVectorMirrorFrameRefs_ACU(chat, isolationKey)) {
-                    if (ref.frame.summaryVectorIndexFrame) {
-                        delete ref.frame.summaryVectorIndexFrame.checkpoint;
-                        ref.frame.summaryVectorIndexFrame.logEntries = [];
-                        delete ref.frame.summaryVectorIndexFrame;
-                    }
+                    undo.remove(ref.frame, 'summaryVectorIndexFrame');
                 }
                 const tagData = chat[base.messageIndex]?.TavernDB_ACU_IsolatedData?.[isolationKey];
                 if (!isV2TagData_ACU(tagData))
@@ -57299,8 +57466,8 @@ async function rebuildSummaryVectorMirror_ACU(options) {
                     checkpoint,
                     logEntries: [],
                 };
-                frame.summaryVectorIndexFrame = mirror;
-                clearLegacyVectorFields_ACU(chat);
+                undo.set(frame, 'summaryVectorIndexFrame', mirror);
+                clearLegacyVectorFields_ACU(chat, undo);
                 const violation = assertSummaryVectorMirrorFrameInvariantsV2_ACU(chat, isolationKey, 'rebuildSummaryVectorMirror');
                 if (violation)
                     throw new Error(violation);
@@ -57309,14 +57476,7 @@ async function rebuildSummaryVectorMirror_ACU(options) {
         });
     }
     catch (error) {
-        for (const snapshot of snapshots) {
-            if (!snapshot.message)
-                continue;
-            if (snapshot.existed)
-                snapshot.message.TavernDB_ACU_IsolatedData = snapshot.value;
-            else
-                delete snapshot.message.TavernDB_ACU_IsolatedData;
-        }
+        undo.rollback();
         await discardSummaryVectorMirrorPreparedFiles_ACU(files, '重建落盘失败');
         return emptyResult_ACU({
             reason: 'rebuild_commit_failed',
@@ -92061,7 +92221,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261007-16"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261007-17"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92080,7 +92240,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261007-16";
+        const stamp = "20261007-17";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -105035,19 +105195,23 @@ function scanTargetKeysResidue_ACU(msg, isolationKey, targetSheetKeys, messageIn
  * service/vector/summary-vector-mirror-fold.ts — compaction 时把 vector head 折到新锚点
  *
  * 纯 I/O：resolver(楼层 < anchor) → 合并 pack + 新 manifest → 写 checkpoint@anchor →
- * 删除旧 checkpoint 与 anchor 前 delta。零 embedding。失败抛错，由 compaction 回滚消息字段。
+ * 删除旧 checkpoint 与 anchor 前 delta。零 embedding。上传失败抛错，由 compaction 回滚消息字段。
+ *
+ * 镜像本身不可用（head 非 ok、pack/chunk 读不到）时不抛错（R5-05）：派生索引坏了不能挡住主数据
+ * 的 checkpoint 滚动。此时剥掉当前隔离槽的全部镜像 frame，下一次 flush 走 no_mirror → initial 重建。
  */
 function findSummarySheetKeyInCheckpoint_ACU(data) {
     if (!data || typeof data !== 'object')
         return null;
-    for (const [sheetKey, sheet] of Object.entries(data)) {
-        if (!sheetKey.startsWith('sheet_'))
-            continue;
-        if (sheet && typeof sheet === 'object' && isSummaryOrOutlineTable_ACU(String(sheet.name || ''))) {
-            return sheetKey;
-        }
+    const sheetKeys = Object.keys(data).filter((key) => key.startsWith('sheet_'));
+    return pickSummarySheetKeyByPriority_ACU(sheetKeys, (key) => data[key]?.name);
+}
+function stripAllSummaryVectorMirrorFrames_ACU(chat, isolationKey, reason) {
+    for (const ref of collectSummaryVectorMirrorFrameRefs_ACU(chat, isolationKey)) {
+        delete ref.frame.summaryVectorIndexFrame;
     }
-    return null;
+    logWarn_ACU(`[向量镜像] 折叠时镜像不可用（${reason}），已移除镜像以免阻塞表格整理；下次同步将重建向量索引。`);
+    return { folded: false, files: [] };
 }
 function getFrame_ACU(chat, isolationKey, messageIndex) {
     const tagData = chat[messageIndex]?.TavernDB_ACU_IsolatedData?.[isolationKey];
@@ -105071,14 +105235,14 @@ async function foldSummaryVectorMirrorAtBoundary_ACU(params) {
         return { folded: false, files: [] };
     }
     if (head.status !== 'ok') {
-        throw new Error(`向量镜像折叠失败：resolver status=${head.status}`);
+        return stripAllSummaryVectorMirrorFrames_ACU(params.chat, params.isolationKey, `resolver status=${head.status}`);
     }
     const embedding = head.checkpoint?.embedding || buildCurrentSummaryVectorEmbeddingIdentity_ACU();
     const packByHash = new Map();
     for (const packRef of head.packRefs) {
         const pack = await loadSummaryVectorMirrorPack_ACU(packRef);
         if (!pack)
-            throw new Error(`向量镜像折叠失败：无法读取 pack ${packRef.packHash}`);
+            return stripAllSummaryVectorMirrorFrames_ACU(params.chat, params.isolationKey, `无法读取 pack ${packRef.packHash}`);
         packByHash.set(packRef.packHash, pack);
     }
     const mergedChunks = [];
@@ -105089,7 +105253,7 @@ async function foldSummaryVectorMirrorAtBoundary_ACU(params) {
             const pack = packByHash.get(ref.packHash);
             const chunk = pack?.chunks[ref.chunkIndex];
             if (!chunk)
-                throw new Error(`向量镜像折叠失败：rowId=${rowId} 缺少 chunk ${ref.packHash}#${ref.chunkIndex}`);
+                return stripAllSummaryVectorMirrorFrames_ACU(params.chat, params.isolationKey, `rowId=${rowId} 缺少 chunk ${ref.packHash}#${ref.chunkIndex}`);
             newRefs.push({ packHash: '', chunkIndex: mergedChunks.length });
             mergedChunks.push({
                 ...chunk,
@@ -105135,7 +105299,10 @@ async function foldSummaryVectorMirrorAtBoundary_ACU(params) {
                 schema: 'summary_vector_mirror_manifest',
                 version: 1,
                 sourceTableKey,
-                rows: rows.map((row) => ({ rowId: row.rowId, chunks: row.chunks })),
+                rows: rows.map((row) => {
+                    const vectorSourceHash = head.rowSourceHashes?.get(row.rowId);
+                    return { rowId: row.rowId, chunks: row.chunks, ...(vectorSourceHash ? { vectorSourceHash } : {}) };
+                }),
             },
         });
     }
@@ -105144,7 +105311,9 @@ async function foldSummaryVectorMirrorAtBoundary_ACU(params) {
         await discardSummaryVectorMirrorPreparedFiles_ACU(files, '镜像折叠 manifest 上传失败');
         throw error;
     }
-    files.push(manifestPersist.file);
+    // 复用的既有 manifest 不进回收/发布列表：失败时不能删，成功时它本来就已发布。
+    if (manifestPersist.createdNew !== false)
+        files.push(manifestPersist.file);
     const checkpoint = {
         kind: 'vector_full',
         createdAt: Date.now(),
@@ -130767,235 +130936,6 @@ async function materializeSummaryVectorMirrorHead_ACU(head, live) {
     }
     return { rows, chunks, incompleteRowIds, contentMismatchedRowIds };
 }
-function isSingleFileSnapshotManifest_ACU(manifest) {
-    if (!manifest)
-        return false;
-    const explicitMode = manifest.snapshot?.mode;
-    if (explicitMode)
-        return explicitMode === 'single_file_snapshot';
-    const manifestPath = normalizeText_ACU(manifest.manifestFile);
-    return !!manifestPath && manifest.rowsFile === manifestPath && manifest.tombstoneFile === manifestPath;
-}
-async function selectRealignSnapshotFromDisk_ACU(manifest) {
-    const currentPath = normalizeText_ACU(manifest.manifestFile || manifest.files?.[0]?.path);
-    const isV2 = !!manifest.storageIdentity;
-    const currentStorageRevision = Number(manifest.storageIdentity?.revision || 0);
-    const currentSnapshotRevision = Number(manifest.snapshot?.revision || 0);
-    if (isV2 && (!Number.isInteger(currentStorageRevision) || currentStorageRevision < 1
-        || currentStorageRevision !== currentSnapshotRevision)) {
-        return null;
-    }
-    const currentRevision = isV2 ? currentStorageRevision : currentSnapshotRevision;
-    const expectedScope = normalizeSummaryVectorIndexScope_ACU({
-        chatKey: manifest.chatKey,
-        isolationKey: manifest.isolationKey,
-        sourceTableKey: manifest.sourceTableKey,
-    });
-    let registeredFiles = [{ path: currentPath }];
-    if (isV2) {
-        try {
-            const registry = await loadVectorIndexRegistry_ACU();
-            registeredFiles = Array.isArray(registry.files)
-                ? registry.files.filter((file) => file?.publicationState === 'published')
-                : [];
-        }
-        catch {
-            return null;
-        }
-    }
-    const candidates = [];
-    for (const file of registeredFiles) {
-        const path = normalizeText_ACU(file?.path);
-        if (!path)
-            continue;
-        try {
-            const loaded = await readVectorIndexJsonFile_ACU(path);
-            const blob = loaded.data;
-            const diskManifest = blob?.manifest;
-            if (!loaded.ok || !blob || blob.schema !== 'single_file_snapshot' || !diskManifest || diskManifest.status !== 'ready')
-                continue;
-            const diskScope = normalizeSummaryVectorIndexScope_ACU({
-                chatKey: diskManifest.chatKey,
-                isolationKey: diskManifest.isolationKey,
-                sourceTableKey: diskManifest.sourceTableKey,
-            });
-            if (diskScope.chatKey !== expectedScope.chatKey
-                || diskScope.isolationKey !== expectedScope.isolationKey
-                || diskScope.sourceTableKey !== expectedScope.sourceTableKey)
-                continue;
-            if (isV2 && (diskManifest.chatKey !== expectedScope.chatKey
-                || diskManifest.isolationKey !== expectedScope.isolationKey
-                || diskManifest.sourceTableKey !== expectedScope.sourceTableKey
-                || !blob.storageIdentity))
-                continue;
-            validateSingleFileSnapshotIdentity_ACU(diskManifest, blob, path);
-            const revision = Number(diskManifest.storageIdentity?.revision ?? diskManifest.snapshot?.revision);
-            const writeGeneration = normalizeText_ACU(diskManifest.storageIdentity?.writeGeneration);
-            if (!Number.isInteger(revision) || revision < 1 || revision < currentRevision || (isV2 && !writeGeneration))
-                continue;
-            candidates.push({ path, blob, revision, writeGeneration });
-        }
-        catch {
-            // 单个 registry 对象不可信时继续审阅同 scope 的其他 published 候选。
-        }
-    }
-    if (candidates.length === 0)
-        return null;
-    const newestRevision = Math.max(...candidates.map((candidate) => candidate.revision));
-    const newestCandidates = candidates.filter((candidate) => candidate.revision === newestRevision);
-    if (newestCandidates.length !== 1) {
-        logWarn_ACU('[交火模式纪要索引] realign 拒绝同 canonical scope、同 revision 的多个 writeGeneration 候选:', {
-            scope: expectedScope,
-            revision: newestRevision,
-            paths: newestCandidates.map((candidate) => candidate.path),
-        });
-        return null;
-    }
-    return newestCandidates[0];
-}
-async function tryRealignSummaryVectorIndexPointerFromDisk_ACU(params) {
-    const manifest = params.state.manifest || null;
-    if (!manifest || !isSingleFileSnapshotManifest_ACU(manifest))
-        return null;
-    const selected = await selectRealignSnapshotFromDisk_ACU(manifest);
-    if (!selected) {
-        logSummaryVectorIndexIdentityEvent_ACU('warn', 'realign', 'reader_unreadable', {
-            manifest,
-            path: normalizeText_ACU(manifest.manifestFile || manifest.files?.[0]?.path),
-        });
-        logWarn_ACU('[交火模式纪要索引] 未找到可验证且不回退 revision 的 single_file_snapshot 对齐候选。');
-        return null;
-    }
-    const { path: snapshotPath, blob } = selected;
-    const blobManifest = blob.manifest;
-    if (blob.schema !== 'single_file_snapshot' || !blobManifest || blobManifest.snapshot?.mode !== 'single_file_snapshot') {
-        logSummaryVectorIndexIdentityEvent_ACU('warn', 'realign', 'snapshot_shape_rejected', {
-            manifest,
-            path: snapshotPath,
-        });
-        return null;
-    }
-    // V2 object identity is immutable. A raw empty key whose canonical scope is
-    // default is a known malformed write, not a legacy record that may be repointed.
-    const blobScope = normalizeSummaryVectorIndexScope_ACU({
-        chatKey: blob.chatKey,
-        isolationKey: blob.isolationKey,
-        sourceTableKey: blob.sourceTableKey,
-    });
-    const embeddedScope = normalizeSummaryVectorIndexScope_ACU({
-        chatKey: blobManifest.chatKey,
-        isolationKey: blobManifest.isolationKey,
-        sourceTableKey: blobManifest.sourceTableKey,
-    });
-    if (blob.storageIdentity && (blob.isolationKey !== blobScope.isolationKey || blobManifest.isolationKey !== embeddedScope.isolationKey)) {
-        logSummaryVectorIndexIdentityEvent_ACU('warn', 'realign', 'noncanonical_scope_rejected', {
-            manifest: blobManifest,
-            path: snapshotPath,
-            error: 'V2 单文件快照包含非 canonical isolationKey；拒绝将非 canonical 对象写回聊天指针。',
-        });
-        return null;
-    }
-    try {
-        // realign 是写 pointer 的自愈入口，不能维护一套缩水校验；必须复用正式 reader 契约。
-        validateSingleFileSnapshotIdentity_ACU(blobManifest, blob, snapshotPath);
-    }
-    catch (error) {
-        logSummaryVectorIndexIdentityEvent_ACU('warn', 'realign', 'identity_validation_failed', {
-            manifest: blobManifest,
-            path: snapshotPath,
-            error,
-        });
-        logWarn_ACU('[交火模式纪要索引] single_file_snapshot 指针对齐身份校验失败，拒绝 repoint:', error);
-        return null;
-    }
-    const isV2 = !!blob.storageIdentity;
-    const scopeMatches = (isV2
-        ? blobManifest.sourceTableKey === manifest.sourceTableKey
-            && blobManifest.chatKey === manifest.chatKey
-            && blobManifest.isolationKey === manifest.isolationKey
-        : normalizeText_ACU(blobManifest.sourceTableKey) === normalizeText_ACU(manifest.sourceTableKey)
-            && normalizeText_ACU(blobManifest.chatKey) === normalizeText_ACU(manifest.chatKey)
-            && normalizeSummaryVectorIsolationKey_ACU(blobManifest.isolationKey) === normalizeSummaryVectorIsolationKey_ACU(manifest.isolationKey))
-        && (!params.latestLayer || (isV2
-            ? blobManifest.isolationKey === normalizeSummaryVectorIsolationKey_ACU(params.latestLayer.isolationKey)
-            : normalizeSummaryVectorIsolationKey_ACU(blobManifest.isolationKey) === normalizeSummaryVectorIsolationKey_ACU(params.latestLayer.isolationKey)))
-        && (!params.liveRows || normalizeText_ACU(blob.sourceTableKey) === params.liveRows.summaryKey);
-    if (!scopeMatches) {
-        logSummaryVectorIndexIdentityEvent_ACU('warn', 'realign', 'scope_mismatch', { manifest: blobManifest, path: snapshotPath });
-        return null;
-    }
-    if (blobManifest.status !== 'ready') {
-        logSummaryVectorIndexIdentityEvent_ACU('warn', 'realign', 'not_ready', { manifest: blobManifest, path: snapshotPath });
-        return null;
-    }
-    if (normalizeText_ACU(blobManifest.manifestFile) !== snapshotPath
-        || normalizeText_ACU(blobManifest.rowsFile) !== snapshotPath
-        || normalizeText_ACU(blobManifest.tombstoneFile) !== snapshotPath) {
-        logSummaryVectorIndexIdentityEvent_ACU('warn', 'realign', 'canonical_path_mismatch', { manifest: blobManifest, path: snapshotPath });
-        return null;
-    }
-    const currentRevision = Number(manifest.snapshot?.revision || 0);
-    const diskRevision = Number(blobManifest.snapshot?.revision || 0);
-    if (diskRevision < currentRevision) {
-        logSummaryVectorIndexIdentityEvent_ACU('warn', 'realign', 'revision_stale', { manifest: blobManifest, path: snapshotPath });
-        return null;
-    }
-    const activeRowKeys = new Set(blobManifest.snapshot?.activeRowKeys || []);
-    const diskRows = (Array.isArray(blob.rows) ? blob.rows : [])
-        .filter((row) => row && row.status !== 'removed' && (activeRowKeys.size === 0 || activeRowKeys.has(row.rowKey)));
-    const reconciledDiskRows = filterRowsByLiveSummaryTable_ACU(diskRows, params.liveRows);
-    const reconciledRows = reconciledDiskRows.rows;
-    const alignedManifest = {
-        ...blobManifest,
-        manifestFile: snapshotPath,
-        rowsFile: snapshotPath,
-        tombstoneFile: snapshotPath,
-        status: 'ready',
-    };
-    const alignedState = {
-        ...params.state,
-        version: params.state.version || 1,
-        backend: 'st-files',
-        status: 'ready',
-        indexId: alignedManifest.indexId,
-        snapshotMessageId: alignedManifest.snapshotMessageId || normalizeText_ACU(blob.snapshotMessageId),
-        sourceTableKey: alignedManifest.sourceTableKey,
-        sourceTableName: alignedManifest.sourceTableName || normalizeText_ACU(blob.sourceTableName),
-        indexedAt: alignedManifest.indexedAt || normalizeText_ACU(blob.indexedAt) || new Date().toISOString(),
-        rowCount: reconciledRows.length || alignedManifest.rowCount,
-        chunkCount: alignedManifest.chunkCount,
-        skippedRowCount: alignedManifest.skippedRowCount,
-        rows: reconciledRows,
-        manifest: alignedManifest,
-    };
-    delete alignedState.chunks;
-    const layer = params.latestLayer;
-    const chat = getChatArray_ACU();
-    const message = layer ? chat[layer.messageIndex] : null;
-    if (!layer || !message)
-        return null;
-    const previousManifest = readIsolatedTagData_ACU(message, layer.isolationKey)
-        ?.summaryVectorIndexManifest
-        || layer.tagData?.summaryVectorIndexManifest
-        || null;
-    const expectedIndexId = previousManifest?.indexId || (layer.tagData?.summaryVectorIndexState?.manifest?.indexId) || undefined;
-    try {
-        await commitVectorMetadataPatch_ACU(message, layer.isolationKey, {
-            summaryVectorIndexState: alignedState,
-            summaryVectorIndexManifest: alignedManifest,
-        }, {
-            expectedIndexId,
-        });
-    }
-    catch (error) {
-        logSummaryVectorIndexIdentityEvent_ACU('warn', 'realign', 'strict_save_failed', { manifest: alignedManifest, path: snapshotPath, error });
-        logWarn_ACU('[交火模式纪要索引] 磁盘 pointer 对齐严格保存失败，已回滚内存状态:', error);
-        return null;
-    }
-    logSummaryVectorIndexIdentityEvent_ACU('debug', 'realign', 'accepted', { manifest: alignedManifest, path: snapshotPath });
-    logWarn_ACU(`[交火模式纪要索引] 已从 single_file_snapshot 磁盘文件对齐索引指针：indexId=${alignedManifest.indexId}, revision=${diskRevision}`);
-    return alignedState;
-}
 // T5：query embedding 失败时的降级路径 —— 仅注入最近固定行，不依赖向量检索。
 // 仅在 recentFixedRows 非空时调用；调用方负责确认 recentFixedRows.length > 0。
 async function injectRecentFixedRowsOnly_ACU(recentFixedRows) {
@@ -131660,11 +131600,13 @@ async function deleteCurrentSummaryVectorIndexFromChat_ACU() {
             const tagData = container?.[isolationKey];
             if (!tagData?.storageFrame?.summaryVectorIndexFrame)
                 return false;
-            delete tagData.storageFrame.summaryVectorIndexFrame;
-            // 容器以字符串形态存在于楼层上时必须写回，否则剥掉的只是内存副本。
-            if (typeof message.TavernDB_ACU_IsolatedData === 'string') {
-                message.TavernDB_ACU_IsolatedData = JSON.stringify(container);
-            }
+            // 写时复制后整体赋值（R5-11）：纯 V2 楼层上 metadata patch 是 no-op、不会换新容器，
+            // 原地删除会连带改掉事务快照引用的同一对象，严格保存失败时回滚就成了空操作。
+            const { summaryVectorIndexFrame: _removed, ...restFrame } = tagData.storageFrame;
+            const nextContainer = { ...container, [isolationKey]: { ...tagData, storageFrame: restFrame } };
+            message.TavernDB_ACU_IsolatedData = typeof message.TavernDB_ACU_IsolatedData === 'string'
+                ? JSON.stringify(nextContainer)
+                : nextContainer;
             return true;
         },
     });
@@ -151320,18 +151262,21 @@ async function applyPurgeResultToUi_ACU(result) {
         showToastr_ACU('success', `已删除所有本地数据（${result.clearedMessageCount} 条消息）${removed}。`);
     }
 }
+// 召回链路只读新版镜像（R5-06）：旧版指针迁移写出的仍是旧字段，召回照样要求重建。
+// 因此「迁移」直接按当前纪要表重建新版镜像，重建会顺带清掉旧版向量字段。
 async function migrateLegacySummaryVectorIndex_ACU() {
     try {
-        const result = await migrateLegacySummaryVectorIndexToContentAddressed_ACU();
+        if (!chatHasLegacySummaryVectorFields_ACU(getChatArray_ACU())) {
+            showToastr_ACU('info', '当前聊天没有可迁移的旧交火索引。');
+            return { success: true, skipped: true, indexedRowCount: 0, skippedRowCount: 0, chunkCount: 0, reason: 'no_legacy_vector_index', errors: [] };
+        }
+        const result = await rebuildCurrentSummaryVectorIndexNow_ACU({ reason: 'initial' });
         if (result.success && !result.skipped) {
-            showToastr_ACU('success', `旧交火索引已非破坏迁移：${result.indexedRowCount || 0} 行，${result.chunkCount || 0} 个 chunks。旧外置文件仍保留给历史楼层回退使用。`);
+            showToastr_ACU('success', `旧交火索引已按当前纪要表重建为新版索引：${result.indexedRowCount || 0} 行，${result.chunkCount || 0} 个 chunks。`);
             return result;
         }
         if (result.success && result.skipped) {
-            const reason = result.reason === 'already_content_addressed'
-                ? '当前交火索引已经是内容寻址协议，无需迁移。'
-                : '当前聊天没有可迁移的旧交火索引。';
-            showToastr_ACU('info', reason);
+            showToastr_ACU('info', `交火索引未重建：${result.reason || '没有可索引的纪要'}`);
             return result;
         }
         const reasonText = result.errors?.length ? result.errors.join('；') : (result.reason || '未知原因');
@@ -154123,7 +154068,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261007-16";
+        const stamp = "20261007-17";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -207634,11 +207579,12 @@ function useVectorIndexConfig() {
                 notify('info', '当前没有可迁移的旧交火索引。', { muteable: false });
                 return;
             }
-            notifyProgress('正在迁移旧交火索引...');
-            const result = await migrateLegacySummaryVectorIndexToContentAddressed_ACU();
+            // 召回只读新版镜像：旧版指针迁移无效，直接按当前纪要表重建（顺带清掉旧版字段）。
+            notifyProgress('正在按当前纪要表重建交火索引...');
+            const result = await rebuildCurrentSummaryVectorIndexNow_ACU({ reason: 'initial' });
             await refreshIndexStatus(false);
             if (result.success && !result.skipped) {
-                notify('success', `旧交火索引非破坏迁移完成：${result.indexedRowCount || 0} 行，${result.chunkCount || 0} 个 chunks。新 V2 pointer 已 durable 发布；旧外置对象未在主提交路径删除，后续由安全 GC 处理。`, { muteable: false });
+                notify('success', `旧交火索引已重建为新版索引：${result.indexedRowCount || 0} 行，${result.chunkCount || 0} 个 chunks。`, { muteable: false });
                 return;
             }
             const reason = result.errors?.length

@@ -500,6 +500,8 @@ export type {
 export interface SummaryVectorMirrorManifestRow_ACU {
     rowId: string;
     chunks: SummaryVectorChunkRef_ACU[];
+    /** 写入该行向量时的源文本哈希；旧 manifest 没有此字段，需回读 pack chunk 的 textHash。 */
+    vectorSourceHash?: string;
 }
 
 export interface SummaryVectorMirrorManifestRows_ACU {
@@ -556,8 +558,10 @@ export interface SummaryVectorMirrorHeadResult_ACU {
     head: Map<string, SummaryVectorChunkRef_ACU[]>;
     /** sha256(checkpoint.vectorRevision + 按序 applied delta entryId)。对 messageIndex 位移不敏感。 */
     vectorRevision: string;
-    /** head 引用的全部 pack（checkpoint + applied delta，按 packHash 去重）。 */
+    /** head 行实际引用到的 pack（按 packHash 去重）；被 refresh 取代、已无行引用的旧 pack 不列出。 */
     packRefs: SummaryVectorPackRef_ACU[];
+    /** rowId → 写入该行向量时的源文本哈希（未知时缺省），用于 flush 判断正文是否变化。 */
+    rowSourceHashes?: Map<string, string>;
     /** 按应用顺序排列的 vector delta entryId。 */
     appliedDeltaEntryIds: string[];
     /** 已镜像的 table entryId（applied delta 的 sourceTableEntry.entryId）。 */

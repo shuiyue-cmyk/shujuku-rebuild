@@ -422,6 +422,7 @@ export async function resolveSummaryVectorMirrorHead_ACU(
     }
 
     const head = new Map<string, SummaryVectorChunkRef_ACU[]>();
+    const rowSourceHashes = new Map<string, string>();
     for (const row of manifest.rows) {
         if (!isPlainObject_ACU(row) || !isNonEmptyString_ACU(row.rowId) || !Array.isArray(row.chunks)) continue;
         if (head.has(row.rowId)) {
@@ -433,6 +434,8 @@ export async function resolveSummaryVectorMirrorHead_ACU(
             });
         }
         head.set(row.rowId, (row.chunks as SummaryVectorChunkRef_ACU[]).filter(isChunkRef_ACU).map((chunk) => ({ ...chunk })));
+        if (isNonEmptyString_ACU((row as any).vectorSourceHash)) rowSourceHashes.set(row.rowId, (row as any).vectorSourceHash);
+        else rowSourceHashes.delete(row.rowId);
     }
 
     const packRefsByHash = new Map<string, SummaryVectorPackRef_ACU>();
@@ -529,8 +532,11 @@ export async function resolveSummaryVectorMirrorHead_ACU(
             for (const operation of delta.operations) {
                 if (operation.kind === 'row_add') {
                     head.set(operation.rowId, operation.chunks.map((chunk) => ({ ...chunk })));
+                    if (isNonEmptyString_ACU(operation.vectorSourceHash)) rowSourceHashes.set(operation.rowId, operation.vectorSourceHash);
+                    else rowSourceHashes.delete(operation.rowId);
                 } else {
                     head.delete(operation.rowId);
+                    rowSourceHashes.delete(operation.rowId);
                 }
             }
             delta.packRefs.forEach((packRef) => {
@@ -541,6 +547,8 @@ export async function resolveSummaryVectorMirrorHead_ACU(
         }
     }
 
+    const usedPackHashes = new Set<string>();
+    head.forEach((chunks) => chunks.forEach((chunk) => usedPackHashes.add(chunk.packHash)));
     return {
         status: 'ok',
         sourceTableKey,
@@ -548,7 +556,10 @@ export async function resolveSummaryVectorMirrorHead_ACU(
         checkpoint,
         head,
         vectorRevision: computeSummaryVectorMirrorHeadRevision_ACU(checkpoint.vectorRevision, appliedDeltaEntryIds),
-        packRefs: Array.from(packRefsByHash.values()),
+        // 只列 head 行实际引用的 pack：被 refresh 取代的旧 pack 召回时不必再下载（R5-02）。
+        // GC 可达性另按原始 frame 收集，不受此处影响。
+        packRefs: Array.from(packRefsByHash.values()).filter((ref) => usedPackHashes.has(ref.packHash)),
+        rowSourceHashes,
         appliedDeltaEntryIds,
         appliedTableEntryIds,
         stale,

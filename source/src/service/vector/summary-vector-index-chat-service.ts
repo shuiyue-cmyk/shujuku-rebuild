@@ -275,11 +275,13 @@ export async function deleteCurrentSummaryVectorIndexFromChat_ACU(): Promise<boo
             const container = readIsolatedDataContainer_ACU(message);
             const tagData = container?.[isolationKey];
             if (!tagData?.storageFrame?.summaryVectorIndexFrame) return false;
-            delete tagData.storageFrame.summaryVectorIndexFrame;
-            // 容器以字符串形态存在于楼层上时必须写回，否则剥掉的只是内存副本。
-            if (typeof message.TavernDB_ACU_IsolatedData === 'string') {
-                message.TavernDB_ACU_IsolatedData = JSON.stringify(container);
-            }
+            // 写时复制后整体赋值（R5-11）：纯 V2 楼层上 metadata patch 是 no-op、不会换新容器，
+            // 原地删除会连带改掉事务快照引用的同一对象，严格保存失败时回滚就成了空操作。
+            const { summaryVectorIndexFrame: _removed, ...restFrame } = tagData.storageFrame;
+            const nextContainer = { ...container, [isolationKey]: { ...tagData, storageFrame: restFrame } };
+            message.TavernDB_ACU_IsolatedData = typeof message.TavernDB_ACU_IsolatedData === 'string'
+                ? JSON.stringify(nextContainer)
+                : nextContainer;
             return true;
         },
     });

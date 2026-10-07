@@ -274,7 +274,7 @@ describe('resolveSummaryVectorMirrorHead_ACU 状态判定', () => {
 });
 
 describe('resolveSummaryVectorMirrorHead_ACU delta 应用', () => {
-  it('checkpoint + 多层 add/remove 得到正确 head，并汇总 packRefs 与 applied entryId', async () => {
+  it('checkpoint + 多层 add/remove 得到正确 head，并只汇总 head 行仍引用的 packRefs 与 applied entryId', async () => {
     const chat = [
       user(),
       ai(fullFrame({ entries: [tableEntry('c1')], deltas: [delta({ seq: 1, entryId: 'vc1', sourceEntryId: 'c1', ops: [add('3', 'p1')] })] })),
@@ -289,7 +289,8 @@ describe('resolveSummaryVectorMirrorHead_ACU delta 应用', () => {
     expect(result.head.get('3')).toEqual([{ packHash: 'p1', chunkIndex: 0 }]);
     expect(result.appliedDeltaEntryIds).toEqual(['vc1', 'v2', 'v3']);
     expect(result.appliedTableEntryIds).toEqual(['c1', 'e2', 'e3']);
-    expect(result.packRefs.map((ref) => ref.packHash).sort()).toEqual(['p0', 'p1', 'p2']);
+    // 行 4 已被移除，p2 不再被任何 head 行引用，召回无需下载（块 5 复审 R5-02）。
+    expect(result.packRefs.map((ref) => ref.packHash).sort()).toEqual(['p0', 'p1']);
     expect(result.stale).toBe(false);
     expect(result.chainConflict).toBe(false);
     expect(result.diagnostics).toEqual([]);

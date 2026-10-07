@@ -33,21 +33,24 @@ import type {
     TableMutationWriteSetV2_ACU,
     TableStorageFrameV2_ACU,
 } from '../table/storage-frame-v2-types';
-import { hashUserInput_ACU, isSummaryOrOutlineTable_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { hashUserInput_ACU, logDebug_ACU, logWarn_ACU, pickSummarySheetKeyByPriority_ACU } from '../../shared/utils';
 import { normalizeSummaryVectorIndexScope_ACU, toChatIsolationSlotKey_ACU } from '../../shared/summary-vector-index-scope';
 import { buildPreparedRows_ACU, buildRowChunkTexts_ACU, findSummaryTable_ACU } from './summary-vector-index-archive-service';
 import { getEffectiveSummaryVectorIndexConfig_ACU, validateSummaryVectorIndexConfig_ACU } from './vector-memory-config';
 import { SUMMARY_VECTOR_SOURCE_TEXT_VERSION_ACU } from './summary-vector-row-fingerprint';
-import { resolveSummaryVectorMirrorHead_ACU, summaryVectorEmbeddingIdentityEquals_ACU } from './summary-vector-mirror-resolver';
+import { collectSummaryVectorMirrorFrameRefs_ACU, resolveSummaryVectorMirrorHead_ACU, summaryVectorEmbeddingIdentityEquals_ACU } from './summary-vector-mirror-resolver';
 import {
     discardSummaryVectorMirrorPreparedFiles_ACU,
     encodeSummaryVectorMirrorVector_ACU,
     finalizeSummaryVectorMirrorFiles_ACU,
     loadSummaryVectorMirrorManifest_ACU,
+    loadSummaryVectorMirrorPack_ACU,
     persistSummaryVectorMirrorPackPrepared_ACU,
 } from './summary-vector-mirror-storage';
 import type { SummaryVectorIndexContentPackChunk_ACU, SummaryVectorIndexExternalFileRef_ACU } from './summary-vector-index-types';
 import type { SummaryVectorMirrorHeadResult_ACU } from './summary-vector-index-types';
+import { createSummaryVectorMirrorUndoLog_ACU } from './summary-vector-mirror-undo';
+import { assertSummaryVectorFlushGenerationCurrent_ACU, SummaryVectorFlushGenerationInvalidatedError_ACU } from '../../data/storage/vector-index-hot-cache';
 
 export interface SummaryVectorMirrorFlushResult_ACU {
     success: boolean;
@@ -107,20 +110,13 @@ export function findTouchedSummarySheetKey_ACU(options: {
         : [];
     const candidates = [...new Set([...fromKeys, ...fromWriteSet].map((key) => String(key || '').trim()).filter(Boolean))];
     if (options.writeSet?.some((unit) => unit?.kind === 'all')) {
-        for (const [sheetKey, sheet] of Object.entries(tableData)) {
-            if (!sheetKey.startsWith('sheet_')) continue;
-            if (sheet && typeof sheet === 'object' && isSummaryOrOutlineTable_ACU(String((sheet as any).name || ''))) {
-                return sheetKey;
-            }
-        }
+        const picked = pickSummarySheetKeyByPriority_ACU(
+            Object.keys(tableData).filter((key) => key.startsWith('sheet_')),
+            (key) => tableData[key]?.name,
+        );
+        if (picked) return picked;
     }
-    for (const sheetKey of candidates) {
-        const sheet = tableData[sheetKey];
-        if (sheet && typeof sheet === 'object' && isSummaryOrOutlineTable_ACU(String(sheet.name || ''))) {
-            return sheetKey;
-        }
-    }
-    return null;
+    return pickSummarySheetKeyByPriority_ACU(candidates, (key) => tableData[key]?.name);
 }
 
 export function planUnmirroredEntryDeltasV2_ACU(
@@ -183,28 +179,78 @@ function generateVectorDeltaEntryId_ACU(): string {
     return `vdelta_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function snapshotIsolatedData_ACU(chat: any[], messageIndices: number[]): Array<{
-    message: any;
-    existed: boolean;
-    value: any;
-}> {
-    return [...new Set(messageIndices)].map((index) => {
-        const message = chat[index];
-        const existed = !!message && Object.prototype.hasOwnProperty.call(message, 'TavernDB_ACU_IsolatedData');
-        return {
-            message,
-            existed,
-            value: existed ? JSON.parse(JSON.stringify(message.TavernDB_ACU_IsolatedData)) : undefined,
-        };
-    });
+/**
+ * 当前隔离槽全部镜像 frame 的结构签名（checkpoint 修订号 + 各层 delta entryId）。
+ * writer 与 rebuild 之间没有互斥，派生写入也不 bump 表格修订号（R5-07）：
+ * 提交前比对签名，镜像在 embedding 期间被改写过就放弃本次计划，交回队列按新 head 重放。
+ */
+function computeSummaryVectorMirrorFramesSignature_ACU(chat: any[], isolationKey: string): string {
+    return collectSummaryVectorMirrorFrameRefs_ACU(chat, isolationKey)
+        .map((ref) => {
+            const mirror = ref.frame.summaryVectorIndexFrame;
+            const deltaIds = (mirror?.logEntries || []).map((entry) => String(entry?.entryId || '')).join(',');
+            return `${ref.messageIndex}:${mirror?.checkpoint?.vectorRevision || ''}:${deltaIds}`;
+        })
+        .join('|');
 }
 
-function restoreIsolatedData_ACU(snapshots: Array<{ message: any; existed: boolean; value: any }>): void {
-    for (const snapshot of snapshots) {
-        if (!snapshot.message) continue;
-        if (snapshot.existed) snapshot.message.TavernDB_ACU_IsolatedData = snapshot.value;
-        else delete snapshot.message.TavernDB_ACU_IsolatedData;
+async function collectKnownHeadRowHashes_ACU(
+    head: SummaryVectorMirrorHeadResult_ACU,
+    rowIds: string[],
+): Promise<Map<string, string>> {
+    const known = new Map<string, string>();
+    const unknown: string[] = [];
+    for (const rowId of rowIds) {
+        const hash = head.rowSourceHashes?.get(rowId);
+        if (hash) known.set(rowId, hash);
+        else unknown.push(rowId);
     }
+    if (unknown.length === 0) return known;
+    // 旧 manifest 未记录哈希：回读该行引用的 pack chunk，用写入时的 textHash 判定。读不到按未知处理（照常重嵌）。
+    const packRefsByHash = new Map(head.packRefs.map((ref) => [ref.packHash, ref]));
+    const packCache = new Map<string, Awaited<ReturnType<typeof loadSummaryVectorMirrorPack_ACU>>>();
+    for (const rowId of unknown) {
+        const refs = head.head.get(rowId) || [];
+        const hashes = new Set<string>();
+        for (const ref of refs) {
+            if (!packCache.has(ref.packHash)) {
+                const packRef = packRefsByHash.get(ref.packHash);
+                let pack: Awaited<ReturnType<typeof loadSummaryVectorMirrorPack_ACU>> = null;
+                try {
+                    pack = packRef ? await loadSummaryVectorMirrorPack_ACU(packRef) : null;
+                } catch {
+                    pack = null;
+                }
+                packCache.set(ref.packHash, pack);
+            }
+            hashes.add(String(packCache.get(ref.packHash)?.chunks?.[ref.chunkIndex]?.textHash || ''));
+        }
+        const [only] = [...hashes];
+        if (hashes.size === 1 && only) known.set(rowId, only);
+    }
+    return known;
+}
+
+async function dropUnchangedRefreshes_ACU(
+    plans: UnmirroredEntryDeltaPlanV2_ACU[],
+    head: SummaryVectorMirrorHeadResult_ACU,
+    rowsById: Map<string, { vectorSourceHash: string }>,
+): Promise<UnmirroredEntryDeltaPlanV2_ACU[]> {
+    const refreshCandidates = [...new Set(plans.flatMap((plan) => plan.refreshed || []))];
+    if (refreshCandidates.length === 0) return plans;
+    const known = await collectKnownHeadRowHashes_ACU(head, refreshCandidates);
+    const unchanged = new Set(refreshCandidates.filter((rowId) => {
+        const liveHash = String(rowsById.get(rowId)?.vectorSourceHash || '');
+        return !!liveHash && known.get(rowId) === liveHash;
+    }));
+    if (unchanged.size === 0) return plans;
+    return plans
+        .map((plan): UnmirroredEntryDeltaPlanV2_ACU => {
+            const refreshed = (plan.refreshed || []).filter((rowId) => !unchanged.has(rowId));
+            const { refreshed: _dropped, ...rest } = plan;
+            return refreshed.length > 0 ? { ...rest, refreshed } : rest;
+        })
+        .filter((plan) => plan.added.length > 0 || plan.removed.length > 0 || (plan.refreshed?.length || 0) > 0);
 }
 
 export async function flushSummaryVectorMirrorNow_ACU(options: {
@@ -324,7 +370,8 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
         });
     }
 
-    const plans = planUnmirroredEntryDeltasV2_ACU(
+    const mirrorSignature = computeSummaryVectorMirrorFramesSignature_ACU(chat, isolationKey);
+    let plans = planUnmirroredEntryDeltasV2_ACU(
         timeline.entries,
         head.appliedTableEntryIds,
         timeline.rowIdsAtCheckpoint,
@@ -351,6 +398,16 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
         { isolationKey },
     );
     const rowsById = new Map(prepared.rows.map((row) => [row.rowId, row]));
+    // 时间线只看 rowId，看不出正文是否变化：refresh 前比对 head 中该行写入时的源文本哈希，
+    // 只重嵌真正变了的行（R5-02），否则每次 flush 都会把整张表重嵌一遍。
+    plans = await dropUnchangedRefreshes_ACU(plans, head, rowsById);
+    if (plans.length === 0) {
+        return emptyResult_ACU({
+            success: true,
+            skipped: true,
+            reason: 'no_changed_rows',
+        });
+    }
     const addedRowIds = [...new Set(plans.flatMap((plan) => [
         ...plan.added,
         ...(plan.refreshed || []),
@@ -458,7 +515,9 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
         });
     }
 
-    const snapshots = snapshotIsolatedData_ACU(chat, plans.map((plan) => plan.messageIndex));
+    // 只撤销本次亲手写入的镜像字段（在锁内登记），不能整块覆盖楼层数据：
+    // 等锁期间别的写入方可能已向同一楼层提交了表格 entry。
+    const undo = createSummaryVectorMirrorUndoLog_ACU();
     let writtenDeltaCount = 0;
     try {
         await runTableWriteTransaction_ACU({
@@ -471,6 +530,13 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
             workingDataMode: 'none',
         }, async (ctx) => {
             ctx.assertFresh?.('vector_mirror:before_delta_write');
+            // 队列墓碑协议（R5-10）：删除索引 / 清空队列后，在飞的 flush 不得再提交。
+            if (options.expectedFlushScopeKey && options.expectedFlushGeneration != null) {
+                await assertSummaryVectorFlushGenerationCurrent_ACU(options.expectedFlushScopeKey, options.expectedFlushGeneration);
+            }
+            if (computeSummaryVectorMirrorFramesSignature_ACU(chat, isolationKey) !== mirrorSignature) {
+                throw new Error('summary_vector_mirror_stale_head：embedding 期间镜像已被改写（重建或其他 flush），放弃本次计划。');
+            }
             await ctx.runCommit(async () => {
                 for (const plan of plans) {
                     const frame = getStorageFrame_ACU(chat, isolationKey, plan.messageIndex);
@@ -478,8 +544,12 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
                         logDebug_ACU(`[向量镜像] 丢弃已失效来源 entry 的 delta：entryId=${plan.entryId}, messageIndex=${plan.messageIndex}`);
                         continue;
                     }
-                    const mirror: SummaryVectorIndexMirrorFrameV2_ACU = frame.summaryVectorIndexFrame && typeof frame.summaryVectorIndexFrame === 'object'
+                    // 浅拷贝后再改，旧镜像对象保持原样以便回滚。
+                    const existingMirror = frame.summaryVectorIndexFrame && typeof frame.summaryVectorIndexFrame === 'object'
                         ? frame.summaryVectorIndexFrame
+                        : null;
+                    const mirror: SummaryVectorIndexMirrorFrameV2_ACU = existingMirror
+                        ? { ...existingMirror, logEntries: [...(existingMirror.logEntries || [])] }
                         : { version: 3, sourceTableKey: selected.summaryKey, logEntries: [] };
                     let nextSeq = Math.max(0, ...(mirror.logEntries || []).map((entry) => Number(entry.seq) || 0));
                     const appendDelta = (
@@ -531,22 +601,26 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
                         }];
                     }), packPersist, additions.filter((rowId) => !chunkRefsByRowId.has(rowId)).length || undefined);
 
-                    frame.summaryVectorIndexFrame = {
+                    undo.set(frame as any, 'summaryVectorIndexFrame', {
                         ...mirror,
                         sourceTableKey: selected.summaryKey,
                         logEntries: [...(mirror.logEntries || [])],
-                    };
+                    });
                 }
                 if (writtenDeltaCount === 0) return;
                 await saveChatToHostStrict_ACU();
             });
         });
     } catch (error: any) {
-        restoreIsolatedData_ACU(snapshots);
+        undo.rollback();
         // 提交失败 → 本次不会再 finalize，prepared pack 永远不会被引用（GC 出于保护 finalize 窗口
         // 而保留所有 prepared pack），不主动回收就会永久累积。走统一回收（含 ok 检查与 registry 注销）。
         if (packPersist?.file && packPersist.createdNew !== false) {
             await discardSummaryVectorMirrorPreparedFiles_ACU([packPersist.file], 'delta 提交失败');
+        }
+        if (error instanceof SummaryVectorFlushGenerationInvalidatedError_ACU) {
+            // 与队列墓碑协议一致：任务已被作废，按跳过处理，不记失败、不重试。
+            return emptyResult_ACU({ success: true, skipped: true, reason: 'flush_scope_invalidated' });
         }
         return emptyResult_ACU({
             reason: 'vector_mirror_commit_failed',

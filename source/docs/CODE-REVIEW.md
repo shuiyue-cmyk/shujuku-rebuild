@@ -119,11 +119,23 @@
 | R6-12 删除生成条目两份副本 | P3 | 已修：合并为 pipeline 一份 | — |
 | R6-13 绕过协调器的作用域直写函数 | P3 | 已修：删除（含仅供其使用的辅助函数与 import） | — |
 | R6-14 开场白抑制死分支 | P3 | 已修：删除分支 | — |
+| R5-01 镜像 flush/重建失败整块回滚吞掉并发提交 | P1 | 已修：改为锁内登记的字段级撤销日志，只撤销仍是自己写入值的镜像/legacy 字段；旧镜像对象不再原地改动 | summary-vector-mirror-review-block5.test「R5-01」×3 |
+| R5-02 每次 flush 全表重嵌、召回下载全部历史 pack | P2 | 已修：refresh 前比对写入时源文本哈希（manifest 行与 row_add 记录哈希，旧 manifest 回读 pack textHash），只重嵌变化行；resolver 只输出 head 行仍引用的 pack | 同上「R5-02」×3、resolver.test 期望更新 |
+| R5-03 重建失败回收删掉在用 manifest | P2 | 已修：manifest 与 pack 同口径先读后写，已存在则复用（createdNew:false），不降级、不回收 | summary-vector-mirror-manifest-reuse.test |
+| R5-04 GC 可达性只看当前聊天（分支/改名聊天的引用被删） | P2 | 未修：需产品取舍（宁可多占存储 vs 及时回收），待定 | — |
+| R5-05 镜像不可用时 fold 抛错阻塞 compaction | P2 | 已修：head 非 ok / pack 或 chunk 读不到时剥掉镜像让下次 flush 自动 initial 重建，不再抛错 | summary-vector-mirror-fold-degrade.test |
+| R5-06 迁移旧交火索引写出召回不读的旧指针 | P2 | 已修：对外 API 与 v2 页面入口改为按当前纪要表重建新版镜像（会清旧字段） | data-admin-ui-legacy-vector.test |
+| R5-07 writer 与 rebuild 无互斥 | P2 | 已修：提交前比对镜像结构签名，embedding 期间被改写即放弃交回队列 | 同上「R5-07」 |
+| R5-08 legacy realign 死代码 | P3 | 已修：删除三个函数及只被其使用的 import（legacy 整套是否下线另议） | — |
+| R5-09 全部复用时维度赋值空操作 | P3 | 已修：取复用 pack 的实际维度 | manifest-reuse.test「R5-09」 |
+| R5-10 flush 代次墓碑在新链路失效 | P3 | 已修：提交前校验代次，失效按 flush_scope_invalidated 跳过 | 同上「R5-10」 |
+| R5-11 删除索引在纯 V2 楼层回滚为空操作 | P3 | 已修：写时复制后整体赋值 | chat-service.test「R5-11」 |
+| R5-12 纪要表选取依赖键顺序 / rowId 口径 | P3 | 部分：选取改为纪要表>总结表>总体大纲并全仓共用；rowId 口径未改（缺 row_id 的行已在加载时被清理，实际影响小） | scope-resolver-priority.test |
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
 R2B-08/09（迁移、混合提交、batch 写入的整聊天克隆替换）与上面同一模式但无 await 窗口，未改，留作 P3。
 
-待修：块 5 全部；R2A-07（多 staging 组汇合后丢 pre 段）、R2A-04 第 2 部分、R2B-04/05/06（待坐实）、R4-06（待坐实）/07/08、各块 P3。
+待修：R5-04（待产品取舍）；R2A-07（多 staging 组汇合后丢 pre 段）、R2A-04 第 2 部分、R2B-04/05/06（待坐实）、R4-06（待坐实）/07/08、各块 P3。
 R4-02 遗留：模型放弃补齐时，草稿（partial）不会阻止水位推进——只在提升路径堵住了「写齐却看不见」，「没写齐就收工」仍按旧口径。
 
 测试稳定性：重型页面套件首个用例冷导入整张 V2 模块图单跑 11–15s，贴着原全局 15s 上限，本机并行全量必超时（发布基线同样失败）；全局 testTimeout 调为 60s。

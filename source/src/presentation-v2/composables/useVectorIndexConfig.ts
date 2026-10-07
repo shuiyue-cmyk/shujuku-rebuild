@@ -21,7 +21,6 @@ import {
 } from '../../service/vector/vector-memory-config';
 
 import {
-  migrateLegacySummaryVectorIndexToContentAddressed_ACU,
 } from '../../service/vector/summary-vector-index-archive-service';
 import {
   rebuildCurrentSummaryVectorIndexNow_ACU
@@ -580,11 +579,12 @@ export function useVectorIndexConfig() {
         return;
       }
 
-      notifyProgress('正在迁移旧交火索引...');
-      const result = await migrateLegacySummaryVectorIndexToContentAddressed_ACU();
+      // 召回只读新版镜像：旧版指针迁移无效，直接按当前纪要表重建（顺带清掉旧版字段）。
+      notifyProgress('正在按当前纪要表重建交火索引...');
+      const result = await rebuildCurrentSummaryVectorIndexNow_ACU({ reason: 'initial' });
       await refreshIndexStatus(false);
       if (result.success && !result.skipped) {
-        notify('success', `旧交火索引非破坏迁移完成：${result.indexedRowCount || 0} 行，${result.chunkCount || 0} 个 chunks。新 V2 pointer 已 durable 发布；旧外置对象未在主提交路径删除，后续由安全 GC 处理。`, { muteable: false });
+        notify('success', `旧交火索引已重建为新版索引：${result.indexedRowCount || 0} 行，${result.chunkCount || 0} 个 chunks。`, { muteable: false });
         return;
       }
 

@@ -225,6 +225,37 @@ export async function persistSummaryVectorMirrorManifestPrepared_ACU(params: {
         ...scope,
         manifestHash,
     });
+    // 与 pack 同口径：内容寻址路径已存在且内容一致时复用既有对象（R5-03）。
+    // 不得重新上传并降级成 prepared，失败回收也不能删除它——旧 checkpoint 可能正引用这份 manifest。
+    const existing = await readVectorIndexJsonFile_ACU<SummaryVectorMirrorManifestRows_ACU>(path);
+    if (existing.ok && existing.data) {
+        const existingJson = JSON.stringify({
+            schema: existing.data.schema,
+            version: existing.data.version,
+            sourceTableKey: existing.data.sourceTableKey,
+            rows: existing.data.rows,
+        });
+        if (await sha256Text_ACU(existingJson) !== manifestHash) {
+            throw new Error(`镜像 manifest 路径冲突：path=${path} 已存在但内容与 manifestHash=${manifestHash} 不一致。`);
+        }
+        const now = new Date().toISOString();
+        return {
+            ref: { manifestHash, path, byteLength: existingJson.length },
+            file: {
+                role: 'manifest',
+                path,
+                byteSize: existingJson.length,
+                checksum: await sha256Text_ACU(existingJson),
+                rowCount: payload.rows.length,
+                createdAt: now,
+                updatedAt: now,
+                status: 'ready',
+                scope,
+                publicationState: 'prepared',
+            },
+            createdNew: false,
+        };
+    }
     const uploaded = await uploadVectorIndexJsonFile_ACU({
         path,
         role: 'manifest',
@@ -245,6 +276,7 @@ export async function persistSummaryVectorMirrorManifestPrepared_ACU(params: {
             byteLength: Number(uploaded.ref.byteSize) || JSON.stringify(payload).length,
         },
         file: uploaded.ref,
+        createdNew: true,
     };
 }
 

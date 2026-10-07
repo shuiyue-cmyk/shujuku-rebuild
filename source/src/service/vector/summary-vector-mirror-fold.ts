@@ -2,7 +2,10 @@
  * service/vector/summary-vector-mirror-fold.ts — compaction 时把 vector head 折到新锚点
  *
  * 纯 I/O：resolver(楼层 < anchor) → 合并 pack + 新 manifest → 写 checkpoint@anchor →
- * 删除旧 checkpoint 与 anchor 前 delta。零 embedding。失败抛错，由 compaction 回滚消息字段。
+ * 删除旧 checkpoint 与 anchor 前 delta。零 embedding。上传失败抛错，由 compaction 回滚消息字段。
+ *
+ * 镜像本身不可用（head 非 ok、pack/chunk 读不到）时不抛错（R5-05）：派生索引坏了不能挡住主数据
+ * 的 checkpoint 滚动。此时剥掉当前隔离槽的全部镜像 frame，下一次 flush 走 no_mirror → initial 重建。
  */
 
 import { currentChatFileIdentifier_ACU } from '../runtime/state-manager';
@@ -14,7 +17,7 @@ import type {
     TableStorageFrameV2_ACU,
 } from '../table/storage-frame-v2-types';
 import { normalizeSummaryVectorIndexScope_ACU } from '../../shared/summary-vector-index-scope';
-import { isSummaryOrOutlineTable_ACU, logDebug_ACU } from '../../shared/utils';
+import { logDebug_ACU, logWarn_ACU, pickSummarySheetKeyByPriority_ACU } from '../../shared/utils';
 import { collectSummaryVectorMirrorFrameRefs_ACU, computeSummaryVectorMirrorCheckpointRevision_ACU, resolveSummaryVectorMirrorHead_ACU } from './summary-vector-mirror-resolver';
 import {
     discardSummaryVectorMirrorPreparedFiles_ACU,
@@ -34,13 +37,16 @@ export interface FoldSummaryVectorMirrorResult_ACU {
 
 function findSummarySheetKeyInCheckpoint_ACU(data: Record<string, any> | null | undefined): string | null {
     if (!data || typeof data !== 'object') return null;
-    for (const [sheetKey, sheet] of Object.entries(data)) {
-        if (!sheetKey.startsWith('sheet_')) continue;
-        if (sheet && typeof sheet === 'object' && isSummaryOrOutlineTable_ACU(String((sheet as any).name || ''))) {
-            return sheetKey;
-        }
+    const sheetKeys = Object.keys(data).filter((key) => key.startsWith('sheet_'));
+    return pickSummarySheetKeyByPriority_ACU(sheetKeys, (key) => (data[key] as any)?.name);
+}
+
+function stripAllSummaryVectorMirrorFrames_ACU(chat: any[], isolationKey: string, reason: string): FoldSummaryVectorMirrorResult_ACU {
+    for (const ref of collectSummaryVectorMirrorFrameRefs_ACU(chat, isolationKey)) {
+        delete ref.frame.summaryVectorIndexFrame;
     }
-    return null;
+    logWarn_ACU(`[向量镜像] 折叠时镜像不可用（${reason}），已移除镜像以免阻塞表格整理；下次同步将重建向量索引。`);
+    return { folded: false, files: [] };
 }
 
 function getFrame_ACU(chat: any[], isolationKey: string, messageIndex: number): TableStorageFrameV2_ACU | null {
@@ -71,14 +77,14 @@ export async function foldSummaryVectorMirrorAtBoundary_ACU(params: {
         return { folded: false, files: [] };
     }
     if (head.status !== 'ok') {
-        throw new Error(`向量镜像折叠失败：resolver status=${head.status}`);
+        return stripAllSummaryVectorMirrorFrames_ACU(params.chat, params.isolationKey, `resolver status=${head.status}`);
     }
 
     const embedding = head.checkpoint?.embedding || buildCurrentSummaryVectorEmbeddingIdentity_ACU();
     const packByHash = new Map<string, Awaited<ReturnType<typeof loadSummaryVectorMirrorPack_ACU>>>();
     for (const packRef of head.packRefs) {
         const pack = await loadSummaryVectorMirrorPack_ACU(packRef);
-        if (!pack) throw new Error(`向量镜像折叠失败：无法读取 pack ${packRef.packHash}`);
+        if (!pack) return stripAllSummaryVectorMirrorFrames_ACU(params.chat, params.isolationKey, `无法读取 pack ${packRef.packHash}`);
         packByHash.set(packRef.packHash, pack);
     }
 
@@ -89,7 +95,7 @@ export async function foldSummaryVectorMirrorAtBoundary_ACU(params: {
         for (const ref of refs) {
             const pack = packByHash.get(ref.packHash);
             const chunk = pack?.chunks[ref.chunkIndex];
-            if (!chunk) throw new Error(`向量镜像折叠失败：rowId=${rowId} 缺少 chunk ${ref.packHash}#${ref.chunkIndex}`);
+            if (!chunk) return stripAllSummaryVectorMirrorFrames_ACU(params.chat, params.isolationKey, `rowId=${rowId} 缺少 chunk ${ref.packHash}#${ref.chunkIndex}`);
             newRefs.push({ packHash: '', chunkIndex: mergedChunks.length });
             mergedChunks.push({
                 ...chunk,
@@ -136,7 +142,10 @@ export async function foldSummaryVectorMirrorAtBoundary_ACU(params: {
                 schema: 'summary_vector_mirror_manifest',
                 version: 1,
                 sourceTableKey,
-                rows: rows.map((row) => ({ rowId: row.rowId, chunks: row.chunks })),
+                rows: rows.map((row) => {
+                    const vectorSourceHash = head.rowSourceHashes?.get(row.rowId);
+                    return { rowId: row.rowId, chunks: row.chunks, ...(vectorSourceHash ? { vectorSourceHash } : {}) };
+                }),
             },
         });
     } catch (error) {
@@ -144,7 +153,8 @@ export async function foldSummaryVectorMirrorAtBoundary_ACU(params: {
         await discardSummaryVectorMirrorPreparedFiles_ACU(files, '镜像折叠 manifest 上传失败');
         throw error;
     }
-    files.push(manifestPersist.file);
+    // 复用的既有 manifest 不进回收/发布列表：失败时不能删，成功时它本来就已发布。
+    if (manifestPersist.createdNew !== false) files.push(manifestPersist.file);
 
     const checkpoint: SummaryVectorIndexMirrorCheckpointV2_ACU = {
         kind: 'vector_full',
