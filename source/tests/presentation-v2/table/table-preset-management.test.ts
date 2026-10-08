@@ -45,6 +45,8 @@ async function importManagement() {
   }));
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
     settings_ACU: { currentTemplatePresetName: 'global-A' },
+    currentChatFileIdentifier_ACU: 'chat-a',
+    getCurrentIsolationKey_ACU: () => '',
   }));
   vi.doMock('../../../src/presentation-v2/composables/useTemplateRecoveryGuard', () => ({
     ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU: ensureTemplateRecoveryOrDeleteCurrentIsolationData,
@@ -246,6 +248,7 @@ describe('useTablePresetManagement', () => {
     const { useDialogStore } = await import('../../../src/presentation-v2/stores/dialog-store');
     applyTemplatePresetToCurrent
       .mockResolvedValueOnce({ saved: false, blockers: ['删除表「旧表」需要显式确认。'], error: '删除表「旧表」需要显式确认。' })
+      .mockResolvedValueOnce({ saved: false, blockers: ['删除表「旧表」需要显式确认。'], error: '删除表「旧表」需要显式确认。' })
       .mockResolvedValueOnce({ saved: true, mode: 'v2_commit' });
 
     const pending = management.editPreset('global-B');
@@ -254,13 +257,15 @@ describe('useTablePresetManagement', () => {
     await pending;
 
     expect(applyTemplatePresetToCurrent).toHaveBeenNthCalledWith(1, 'global-B', expect.objectContaining({ destructiveChangeConfirmed: false }));
-    expect(applyTemplatePresetToCurrent).toHaveBeenNthCalledWith(2, 'global-B', expect.objectContaining({ destructiveChangeConfirmed: true }));
+    expect(applyTemplatePresetToCurrent).toHaveBeenNthCalledWith(2, 'global-B', expect.objectContaining({ destructiveChangeConfirmed: false }));
+    expect(applyTemplatePresetToCurrent).toHaveBeenNthCalledWith(3, 'global-B', expect.objectContaining({ destructiveChangeConfirmed: true }));
   });
 
   it('setAsDefault 全局切换出现破坏性 blockers 时经确认后重试（S1-3）', async () => {
     const { management, applyTemplatePresetToCurrent } = await importManagement();
     const { useDialogStore } = await import('../../../src/presentation-v2/stores/dialog-store');
     applyTemplatePresetToCurrent
+      .mockResolvedValueOnce({ saved: false, blockers: ['删除列「HP」需要显式确认。'], error: '删除列「HP」需要显式确认。' })
       .mockResolvedValueOnce({ saved: false, blockers: ['删除列「HP」需要显式确认。'], error: '删除列「HP」需要显式确认。' })
       .mockResolvedValueOnce({ saved: true });
 
@@ -274,6 +279,10 @@ describe('useTablePresetManagement', () => {
       destructiveChangeConfirmed: false,
     }));
     expect(applyTemplatePresetToCurrent).toHaveBeenNthCalledWith(2, 'global-B', expect.objectContaining({
+      updateGlobal: true,
+      destructiveChangeConfirmed: false,
+    }));
+    expect(applyTemplatePresetToCurrent).toHaveBeenNthCalledWith(3, 'global-B', expect.objectContaining({
       updateGlobal: true,
       destructiveChangeConfirmed: true,
     }));

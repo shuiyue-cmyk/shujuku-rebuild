@@ -76,6 +76,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, watch } from 'vue';
+import { captureChatActionScope_ACU } from '../../presentation-v2/composables/chat-action-scope';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
 import { useDashboardPage } from '../../presentation-v2/composables/useDashboardPage';
 import { useTemplateRuntimeChangeTick } from '../../presentation-v2/composables/useTemplateRuntimeChangeListener';
@@ -115,8 +116,23 @@ async function refreshAll(): Promise<void> {
 }
 
 /** 飞行模式关闭会永久删除大总结表：必须二次确认；模板被改过时再确认一次覆盖。 */
+let flightModeToggleBusy = false;
+
 async function toggleFlightMode(value: boolean): Promise<void> {
+  // R10A-04：确认框排队期间连点会排出第二个确认；整段流程只允许一个在途。
+  if (flightModeToggleBusy) return;
+  flightModeToggleBusy = true;
+  try {
+    await runFlightModeToggle(value);
+  } finally {
+    flightModeToggleBusy = false;
+  }
+}
+
+async function runFlightModeToggle(value: boolean): Promise<void> {
   const copy = dashboardCopy.toggles.flightMode;
+  // 确认框写的是「当前聊天」的大总结表；确认后聊天已切换就不执行。
+  const scope = captureChatActionScope_ACU();
   if (!value) {
     const confirmed = await dialogStore.confirm({
       title: copy.disableTitle,
@@ -127,7 +143,7 @@ async function toggleFlightMode(value: boolean): Promise<void> {
     });
     if (!confirmed) return;
   }
-  const result = await dashboard.setFlightMode(value);
+  const result = await dashboard.setFlightMode(value, { scope });
   if (result.ok) {
     toastStore.success(value ? copy.enabled : copy.disabled, { muteable: false });
     return;
@@ -141,7 +157,7 @@ async function toggleFlightMode(value: boolean): Promise<void> {
       confirmVariant: 'danger',
     });
     if (!confirmed) return;
-    const confirmedResult = await dashboard.setFlightMode(false, { confirmTemplateScopeChange: true });
+    const confirmedResult = await dashboard.setFlightMode(false, { confirmTemplateScopeChange: true, scope });
     if (confirmedResult.ok) toastStore.success(copy.disabled, { muteable: false });
     else toastStore.error(confirmedResult.error || copy.disableFailed, { muteable: false });
     return;

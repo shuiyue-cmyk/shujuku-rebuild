@@ -32,6 +32,7 @@ import { useDialogStore } from '../stores/dialog-store';
 import { useToastStore } from '../stores/toast-store';
 import { ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU } from './useTemplateRecoveryGuard';
 import { promptFollowGlobalAfterSetDefault_ACU, runFollowGlobalTemplateFlow_ACU } from './templateFollowGlobalFlow';
+import { applyTemplateWithDestructiveConfirm_ACU } from './template-destructive-confirm';
 
 export type TemplateScope = 'global' | 'chat' | 'runtime';
 
@@ -163,13 +164,6 @@ function downloadJson(jsonData: Record<string, any>, filename: string): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-}
-
-function isStaleRevisionConflict(result: unknown): boolean {
-  return !!result
-    && typeof result === 'object'
-    && (result as { saved?: unknown }).saved === false
-    && /^V2 stale_revision_conflict(?:\b|:)/.test(String((result as { error?: unknown }).error || ''));
 }
 
 function formatTemplateOperationError(error: unknown): string {
@@ -440,32 +434,17 @@ export function useTableTemplatePresets() {
   async function applyChatTemplateWithDestructiveConfirmation(
     apply: (destructiveChangeConfirmed: boolean) => Promise<any>,
   ): Promise<any> {
-    const applyWithSingleStaleRetry = async (destructiveChangeConfirmed: boolean): Promise<any> => {
-      const firstAttempt = await apply(destructiveChangeConfirmed);
-      // stale revision 表示本次计划的 read-plan-commit 窗口已失效。重新进入 service
-      // 才会读取新基线；其它 V2 历史错误绝不能通过重试伪装成可恢复状态。
-      if (!isStaleRevisionConflict(firstAttempt)) return firstAttempt;
-      if (templateOperationController.signal.aborted) return firstAttempt;
-      return apply(destructiveChangeConfirmed);
-    };
-
-    const firstResult = await applyWithSingleStaleRetry(false);
-    if (!firstResult || firstResult.saved !== false || !Array.isArray(firstResult.blockers) || firstResult.blockers.length === 0) {
-      return firstResult;
-    }
-    const destructiveBlockers = firstResult.blockers.filter((blocker: unknown) => (
-      typeof blocker === 'string' && /删除(?:表|列).+需要显式确认/.test(blocker)
-    ));
-    if (destructiveBlockers.length === 0) return firstResult;
-    const confirmed = await dialogStore.confirm({
-      title: '确认破坏性模板变更',
-      message: `此模板变更会删除现有表或列：\n${destructiveBlockers.join('\n')}`,
-      dangerMessage: '确认后将按 V2 原子提交执行。删除的数据只能通过聊天备份或 checkpoint 恢复。',
-      confirmLabel: '确认删除并继续',
-      cancelLabel: '取消',
-      confirmVariant: 'danger',
+    return applyTemplateWithDestructiveConfirm_ACU(apply, {
+      signal: templateOperationController.signal,
+      confirm: destructiveBlockers => dialogStore.confirm({
+        title: '确认破坏性模板变更',
+        message: `此模板变更会删除现有表或列：\n${destructiveBlockers.join('\n')}`,
+        dangerMessage: '确认后将按 V2 原子提交执行。删除的数据只能通过聊天备份或 checkpoint 恢复。',
+        confirmLabel: '确认删除并继续',
+        cancelLabel: '取消',
+        confirmVariant: 'danger',
+      }),
     });
-    return confirmed ? applyWithSingleStaleRetry(true) : firstResult;
   }
 
   async function selectChatPreset(name: string): Promise<void> {

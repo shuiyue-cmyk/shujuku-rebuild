@@ -205,4 +205,42 @@ describe('chat mutation scheduler', () => {
     expect(h.recoverDeleted).toHaveBeenCalledTimes(1);
     expect(h.refreshUI).toHaveBeenCalledTimes(2);
   });
+
+  // R9-03：删楼与滑动落在同一防抖窗口时，合并轮仍须先做删楼恢复。
+  it('R9-03：删楼后紧接滑动合并成一轮时仍执行删楼恢复，dirty 按删楼标记', async () => {
+    scheduleChatMutationRefresh_ACU('chat_modified_deleted');
+    await vi.advanceTimersByTimeAsync(300);
+    scheduleChatMutationRefresh_ACU('chat_modified_swiped');
+    await vi.advanceTimersByTimeAsync(1200);
+    await vi.runAllTicks();
+
+    expect(h.recoverDeleted).toHaveBeenCalledTimes(1);
+    expect(h.markDirty).toHaveBeenCalledWith('scope-1', 'chat_modified_deleted');
+  });
+
+  it('R9-03：删楼轮执行中到达的删楼请求留给补跑轮恢复', async () => {
+    let release!: () => void;
+    h.refreshUI.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({ ok: true }); }));
+
+    scheduleChatMutationRefresh_ACU('chat_modified_deleted');
+    await vi.advanceTimersByTimeAsync(1200);
+    scheduleChatMutationRefresh_ACU('chat_modified_deleted');
+    scheduleChatMutationRefresh_ACU('chat_modified_swiped');
+    await vi.advanceTimersByTimeAsync(1200);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.runAllTicks();
+
+    expect(h.recoverDeleted).toHaveBeenCalledTimes(2);
+  });
+
+  it('R9-03：聊天切换后旧聊天的删楼标记不带到新聊天', async () => {
+    scheduleChatMutationRefresh_ACU('chat_modified_deleted');
+    cancelPendingChatMutationRefresh_ACU();
+    scheduleChatMutationRefresh_ACU('chat_modified_swiped');
+    await vi.advanceTimersByTimeAsync(1200);
+    await vi.runAllTicks();
+
+    expect(h.recoverDeleted).not.toHaveBeenCalled();
+  });
 });

@@ -34,6 +34,11 @@ import {
 } from '../../../service/optimization/content-optimization';
 
 
+import {
+  CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU,
+  isChatMessageWriteTargetCurrent_ACU
+} from '../../../service/chat/chat-message-write-target';
+
 // 循环 import — 运行时安全
 import {
   getOriginalContent_ACU,
@@ -67,7 +72,7 @@ import {
         box-sizing: border-box;
       ">
         <h3 style="margin: 0 0 8px 0; color: var(--acu-accent, #7d4940); font-size: 1.1em; letter-spacing: 1px;">正文替换建议</h3>
-        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">${result.summary}</p>
+        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">${escapeHtml_ACU(String(result.summary || ''))}</p>
         ${result.totalLoops > 1 ? `<p style="margin: 0 0 12px 0; color: var(--acu-text-mute, #6a6055); font-size: 12px;">进度: 第 ${result.currentLoop}/${result.totalLoops} 轮</p>` : ''}
         <div class="optimization-list" style="margin-bottom: 16px; max-height: 400px; overflow-y: auto;">
           ${result.optimizations.map((opt: any, i: number) => `
@@ -191,8 +196,18 @@ import {
       // 如果是最后一轮，先应用优化
       if (isLastLoop) {
         logDebug_ACU(`[正文优化] 准备调用 replaceChatMessage_ACU...`);
-        const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, { originalContent: getOriginalContent_ACU(messageIndex) || originalContent });
+        const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, {
+          originalContent: getOriginalContent_ACU(messageIndex) || originalContent,
+          expected: result.writeTarget,
+        });
         logDebug_ACU(`[正文优化] replaceChatMessage_ACU 返回: ${success}`);
+        // R9-01：对话框打开期间楼层被滑动/删除或聊天已切换：结果作废，关闭对话框并结束本次优化。
+        if (!success && result.writeTarget !== undefined && !isChatMessageWriteTargetCurrent_ACU(result.writeTarget)) {
+          jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+          showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
+          callback('cancel');
+          return;
+        }
         if (!success) {
           jQuery_API_ACU(this).prop('disabled', false).text(applyButtonText);
           showToastr_ACU('error', '应用失败');

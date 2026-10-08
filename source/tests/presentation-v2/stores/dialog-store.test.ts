@@ -81,4 +81,23 @@ describe('useDialogStore', () => {
 
     await expect(selected).resolves.toEqual(['locks']);
   });
+
+  // R10A-01/R10A-04：确认框绑定弹出时的聊天；切到别的聊天后一律按取消处理，避免在新聊天上执行旧聊天的危险操作。
+  it('切换到其他聊天时取消当前与排队中的弹窗，同一聊天不受影响', async () => {
+    const { _set_currentChatFileIdentifier_ACU } = await import('../../../src/service/runtime/state-manager');
+    _set_currentChatFileIdentifier_ACU('chat-a');
+    const dialog = useDialogStore();
+    const confirmA = dialog.confirm({ title: '删除', message: '删除 A 的数据？' });
+    const promptA = dialog.prompt({ title: '楼层', message: '输入', label: '楼层' });
+
+    dialog.cancelForChatChange('chat-a');
+    expect(dialog.active?.kind).toBe('confirm');
+
+    dialog.cancelForChatChange('chat-b');
+    await expect(confirmA).resolves.toBe(false);
+    await expect(promptA).resolves.toBeNull();
+    expect(dialog.active).toBeNull();
+    expect(dialog.queue).toHaveLength(0);
+    _set_currentChatFileIdentifier_ACU('');
+  });
 });

@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { acuClearInterval, acuSetInterval, type AcuTimerHandle } from "../bootstrap/host-env";
+import { currentChatFileIdentifier_ACU } from "../../service/runtime/state-manager";
 
 export type AcuDialogVariant = "default" | "primary" | "danger";
 export type AcuDialogKind = "confirm" | "prompt" | "choice" | "multiselect";
@@ -39,6 +40,8 @@ export interface AcuDialogRequest {
   requireNonEmpty?: boolean;
   /** 确认按钮倒计时秒数：激活后倒数归零前 submitActive 被硬性拒绝，取消不受影响。 */
   confirmCountdownSeconds?: number;
+  /** 弹出时的聊天（enqueue 自动填写）：切到别的聊天后该弹窗按取消处理。 */
+  chatKey?: string;
   resolve: (value: string | boolean | string[] | null) => void;
 }
 
@@ -187,6 +190,19 @@ export const useDialogStore = defineStore("acu-v2-dialog", {
         [value]: checked,
       };
     },
+    /**
+     * R10A-01：切到其他聊天时，把属于旧聊天的当前与排队弹窗全部按取消处理。
+     * 弹窗内容（删除范围、恢复目标、模板覆盖……）都是针对弹出时的聊天写的，
+     * 在新聊天上点确认会把危险操作落到用户从未确认过的聊天。
+     */
+    cancelForChatChange(nextChatKey: string): void {
+      const stale = (dialog: AcuDialogRequest) => String(dialog.chatKey ?? "") !== String(nextChatKey ?? "");
+      const cancelValue = (dialog: AcuDialogRequest) => (dialog.kind === "confirm" ? false : null);
+      const staleQueued = this.queue.filter(stale);
+      this.queue = this.queue.filter(dialog => !stale(dialog));
+      for (const dialog of staleQueued) dialog.resolve(cancelValue(dialog));
+      if (this.active && stale(this.active)) this.cancelActive();
+    },
     cancelActive(): void {
       const dialog = this.active;
       this.active = null;
@@ -248,7 +264,7 @@ export const useDialogStore = defineStore("acu-v2-dialog", {
     },
     enqueue(request: AcuDialogRequest): Promise<string | boolean | string[] | null> {
       return new Promise((resolve) => {
-        const next = { ...request, resolve };
+        const next = { ...request, chatKey: String(currentChatFileIdentifier_ACU || ""), resolve };
         if (this.active) this.queue.push(next);
         else this.activateRequest(next);
       });

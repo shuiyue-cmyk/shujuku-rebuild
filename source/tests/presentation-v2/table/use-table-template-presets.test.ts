@@ -26,6 +26,8 @@ async function importComposable() {
 
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
     settings_ACU: {},
+    currentChatFileIdentifier_ACU: 'chat-a',
+    getCurrentIsolationKey_ACU: () => '',
   }));
   vi.doMock('../../../src/service/table/storage-mode', () => ({
     isSqliteMode: () => false,
@@ -359,6 +361,7 @@ describe('useTableTemplatePresets', () => {
     const presets = useTableTemplatePresets();
     applyTemplatePresetToCurrent_ACU
       .mockResolvedValueOnce({ saved: false, blockers: ['删除表「旧表」需要显式确认。'], error: '删除表「旧表」需要显式确认。' })
+      .mockResolvedValueOnce({ saved: false, blockers: ['删除表「旧表」需要显式确认。'], error: '删除表「旧表」需要显式确认。' })
       .mockResolvedValueOnce({ saved: true, mode: 'v2_commit' });
 
     const pending = presets.selectChatPreset('chat-A');
@@ -374,6 +377,9 @@ describe('useTableTemplatePresets', () => {
       destructiveChangeConfirmed: false,
     }));
     expect(applyTemplatePresetToCurrent_ACU).toHaveBeenNthCalledWith(2, 'chat-A', expect.objectContaining({
+      destructiveChangeConfirmed: false,
+    }));
+    expect(applyTemplatePresetToCurrent_ACU).toHaveBeenNthCalledWith(3, 'chat-A', expect.objectContaining({
       destructiveChangeConfirmed: true,
     }));
   });
@@ -598,6 +604,7 @@ describe('useTableTemplatePresets · runtime 视图', () => {
     const presets = useTableTemplatePresets();
     applyTemplatePresetToCurrent_ACU
       .mockResolvedValueOnce({ saved: false, blockers: ['删除表「旧表」需要显式确认。'], error: '删除表「旧表」需要显式确认。' } as any)
+      .mockResolvedValueOnce({ saved: false, blockers: ['删除表「旧表」需要显式确认。'], error: '删除表「旧表」需要显式确认。' } as any)
       .mockResolvedValueOnce({ saved: true, presetName: 'global-B' } as any);
 
     const pending = presets.selectGlobalPreset('global:global-B');
@@ -614,6 +621,10 @@ describe('useTableTemplatePresets · runtime 视图', () => {
       destructiveChangeConfirmed: false,
     }));
     expect(applyTemplatePresetToCurrent_ACU).toHaveBeenNthCalledWith(2, 'global-B', expect.objectContaining({
+      updateGlobal: true,
+      destructiveChangeConfirmed: false,
+    }));
+    expect(applyTemplatePresetToCurrent_ACU).toHaveBeenNthCalledWith(3, 'global-B', expect.objectContaining({
       updateGlobal: true,
       destructiveChangeConfirmed: true,
     }));

@@ -17,7 +17,8 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import { currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
 import { SillyTavern_API_ACU } from '../../shared/host-api';
-import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { cleanChatName_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { useDialogStore } from '../stores/dialog-store';
 import { useApiPresetStore } from '../stores/api-preset-store';
 import { usePlotPresetStore } from '../stores/plot-preset-store';
 
@@ -83,6 +84,12 @@ export function useChatChangedListener(): void {
 
   function onChatChanged(chatFileName: string): void {
     logDebug_ACU(`[ACU-V2] CHAT_CHANGED 收到: "${chatFileName}"，将延迟刷新 v2 store`);
+    // 立即（不等延迟刷新）取消属于旧聊天的未决弹窗，见 dialog-store cancelForChatChange。
+    try {
+      useDialogStore().cancelForChatChange(cleanChatName_ACU(String(chatFileName || '')));
+    } catch (e) {
+      logWarn_ACU('[ACU-V2] CHAT_CHANGED 取消旧聊天弹窗异常', e);
+    }
 
     if (pendingTimer) clearTimeout(pendingTimer);
 

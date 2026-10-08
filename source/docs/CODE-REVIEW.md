@@ -24,8 +24,8 @@
 | 6 | service/template + template-assistant + worldbook | 13.3k | 子代理完成 → `docs/review/block6-template-worldbook.md`；已修 |
 | 7 | shared/ | 9.8k | 子代理完成 → `docs/review/block7-shared.md`；全部已修（R7-11 locale 一项按风险不修） |
 | 8 | service/ai、plot、optimization、flight-mode、其余小模块 | 5k | 子代理完成 → `docs/review/block8-small-services.md`；全部已修 |
-| 9 | presentation（旧 bootstrap/triggers/api-groups） | 12k | 子代理完成 → `docs/review/block9-presentation-legacy.md`；无 P0；P1×3（R9-01~03）、P2×7（R9-04~10）、P3×8（R9-11~18）全部待修（用户指示额度紧张时只修 P0） |
-| 10 | presentation-v2 逻辑层（stores/composables）+ presentation-v3 | 35k | 子代理完成：10A composables → `docs/review/block10a-v2-composables.md`（无 P0；P1×2 R10A-01~02、P2×11、P3×10）；10B stores 等 + v3 → `docs/review/block10b-v2-stores-v3.md`（无 P0/P1；P2×7、P3×13）；全部待修 |
+| 9 | presentation（旧 bootstrap/triggers/api-groups） | 12k | 子代理完成 → `docs/review/block9-presentation-legacy.md`；无 P0；P1×3（R9-01~03）、P2×7（R9-04~10）、P3×8（R9-11~18）；P1 已全部修复，R9-08/09 已修，其余待修 |
+| 10 | presentation-v2 逻辑层（stores/composables）+ presentation-v3 | 35k | 子代理完成：10A composables → `docs/review/block10a-v2-composables.md`（无 P0；P1×2 R10A-01~02、P2×11、P3×10）；10B stores 等 + v3 → `docs/review/block10b-v2-stores-v3.md`（无 P0/P1；P2×7、P3×13）；P1 已全部修复，R10A-03/04 已修，其余待修 |
 
 ## 块 1：data/
 
@@ -179,10 +179,19 @@
 | R4-09 SQL 视图冗余校验 | P3 | 已修：删除与 JSON 链重复的整表 SQL 视图物化校验（逐列写闸门不变） | agent-module-sql-view-materialization-once.test |
 | R4-10 时间线无上限 | P3 | 不修：阶段游标与 progressSelections 直接按时间线下标寻址，截断会让存量游标错位，收益未量化 | — |
 | R4-11 重规划中止控制器登记在租约外 | P3 | 已修：登记移入租约回调内，外层 finally 注销 | — |
+| R10A-01 确认弹窗期间切聊天，危险操作落到新聊天 | P1 | 已修：弹窗请求记录所属聊天，切聊天时自动取消旧聊天的全部弹窗；删除本地数据/恢复 Checkpoint 在弹窗前冻结聊天与删除路径，执行前复核 | dialog-store.test、use-chat-changed-listener.test、use-data-management.test「R10A-01」 |
+| R10A-02 可视化器「保存数据」吞掉未提交的模板改动与删表 | P1 | 已修：只有锁改动时也拒绝混入模板改动；删表一律引导走「保存模板到当前聊天」原子提交，数据路径不再单独硬删；删除从未被调用的旧保存函数 | use-visualizer-save.test「R10A-02」×2 |
+| R10A-03 保存模板到全局：确认后不复核聊天 | P2 | 已修：命名/覆盖确认后核对聊天，切了就不写预设、不切模板、不写锁 | use-visualizer-save.test「R10A-03」 |
+| R10A-04 其余确认 → 执行 TOCTOU | P2 | 已修：三处模板破坏性确认合并为一份实现，确认后复核聊天并重算待删清单，清单变了不带确认标志提交；关闭飞行模式加忙碌态与聊天复核；恢复默认每一步后复核，中途切聊天即停；删除交火索引复核聊天 | template-destructive-confirm.test、dashboard-page.test、use-data-management.test、use-vector-index-delete-scope.test「R10A-04」 |
+| R9-01 正文优化按下标写回，滑动/删楼/切聊天后写错楼 | P1 | 已修：读取正文时拍下楼层快照（消息对象、message_id、swipe_id、正文、聊天标识），自动应用/手动确认/重新优化三条写回路径都按快照复核，写回函数也支持带快照拒绝；末轮对话框与执行层的重复写回合并为一次 | chat-service.test、optimization-ui-write-target.test「R9-01」 |
+| R9-02 覆盖最新层后 SQLite 内存库不重建 | P1 | 已修：服务层提交成功后在 SQLite 模式重建内存库，两个调用方都受益；重建失败如实报错 | chat-service.test「R9-02」×2 |
+| R9-03 删楼与滑动同窗口时跳过删楼恢复 | P1 | 已修：「本轮含删楼」改为粘性标志，执行时读取并清零；执行中到达的删楼留给补跑轮；切聊天清掉旧聊天的标志 | chat-mutation-scheduler.test「R9-03」×3 |
+| R9-08 手动确认多轮：后续轮次结束时丢掉已确认结果 | P2 | 已修：末轮无需优化、请求失败（及不可达的末轮跳过）时写回此前已确认的内容，填表只触发一次。注：末轮对话框本就没有「跳过」按钮，可达的丢失路径是前两种 | optimization-ui-write-target.test「R9-08」×2 |
+| R9-09 重新优化对话框 summary 未转义 | P2 | 已修：两处对话框的 summary 都转义 | optimization-ui-write-target.test「R9-09」 |
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
 
-待修：块 1–8 已全部收口（不修项均已注明理由）。块 9、10 已复审、无 P0，按用户指示（额度紧张，只修 P0）全部登记待修：块 9 P1×3/P2×7/P3×8，块 10A P1×2/P2×11/P3×10，块 10B P2×7/P3×13。
+待修：块 1–8 已全部收口（不修项均已注明理由）。块 9、10 的 P1 已全部修复；剩余待修：块 9 R9-04~07、R9-10 与 P3×8，块 10A R10A-05~13 与 P3×10，块 10B P2×7/P3×13（R10B-09 已随 R10A-01 修复）。
 R4-02 遗留：模型放弃补齐时，草稿（partial）不会阻止水位推进——只在提升路径堵住了「写齐却看不见」，「没写齐就收工」仍按旧口径。
 
 测试稳定性：重型页面套件首个用例冷导入整张 V2 模块图单跑 11–15s，贴着原全局 15s 上限，本机并行全量必超时（发布基线同样失败）；全局 testTimeout 调为 60s。

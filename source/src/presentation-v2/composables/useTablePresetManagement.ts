@@ -38,6 +38,7 @@ import { openVisualizerSurface_ACU } from '../surfaces/visualizer/open-visualize
 import { ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU } from './useTemplateRecoveryGuard';
 import { buildChatSheetGuideDataFromTemplateObj_ACU } from '../../service/template/chat-scope';
 import { promptFollowGlobalAfterSetDefault_ACU } from './templateFollowGlobalFlow';
+import { applyTemplateWithDestructiveConfirm_ACU } from './template-destructive-confirm';
 
 export type TablePresetDrawerView = 'closed' | 'manage';
 
@@ -56,13 +57,6 @@ const RUNTIME_TEMPLATE_LABEL = '当前生效模板（内存）';
 
 function isRuntimeSentinelName(name: string): boolean {
   return String(name || '') === RUNTIME_SENTINEL_NAME;
-}
-
-function isStaleRevisionConflict(result: unknown): boolean {
-  return !!result
-    && typeof result === 'object'
-    && (result as { saved?: unknown }).saved === false
-    && /^V2 stale_revision_conflict(?:\b|:)/.test(String((result as { error?: unknown }).error || ''));
 }
 
 function downloadJson(jsonData: Record<string, any>, filename: string): void {
@@ -155,37 +149,27 @@ export function useTablePresetManagement() {
     presetName: string,
     options: { source: string; updateGlobal: boolean; persistChatScope: boolean },
   ): Promise<any> {
-    const applyWithSingleStaleRetry = async (destructiveChangeConfirmed: boolean): Promise<any> => {
-      const buildOptions = () => ({
+    return applyTemplateWithDestructiveConfirm_ACU(
+      destructiveChangeConfirmed => applyTemplatePresetToCurrent_ACU(presetName, {
         source: options.source,
         updateGlobal: options.updateGlobal,
         save: true,
         persistChatScope: options.persistChatScope,
         destructiveChangeConfirmed,
         signal: templateOperationController.signal,
-      });
-      const firstAttempt = await applyTemplatePresetToCurrent_ACU(presetName, buildOptions());
-      if (!isStaleRevisionConflict(firstAttempt)) return firstAttempt;
-      if (templateOperationController.signal.aborted) return firstAttempt;
-      return applyTemplatePresetToCurrent_ACU(presetName, buildOptions());
-    };
-    const firstResult = await applyWithSingleStaleRetry(false);
-    if (!firstResult || firstResult.saved !== false || !Array.isArray(firstResult.blockers) || firstResult.blockers.length === 0) {
-      return firstResult;
-    }
-    const destructiveBlockers = firstResult.blockers.filter((blocker: unknown) => (
-      typeof blocker === 'string' && /删除(?:表|列).+需要显式确认/.test(blocker)
-    ));
-    if (destructiveBlockers.length === 0) return firstResult;
-    const confirmed = await dialogStore.confirm({
-      title: '确认破坏性模板变更',
-      message: `此模板变更会删除现有表或列：\n${destructiveBlockers.join('\n')}`,
-      dangerMessage: '确认后将按 V2 原子提交执行。删除的数据只能通过聊天备份或 checkpoint 恢复。',
-      confirmLabel: '确认删除并继续',
-      cancelLabel: '取消',
-      confirmVariant: 'danger',
-    });
-    return confirmed ? applyWithSingleStaleRetry(true) : firstResult;
+      }),
+      {
+        signal: templateOperationController.signal,
+        confirm: destructiveBlockers => dialogStore.confirm({
+          title: '确认破坏性模板变更',
+          message: `此模板变更会删除现有表或列：\n${destructiveBlockers.join('\n')}`,
+          dangerMessage: '确认后将按 V2 原子提交执行。删除的数据只能通过聊天备份或 checkpoint 恢复。',
+          confirmLabel: '确认删除并继续',
+          cancelLabel: '取消',
+          confirmVariant: 'danger',
+        }),
+      },
+    );
   }
 
   /** 打开可视化表格编辑器；编辑当前生效的模板。 */

@@ -26,7 +26,6 @@ import {
   currentChatFileIdentifier_ACU,
   currentJsonTableData_ACU,
   getCurrentIsolationKey_ACU,
-  settings_ACU,
   _set_currentJsonTableData_ACU,
 } from '../../../service/runtime/state-manager';
 import {
@@ -39,13 +38,6 @@ import {
 import {
   getCurrentWorldbookConfig_ACU
 } from '../../../service/settings/settings-readers';
-import {
-  runTableUpdateCommit_ACU
-} from '../../../service/table/table-update-commit';
-import {
-  getLatestAiMessageIndexFromChat_ACU,
-  resolveTableHistoryStateFromChat_ACU,
-} from '../../../service/table/table-history';
 import {
   isSqliteMode
 } from '../../../service/table/storage-mode';
@@ -143,7 +135,8 @@ export interface VisualizerDestructiveSchemaChangeSummary {
 type GlobalTemplateSaveResult =
   | { status: 'saved'; presetName: string }
   | { status: 'unchanged' }
-  | { status: 'cancelled' };
+  | { status: 'cancelled' }
+  | { status: 'context_changed' };
 
 function cloneData<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
@@ -316,6 +309,7 @@ function prepareTemplateSheetsForCommit_ACU(
 async function saveGlobalTemplateSnapshot(
   orderedData: Record<string, any>,
   interactions: VisualizerSaveInteractions,
+  contextStillMatches: () => boolean = () => true,
 ): Promise<GlobalTemplateSaveResult> {
   const templateObj: Record<string, any> = {};
   Object.keys(orderedData || {}).forEach(key => {
@@ -365,6 +359,8 @@ async function saveGlobalTemplateSnapshot(
     if (!confirmed) return { status: 'cancelled' };
   }
   if (!finalGlobalPresetName) return { status: 'cancelled' };
+  // R10A-03：命名/覆盖确认期间可能切了聊天；之后的模板切换会作用于「此刻」的聊天。
+  if (!contextStillMatches()) return { status: 'context_changed' };
 
   const preparedSnapshot = sanitizeTemplateSnapshotForChat_ACU(templateObj);
   // 比较对象是「目标预设自身」的 templateStr，而不是全局 profile 串：
@@ -390,106 +386,6 @@ async function saveGlobalTemplateSnapshot(
     throw new Error(typeof (applied as any).error === 'string' && (applied as any).error ? (applied as any).error : '模板快照应用失败。');
   }
   return { status: 'saved', presetName: finalGlobalPresetName };
-}
-
-async function saveCurrentDataToChat(
-  sheetKeysToSave: string[],
-  deletedSheetKeys: string[],
-): Promise<'memory-only' | 'saved'> {
-  const chat = getChatArray_ACU();
-  if (!chat.length) return 'memory-only';
-
-  const isolationKey = getCurrentIsolationKey_ACU();
-  const allSheetKeys = sheetKeysToSave.filter(key => !!currentJsonTableData_ACU?.[key]);
-  const latestAiIndex = getLatestAiMessageIndexFromChat_ACU(chat);
-  const bucketByIndex: Record<number, string[]> = {};
-
-  allSheetKeys.forEach(key => {
-    const table = currentJsonTableData_ACU?.[key];
-    const history = resolveTableHistoryStateFromChat_ACU(chat, {
-      sheetKey: key,
-      isSummaryTable: table ? isSummaryOrOutlineTable_ACU(table.name) : false,
-      isolationKey,
-      settings: settings_ACU,
-    });
-    const idx = history.latestDataMessageIndex !== -1
-      ? history.latestDataMessageIndex
-      : latestAiIndex;
-    if (idx === -1) return;
-    if (!bucketByIndex[idx]) bucketByIndex[idx] = [];
-    bucketByIndex[idx].push(key);
-  });
-
-  if (Object.keys(bucketByIndex).length === 0 && latestAiIndex !== -1) {
-    bucketByIndex[latestAiIndex] = [...allSheetKeys];
-  }
-  if (Object.keys(bucketByIndex).length === 0) return 'memory-only';
-
-  for (const [indexStr, keys] of Object.entries(bucketByIndex)) {
-    const idx = Number.parseInt(indexStr, 10);
-    if (Number.isNaN(idx)) continue;
-    const writeSet = keys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey }));
-    const commitResult = await runTableUpdateCommit_ACU<null>({
-      source: 'manual_crud',
-      reason: 'visualizer_v2_save',
-      isolationKey,
-      writeSet,
-      revisionWriteSet: writeSet,
-      initialData: currentJsonTableData_ACU as any,
-      targetMessageIndex: idx,
-      targetSheetKeys: keys,
-      updateGroupKeys: null,
-      trackingSheetKeys: [],
-      trackAsUpdate: false,
-      operations: keys
-        .filter(sheetKey => Boolean((currentJsonTableData_ACU as any)?.[sheetKey]))
-        .map(sheetKey => ({ kind: 'sheet_replace' as const, sheetKey, sheet: (currentJsonTableData_ACU as any)[sheetKey], reason: 'manual_crud' as const })),
-    }, () => ({
-      success: true,
-      value: null,
-      tableData: currentJsonTableData_ACU as any,
-      mutationResult: { changes: keys.length, errors: [] },
-    }));
-    if (!commitResult.success) {
-      logWarn_ACU('[ACU-V2 Visualizer] save commit failed:', commitResult.error);
-    }
-  }
-
-  if (deletedSheetKeys.length > 0) {
-    const result = await purgeSheetKeysFromChatHistoryHard_ACU(deletedSheetKeys);
-    if (result?.changed && isSqliteMode()) {
-      try {
-        await reloadStorageProvider();
-      } catch (error) {
-        logWarn_ACU('[ACU-V2 Visualizer] reloadStorageProvider failed:', error);
-      }
-    }
-  }
-
-  await refreshMergedDataAndNotify_ACU();
-
-  const sourceTableKey = allSheetKeys.find(sheetKey => {
-    const table = currentJsonTableData_ACU?.[sheetKey];
-    return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
-  });
-  if (sourceTableKey && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
-    try {
-      await enqueueSummaryVectorIndexFlush_ACU({
-        sourceTableKey,
-        reason: 'visualizer_v2_save',
-      });
-    } catch (error) {
-      logWarn_ACU('[ACU-V2 Visualizer] summary vector index queue failed:', error);
-    }
-  }
-
-  try {
-    (topLevelWindow_ACU as any).AutoCardUpdaterAPI?._notifyTableUpdate?.();
-  } catch (error) {
-    logDebug_ACU('[ACU-V2 Visualizer] table update notification skipped:', error);
-  }
-
-  return 'saved';
 }
 
 export function useVisualizerSave(interactions: VisualizerSaveInteractions = {}) {
@@ -535,6 +431,12 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         toastStore.error('行数据增量与整表删除无法原子提交；请分别保存行数据和删表操作。', { muteable: false });
         return false;
       }
+      // R10A-02：删表要连同模板一起原子提交。数据路径只硬删数据，模板里的表还在，
+      // 重新载入后会以空表回来；markSaved('data') 还会把删除意图从草稿里抹掉。
+      if (deletedSheetKeys.length > 0) {
+        toastStore.error('删除整张表需要连同模板一起提交；请使用「保存模板到当前聊天」完成删表。', { muteable: false });
+        return false;
+      }
       const templateChanges = classifyVisualizerTemplateChanges_ACU(visualizer.templateBaseData, visualizer.tempData || {});
       const deletedSheetKeySet = new Set(deletedSheetKeys);
       const baseOrderWithoutDeleted = (visualizer.templateBaseSheetOrder || []).filter(key => !deletedSheetKeySet.has(key));
@@ -544,11 +446,13 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         || templateChanges.metadataChangedSheetKeys.length > 0
         || templateChanges.mateChanged
         || JSON.stringify(baseOrderWithoutDeleted) !== JSON.stringify(currentOrderWithoutDeleted);
-      if (hasDataChanges && hasPendingTemplateChanges) {
+      const hasLockChanges = visualizer.lockDirty;
+      // R10A-02：只有锁改动时同样拒绝。markSaved('data') 会把模板基线设成当前草稿，
+      // 未提交的改表名/改列/调顺序会被当成「已保存」吞掉，之后模板保存看不到任何变化。
+      if ((hasDataChanges || hasLockChanges) && hasPendingTemplateChanges) {
         toastStore.error('数据保存不能混入未提交的模板变化；请先保存模板，再保存数据。', { muteable: false });
         return false;
       }
-      const hasLockChanges = visualizer.lockDirty;
       const result = hasDataChanges
         ? await applyVisualizerPendingDataOps_ACU(visualizer, saveContextKey)
         : { success: true, changed: false };
@@ -556,7 +460,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         toastStore.error(result.error || '数据保存失败。', { muteable: false });
         return false;
       }
-      if (!result.changed && deletedSheetKeys.length === 0 && !hasLockChanges) {
+      if (!result.changed && !hasLockChanges) {
         // 数据路径不负责模板层配置。若检测到仅存在 mate 级配置变更（如全局注入配置），
         // 给出可执行指引，而非误导性的「没有需要保存的」。
         const mateChanged = classifyVisualizerTemplateChanges_ACU(
@@ -569,16 +473,6 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
             : '没有需要保存的数据、锁或删表增量。',
           { muteable: false });
         return false;
-      }
-      if (deletedSheetKeys.length > 0) {
-        const purgeResult = await purgeSheetKeysFromChatHistoryHard_ACU(deletedSheetKeys);
-        if (purgeResult?.changed && isSqliteMode()) {
-          try {
-            await reloadStorageProvider();
-          } catch (error) {
-            logWarn_ACU('[ACU-V2 Visualizer] reloadStorageProvider failed after sheet purge:', error);
-          }
-        }
       }
       if (hasLockChanges) saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
       try {
@@ -609,9 +503,8 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
       } catch {}
       visualizer.markSaved('data');
       toastStore.success(
-        deletedSheetKeys.length > 0 ? '数据增量、锁设置与删表清理已保存到当前消息。'
-          : result.changed && hasLockChanges ? '数据增量与锁设置已保存到当前消息。'
-            : result.changed ? '数据增量已保存到当前消息。'
+        result.changed && hasLockChanges ? '数据增量与锁设置已保存到当前消息。'
+          : result.changed ? '数据增量已保存到当前消息。'
             : '表格锁设置已保存。',
         { muteable: false },
       );
@@ -1202,8 +1095,16 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         renumberOrder: false,
         applySpecialIndex: false,
       });
-      const globalTemplateResult = await saveGlobalTemplateSnapshot(orderedData, interactions);
+      const saveContextKey = currentVisualizerContextKey();
+      const globalTemplateResult = await saveGlobalTemplateSnapshot(
+        orderedData,
+        interactions,
+        () => saveContextStillMatches(saveContextKey),
+      );
       if (globalTemplateResult.status === 'cancelled') return false;
+      if (globalTemplateResult.status === 'context_changed') return rejectChangedSaveContext();
+      // 锁草稿按「此刻」的聊天与隔离键解析作用域，写入前再核对一次。
+      if (!saveContextStillMatches(saveContextKey)) return rejectChangedSaveContext();
       saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
       if (isSqliteMode()) await reloadStorageProvider();
       await refreshMergedDataAndNotify_ACU();

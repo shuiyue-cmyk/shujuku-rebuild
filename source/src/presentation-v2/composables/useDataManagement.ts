@@ -48,6 +48,7 @@ import type { MixedStorageCommitAction_ACU } from '../../shared/models/mixed-sto
 import { commitPreparedV2Recovery_ACU, prepareV2Recovery_ACU, scanV2IsolationDiagnostics_ACU, type V2IsolationDiagnostic_ACU, type V2RecoverySummary_ACU } from '../../service/table/table-v2-recovery-service';
 import { useToastStore } from '../stores/toast-store';
 import { countAiFloors_ACU } from '../../shared/ai-floor';
+import { CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU, captureChatActionScope_ACU, isChatActionScopeCurrent_ACU, type ChatActionScope_ACU } from './chat-action-scope';
 
 export type DataMgmtMessageKind = 'info' | 'success' | 'warning' | 'error';
 
@@ -683,10 +684,24 @@ export function useDataManagement() {
     }
   }
 
+  /** 危险操作在弹确认框前冻结所属聊天，确认后由执行函数核对（R10A-01）。 */
+  function captureActionScope(): ChatActionScope_ACU {
+    return captureChatActionScope_ACU();
+  }
+
+  function rejectStaleActionScope(scope: ChatActionScope_ACU | null | undefined): boolean {
+    if (isChatActionScopeCurrent_ACU(scope)) return false;
+    message.value = null;
+    toast.warning(CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU, { muteable: false, durationMs: 6000 });
+    return true;
+  }
+
   async function restoreTableCheckpoint(
     checkpoint: TableCheckpointFileV1_ACU,
     options: TableCheckpointRestoreOptions_ACU = {},
+    scope?: ChatActionScope_ACU,
   ): Promise<void> {
+    if (rejectStaleActionScope(scope)) return;
     busyAction.value = 'restore-checkpoint';
     try {
       const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint, options);
@@ -732,15 +747,27 @@ export function useDataManagement() {
     }
   }
 
-  async function resetAllDefaults(options: ResetDefaultsCleanupOptions = {}): Promise<void> {
+  async function resetAllDefaults(
+    options: ResetDefaultsCleanupOptions = {},
+    scope?: ChatActionScope_ACU,
+  ): Promise<void> {
     const cleanup = normalizeResetDefaultsOptions(options);
     if (!hasSelectedResetDefaultsOption(cleanup)) {
       toast.warning('未选择需要恢复或清理的项目。');
       return;
     }
+    if (rejectStaleActionScope(scope)) return;
 
     busyAction.value = 'reset-defaults';
     let resetSnapshot: ResetTransactionSnapshot_ACU | null = null;
+    // R10A-04：每一步都现读「当前聊天」；中途切了聊天就停下，后半程不能落到新聊天。
+    const runScope = scope ?? captureActionScope();
+    let chatSwitchedMidway = false;
+    const assertSameChat = () => {
+      if (isChatActionScopeCurrent_ACU(runScope)) return;
+      chatSwitchedMidway = true;
+      throw new Error('恢复默认执行期间聊天已切换。');
+    };
     try {
       resetSnapshot = captureResetTransaction_ACU();
       if (!resetSnapshot) throw new Error('无法创建恢复默认操作快照。');
@@ -769,6 +796,7 @@ export function useDataManagement() {
           saveSettings: false,
           saveChat: true,
         });
+        assertSameChat();
       }
 
       if (cleanup.clearTemplateSnapshots) {
@@ -779,6 +807,7 @@ export function useDataManagement() {
           clearLegacyGuide: true,
           save: true,
         });
+        assertSameChat();
       }
 
       if (cleanup.restoreTemplateAndPrompts) {
@@ -793,6 +822,7 @@ export function useDataManagement() {
         if (typeof applied === 'object' && 'saved' in applied && applied.saved === false) {
           throw new Error((applied as any).error || '默认模板应用失败（当前聊天协调提交被拒绝）。');
         }
+        assertSameChat();
       } else if (cleanup.clearTemplateSnapshots) {
         applyTemplateScopeForCurrentChat_ACU();
       }
@@ -823,7 +853,11 @@ export function useDataManagement() {
       const rollbackError = resetSnapshot ? await rollbackResetTransaction_ACU(resetSnapshot) : null;
       logError_ACU('[ACU-V2] resetAllDefaults failed', e);
       message.value = null;
-      toast.error(rollbackError ? `恢复默认失败：${rollbackError}。` : '恢复默认失败，详情见运行日志。');
+      if (chatSwitchedMidway) {
+        toast.error('恢复默认执行期间聊天已切换，后续步骤已停止，没有改动新聊天；原聊天里已完成的部分未回滚，请回到原聊天检查后重新执行恢复默认。');
+      } else {
+        toast.error(rollbackError ? `恢复默认失败：${rollbackError}。` : '恢复默认失败，详情见运行日志。');
+      }
     } finally {
       busyAction.value = '';
     }
@@ -867,8 +901,16 @@ export function useDataManagement() {
     return isFullRangeDeletionRequest_ACU(start, end, getAiMessageCount()) ? 'purge' : 'range';
   }
 
-  async function deleteLocalData(mode: 'current' | 'all'): Promise<void> {
-    const expectedPath = resolveDeletionPath(mode);
+  /**
+   * frozen：页面在确认框弹出前冻结的删除路径与所属聊天。路径必须用确认时的值交给服务层核对
+   * （此刻重算会与服务层同一时刻得出同一结论，「确认期间范围变化」守卫就失效了，R10B-09）。
+   */
+  async function deleteLocalData(
+    mode: 'current' | 'all',
+    frozen: { expectedPath?: 'purge' | 'range'; scope?: ChatActionScope_ACU } = {},
+  ): Promise<void> {
+    if (rejectStaleActionScope(frozen.scope)) return;
+    const expectedPath = frozen.expectedPath ?? resolveDeletionPath(mode);
     const sheetKeys = hasDeleteSheetSelection.value ? [...deleteSheetKeys.value] : null;
     busyAction.value = expectedPath === 'purge'
       ? 'purge-all-local'
@@ -967,6 +1009,7 @@ export function useDataManagement() {
   }
 
   return {
+    captureActionScope,
     message,
     busyAction,
     isolationCode,

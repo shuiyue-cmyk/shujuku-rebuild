@@ -49,6 +49,7 @@ import type {
 import {
   useToastStore
 } from '../stores/toast-store';
+import { CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU, isChatActionScopeCurrent_ACU, type ChatActionScope_ACU } from './chat-action-scope';
 
 type MessageKind = 'info' | 'success' | 'warning' | 'error';
 type BadgeVariant = 'neutral' | 'accent' | 'success' | 'warning' | 'danger';
@@ -546,8 +547,13 @@ export function useVectorIndexConfig() {
     }
   }
 
-  async function deleteCurrentIndex(): Promise<void> {
+  async function deleteCurrentIndex(scope?: ChatActionScope_ACU | null): Promise<void> {
     if (maintenanceBusy.value) return;
+    // R10A-04：确认的是弹窗时那个聊天的索引；确认期间切了聊天就不删。
+    if (!isChatActionScopeCurrent_ACU(scope)) {
+      notify('warning', CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU, { muteable: false, durationMs: 6000 });
+      return;
+    }
     maintenanceBusy.value = true;
     try {
       const changed = await deleteCurrentSummaryVectorIndexFromChat_ACU();

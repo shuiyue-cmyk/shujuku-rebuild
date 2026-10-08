@@ -204,6 +204,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import { captureChatActionScope_ACU } from '../../presentation-v2/composables/chat-action-scope';
 import { useApiPresetSelectOptions } from '../../presentation-v2/composables/useApiPresetSelectOptions';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
 import { useUiCloseGuard } from '../../presentation-v2/composables/useUiCloseGuard';
@@ -281,13 +282,14 @@ function onRerankBatchSizeChange(raw: string | number): void {
 }
 
 async function onDeleteCurrentIndex(): Promise<void> {
+  const scope = captureChatActionScope_ACU();
   const confirmed = await dialogStore.confirm({
     title: '删除当前索引',
     message: '删除当前聊天的交火索引？这会移除索引引用并清理可回收外置资产，之后需要重新构建。',
     confirmLabel: '删除索引',
     confirmVariant: 'danger',
   });
-  if (confirmed) void vector.deleteCurrentIndex();
+  if (confirmed) void vector.deleteCurrentIndex(scope);
 }
 
 function refreshAll(): void {

@@ -277,8 +277,9 @@ describe('自动正文替换入口判重（executeContentOptimization_ACU）', (
       summary: '一处改进',
       optimizedContent: '夜色漫过窗台。',
     }));
-    // 手动确认模式会弹对比框：这里只验登记接线，直接回放 apply 回调
-    h.showDiffDialogForLoop.mockImplementation((_index: number, _result: any, callback: any) => {
+    // 手动确认模式会弹对比框：末轮「应用并完成」由对话框写回（只写一次），再回放 apply 回调
+    h.showDiffDialogForLoop.mockImplementation(async (index: number, result: any, callback: any) => {
+      await h.replace(index, result.optimizedContent);
       callback('apply');
     });
 

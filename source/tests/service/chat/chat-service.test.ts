@@ -91,6 +91,19 @@ vi.mock('../../../src/service/table/table-service', () => ({
   persistTablesToChatMessage_ACU: mockPersistTablesToChatMessage,
 }));
 
+const { mockReloadStorageProvider, mockIsSqliteMode } = vi.hoisted(() => ({
+  mockReloadStorageProvider: vi.fn(async () => undefined),
+  mockIsSqliteMode: vi.fn(() => false),
+}));
+vi.mock('../../../src/service/table/table-storage-strategy', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  reloadStorageProvider: mockReloadStorageProvider,
+}));
+vi.mock('../../../src/service/table/storage-mode', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  isSqliteMode: mockIsSqliteMode,
+}));
+
 vi.mock('../../../src/service/table/table-update-commit', () => ({
   runTableUpdateCommit_ACU: mockRunTableUpdateCommit,
 }));
@@ -257,6 +270,44 @@ describe('replaceChatMessage_ACU', () => {
     mockGetChatArray.mockReturnValue([]);
     const result = await replaceChatMessage_ACU(5, '新内容');
     expect(result).toBe(false);
+  });
+
+  // R9-01：写回前核对优化开始时的楼层身份；滑动/删楼/切聊天后不得按下标写到别的正文上。
+  it('R9-01：带 expected 时楼层正文已变（滑动）则拒绝写回', async () => {
+    const { captureChatMessageWriteTarget_ACU } = await import('../../../src/service/chat/chat-message-write-target');
+    const chat = [{ is_user: false, mes: '旧 swipe', message_id: 'msg1', extra: {} }];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSetChatMessages.mockClear();
+    const expected = captureChatMessageWriteTarget_ACU(0);
+    chat[0].mes = '新 swipe';
+
+    const result = await replaceChatMessage_ACU(0, '旧 swipe 的优化版', { expected });
+
+    expect(result).toBe(false);
+    expect(mockSetChatMessages).not.toHaveBeenCalled();
+    expect(chat[0].mes).toBe('新 swipe');
+  });
+
+  it('R9-01：带 expected 时该下标已换成另一条消息（删楼/切聊天）则拒绝写回', async () => {
+    const { captureChatMessageWriteTarget_ACU } = await import('../../../src/service/chat/chat-message-write-target');
+    mockGetChatArray.mockReturnValue([{ is_user: false, mes: 'A', message_id: 'msg1', extra: {} }]);
+    const expected = captureChatMessageWriteTarget_ACU(0);
+    const other = [{ is_user: false, mes: 'A', message_id: 'msg1', extra: {} }];
+    mockGetChatArray.mockReturnValue(other);
+    mockSetChatMessages.mockClear();
+
+    expect(await replaceChatMessage_ACU(0, 'A 的优化版', { expected })).toBe(false);
+    expect(mockSetChatMessages).not.toHaveBeenCalled();
+    expect(other[0].extra).toEqual({});
+  });
+
+  it('R9-01：带 expected 且楼层未变时正常写回', async () => {
+    const { captureChatMessageWriteTarget_ACU } = await import('../../../src/service/chat/chat-message-write-target');
+    mockGetChatArray.mockReturnValue([{ is_user: false, mes: 'A', message_id: 'msg1', extra: {} }]);
+    mockSetChatMessages.mockResolvedValue(true);
+    const expected = captureChatMessageWriteTarget_ACU(0);
+
+    expect(await replaceChatMessage_ACU(0, 'A 的优化版', { expected })).toBe(true);
   });
 
   it('setChatMessages 不可用时使用降级方案', async () => {
@@ -2774,6 +2825,30 @@ describe('overrideLatestLayerWithTemplateCore_ACU', () => {
     expect(call.operations[0].kind).toBe('sheet_replace');
     expect(call.operations[0].sheet.content.length).toBe(1); // 只有表头
     expect(chat[0].TavernDB_ACU_IsolatedData).toBeUndefined();
+  });
+
+  // R9-02：sheet_replace 只写回放帧和 canonical 视图；SQLite 内存库仍持有旧行，
+  // 下一次写入的全量导出会让旧行复活，且 runtime 与回放的 row_id 错位。
+  it('R9-02：SQLite 模式提交成功后重建内存数据库', async () => {
+    mockGetChatArray.mockReturnValue([{ is_user: false }]);
+    mockIsSqliteMode.mockReturnValue(true);
+    mockReloadStorageProvider.mockClear();
+    try {
+      const count = await overrideLatestLayerWithTemplateCore_ACU({
+        sheet_0: { name: '物品表', content: [['row_id', '物品名'], ['1', '剑']] },
+      });
+      expect(count).toBe(1);
+      expect(mockReloadStorageProvider).toHaveBeenCalledOnce();
+    } finally {
+      mockIsSqliteMode.mockReturnValue(false);
+    }
+  });
+
+  it('R9-02：非 SQLite 模式不重建内存数据库', async () => {
+    mockGetChatArray.mockReturnValue([{ is_user: false }]);
+    mockReloadStorageProvider.mockClear();
+    await overrideLatestLayerWithTemplateCore_ACU({ sheet_0: { name: '物品表', content: [['row_id', '物品名']] } });
+    expect(mockReloadStorageProvider).not.toHaveBeenCalled();
   });
 });
 

@@ -649,6 +649,36 @@ describe("DashboardPage", () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  // R10A-04：关闭飞行模式会硬删大总结表；确认针对的是弹窗时的聊天，且执行期间不能重复触发。
+  it("R10A-04：飞行模式切换进行中再次触发不会重复执行", async () => {
+    const { mount, dashboard, disableFlightMode } = await mountDashboardPage();
+    let release!: () => void;
+    disableFlightMode.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve({ ok: true }); }));
+
+    const first = dashboard.setFlightMode(false);
+    await new Promise((r) => setTimeout(r, 0));
+    const second = await dashboard.setFlightMode(false);
+    release();
+    await first;
+
+    expect(second).toMatchObject({ ok: false, reason: "busy" });
+    expect(disableFlightMode).toHaveBeenCalledOnce();
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it("R10A-04：确认期间聊天已切换时不关闭飞行模式", async () => {
+    const { mount, dashboard, disableFlightMode } = await mountDashboardPage();
+
+    const result = await dashboard.setFlightMode(false, {
+      scope: { chatIdentity: "chat-previous", isolationKey: "" },
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: "context_changed" });
+    expect(String(result.error)).toContain("切换");
+    expect(disableFlightMode).not.toHaveBeenCalled();
+    mount.__resetAcuV2MountForTests();
+  });
+
   it("修改自动填表开关会保存 settings", async () => {
     const { mount, settings, saveSettings } = await mountDashboardPage();
 

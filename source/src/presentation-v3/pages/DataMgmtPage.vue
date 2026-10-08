@@ -207,6 +207,7 @@ function runtimeBusy(): boolean {
 
 async function onImportTableCheckpoint(file: File): Promise<void> {
   if (runtimeBusy()) return;
+  const scope = flow.captureActionScope();
   const checkpoint = await flow.parseTableCheckpoint(file);
   if (!checkpoint) return;
   const sourceStorageMode = checkpoint.source.storageMode;
@@ -249,12 +250,14 @@ ${floorNote}确认继续？`,
     confirmVariant: 'danger',
   });
   if (!confirmed || runtimeBusy()) return;
-  void flow.restoreTableCheckpoint(checkpoint, { restoredUpToAiFloor: floorValue });
+  void flow.restoreTableCheckpoint(checkpoint, { restoredUpToAiFloor: floorValue }, scope);
 }
 
 async function onDeleteLocalData(): Promise<void> {
   if (runtimeBusy()) return;
+  // 删除路径与所属聊天在确认前冻结，执行时交给 composable/服务层核对（R10A-01）。
   const path = flow.resolveDeletionPath('all');
+  const scope = flow.captureActionScope();
   if (flow.hasDeleteSheetSelection.value) {
     const names = flow.selectedDeleteSheetNames.value;
     const confirmed = await dialogStore.confirm({
@@ -268,7 +271,7 @@ async function onDeleteLocalData(): Promise<void> {
       confirmVariant: 'danger',
     });
     if (!confirmed || runtimeBusy()) return;
-    void flow.deleteLocalData('all');
+    void flow.deleteLocalData('all', { expectedPath: path, scope });
     return;
   }
   if (path === 'range') {
@@ -282,7 +285,7 @@ async function onDeleteLocalData(): Promise<void> {
       confirmVariant: 'danger',
     });
     if (!confirmed || runtimeBusy()) return;
-    void flow.deleteLocalData('all');
+    void flow.deleteLocalData('all', { expectedPath: path, scope });
     return;
   }
   // 范围覆盖全部 AI 楼层＝硬清空：两级确认
@@ -308,7 +311,7 @@ async function onDeleteLocalData(): Promise<void> {
     confirmVariant: 'danger',
   });
   if (!again || runtimeBusy()) return;
-  void flow.deleteLocalData('all');
+  void flow.deleteLocalData('all', { expectedPath: path, scope });
 }
 
 async function onCommitMixedStorageDecision(action: MixedStorageCommitAction_ACU): Promise<void> {
@@ -362,6 +365,7 @@ async function onCommitV2Recovery(isOrphan: boolean): Promise<void> {
 
 async function onResetAllDefaults(): Promise<void> {
   if (runtimeBusy()) return;
+  const scope = flow.captureActionScope();
   const selected = await dialogStore.selectMany<ResetDefaultsCleanupKey>({
     title: '恢复默认配置',
     message: '选择本次要恢复或清理的项目。默认全选；取消某一项后会保留对应内容。不会删除聊天正文、本地楼层数据、API 配置或全局预设库。',
@@ -379,7 +383,7 @@ async function onResetAllDefaults(): Promise<void> {
     clearTableLocks: picked.has('clear-table-locks'),
     clearTableOrder: picked.has('clear-table-order'),
   };
-  void flow.resetAllDefaults(cleanup);
+  void flow.resetAllDefaults(cleanup, scope);
 }
 
 function refreshAll(): void {

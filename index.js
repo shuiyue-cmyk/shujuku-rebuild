@@ -92549,7 +92549,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261008-07"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261008-13"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92568,7 +92568,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261008-07";
+        const stamp = "20261008-13";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -105279,6 +105279,39 @@ async function runSqliteRuntimeMutationCommit_ACU(options) {
 }
 
 /**
+ * 正文写回目标的身份快照（R9-01）。
+ *
+ * 正文优化要等 AI 十几秒到一分钟；这期间用户可以滑动（同一楼对象换成新 swipe 的正文）、
+ * 删楼（下标 n 变成另一条消息）或切聊天（下标 n 是另一个聊天的楼）。按下标写回会写错楼
+ * 甚至写错聊天，所以在读取正文时拍下快照，写回前逐项核对，任一不一致就放弃写回。
+ */
+const CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU = '正文优化期间该楼层已被滑动、删除或修改，或已切换聊天；本次优化结果已丢弃，没有写回。';
+function captureChatMessageWriteTarget_ACU(messageIndex) {
+    const message = getChatArray_ACU()?.[messageIndex];
+    if (!message || typeof message !== 'object')
+        return null;
+    return {
+        messageIndex,
+        message,
+        messageId: message.message_id,
+        swipeId: message.swipe_id,
+        mes: message.mes,
+        chatIdentity: String(currentChatFileIdentifier_ACU || ''),
+    };
+}
+function isChatMessageWriteTargetCurrent_ACU(target) {
+    if (!target)
+        return false;
+    const message = getChatArray_ACU()?.[target.messageIndex];
+    return !!message
+        && message === target.message
+        && message.message_id === target.messageId
+        && message.swipe_id === target.swipeId
+        && message.mes === target.mes
+        && String(currentChatFileIdentifier_ACU || '') === target.chatIdentity;
+}
+
+/**
  * service/vector/summary-vector-mirror-fold.ts — compaction 时把 vector head 折到新锚点
  *
  * 纯 I/O：resolver(楼层 < anchor) → 合并 pack + 新 manifest → 写 checkpoint@anchor →
@@ -106392,6 +106425,11 @@ async function replaceChatMessage_ACU(messageIndex, newContent, options = {}) {
             logError_ACU('[正文优化] 消息不存在, chat存在=', !!chat, 'messageIndex=', messageIndex);
             throw new Error('消息不存在');
         }
+        // R9-01：调用方传入读取正文时的快照；楼层被滑动/删除/修改或聊天已切换时拒绝按下标写回。
+        if (options.expected !== undefined && !isChatMessageWriteTargetCurrent_ACU(options.expected)) {
+            logWarn_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间已变化，拒绝写回。`);
+            return false;
+        }
         const oldContent = chat[messageIndex].mes;
         logDebug_ACU(`[正文优化] 原内容长度: ${oldContent?.length || 0}, 新内容长度: ${newContent?.length || 0}`);
         // 保存原始内容到 extra 字段，用于"重新优化"功能
@@ -107450,6 +107488,16 @@ async function overrideLatestLayerWithTemplateCore_ACU(templateData) {
     if (!commitResult.success) {
         logWarn_ACU(`[模板覆盖] 公共提交失败：${commitResult.error || 'unknown error'}`);
         return 0;
+    }
+    // R9-02：sheet_replace 只更新回放帧与 canonical 视图，SQLite 内存库仍持有旧行；
+    // 不重建的话，下一次写入的全量导出会让被清空的行复活，runtime 与回放的 row_id 也会错位。
+    if (isSqliteMode()) {
+        try {
+            await reloadStorageProvider();
+        }
+        catch (error) {
+            throw new Error(`模板覆盖已写入最新层，但 SQLite 运行时重建失败：${error instanceof Error ? error.message : String(error)}。请重新打开当前聊天后再继续操作。`);
+        }
     }
     return commitResult.value || 0;
 }
@@ -110670,7 +110718,7 @@ function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
         box-sizing: border-box;
       ">
         <h3 style="margin: 0 0 8px 0; color: var(--acu-accent, #7d4940); font-size: 1.1em; letter-spacing: 1px;">正文替换建议</h3>
-        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">${result.summary}</p>
+        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">${escapeHtml_ACU$1(String(result.summary || ''))}</p>
         ${result.totalLoops > 1 ? `<p style="margin: 0 0 12px 0; color: var(--acu-text-mute, #6a6055); font-size: 12px;">进度: 第 ${result.currentLoop}/${result.totalLoops} 轮</p>` : ''}
         <div class="optimization-list" style="margin-bottom: 16px; max-height: 400px; overflow-y: auto;">
           ${result.optimizations.map((opt, i) => `
@@ -110782,8 +110830,18 @@ function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
         // 如果是最后一轮，先应用优化
         if (isLastLoop) {
             logDebug_ACU(`[正文优化] 准备调用 replaceChatMessage_ACU...`);
-            const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, { originalContent: getOriginalContent_ACU(messageIndex) || originalContent });
+            const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, {
+                originalContent: getOriginalContent_ACU(messageIndex) || originalContent,
+                expected: result.writeTarget,
+            });
             logDebug_ACU(`[正文优化] replaceChatMessage_ACU 返回: ${success}`);
+            // R9-01：对话框打开期间楼层被滑动/删除或聊天已切换：结果作废，关闭对话框并结束本次优化。
+            if (!success && result.writeTarget !== undefined && !isChatMessageWriteTargetCurrent_ACU(result.writeTarget)) {
+                jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+                showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
+                callback('cancel');
+                return;
+            }
             if (!success) {
                 jQuery_API_ACU(this).prop('disabled', false).text(applyButtonText);
                 showToastr_ACU('error', '应用失败');
@@ -110954,6 +111012,8 @@ async function reoptimizeMessage_ACU(messageIndex) {
     }
     // 获取原始内容
     const originalContent = getOriginalContent_ACU(messageIndex) || message.mes;
+    // R9-01：AI 在途与对话框打开期间楼层可能被滑动、删除或切聊天；应用前按此快照复核。
+    const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
     if (!originalContent) {
         showToastr_ACU('error', '无法获取消息内容');
         return false;
@@ -110984,7 +111044,7 @@ async function reoptimizeMessage_ACU(messageIndex) {
             showToastr_ACU('info', '原文已足够好，无需优化');
             return true;
         }
-        showReoptimizationDialog_ACU(messageIndex, result, originalContent);
+        showReoptimizationDialog_ACU(messageIndex, result, originalContent, writeTarget);
         return true;
     }
     catch (error) {
@@ -111010,7 +111070,7 @@ async function reoptimizeMessage_ACU(messageIndex) {
  * @param {object} result - 优化结果
  * @param {string} originalContent - 原始内容
  */
-function showReoptimizationDialog_ACU(messageIndex, result, originalContent) {
+function showReoptimizationDialog_ACU(messageIndex, result, originalContent, writeTarget) {
     const dialogHtml = `
       <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
         position: fixed;
@@ -111032,7 +111092,7 @@ function showReoptimizationDialog_ACU(messageIndex, result, originalContent) {
         box-sizing: border-box;
       ">
         <h3 style="margin: 0 0 8px 0; color: var(--acu-accent, #7d4940); font-size: 1.1em; letter-spacing: 1px;">🔄 重新优化结果</h3>
-        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">${result.summary}</p>
+        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">${escapeHtml_ACU$1(String(result.summary || ''))}</p>
         <div class="optimization-list" style="margin-bottom: 16px; max-height: 400px; overflow-y: auto;">
           ${result.optimizations.map((opt, i) => `
             <div class="optimization-item" style="
@@ -111114,16 +111174,32 @@ function showReoptimizationDialog_ACU(messageIndex, result, originalContent) {
     // 绑定应用事件
     jQuery_API_ACU('#acu-opt-apply').on('click', async function () {
         jQuery_API_ACU(this).prop('disabled', true).text('应用中...');
-        const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, { originalContent: getOriginalContent_ACU(messageIndex) || originalContent });
+        const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, {
+            originalContent: getOriginalContent_ACU(messageIndex) || originalContent,
+            expected: writeTarget,
+        });
         if (success) {
             jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
             showToastr_ACU('success', '优化已应用');
+        }
+        else if (!isChatMessageWriteTargetCurrent_ACU(writeTarget)) {
+            jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+            showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
         }
         else {
             jQuery_API_ACU(this).prop('disabled', false).text('应用优化');
             showToastr_ACU('error', '应用失败');
         }
     });
+}
+/** 写回被拒或失败时的提示：楼层已变化与写入出错分开说明（R9-01）。 */
+function reportOptimizationWriteBackFailure_ACU(writeTarget) {
+    if (!isChatMessageWriteTargetCurrent_ACU(writeTarget)) {
+        showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
+    }
+    else {
+        showToastr_ACU('error', '正文优化结果写回失败，原文未改动，详情见运行日志。');
+    }
 }
 /**
  * 自动替换成功写回后登记「已处理」指纹，供下一次自动触发判重。
@@ -111182,6 +111258,8 @@ async function executeContentOptimization_ACU(messageIndex) {
         messageId: message.message_id,
         baseContent: content
     });
+    // R9-01：AI 在途期间楼层可能被滑动、删除或切聊天；写回前按此快照复核，不按下标盲写。
+    const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
     // [新增] 获取用户消息（用于$8占位符）
     let userMessage = '';
     for (let i = messageIndex - 1; i >= 0; i--) {
@@ -111287,16 +111365,18 @@ async function executeContentOptimization_ACU(messageIndex) {
                 }
                 return true;
             }
-            const writtenBack = await replaceChatMessage_ACU(messageIndex, finalOptimizedContent);
-            if (writtenBack) {
-                recordAutoProcessedAfterWriteBack_ACU(messageIndex, finalOptimizedContent);
-            }
+            const writtenBack = await replaceChatMessage_ACU(messageIndex, finalOptimizedContent, { expected: writeTarget });
             if (config.seamlessMode) {
                 hideOptimizationOverlay_ACU();
             }
             else {
                 hideOptimizationProgressToast_ACU();
             }
+            if (!writtenBack) {
+                reportOptimizationWriteBackFailure_ACU(writeTarget);
+                return false;
+            }
+            recordAutoProcessedAfterWriteBack_ACU(messageIndex, finalOptimizedContent);
             if (config.showDiff && !config.seamlessMode) {
                 // 自动链已写回：用只读结果对话框展示对比（原文/修改方案/优化），不用 toast。
                 // 对话框是 DOM 覆盖层，不受静默提示框拦截；无感模式下保持无打扰，不弹框。
@@ -111313,7 +111393,7 @@ async function executeContentOptimization_ACU(messageIndex) {
         }
         else {
             hideOptimizationProgressToast_ACU();
-            return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, loopCount);
+            return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, loopCount, writeTarget);
         }
     }
     catch (error) {
@@ -111342,14 +111422,34 @@ async function executeContentOptimization_ACU(messageIndex) {
  * @param {string} content - 原始内容
  * @param {string} userMessage - 用户消息
  * @param {number} totalLoops - 总循环次数
+ * @param writeTarget - 读取正文时的楼层快照，写回前复核（R9-01）
  * @param {number} currentLoop - 当前循环次数（内部使用）
  * @param {string} currentContent - 当前内容（内部使用）
  * @param {Array} totalOptimizations - 累计优化项（内部使用）
  * @returns {Promise<boolean>} 是否成功
  */
-async function executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, currentLoop = 1, currentContent = null, totalOptimizations = []) {
+async function executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop = 1, currentContent = null, totalOptimizations = []) {
     // 使用传入的当前内容，或者原始内容
     let workingContent = currentContent !== null ? currentContent : content;
+    // R9-08：前几轮「应用并继续」只把结果交给下一轮，不写回。后续轮次失败、无需优化或跳过时，
+    // 要写回已确认的内容，否则用户确认过的修改会丢失，界面却报成功。填表只触发一次。
+    const finishWithConfirmedContent = async (confirmedContent, confirmedOptimizations) => {
+        if (confirmedOptimizations.length > 0 && confirmedContent !== content) {
+            const written = await replaceChatMessage_ACU(messageIndex, confirmedContent, { expected: writeTarget });
+            if (written) {
+                recordAutoProcessedAfterWriteBack_ACU(messageIndex, confirmedContent);
+                showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${confirmedOptimizations.length} 处改进`);
+            }
+            else {
+                reportOptimizationWriteBackFailure_ACU(writeTarget);
+            }
+        }
+        else {
+            showToastr_ACU('info', '正文无需优化');
+        }
+        await triggerAutomaticUpdateIfNeeded_ACU();
+        return true;
+    };
     logDebug_ACU(`[正文优化-手动确认] 执行第 ${currentLoop}/${totalLoops} 轮优化`);
     // 执行优化
     const result = await performContentOptimization_ACU(workingContent, {
@@ -111363,9 +111463,8 @@ async function executeContentOptimizationWithConfirm_ACU(messageIndex, content, 
             showToastr_ACU('error', `正文优化失败: ${result.error}`);
             return false;
         }
-        // 如果是后续轮次失败，使用之前的结果触发填表
-        await triggerAutomaticUpdateIfNeeded_ACU();
-        return true;
+        // 后续轮次失败：写回此前已确认的结果，再触发填表
+        return finishWithConfirmedContent(workingContent, totalOptimizations);
     }
     // 检查是否有实际优化
     if (!result.optimizations || result.optimizations.length === 0) {
@@ -111373,18 +111472,11 @@ async function executeContentOptimizationWithConfirm_ACU(messageIndex, content, 
         // 如果没有优化项，检查是否还有下一轮
         if (currentLoop < totalLoops) {
             // 继续下一轮（使用当前内容）
-            return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, currentLoop + 1, workingContent, totalOptimizations);
+            return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop + 1, workingContent, totalOptimizations);
         }
         else {
-            // 所有轮次完成，触发填表
-            if (totalOptimizations.length > 0) {
-                showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${totalOptimizations.length} 处改进`);
-            }
-            else {
-                showToastr_ACU('info', '正文无需优化');
-            }
-            await triggerAutomaticUpdateIfNeeded_ACU();
-            return true;
+            // 所有轮次完成：写回此前已确认的结果，再触发填表
+            return finishWithConfirmedContent(workingContent, totalOptimizations);
         }
     }
     // 累积优化项
@@ -111397,21 +111489,19 @@ async function executeContentOptimizationWithConfirm_ACU(messageIndex, content, 
             optimizedContent: result.optimizedContent,
             currentLoop: currentLoop,
             totalLoops: totalLoops,
-            totalOptimizations: newTotalOptimizations
+            totalOptimizations: newTotalOptimizations,
+            writeTarget
         }, async (action) => {
             if (action === 'apply') {
                 // 用户确认应用
                 if (currentLoop < totalLoops) {
                     // 还有下一轮，继续优化
-                    const nextResult = await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, currentLoop + 1, result.optimizedContent, newTotalOptimizations);
+                    const nextResult = await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop + 1, result.optimizedContent, newTotalOptimizations);
                     resolve(nextResult);
                 }
                 else {
-                    // 所有轮次完成，应用最终结果并触发填表
-                    const confirmWrittenBack = await replaceChatMessage_ACU(messageIndex, result.optimizedContent);
-                    if (confirmWrittenBack) {
-                        recordAutoProcessedAfterWriteBack_ACU(messageIndex, result.optimizedContent);
-                    }
+                    // 所有轮次完成：末轮对话框已按快照复核并写回（只写一次），这里登记已处理并触发填表
+                    recordAutoProcessedAfterWriteBack_ACU(messageIndex, result.optimizedContent);
                     showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${newTotalOptimizations.length} 处改进`);
                     await triggerAutomaticUpdateIfNeeded_ACU();
                     resolve(true);
@@ -111420,24 +111510,14 @@ async function executeContentOptimizationWithConfirm_ACU(messageIndex, content, 
             else if (action === 'skip') {
                 // 用户跳过本轮，但继续下一轮
                 if (currentLoop < totalLoops) {
-                    const nextResult = await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, currentLoop + 1, workingContent, // 使用未优化的内容
+                    const nextResult = await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop + 1, workingContent, // 使用未优化的内容
                     totalOptimizations // 不累积本轮优化项
                     );
                     resolve(nextResult);
                 }
                 else {
-                    // 最后一轮跳过
-                    if (totalOptimizations.length > 0) {
-                        // 如果有之前的优化，应用之前的结果
-                        // 注意：这里需要应用之前累积的优化内容
-                        await triggerAutomaticUpdateIfNeeded_ACU();
-                        showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${totalOptimizations.length} 处改进`);
-                    }
-                    else {
-                        showToastr_ACU('info', '正文优化已跳过');
-                    }
-                    await triggerAutomaticUpdateIfNeeded_ACU();
-                    resolve(true);
+                    // 最后一轮跳过：写回此前已确认的结果
+                    resolve(await finishWithConfirmedContent(workingContent, totalOptimizations));
                 }
             }
             else {
@@ -121909,11 +121989,19 @@ let pendingAfterRun_ACU = false;
 /** 最近一次调度原因；事件流里取最新一条标记 dirty，避免旧原因覆盖新原因。 */
 let latestReason_ACU = 'chat_modified_swiped';
 /**
+ * R9-03：本轮是否含删楼（粘性）。删楼后 1.2s 内再滑动，最新原因会变成「滑动」，
+ * 但被删楼层携带的 checkpoint 仍需先前移恢复，否则冷回放会把丢失固化。
+ * 执行时读取并清零；执行中到达的删楼留给补跑轮。
+ */
+let pendingDeletion_ACU = false;
+/**
  * 触发一次聊天变更刷新请求。同一时刻最多一轮执行；
  * 事件在 trailing 窗口内到达会被聚合，超过 MAX_WAIT_MS 则强制立即执行。
  */
 function scheduleChatMutationRefresh_ACU(reason) {
     latestReason_ACU = reason;
+    if (reason === 'chat_modified_deleted')
+        pendingDeletion_ACU = true;
     generation_ACU += 1;
     const now = Date.now();
     if (firstRequestAt_ACU === 0)
@@ -121937,6 +122025,7 @@ function cancelPendingChatMutationRefresh_ACU() {
     _set_chatMutationDebounceTimer_ACU(null);
     generation_ACU += 1; // 使已排队的 runMutationRound_ACU 变为过期代次
     firstRequestAt_ACU = 0;
+    pendingDeletion_ACU = false; // 旧聊天的删楼不能在新聊天上做恢复
 }
 async function runMutationRound_ACU() {
     if (running_ACU$1) {
@@ -121946,11 +122035,13 @@ async function runMutationRound_ACU() {
     running_ACU$1 = true;
     const startedGeneration = generation_ACU;
     firstRequestAt_ACU = 0;
+    const roundHasDeletion = pendingDeletion_ACU;
+    pendingDeletion_ACU = false;
     try {
         // S0-4：删楼轮次先做 checkpoint 前移恢复，再进入冷回放——被删楼层携带的
         // 回放根 / 休眠表 checkpoint 若不先嫁接到幸存楼层，冷回放会把丢失固化。
         // 失败隔离：恢复失败（守卫内部已回滚）不阻断后续冷回放。
-        if (latestReason_ACU === 'chat_modified_deleted') {
+        if (roundHasDeletion) {
             try {
                 await recoverLostCheckpointsAfterMessageDeletion_ACU();
             }
@@ -121976,7 +122067,7 @@ async function runMutationRound_ACU() {
         catch (e) {
             logError_ACU(`[聊天变更] 合并数据与 UI 刷新失败: ${e?.message}`);
         }
-        const realignDirtyReason = latestReason_ACU;
+        const realignDirtyReason = roundHasDeletion ? 'chat_modified_deleted' : latestReason_ACU;
         const summaryTable = findSummaryTable_ACU();
         if (currentChatFileIdentifier_ACU && summaryTable?.summaryKey) {
             const scopeKey = buildSummaryVectorIndexArchiveScopeKey_ACU({
@@ -122028,6 +122119,7 @@ function __resetChatMutationSchedulerForTests_ACU() {
     firstRequestAt_ACU = 0;
     running_ACU$1 = false;
     pendingAfterRun_ACU = false;
+    pendingDeletion_ACU = false;
 }
 
 /**
@@ -153738,7 +153830,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261008-07";
+        const stamp = "20261008-13";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -169665,6 +169757,227 @@ function acuMatchesMedia(query) {
     return typeof win.matchMedia === 'function' && win.matchMedia(query).matches;
 }
 
+let nextDialogId = 1;
+function makeDialogId() {
+    return `dialog-${nextDialogId++}`;
+}
+// 倒计时定时器放模块级：store state 只存剩余秒数（可序列化），句柄不进 state。
+let confirmCountdownTimer = null;
+function clearConfirmCountdownTimer() {
+    if (confirmCountdownTimer !== null) {
+        acuClearInterval(confirmCountdownTimer);
+        confirmCountdownTimer = null;
+    }
+}
+const useDialogStore = defineStore("acu-v2-dialog", {
+    state: () => ({
+        active: null,
+        queue: [],
+        inputValue: "",
+        checkedValues: {},
+        confirmCountdownRemaining: 0,
+    }),
+    getters: {
+        confirmDisabled(state) {
+            if (state.confirmCountdownRemaining > 0)
+                return true;
+            if (state.active?.kind === "prompt") {
+                if (state.active.requireNonEmpty === false)
+                    return false;
+                return !String(state.inputValue || "").trim();
+            }
+            if (state.active?.kind === "multiselect") {
+                if (state.active.requireNonEmpty === false)
+                    return false;
+                return !Object.values(state.checkedValues).some(Boolean);
+            }
+            return false;
+        },
+    },
+    actions: {
+        confirm(options) {
+            return this.enqueue({
+                id: makeDialogId(),
+                kind: "confirm",
+                title: options.title,
+                message: options.message,
+                dangerMessage: options.dangerMessage,
+                confirmLabel: options.confirmLabel || "确认",
+                cancelLabel: options.cancelLabel || "取消",
+                confirmVariant: options.confirmVariant || "primary",
+                requireNonEmpty: false,
+                confirmCountdownSeconds: options.confirmCountdownSeconds,
+                resolve: () => { },
+            }).then((value) => value === true);
+        },
+        prompt(options) {
+            return this.enqueue({
+                id: makeDialogId(),
+                kind: "prompt",
+                title: options.title,
+                message: options.message,
+                label: options.label,
+                initialValue: String(options.defaultValue || ""),
+                placeholder: options.placeholder,
+                confirmLabel: options.confirmLabel || "确认",
+                cancelLabel: options.cancelLabel || "取消",
+                confirmVariant: options.confirmVariant || "primary",
+                requireNonEmpty: options.requireNonEmpty !== false,
+                resolve: () => { },
+            }).then((value) => (typeof value === "string" ? value : null));
+        },
+        choose(options) {
+            return this.enqueue({
+                id: makeDialogId(),
+                kind: "choice",
+                title: options.title,
+                message: options.message,
+                actions: options.actions,
+                cancelLabel: options.cancelLabel || "取消",
+                badge: options.badge,
+                requireNonEmpty: false,
+                resolve: () => { },
+            }).then((value) => (typeof value === "string" ? value : null));
+        },
+        selectMany(options) {
+            return this.enqueue({
+                id: makeDialogId(),
+                kind: "multiselect",
+                title: options.title,
+                message: options.message,
+                checkboxOptions: options.options,
+                confirmLabel: options.confirmLabel || "确认",
+                cancelLabel: options.cancelLabel || "取消",
+                confirmVariant: options.confirmVariant || "primary",
+                badge: options.badge,
+                requireNonEmpty: options.requireNonEmpty !== false,
+                resolve: () => { },
+            }).then((value) => (Array.isArray(value) ? value : null));
+        },
+        setCheckedValue(value, checked) {
+            this.checkedValues = {
+                ...this.checkedValues,
+                [value]: checked,
+            };
+        },
+        /**
+         * R10A-01：切到其他聊天时，把属于旧聊天的当前与排队弹窗全部按取消处理。
+         * 弹窗内容（删除范围、恢复目标、模板覆盖……）都是针对弹出时的聊天写的，
+         * 在新聊天上点确认会把危险操作落到用户从未确认过的聊天。
+         */
+        cancelForChatChange(nextChatKey) {
+            const stale = (dialog) => String(dialog.chatKey ?? "") !== String(nextChatKey ?? "");
+            const cancelValue = (dialog) => (dialog.kind === "confirm" ? false : null);
+            const staleQueued = this.queue.filter(stale);
+            this.queue = this.queue.filter(dialog => !stale(dialog));
+            for (const dialog of staleQueued)
+                dialog.resolve(cancelValue(dialog));
+            if (this.active && stale(this.active))
+                this.cancelActive();
+        },
+        cancelActive() {
+            const dialog = this.active;
+            this.active = null;
+            this.inputValue = "";
+            this.checkedValues = {};
+            dialog?.resolve(dialog.kind === "confirm" ? false : null);
+            this.activateNext();
+        },
+        submitActive(value) {
+            const dialog = this.active;
+            if (!dialog)
+                return;
+            // 倒计时未归零时硬性拒绝提交（UI 禁用只是表现层，这里是真正的 guard）。
+            if (this.confirmCountdownRemaining > 0)
+                return;
+            if (dialog.kind === "prompt") {
+                const next = String(this.inputValue || "").trim();
+                if (dialog.requireNonEmpty !== false && !next)
+                    return;
+                this.active = null;
+                this.inputValue = "";
+                this.checkedValues = {};
+                dialog.resolve(next);
+                this.activateNext();
+                return;
+            }
+            if (dialog.kind === "confirm") {
+                this.active = null;
+                this.inputValue = "";
+                this.checkedValues = {};
+                dialog.resolve(true);
+                this.activateNext();
+                return;
+            }
+            if (dialog.kind === "multiselect") {
+                const selected = (dialog.checkboxOptions || [])
+                    .filter(option => this.checkedValues[option.value] === true)
+                    .map(option => option.value);
+                if (dialog.requireNonEmpty !== false && selected.length === 0)
+                    return;
+                this.active = null;
+                this.inputValue = "";
+                this.checkedValues = {};
+                dialog.resolve(selected);
+                this.activateNext();
+                return;
+            }
+            this.active = null;
+            this.inputValue = "";
+            this.checkedValues = {};
+            dialog.resolve(value ?? null);
+            this.activateNext();
+        },
+        __resetForTests() {
+            if (this.active)
+                this.active.resolve(null);
+            for (const dialog of this.queue)
+                dialog.resolve(null);
+            this.active = null;
+            this.queue = [];
+            this.inputValue = "";
+            this.checkedValues = {};
+            clearConfirmCountdownTimer();
+            this.confirmCountdownRemaining = 0;
+        },
+        enqueue(request) {
+            return new Promise((resolve) => {
+                const next = { ...request, chatKey: String(currentChatFileIdentifier_ACU || ""), resolve };
+                if (this.active)
+                    this.queue.push(next);
+                else
+                    this.activateRequest(next);
+            });
+        },
+        activateNext() {
+            this.activateRequest(this.queue.shift() || null);
+        },
+        activateRequest(request) {
+            this.active = request;
+            this.inputValue = request?.kind === "prompt" ? String(request.initialValue || "") : "";
+            if (request?.kind === "multiselect") {
+                this.checkedValues = Object.fromEntries((request.checkboxOptions || []).map(option => [option.value, option.defaultChecked === true]));
+            }
+            else {
+                this.checkedValues = {};
+            }
+            clearConfirmCountdownTimer();
+            const countdown = Math.max(0, Math.floor(request?.confirmCountdownSeconds || 0));
+            this.confirmCountdownRemaining = countdown;
+            if (countdown > 0) {
+                confirmCountdownTimer = acuSetInterval(() => {
+                    if (this.confirmCountdownRemaining > 1) {
+                        this.confirmCountdownRemaining -= 1;
+                        return;
+                    }
+                    this.confirmCountdownRemaining = 0;
+                    clearConfirmCountdownTimer();
+                }, 1000);
+            }
+        },
+    },
+});
+
 /**
  * api-preset-store — API 页状态边界（阶段 1 / D17，阶段 B 重构）
  *
@@ -170343,6 +170656,13 @@ function useChatChangedListener() {
         .filter((name) => typeof name === 'string' && name.length > 0);
     function onChatChanged(chatFileName) {
         logDebug_ACU(`[ACU-V2] CHAT_CHANGED 收到: "${chatFileName}"，将延迟刷新 v2 store`);
+        // 立即（不等延迟刷新）取消属于旧聊天的未决弹窗，见 dialog-store cancelForChatChange。
+        try {
+            useDialogStore().cancelForChatChange(cleanChatName_ACU(String(chatFileName || '')));
+        }
+        catch (e) {
+            logWarn_ACU('[ACU-V2] CHAT_CHANGED 取消旧聊天弹窗异常', e);
+        }
         if (pendingTimer)
             clearTimeout(pendingTimer);
         pendingTimer = setTimeout(() => {
@@ -174030,7 +174350,7 @@ function prepareTemplateSheetsForCommit_ACU(data, sheetKeys) {
     }
     return { removedNullRowCount: normalization.removedRows.length };
 }
-async function saveGlobalTemplateSnapshot(orderedData, interactions) {
+async function saveGlobalTemplateSnapshot(orderedData, interactions, contextStillMatches = () => true) {
     const templateObj = {};
     Object.keys(orderedData || {}).forEach(key => {
         if (!key.startsWith('sheet_'))
@@ -174082,6 +174402,9 @@ async function saveGlobalTemplateSnapshot(orderedData, interactions) {
     }
     if (!finalGlobalPresetName)
         return { status: 'cancelled' };
+    // R10A-03：命名/覆盖确认期间可能切了聊天；之后的模板切换会作用于「此刻」的聊天。
+    if (!contextStillMatches())
+        return { status: 'context_changed' };
     const preparedSnapshot = sanitizeTemplateSnapshotForChat_ACU(templateObj);
     // 比较对象是「目标预设自身」的 templateStr，而不是全局 profile 串：
     // 目标预设不存在（新建场景）视为有变化，必须落库。
@@ -174108,101 +174431,6 @@ async function saveGlobalTemplateSnapshot(orderedData, interactions) {
         throw new Error(typeof applied.error === 'string' && applied.error ? applied.error : '模板快照应用失败。');
     }
     return { status: 'saved', presetName: finalGlobalPresetName };
-}
-async function saveCurrentDataToChat(sheetKeysToSave, deletedSheetKeys) {
-    const chat = getChatArray_ACU();
-    if (!chat.length)
-        return 'memory-only';
-    const isolationKey = getCurrentIsolationKey_ACU();
-    const allSheetKeys = sheetKeysToSave.filter(key => !!currentJsonTableData_ACU?.[key]);
-    const latestAiIndex = getLatestAiMessageIndexFromChat_ACU(chat);
-    const bucketByIndex = {};
-    allSheetKeys.forEach(key => {
-        const table = currentJsonTableData_ACU?.[key];
-        const history = resolveTableHistoryStateFromChat_ACU(chat, {
-            sheetKey: key,
-            isSummaryTable: table ? isSummaryOrOutlineTable_ACU(table.name) : false,
-            isolationKey,
-            settings: settings_ACU,
-        });
-        const idx = history.latestDataMessageIndex !== -1
-            ? history.latestDataMessageIndex
-            : latestAiIndex;
-        if (idx === -1)
-            return;
-        if (!bucketByIndex[idx])
-            bucketByIndex[idx] = [];
-        bucketByIndex[idx].push(key);
-    });
-    if (Object.keys(bucketByIndex).length === 0 && latestAiIndex !== -1) {
-        bucketByIndex[latestAiIndex] = [...allSheetKeys];
-    }
-    if (Object.keys(bucketByIndex).length === 0)
-        return 'memory-only';
-    for (const [indexStr, keys] of Object.entries(bucketByIndex)) {
-        const idx = Number.parseInt(indexStr, 10);
-        if (Number.isNaN(idx))
-            continue;
-        const writeSet = keys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
-        const commitResult = await runTableUpdateCommit_ACU({
-            source: 'manual_crud',
-            reason: 'visualizer_v2_save',
-            isolationKey,
-            writeSet,
-            revisionWriteSet: writeSet,
-            initialData: currentJsonTableData_ACU,
-            targetMessageIndex: idx,
-            targetSheetKeys: keys,
-            updateGroupKeys: null,
-            trackingSheetKeys: [],
-            trackAsUpdate: false,
-            operations: keys
-                .filter(sheetKey => Boolean(currentJsonTableData_ACU?.[sheetKey]))
-                .map(sheetKey => ({ kind: 'sheet_replace', sheetKey, sheet: currentJsonTableData_ACU[sheetKey], reason: 'manual_crud' })),
-        }, () => ({
-            success: true,
-            value: null,
-            tableData: currentJsonTableData_ACU,
-            mutationResult: { changes: keys.length, errors: [] },
-        }));
-        if (!commitResult.success) {
-            logWarn_ACU('[ACU-V2 Visualizer] save commit failed:', commitResult.error);
-        }
-    }
-    if (deletedSheetKeys.length > 0) {
-        const result = await purgeSheetKeysFromChatHistoryHard_ACU(deletedSheetKeys);
-        if (result?.changed && isSqliteMode()) {
-            try {
-                await reloadStorageProvider();
-            }
-            catch (error) {
-                logWarn_ACU('[ACU-V2 Visualizer] reloadStorageProvider failed:', error);
-            }
-        }
-    }
-    await refreshMergedDataAndNotify_ACU();
-    const sourceTableKey = allSheetKeys.find(sheetKey => {
-        const table = currentJsonTableData_ACU?.[sheetKey];
-        return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
-    });
-    if (sourceTableKey && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
-        try {
-            await enqueueSummaryVectorIndexFlush_ACU({
-                sourceTableKey,
-                reason: 'visualizer_v2_save',
-            });
-        }
-        catch (error) {
-            logWarn_ACU('[ACU-V2 Visualizer] summary vector index queue failed:', error);
-        }
-    }
-    try {
-        topLevelWindow_ACU.AutoCardUpdaterAPI?._notifyTableUpdate?.();
-    }
-    catch (error) {
-        logDebug_ACU('[ACU-V2 Visualizer] table update notification skipped:', error);
-    }
-    return 'saved';
 }
 function useVisualizerSave(interactions = {}) {
     const visualizer = useVisualizerStore();
@@ -174245,6 +174473,12 @@ function useVisualizerSave(interactions = {}) {
                 toastStore.error('行数据增量与整表删除无法原子提交；请分别保存行数据和删表操作。', { muteable: false });
                 return false;
             }
+            // R10A-02：删表要连同模板一起原子提交。数据路径只硬删数据，模板里的表还在，
+            // 重新载入后会以空表回来；markSaved('data') 还会把删除意图从草稿里抹掉。
+            if (deletedSheetKeys.length > 0) {
+                toastStore.error('删除整张表需要连同模板一起提交；请使用「保存模板到当前聊天」完成删表。', { muteable: false });
+                return false;
+            }
             const templateChanges = classifyVisualizerTemplateChanges_ACU(visualizer.templateBaseData, visualizer.tempData || {});
             const deletedSheetKeySet = new Set(deletedSheetKeys);
             const baseOrderWithoutDeleted = (visualizer.templateBaseSheetOrder || []).filter(key => !deletedSheetKeySet.has(key));
@@ -174254,11 +174488,13 @@ function useVisualizerSave(interactions = {}) {
                 || templateChanges.metadataChangedSheetKeys.length > 0
                 || templateChanges.mateChanged
                 || JSON.stringify(baseOrderWithoutDeleted) !== JSON.stringify(currentOrderWithoutDeleted);
-            if (hasDataChanges && hasPendingTemplateChanges) {
+            const hasLockChanges = visualizer.lockDirty;
+            // R10A-02：只有锁改动时同样拒绝。markSaved('data') 会把模板基线设成当前草稿，
+            // 未提交的改表名/改列/调顺序会被当成「已保存」吞掉，之后模板保存看不到任何变化。
+            if ((hasDataChanges || hasLockChanges) && hasPendingTemplateChanges) {
                 toastStore.error('数据保存不能混入未提交的模板变化；请先保存模板，再保存数据。', { muteable: false });
                 return false;
             }
-            const hasLockChanges = visualizer.lockDirty;
             const result = hasDataChanges
                 ? await applyVisualizerPendingDataOps_ACU(visualizer, saveContextKey)
                 : { success: true, changed: false };
@@ -174266,7 +174502,7 @@ function useVisualizerSave(interactions = {}) {
                 toastStore.error(result.error || '数据保存失败。', { muteable: false });
                 return false;
             }
-            if (!result.changed && deletedSheetKeys.length === 0 && !hasLockChanges) {
+            if (!result.changed && !hasLockChanges) {
                 // 数据路径不负责模板层配置。若检测到仅存在 mate 级配置变更（如全局注入配置），
                 // 给出可执行指引，而非误导性的「没有需要保存的」。
                 const mateChanged = classifyVisualizerTemplateChanges_ACU(visualizer.templateBaseData, visualizer.tempData).mateChanged;
@@ -174274,17 +174510,6 @@ function useVisualizerSave(interactions = {}) {
                     ? '全局注入配置属于模板层，请使用「保存模板到当前聊天」保存。'
                     : '没有需要保存的数据、锁或删表增量。', { muteable: false });
                 return false;
-            }
-            if (deletedSheetKeys.length > 0) {
-                const purgeResult = await purgeSheetKeysFromChatHistoryHard_ACU(deletedSheetKeys);
-                if (purgeResult?.changed && isSqliteMode()) {
-                    try {
-                        await reloadStorageProvider();
-                    }
-                    catch (error) {
-                        logWarn_ACU('[ACU-V2 Visualizer] reloadStorageProvider failed after sheet purge:', error);
-                    }
-                }
             }
             if (hasLockChanges)
                 saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
@@ -174317,10 +174542,9 @@ function useVisualizerSave(interactions = {}) {
             }
             catch { }
             visualizer.markSaved('data');
-            toastStore.success(deletedSheetKeys.length > 0 ? '数据增量、锁设置与删表清理已保存到当前消息。'
-                : result.changed && hasLockChanges ? '数据增量与锁设置已保存到当前消息。'
-                    : result.changed ? '数据增量已保存到当前消息。'
-                        : '表格锁设置已保存。', { muteable: false });
+            toastStore.success(result.changed && hasLockChanges ? '数据增量与锁设置已保存到当前消息。'
+                : result.changed ? '数据增量已保存到当前消息。'
+                    : '表格锁设置已保存。', { muteable: false });
             return true;
         });
     }
@@ -174929,9 +175153,15 @@ function useVisualizerSave(interactions = {}) {
                 renumberOrder: false,
                 applySpecialIndex: false,
             });
-            const globalTemplateResult = await saveGlobalTemplateSnapshot(orderedData, interactions);
+            const saveContextKey = currentVisualizerContextKey();
+            const globalTemplateResult = await saveGlobalTemplateSnapshot(orderedData, interactions, () => saveContextStillMatches(saveContextKey));
             if (globalTemplateResult.status === 'cancelled')
                 return false;
+            if (globalTemplateResult.status === 'context_changed')
+                return rejectChangedSaveContext();
+            // 锁草稿按「此刻」的聊天与隔离键解析作用域，写入前再核对一次。
+            if (!saveContextStillMatches(saveContextKey))
+                return rejectChangedSaveContext();
             saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
             if (isSqliteMode())
                 await reloadStorageProvider();
@@ -174954,212 +175184,6 @@ function useVisualizerSave(interactions = {}) {
         saveToGlobal: saveTemplateToGlobal,
     };
 }
-
-let nextDialogId = 1;
-function makeDialogId() {
-    return `dialog-${nextDialogId++}`;
-}
-// 倒计时定时器放模块级：store state 只存剩余秒数（可序列化），句柄不进 state。
-let confirmCountdownTimer = null;
-function clearConfirmCountdownTimer() {
-    if (confirmCountdownTimer !== null) {
-        acuClearInterval(confirmCountdownTimer);
-        confirmCountdownTimer = null;
-    }
-}
-const useDialogStore = defineStore("acu-v2-dialog", {
-    state: () => ({
-        active: null,
-        queue: [],
-        inputValue: "",
-        checkedValues: {},
-        confirmCountdownRemaining: 0,
-    }),
-    getters: {
-        confirmDisabled(state) {
-            if (state.confirmCountdownRemaining > 0)
-                return true;
-            if (state.active?.kind === "prompt") {
-                if (state.active.requireNonEmpty === false)
-                    return false;
-                return !String(state.inputValue || "").trim();
-            }
-            if (state.active?.kind === "multiselect") {
-                if (state.active.requireNonEmpty === false)
-                    return false;
-                return !Object.values(state.checkedValues).some(Boolean);
-            }
-            return false;
-        },
-    },
-    actions: {
-        confirm(options) {
-            return this.enqueue({
-                id: makeDialogId(),
-                kind: "confirm",
-                title: options.title,
-                message: options.message,
-                dangerMessage: options.dangerMessage,
-                confirmLabel: options.confirmLabel || "确认",
-                cancelLabel: options.cancelLabel || "取消",
-                confirmVariant: options.confirmVariant || "primary",
-                requireNonEmpty: false,
-                confirmCountdownSeconds: options.confirmCountdownSeconds,
-                resolve: () => { },
-            }).then((value) => value === true);
-        },
-        prompt(options) {
-            return this.enqueue({
-                id: makeDialogId(),
-                kind: "prompt",
-                title: options.title,
-                message: options.message,
-                label: options.label,
-                initialValue: String(options.defaultValue || ""),
-                placeholder: options.placeholder,
-                confirmLabel: options.confirmLabel || "确认",
-                cancelLabel: options.cancelLabel || "取消",
-                confirmVariant: options.confirmVariant || "primary",
-                requireNonEmpty: options.requireNonEmpty !== false,
-                resolve: () => { },
-            }).then((value) => (typeof value === "string" ? value : null));
-        },
-        choose(options) {
-            return this.enqueue({
-                id: makeDialogId(),
-                kind: "choice",
-                title: options.title,
-                message: options.message,
-                actions: options.actions,
-                cancelLabel: options.cancelLabel || "取消",
-                badge: options.badge,
-                requireNonEmpty: false,
-                resolve: () => { },
-            }).then((value) => (typeof value === "string" ? value : null));
-        },
-        selectMany(options) {
-            return this.enqueue({
-                id: makeDialogId(),
-                kind: "multiselect",
-                title: options.title,
-                message: options.message,
-                checkboxOptions: options.options,
-                confirmLabel: options.confirmLabel || "确认",
-                cancelLabel: options.cancelLabel || "取消",
-                confirmVariant: options.confirmVariant || "primary",
-                badge: options.badge,
-                requireNonEmpty: options.requireNonEmpty !== false,
-                resolve: () => { },
-            }).then((value) => (Array.isArray(value) ? value : null));
-        },
-        setCheckedValue(value, checked) {
-            this.checkedValues = {
-                ...this.checkedValues,
-                [value]: checked,
-            };
-        },
-        cancelActive() {
-            const dialog = this.active;
-            this.active = null;
-            this.inputValue = "";
-            this.checkedValues = {};
-            dialog?.resolve(dialog.kind === "confirm" ? false : null);
-            this.activateNext();
-        },
-        submitActive(value) {
-            const dialog = this.active;
-            if (!dialog)
-                return;
-            // 倒计时未归零时硬性拒绝提交（UI 禁用只是表现层，这里是真正的 guard）。
-            if (this.confirmCountdownRemaining > 0)
-                return;
-            if (dialog.kind === "prompt") {
-                const next = String(this.inputValue || "").trim();
-                if (dialog.requireNonEmpty !== false && !next)
-                    return;
-                this.active = null;
-                this.inputValue = "";
-                this.checkedValues = {};
-                dialog.resolve(next);
-                this.activateNext();
-                return;
-            }
-            if (dialog.kind === "confirm") {
-                this.active = null;
-                this.inputValue = "";
-                this.checkedValues = {};
-                dialog.resolve(true);
-                this.activateNext();
-                return;
-            }
-            if (dialog.kind === "multiselect") {
-                const selected = (dialog.checkboxOptions || [])
-                    .filter(option => this.checkedValues[option.value] === true)
-                    .map(option => option.value);
-                if (dialog.requireNonEmpty !== false && selected.length === 0)
-                    return;
-                this.active = null;
-                this.inputValue = "";
-                this.checkedValues = {};
-                dialog.resolve(selected);
-                this.activateNext();
-                return;
-            }
-            this.active = null;
-            this.inputValue = "";
-            this.checkedValues = {};
-            dialog.resolve(value ?? null);
-            this.activateNext();
-        },
-        __resetForTests() {
-            if (this.active)
-                this.active.resolve(null);
-            for (const dialog of this.queue)
-                dialog.resolve(null);
-            this.active = null;
-            this.queue = [];
-            this.inputValue = "";
-            this.checkedValues = {};
-            clearConfirmCountdownTimer();
-            this.confirmCountdownRemaining = 0;
-        },
-        enqueue(request) {
-            return new Promise((resolve) => {
-                const next = { ...request, resolve };
-                if (this.active)
-                    this.queue.push(next);
-                else
-                    this.activateRequest(next);
-            });
-        },
-        activateNext() {
-            this.activateRequest(this.queue.shift() || null);
-        },
-        activateRequest(request) {
-            this.active = request;
-            this.inputValue = request?.kind === "prompt" ? String(request.initialValue || "") : "";
-            if (request?.kind === "multiselect") {
-                this.checkedValues = Object.fromEntries((request.checkboxOptions || []).map(option => [option.value, option.defaultChecked === true]));
-            }
-            else {
-                this.checkedValues = {};
-            }
-            clearConfirmCountdownTimer();
-            const countdown = Math.max(0, Math.floor(request?.confirmCountdownSeconds || 0));
-            this.confirmCountdownRemaining = countdown;
-            if (countdown > 0) {
-                confirmCountdownTimer = acuSetInterval(() => {
-                    if (this.confirmCountdownRemaining > 1) {
-                        this.confirmCountdownRemaining -= 1;
-                        return;
-                    }
-                    this.confirmCountdownRemaining = 0;
-                    clearConfirmCountdownTimer();
-                }, 1000);
-            }
-        },
-    },
-});
 
 var _sfc_main$_ = /*@__PURE__*/ defineComponent({
     __name: 'UbBadge',
@@ -191157,6 +191181,83 @@ async function ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU(guideData,
 }
 
 /**
+ * 危险操作的「所属聊天」快照（R10A-01 / R10A-03 / R10A-04）。
+ * 页面在弹确认框之前拍下快照，确认后执行前核对：聊天已经切换就不执行。
+ * 确认框里写的范围、目标都是针对弹出时那个聊天的，不能落到用户没确认过的聊天上。
+ */
+const CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU = '确认期间当前聊天或隔离标识已切换，本次操作未执行；请在当前聊天重新操作。';
+function captureChatActionScope_ACU() {
+    return {
+        chatIdentity: String(currentChatFileIdentifier_ACU || ''),
+        isolationKey: String(getCurrentIsolationKey_ACU() || ''),
+    };
+}
+function isChatActionScopeCurrent_ACU(scope) {
+    if (!scope)
+        return true;
+    return String(currentChatFileIdentifier_ACU || '') === scope.chatIdentity
+        && String(getCurrentIsolationKey_ACU() || '') === scope.isolationKey;
+}
+
+/**
+ * 模板变更的「破坏性确认后重提」唯一实现（R10A-04 / R10A-23；原先三处复制）。
+ *
+ * 流程：不带确认标志提交（单次 stale 重试）→ 若被「删除表/列需要显式确认」拦下则弹确认 →
+ * 确认后先核对所属聊天未切换、再不带确认标志重算一次，待删的表/列与用户看到的完全一致
+ * 才带 destructiveChangeConfirmed 提交。否则不执行删除，返回失败结果交给调用方提示。
+ */
+const DESTRUCTIVE_BLOCKERS_CHANGED_MESSAGE_ACU = '确认期间待删除的表或列发生变化，本次未执行删除；请重新操作并确认。';
+function isStaleRevisionConflict_ACU(result) {
+    return !!result
+        && typeof result === 'object'
+        && result.saved === false
+        && /^V2 stale_revision_conflict(?:\b|:)/.test(String(result.error || ''));
+}
+/** 被破坏性确认拦下时返回待删表/列的 blockers；否则 null。 */
+function extractDestructiveTemplateBlockers_ACU(result) {
+    if (!result || result.saved !== false || !Array.isArray(result.blockers))
+        return null;
+    const blockers = result.blockers.filter((blocker) => (typeof blocker === 'string' && /删除(?:表|列).+需要显式确认/.test(blocker)));
+    return blockers.length > 0 ? blockers : null;
+}
+function sameBlockerSet(left, right) {
+    const a = [...new Set(left)].sort();
+    const b = [...new Set(right)].sort();
+    return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+async function applyTemplateWithDestructiveConfirm_ACU(apply, options) {
+    const scope = captureChatActionScope_ACU();
+    const applyWithSingleStaleRetry = async (destructiveChangeConfirmed) => {
+        const firstAttempt = await apply(destructiveChangeConfirmed);
+        // stale revision 表示本次计划的 read-plan-commit 窗口已失效。重新进入 service
+        // 才会读取新基线；其它 V2 历史错误绝不能通过重试伪装成可恢复状态。
+        if (!isStaleRevisionConflict_ACU(firstAttempt))
+            return firstAttempt;
+        if (options.signal?.aborted)
+            return firstAttempt;
+        return apply(destructiveChangeConfirmed);
+    };
+    const firstResult = await applyWithSingleStaleRetry(false);
+    const confirmedBlockers = extractDestructiveTemplateBlockers_ACU(firstResult);
+    if (!confirmedBlockers)
+        return firstResult;
+    if (!(await options.confirm(confirmedBlockers)))
+        return firstResult;
+    if (!isChatActionScopeCurrent_ACU(scope)) {
+        return { saved: false, error: CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU, blockers: [] };
+    }
+    // 用户确认的是弹窗里那份删除清单；确认期间计划可能变了（模板被别处改动），重算核对。
+    const recheck = await applyWithSingleStaleRetry(false);
+    const currentBlockers = extractDestructiveTemplateBlockers_ACU(recheck);
+    if (!currentBlockers)
+        return recheck;
+    if (!sameBlockerSet(currentBlockers, confirmedBlockers)) {
+        return { ...recheck, error: DESTRUCTIVE_BLOCKERS_CHANGED_MESSAGE_ACU };
+    }
+    return applyWithSingleStaleRetry(true);
+}
+
+/**
  * templateFollowGlobalFlow — "跟随全局（清除聊天覆盖）"的共享 UI 流程（S1-2）。
  *
  * 三个消费口复用同一流程，避免破坏性确认/stale 重试逻辑出现第三份复制：
@@ -191168,12 +191269,6 @@ async function ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU(guideData,
  * → 破坏性 blockers 二次确认 → toast 反馈。模块级函数、不持 Vue 状态，
  * dialogStore/toast/signal 由调用方注入。
  */
-function isStaleRevisionConflict$2(result) {
-    return !!result
-        && typeof result === 'object'
-        && result.saved === false
-        && /^V2 stale_revision_conflict(?:\b|:)/.test(String(result.error || ''));
-}
 /**
  * 执行"跟随全局"完整流程。返回 true 表示已成功跟随全局（或本就在跟随），
  * false 表示用户取消、守卫失败或提交失败（失败已 toast）。
@@ -191186,18 +191281,10 @@ async function runFollowGlobalTemplateFlow_ACU({ dialogStore, toast, signal, }) 
     const recoveryGuard = await ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU(guideData, 'switch-template');
     if (!recoveryGuard.success)
         return false;
-    const applyWithSingleStaleRetry = async (destructiveChangeConfirmed) => {
-        const firstAttempt = await followGlobalTemplateForCurrentChat_ACU({ destructiveChangeConfirmed, signal });
-        if (!isStaleRevisionConflict$2(firstAttempt))
-            return firstAttempt;
-        if (signal?.aborted)
-            return firstAttempt;
-        return followGlobalTemplateForCurrentChat_ACU({ destructiveChangeConfirmed, signal });
-    };
-    let result = await applyWithSingleStaleRetry(false);
-    if (result && result.saved === false && Array.isArray(result.blockers) && result.blockers.length > 0) {
-        const destructiveBlockers = result.blockers.filter((blocker) => (typeof blocker === 'string' && /删除(?:表|列).+需要显式确认/.test(blocker)));
-        if (destructiveBlockers.length > 0) {
+    let userCancelled = false;
+    const result = await applyTemplateWithDestructiveConfirm_ACU(destructiveChangeConfirmed => followGlobalTemplateForCurrentChat_ACU({ destructiveChangeConfirmed, signal }), {
+        signal,
+        confirm: async (destructiveBlockers) => {
             const confirmed = await dialogStore.confirm({
                 title: '确认破坏性模板变更',
                 message: `跟随全局模板会删除现有表或列：\n${destructiveBlockers.join('\n')}`,
@@ -191206,11 +191293,12 @@ async function runFollowGlobalTemplateFlow_ACU({ dialogStore, toast, signal, }) 
                 cancelLabel: '取消',
                 confirmVariant: 'danger',
             });
-            if (!confirmed)
-                return false;
-            result = await applyWithSingleStaleRetry(true);
-        }
-    }
+            userCancelled = !confirmed;
+            return confirmed;
+        },
+    });
+    if (userCancelled)
+        return false;
     if (!result || result.saved !== true) {
         toast.error((result && typeof result.error === 'string' && result.error) || '跟随全局模板失败。');
         return false;
@@ -191260,12 +191348,6 @@ const RUNTIME_SENTINEL_NAME$1 = '__runtime__';
 const RUNTIME_TEMPLATE_LABEL$1 = '当前生效模板（内存）';
 function isRuntimeSentinelName$1(name) {
     return String(name || '') === RUNTIME_SENTINEL_NAME$1;
-}
-function isStaleRevisionConflict$1(result) {
-    return !!result
-        && typeof result === 'object'
-        && result.saved === false
-        && /^V2 stale_revision_conflict(?:\b|:)/.test(String(result.error || ''));
 }
 function downloadJson$3(jsonData, filename) {
     const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
@@ -191348,38 +191430,24 @@ function useTablePresetManagement() {
      * 与 chat 路径一样可能返回破坏性 blockers。
      */
     async function applyPresetWithDestructiveConfirmAndRetry(presetName, options) {
-        const applyWithSingleStaleRetry = async (destructiveChangeConfirmed) => {
-            const buildOptions = () => ({
-                source: options.source,
-                updateGlobal: options.updateGlobal,
-                save: true,
-                persistChatScope: options.persistChatScope,
-                destructiveChangeConfirmed,
-                signal: templateOperationController.signal,
-            });
-            const firstAttempt = await applyTemplatePresetToCurrent_ACU(presetName, buildOptions());
-            if (!isStaleRevisionConflict$1(firstAttempt))
-                return firstAttempt;
-            if (templateOperationController.signal.aborted)
-                return firstAttempt;
-            return applyTemplatePresetToCurrent_ACU(presetName, buildOptions());
-        };
-        const firstResult = await applyWithSingleStaleRetry(false);
-        if (!firstResult || firstResult.saved !== false || !Array.isArray(firstResult.blockers) || firstResult.blockers.length === 0) {
-            return firstResult;
-        }
-        const destructiveBlockers = firstResult.blockers.filter((blocker) => (typeof blocker === 'string' && /删除(?:表|列).+需要显式确认/.test(blocker)));
-        if (destructiveBlockers.length === 0)
-            return firstResult;
-        const confirmed = await dialogStore.confirm({
-            title: '确认破坏性模板变更',
-            message: `此模板变更会删除现有表或列：\n${destructiveBlockers.join('\n')}`,
-            dangerMessage: '确认后将按 V2 原子提交执行。删除的数据只能通过聊天备份或 checkpoint 恢复。',
-            confirmLabel: '确认删除并继续',
-            cancelLabel: '取消',
-            confirmVariant: 'danger',
+        return applyTemplateWithDestructiveConfirm_ACU(destructiveChangeConfirmed => applyTemplatePresetToCurrent_ACU(presetName, {
+            source: options.source,
+            updateGlobal: options.updateGlobal,
+            save: true,
+            persistChatScope: options.persistChatScope,
+            destructiveChangeConfirmed,
+            signal: templateOperationController.signal,
+        }), {
+            signal: templateOperationController.signal,
+            confirm: destructiveBlockers => dialogStore.confirm({
+                title: '确认破坏性模板变更',
+                message: `此模板变更会删除现有表或列：\n${destructiveBlockers.join('\n')}`,
+                dangerMessage: '确认后将按 V2 原子提交执行。删除的数据只能通过聊天备份或 checkpoint 恢复。',
+                confirmLabel: '确认删除并继续',
+                cancelLabel: '取消',
+                confirmVariant: 'danger',
+            }),
         });
-        return confirmed ? applyWithSingleStaleRetry(true) : firstResult;
     }
     /** 打开可视化表格编辑器；编辑当前生效的模板。 */
     async function openVisualizer() {
@@ -191739,12 +191807,6 @@ function downloadJson$2(jsonData, filename) {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 }
-function isStaleRevisionConflict(result) {
-    return !!result
-        && typeof result === 'object'
-        && result.saved === false
-        && /^V2 stale_revision_conflict(?:\b|:)/.test(String(result.error || ''));
-}
 function formatTemplateOperationError(error) {
     const text = error instanceof Error ? error.message : String(error || '操作失败。');
     if (/^V2 stale_revision_conflict(?:\b|:)/.test(text)) {
@@ -191988,32 +192050,17 @@ function useTableTemplatePresets() {
         return recoveryGuard.success;
     }
     async function applyChatTemplateWithDestructiveConfirmation(apply) {
-        const applyWithSingleStaleRetry = async (destructiveChangeConfirmed) => {
-            const firstAttempt = await apply(destructiveChangeConfirmed);
-            // stale revision 表示本次计划的 read-plan-commit 窗口已失效。重新进入 service
-            // 才会读取新基线；其它 V2 历史错误绝不能通过重试伪装成可恢复状态。
-            if (!isStaleRevisionConflict(firstAttempt))
-                return firstAttempt;
-            if (templateOperationController.signal.aborted)
-                return firstAttempt;
-            return apply(destructiveChangeConfirmed);
-        };
-        const firstResult = await applyWithSingleStaleRetry(false);
-        if (!firstResult || firstResult.saved !== false || !Array.isArray(firstResult.blockers) || firstResult.blockers.length === 0) {
-            return firstResult;
-        }
-        const destructiveBlockers = firstResult.blockers.filter((blocker) => (typeof blocker === 'string' && /删除(?:表|列).+需要显式确认/.test(blocker)));
-        if (destructiveBlockers.length === 0)
-            return firstResult;
-        const confirmed = await dialogStore.confirm({
-            title: '确认破坏性模板变更',
-            message: `此模板变更会删除现有表或列：\n${destructiveBlockers.join('\n')}`,
-            dangerMessage: '确认后将按 V2 原子提交执行。删除的数据只能通过聊天备份或 checkpoint 恢复。',
-            confirmLabel: '确认删除并继续',
-            cancelLabel: '取消',
-            confirmVariant: 'danger',
+        return applyTemplateWithDestructiveConfirm_ACU(apply, {
+            signal: templateOperationController.signal,
+            confirm: destructiveBlockers => dialogStore.confirm({
+                title: '确认破坏性模板变更',
+                message: `此模板变更会删除现有表或列：\n${destructiveBlockers.join('\n')}`,
+                dangerMessage: '确认后将按 V2 原子提交执行。删除的数据只能通过聊天备份或 checkpoint 恢复。',
+                confirmLabel: '确认删除并继续',
+                cancelLabel: '取消',
+                confirmVariant: 'danger',
+            }),
         });
-        return confirmed ? applyWithSingleStaleRetry(true) : firstResult;
     }
     async function selectChatPreset(name) {
         const selection = decodeChatPresetValue(name);
@@ -200619,6 +200666,8 @@ async function disableFlightMode_ACU(options = {}) {
     return { ok: true };
 }
 
+/** 飞行模式切换（关闭时会硬删大总结表）全局只允许一个在途。 */
+let flightModeTransitionInFlight_ACU = false;
 let deferLogRefresh = false;
 const reportedRenderFallbackCounts = new Map();
 function withRenderFallback(label, fallback, build) {
@@ -201339,10 +201388,17 @@ function useDashboardPage() {
         dataRefreshTick.value++;
     }
     async function setFlightMode(enabled, options = {}) {
+        if (flightModeTransitionInFlight_ACU) {
+            return { ok: false, reason: "busy", error: "飞行模式正在切换，请等当前操作完成。" };
+        }
+        if (!isChatActionScopeCurrent_ACU(options.scope)) {
+            return { ok: false, reason: "context_changed", error: CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU };
+        }
+        flightModeTransitionInFlight_ACU = true;
         try {
             return enabled
                 ? await enableFlightMode_ACU()
-                : await disableFlightMode_ACU(options);
+                : await disableFlightMode_ACU({ confirmTemplateScopeChange: options.confirmTemplateScopeChange });
         }
         catch (error) {
             return {
@@ -201352,7 +201408,12 @@ function useDashboardPage() {
             };
         }
         finally {
-            await refresh();
+            try {
+                await refresh();
+            }
+            finally {
+                flightModeTransitionInFlight_ACU = false;
+            }
         }
     }
     function setToggle(key, value) {
@@ -201444,8 +201505,23 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
             }
         }
         /** 飞行模式关闭会永久删除大总结表：必须二次确认；模板被改过时再确认一次覆盖。 */
+        let flightModeToggleBusy = false;
         async function toggleFlightMode(value) {
+            // R10A-04：确认框排队期间连点会排出第二个确认；整段流程只允许一个在途。
+            if (flightModeToggleBusy)
+                return;
+            flightModeToggleBusy = true;
+            try {
+                await runFlightModeToggle(value);
+            }
+            finally {
+                flightModeToggleBusy = false;
+            }
+        }
+        async function runFlightModeToggle(value) {
             const copy = dashboardCopy.toggles.flightMode;
+            // 确认框写的是「当前聊天」的大总结表；确认后聊天已切换就不执行。
+            const scope = captureChatActionScope_ACU();
             if (!value) {
                 const confirmed = await dialogStore.confirm({
                     title: copy.disableTitle,
@@ -201457,7 +201533,7 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 if (!confirmed)
                     return;
             }
-            const result = await dashboard.setFlightMode(value);
+            const result = await dashboard.setFlightMode(value, { scope });
             if (result.ok) {
                 toastStore.success(value ? copy.enabled : copy.disabled, { muteable: false });
                 return;
@@ -201472,7 +201548,7 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 });
                 if (!confirmed)
                     return;
-                const confirmedResult = await dashboard.setFlightMode(false, { confirmTemplateScopeChange: true });
+                const confirmedResult = await dashboard.setFlightMode(false, { confirmTemplateScopeChange: true, scope });
                 if (confirmedResult.ok)
                     toastStore.success(copy.disabled, { muteable: false });
                 else
@@ -201498,14 +201574,14 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         onMounted(() => void refreshAll());
         watchChatChanged_ACU(() => void refreshAll());
         watch(useTemplateRuntimeChangeTick(), () => void refreshAll());
-        const __returned__ = { dashboard, plotStore, routerStore, dialogStore, toastStore, healthCards, syncGates, refreshAll, toggleFlightMode, handleToggleChange, get dashboardCopy() { return dashboardCopy; }, UbBadge, UbPage, UbRow, UbSection, UbSwitch };
+        const __returned__ = { dashboard, plotStore, routerStore, dialogStore, toastStore, healthCards, syncGates, refreshAll, get flightModeToggleBusy() { return flightModeToggleBusy; }, set flightModeToggleBusy(v) { flightModeToggleBusy = v; }, toggleFlightMode, runFlightModeToggle, handleToggleChange, get dashboardCopy() { return dashboardCopy; }, UbBadge, UbPage, UbRow, UbSection, UbSwitch };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-dash-health[data-v-82694a5b] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--ub-u) * 340)), 1fr));\r\n  gap: var(--ub-s3);\n}\n.ub-health[data-v-82694a5b] {\r\n  --ub-health-tone: var(--ub-text-3);\r\n  display: flex;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\r\n  padding: var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  box-shadow: var(--ub-card-shadow);\n}\n.ub-health.is-ok[data-v-82694a5b] {\r\n  --ub-health-tone: var(--ub-ok);\n}\n.ub-health.is-info[data-v-82694a5b] {\r\n  --ub-health-tone: var(--ub-accent-ink);\n}\n.ub-health.is-warning[data-v-82694a5b] {\r\n  --ub-health-tone: var(--ub-warn);\n}\n.ub-health.is-error[data-v-82694a5b] {\r\n  --ub-health-tone: var(--ub-danger);\r\n  border-color: color-mix(in srgb, var(--ub-danger) 40%, var(--ub-line-soft));\n}\n.ub-health__icon[data-v-82694a5b] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 36);\r\n  height: calc(var(--ub-u) * 36);\r\n  border-radius: 11px;\r\n  background: color-mix(in srgb, var(--ub-health-tone) 15%, transparent);\r\n  color: var(--ub-health-tone);\n}\n.ub-health__body[data-v-82694a5b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-health__head[data-v-82694a5b] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2);\n}\n.ub-health__title[data-v-82694a5b] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\n}\n.ub-health__summary[data-v-82694a5b] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-health__action[data-v-82694a5b] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  align-self: flex-start;\r\n  margin-top: var(--ub-s1);\r\n  padding: 0;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--ub-accent-ink);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\r\n  cursor: pointer;\n}\n.ub-health__action[data-v-82694a5b]:hover {\r\n  text-decoration: underline;\n}\r\n", "src/presentation-v3/pages/DashboardPage.vue#style-0-82694a5b");
-var DashboardPage_vue_vue_type_style_index_0_scoped_82694a5b_lang = null;
+injectSfcStyle("\n.ub-dash-health[data-v-5180a11f] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--ub-u) * 340)), 1fr));\r\n  gap: var(--ub-s3);\n}\n.ub-health[data-v-5180a11f] {\r\n  --ub-health-tone: var(--ub-text-3);\r\n  display: flex;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\r\n  padding: var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  box-shadow: var(--ub-card-shadow);\n}\n.ub-health.is-ok[data-v-5180a11f] {\r\n  --ub-health-tone: var(--ub-ok);\n}\n.ub-health.is-info[data-v-5180a11f] {\r\n  --ub-health-tone: var(--ub-accent-ink);\n}\n.ub-health.is-warning[data-v-5180a11f] {\r\n  --ub-health-tone: var(--ub-warn);\n}\n.ub-health.is-error[data-v-5180a11f] {\r\n  --ub-health-tone: var(--ub-danger);\r\n  border-color: color-mix(in srgb, var(--ub-danger) 40%, var(--ub-line-soft));\n}\n.ub-health__icon[data-v-5180a11f] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 36);\r\n  height: calc(var(--ub-u) * 36);\r\n  border-radius: 11px;\r\n  background: color-mix(in srgb, var(--ub-health-tone) 15%, transparent);\r\n  color: var(--ub-health-tone);\n}\n.ub-health__body[data-v-5180a11f] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-health__head[data-v-5180a11f] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2);\n}\n.ub-health__title[data-v-5180a11f] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\n}\n.ub-health__summary[data-v-5180a11f] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-health__action[data-v-5180a11f] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  align-self: flex-start;\r\n  margin-top: var(--ub-s1);\r\n  padding: 0;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--ub-accent-ink);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\r\n  cursor: pointer;\n}\n.ub-health__action[data-v-5180a11f]:hover {\r\n  text-decoration: underline;\n}\r\n", "src/presentation-v3/pages/DashboardPage.vue#style-0-5180a11f");
+var DashboardPage_vue_vue_type_style_index_0_scoped_5180a11f_lang = null;
 
 const _hoisted_1$d = {
 	class: "ub-dash-health",
@@ -201660,7 +201736,7 @@ function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["lead"]);
 }
-var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$f], ["__scopeId", "data-v-82694a5b"]]);
+var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$f], ["__scopeId", "data-v-5180a11f"]]);
 
 const CHECKPOINT_FORMAT_ACU = 'acu-table-checkpoint';
 const CHECKPOINT_VERSION_ACU = 1;
@@ -202843,7 +202919,20 @@ function useDataManagement() {
             busyAction.value = '';
         }
     }
-    async function restoreTableCheckpoint(checkpoint, options = {}) {
+    /** 危险操作在弹确认框前冻结所属聊天，确认后由执行函数核对（R10A-01）。 */
+    function captureActionScope() {
+        return captureChatActionScope_ACU();
+    }
+    function rejectStaleActionScope(scope) {
+        if (isChatActionScopeCurrent_ACU(scope))
+            return false;
+        message.value = null;
+        toast.warning(CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU, { muteable: false, durationMs: 6000 });
+        return true;
+    }
+    async function restoreTableCheckpoint(checkpoint, options = {}, scope) {
+        if (rejectStaleActionScope(scope))
+            return;
         busyAction.value = 'restore-checkpoint';
         try {
             const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint, options);
@@ -202894,14 +202983,25 @@ function useDataManagement() {
             busyAction.value = '';
         }
     }
-    async function resetAllDefaults(options = {}) {
+    async function resetAllDefaults(options = {}, scope) {
         const cleanup = normalizeResetDefaultsOptions(options);
         if (!hasSelectedResetDefaultsOption(cleanup)) {
             toast.warning('未选择需要恢复或清理的项目。');
             return;
         }
+        if (rejectStaleActionScope(scope))
+            return;
         busyAction.value = 'reset-defaults';
         let resetSnapshot = null;
+        // R10A-04：每一步都现读「当前聊天」；中途切了聊天就停下，后半程不能落到新聊天。
+        const runScope = scope ?? captureActionScope();
+        let chatSwitchedMidway = false;
+        const assertSameChat = () => {
+            if (isChatActionScopeCurrent_ACU(runScope))
+                return;
+            chatSwitchedMidway = true;
+            throw new Error('恢复默认执行期间聊天已切换。');
+        };
         try {
             resetSnapshot = captureResetTransaction_ACU();
             if (!resetSnapshot)
@@ -202928,6 +203028,7 @@ function useDataManagement() {
                     saveSettings: false,
                     saveChat: true,
                 });
+                assertSameChat();
             }
             if (cleanup.clearTemplateSnapshots) {
                 await clearCurrentChatTemplateSnapshots_ACU({
@@ -202937,6 +203038,7 @@ function useDataManagement() {
                     clearLegacyGuide: true,
                     save: true,
                 });
+                assertSameChat();
             }
             if (cleanup.restoreTemplateAndPrompts) {
                 const applied = await applyTemplateSnapshotToScope_ACU(snapshot.templateStr, {
@@ -202951,6 +203053,7 @@ function useDataManagement() {
                 if (typeof applied === 'object' && 'saved' in applied && applied.saved === false) {
                     throw new Error(applied.error || '默认模板应用失败（当前聊天协调提交被拒绝）。');
                 }
+                assertSameChat();
             }
             else if (cleanup.clearTemplateSnapshots) {
                 applyTemplateScopeForCurrentChat_ACU();
@@ -202981,7 +203084,12 @@ function useDataManagement() {
             const rollbackError = resetSnapshot ? await rollbackResetTransaction_ACU(resetSnapshot) : null;
             logError_ACU('[ACU-V2] resetAllDefaults failed', e);
             message.value = null;
-            toast.error(rollbackError ? `恢复默认失败：${rollbackError}。` : '恢复默认失败，详情见运行日志。');
+            if (chatSwitchedMidway) {
+                toast.error('恢复默认执行期间聊天已切换，后续步骤已停止，没有改动新聊天；原聊天里已完成的部分未回滚，请回到原聊天检查后重新执行恢复默认。');
+            }
+            else {
+                toast.error(rollbackError ? `恢复默认失败：${rollbackError}。` : '恢复默认失败，详情见运行日志。');
+            }
         }
         finally {
             busyAction.value = '';
@@ -203029,8 +203137,14 @@ function useDataManagement() {
         const end = normalizeFloorValue(deleteRange.endFloor);
         return isFullRangeDeletionRequest_ACU(start, end, getAiMessageCount()) ? 'purge' : 'range';
     }
-    async function deleteLocalData(mode) {
-        const expectedPath = resolveDeletionPath(mode);
+    /**
+     * frozen：页面在确认框弹出前冻结的删除路径与所属聊天。路径必须用确认时的值交给服务层核对
+     * （此刻重算会与服务层同一时刻得出同一结论，「确认期间范围变化」守卫就失效了，R10B-09）。
+     */
+    async function deleteLocalData(mode, frozen = {}) {
+        if (rejectStaleActionScope(frozen.scope))
+            return;
+        const expectedPath = frozen.expectedPath ?? resolveDeletionPath(mode);
         const sheetKeys = hasDeleteSheetSelection.value ? [...deleteSheetKeys.value] : null;
         busyAction.value = expectedPath === 'purge'
             ? 'purge-all-local'
@@ -203124,6 +203238,7 @@ function useDataManagement() {
         message.value = null;
     }
     return {
+        captureActionScope,
         message,
         busyAction,
         isolationCode,
@@ -203639,6 +203754,7 @@ var _sfc_main$d = /*@__PURE__*/ defineComponent({
         async function onImportTableCheckpoint(file) {
             if (runtimeBusy())
                 return;
+            const scope = flow.captureActionScope();
             const checkpoint = await flow.parseTableCheckpoint(file);
             if (!checkpoint)
                 return;
@@ -203683,12 +203799,14 @@ ${floorNote}确认继续？`,
             });
             if (!confirmed || runtimeBusy())
                 return;
-            void flow.restoreTableCheckpoint(checkpoint, { restoredUpToAiFloor: floorValue });
+            void flow.restoreTableCheckpoint(checkpoint, { restoredUpToAiFloor: floorValue }, scope);
         }
         async function onDeleteLocalData() {
             if (runtimeBusy())
                 return;
+            // 删除路径与所属聊天在确认前冻结，执行时交给 composable/服务层核对（R10A-01）。
             const path = flow.resolveDeletionPath('all');
+            const scope = flow.captureActionScope();
             if (flow.hasDeleteSheetSelection.value) {
                 const names = flow.selectedDeleteSheetNames.value;
                 const confirmed = await dialogStore.confirm({
@@ -203702,7 +203820,7 @@ ${floorNote}确认继续？`,
                 });
                 if (!confirmed || runtimeBusy())
                     return;
-                void flow.deleteLocalData('all');
+                void flow.deleteLocalData('all', { expectedPath: path, scope });
                 return;
             }
             if (path === 'range') {
@@ -203716,7 +203834,7 @@ ${floorNote}确认继续？`,
                 });
                 if (!confirmed || runtimeBusy())
                     return;
-                void flow.deleteLocalData('all');
+                void flow.deleteLocalData('all', { expectedPath: path, scope });
                 return;
             }
             // 范围覆盖全部 AI 楼层＝硬清空：两级确认
@@ -203743,7 +203861,7 @@ ${floorNote}确认继续？`,
             });
             if (!again || runtimeBusy())
                 return;
-            void flow.deleteLocalData('all');
+            void flow.deleteLocalData('all', { expectedPath: path, scope });
         }
         async function onCommitMixedStorageDecision(action) {
             if (runtimeBusy())
@@ -203803,6 +203921,7 @@ ${floorNote}确认继续？`,
         async function onResetAllDefaults() {
             if (runtimeBusy())
                 return;
+            const scope = flow.captureActionScope();
             const selected = await dialogStore.selectMany({
                 title: '恢复默认配置',
                 message: '选择本次要恢复或清理的项目。默认全选；取消某一项后会保留对应内容。不会删除聊天正文、本地楼层数据、API 配置或全局预设库。',
@@ -203821,7 +203940,7 @@ ${floorNote}确认继续？`,
                 clearTableLocks: picked.has('clear-table-locks'),
                 clearTableOrder: picked.has('clear-table-order'),
             };
-            void flow.resetAllDefaults(cleanup);
+            void flow.resetAllDefaults(cleanup, scope);
         }
         function refreshAll() {
             flow.refresh();
@@ -203835,8 +203954,8 @@ ${floorNote}确认继续？`,
     }
 });
 
-injectSfcStyle("\n.ub-dm__text[data-v-7bd64c93] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-dm__strong[data-v-7bd64c93] {\r\n  color: var(--ub-text);\n}\n.ub-dm__block[data-v-7bd64c93] {\r\n  display: block;\r\n  margin-top: 2px;\n}\n.ub-dm__buttons[data-v-7bd64c93] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\n}\n.ub-dm__group[data-v-7bd64c93] {\r\n  padding: var(--ub-s2) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\n}\n.ub-dm__sheets[data-v-7bd64c93] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2) var(--ub-s4);\n}\n.ub-dm__danger[data-v-7bd64c93] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: color-mix(in srgb, var(--ub-danger-soft) 40%, transparent);\n}\r\n", "src/presentation-v3/pages/DataMgmtPage.vue#style-0-7bd64c93");
-var DataMgmtPage_vue_vue_type_style_index_0_scoped_7bd64c93_lang = null;
+injectSfcStyle("\n.ub-dm__text[data-v-69249445] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-dm__strong[data-v-69249445] {\r\n  color: var(--ub-text);\n}\n.ub-dm__block[data-v-69249445] {\r\n  display: block;\r\n  margin-top: 2px;\n}\n.ub-dm__buttons[data-v-69249445] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\n}\n.ub-dm__group[data-v-69249445] {\r\n  padding: var(--ub-s2) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\n}\n.ub-dm__sheets[data-v-69249445] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2) var(--ub-s4);\n}\n.ub-dm__danger[data-v-69249445] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: color-mix(in srgb, var(--ub-danger-soft) 40%, transparent);\n}\r\n", "src/presentation-v3/pages/DataMgmtPage.vue#style-0-69249445");
+var DataMgmtPage_vue_vue_type_style_index_0_scoped_69249445_lang = null;
 
 const _hoisted_1$b = { class: "ub-dm__text" };
 const _hoisted_2$a = { class: "ub-dm__buttons" };
@@ -204242,7 +204361,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["sections"]);
 }
-var DataMgmtPage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-7bd64c93"]]);
+var DataMgmtPage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-69249445"]]);
 
 const developerCopy = {
     panels: {
@@ -207264,9 +207383,14 @@ function useVectorIndexConfig() {
             maintenanceBusy.value = false;
         }
     }
-    async function deleteCurrentIndex() {
+    async function deleteCurrentIndex(scope) {
         if (maintenanceBusy.value)
             return;
+        // R10A-04：确认的是弹窗时那个聊天的索引；确认期间切了聊天就不删。
+        if (!isChatActionScopeCurrent_ACU(scope)) {
+            notify('warning', CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU, { muteable: false, durationMs: 6000 });
+            return;
+        }
         maintenanceBusy.value = true;
         try {
             const changed = await deleteCurrentSummaryVectorIndexFromChat_ACU();
@@ -207546,6 +207670,7 @@ var _sfc_main$5 = /*@__PURE__*/ defineComponent({
                 : RERANK_BATCH_SIZE_LIMITS.default;
         }
         async function onDeleteCurrentIndex() {
+            const scope = captureChatActionScope_ACU();
             const confirmed = await dialogStore.confirm({
                 title: '删除当前索引',
                 message: '删除当前聊天的交火索引？这会移除索引引用并清理可回收外置资产，之后需要重新构建。',
@@ -207553,7 +207678,7 @@ var _sfc_main$5 = /*@__PURE__*/ defineComponent({
                 confirmVariant: 'danger',
             });
             if (confirmed)
-                void vector.deleteCurrentIndex();
+                void vector.deleteCurrentIndex(scope);
         }
         function refreshAll() {
             vector.refresh();
@@ -207579,8 +207704,8 @@ var _sfc_main$5 = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-vi__flush-error[data-v-b27af4da] {\r\n  display: block;\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-vi__actions[data-v-b27af4da] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vi__note[data-v-b27af4da] {\r\n  flex-basis: 100%;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-vi__group[data-v-b27af4da] {\r\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s1);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 800;\r\n  letter-spacing: 0.06em;\n}\n.ub-vi__group[data-v-b27af4da]:first-child {\r\n  border-top: 0;\n}\n.ub-vi__save[data-v-b27af4da] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-end;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vi__save[data-v-b27af4da] > :first-child:not(:last-child) {\r\n  align-self: stretch;\n}\n.ub-vi__pad[data-v-b27af4da] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\r\n", "src/presentation-v3/pages/VectorIndexPage.vue#style-0-b27af4da");
-var VectorIndexPage_vue_vue_type_style_index_0_scoped_b27af4da_lang = null;
+injectSfcStyle("\n.ub-vi__flush-error[data-v-5d536c50] {\n  display: block;\n  color: var(--ub-danger);\n  font-size: var(--ub-fs-2xs);\n}\n.ub-vi__actions[data-v-5d536c50] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: var(--ub-s2);\n  padding: var(--ub-s4);\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vi__note[data-v-5d536c50] {\n  flex-basis: 100%;\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-vi__group[data-v-5d536c50] {\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s1);\n  border-top: 1px solid var(--ub-line-soft);\n  background: var(--ub-sunken);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 800;\n  letter-spacing: 0.06em;\n}\n.ub-vi__group[data-v-5d536c50]:first-child {\n  border-top: 0;\n}\n.ub-vi__save[data-v-5d536c50] {\n  display: flex;\n  flex-direction: column;\n  align-items: flex-end;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vi__save[data-v-5d536c50] > :first-child:not(:last-child) {\n  align-self: stretch;\n}\n.ub-vi__pad[data-v-5d536c50] {\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n", "src/presentation-v3/pages/VectorIndexPage.vue#style-0-5d536c50");
+var VectorIndexPage_vue_vue_type_style_index_0_scoped_5d536c50_lang = null;
 
 const _hoisted_1$5 = ["title"];
 const _hoisted_2$5 = { class: "ub-vi__actions" };
@@ -208165,7 +208290,7 @@ function _sfc_render$5(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-b27af4da"]]);
+var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-5d536c50"]]);
 
 /**
  * page-catalog — 新版界面的页面目录

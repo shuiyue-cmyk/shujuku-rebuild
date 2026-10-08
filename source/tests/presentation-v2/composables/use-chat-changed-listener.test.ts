@@ -83,4 +83,22 @@ describe('useChatChangedListener · 楼层变动计数', () => {
     app2.unmount();
     app.unmount();
   });
+
+  it('R10A-01：收到切到其他聊天的 CHAT_CHANGED 时立即取消未决确认框', async () => {
+    const { setActivePinia, createPinia } = await import('pinia');
+    setActivePinia(createPinia());
+    const { useDialogStore } = await import('../../../src/presentation-v2/stores/dialog-store');
+    const { _set_currentChatFileIdentifier_ACU } = await import('../../../src/service/runtime/state-manager');
+    _set_currentChatFileIdentifier_ACU('chat-a');
+    const eventSource = createEventSource();
+    _set_SillyTavern_API_ACU({ eventSource, eventTypes: { CHAT_CHANGED: 'chat_changed' } } as any);
+    const app = mountListener();
+    const confirmed = useDialogStore().confirm({ title: '删除', message: '删除？' });
+
+    eventSource.emit('chat_changed', 'chat-b.jsonl');
+
+    await expect(confirmed).resolves.toBe(false);
+    app.unmount();
+    _set_currentChatFileIdentifier_ACU('');
+  });
 });

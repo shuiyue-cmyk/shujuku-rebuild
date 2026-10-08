@@ -30,6 +30,9 @@ import { LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU } from '../../data/storage/cha
 import { peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
 import { normalizeSummaryVectorIsolationKey_ACU } from '../../shared/summary-vector-index-scope';
 import { runTableUpdateCommit_ACU } from '../table/table-update-commit';
+import { isChatMessageWriteTargetCurrent_ACU, type ChatMessageWriteTarget_ACU } from './chat-message-write-target';
+import { reloadStorageProvider } from '../table/table-storage-strategy';
+import { isSqliteMode } from '../table/storage-mode';
 import { cleanupUnreachableSummaryVectorIndexFiles_ACU, deleteSummaryVectorIndexExternal_ACU } from '../vector/summary-vector-index-storage-service';
 import { assignSummaryVectorIndexStateToTagData_ACU, readSummaryVectorIndexStateFromTagData_ACU } from '../vector/summary-vector-index-state-service';
 import type { IsolationConfig_ACU } from '../../data/models/chat-message-data';
@@ -1131,7 +1134,11 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
  * 替换聊天消息内容（正文优化核心逻辑）
  * 从 presentation/components/optimization-ui/optimization-ui-exec.ts 搬迁
  */
-export async function replaceChatMessage_ACU(messageIndex: number, newContent: string, options: any = {}) {
+export async function replaceChatMessage_ACU(
+    messageIndex: number,
+    newContent: string,
+    options: { originalContent?: string; expected?: ChatMessageWriteTarget_ACU | null } = {},
+) {
     try {
         logDebug_ACU(`[正文优化] replaceChatMessage_ACU 开始执行, messageIndex=${messageIndex}, newContent长度=${newContent?.length || 0}`);
 
@@ -1139,6 +1146,11 @@ export async function replaceChatMessage_ACU(messageIndex: number, newContent: s
         if (!chat || !chat[messageIndex]) {
             logError_ACU('[正文优化] 消息不存在, chat存在=', !!chat, 'messageIndex=', messageIndex);
             throw new Error('消息不存在');
+        }
+        // R9-01：调用方传入读取正文时的快照；楼层被滑动/删除/修改或聊天已切换时拒绝按下标写回。
+        if (options.expected !== undefined && !isChatMessageWriteTargetCurrent_ACU(options.expected)) {
+            logWarn_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间已变化，拒绝写回。`);
+            return false;
         }
 
         const oldContent = chat[messageIndex].mes;
@@ -2271,6 +2283,16 @@ export async function overrideLatestLayerWithTemplateCore_ACU(templateData: any)
     if (!commitResult.success) {
         logWarn_ACU(`[模板覆盖] 公共提交失败：${commitResult.error || 'unknown error'}`);
         return 0;
+    }
+
+    // R9-02：sheet_replace 只更新回放帧与 canonical 视图，SQLite 内存库仍持有旧行；
+    // 不重建的话，下一次写入的全量导出会让被清空的行复活，runtime 与回放的 row_id 也会错位。
+    if (isSqliteMode()) {
+        try {
+            await reloadStorageProvider();
+        } catch (error) {
+            throw new Error(`模板覆盖已写入最新层，但 SQLite 运行时重建失败：${error instanceof Error ? error.message : String(error)}。请重新打开当前聊天后再继续操作。`);
+        }
     }
 
     return commitResult.value || 0;

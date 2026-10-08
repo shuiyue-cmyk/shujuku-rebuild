@@ -34,6 +34,12 @@ let running_ACU = false;
 let pendingAfterRun_ACU = false;
 /** 最近一次调度原因；事件流里取最新一条标记 dirty，避免旧原因覆盖新原因。 */
 let latestReason_ACU: 'chat_modified_deleted' | 'chat_modified_swiped' = 'chat_modified_swiped';
+/**
+ * R9-03：本轮是否含删楼（粘性）。删楼后 1.2s 内再滑动，最新原因会变成「滑动」，
+ * 但被删楼层携带的 checkpoint 仍需先前移恢复，否则冷回放会把丢失固化。
+ * 执行时读取并清零；执行中到达的删楼留给补跑轮。
+ */
+let pendingDeletion_ACU = false;
 
 /**
  * 触发一次聊天变更刷新请求。同一时刻最多一轮执行；
@@ -41,6 +47,7 @@ let latestReason_ACU: 'chat_modified_deleted' | 'chat_modified_swiped' = 'chat_m
  */
 export function scheduleChatMutationRefresh_ACU(reason: 'chat_modified_deleted' | 'chat_modified_swiped'): void {
   latestReason_ACU = reason;
+  if (reason === 'chat_modified_deleted') pendingDeletion_ACU = true;
   generation_ACU += 1;
 
   const now = Date.now();
@@ -67,6 +74,7 @@ export function cancelPendingChatMutationRefresh_ACU(): void {
   _set_chatMutationDebounceTimer_ACU(null);
   generation_ACU += 1; // 使已排队的 runMutationRound_ACU 变为过期代次
   firstRequestAt_ACU = 0;
+  pendingDeletion_ACU = false; // 旧聊天的删楼不能在新聊天上做恢复
 }
 
 async function runMutationRound_ACU(): Promise<void> {
@@ -77,12 +85,14 @@ async function runMutationRound_ACU(): Promise<void> {
   running_ACU = true;
   const startedGeneration = generation_ACU;
   firstRequestAt_ACU = 0;
+  const roundHasDeletion = pendingDeletion_ACU;
+  pendingDeletion_ACU = false;
 
   try {
     // S0-4：删楼轮次先做 checkpoint 前移恢复，再进入冷回放——被删楼层携带的
     // 回放根 / 休眠表 checkpoint 若不先嫁接到幸存楼层，冷回放会把丢失固化。
     // 失败隔离：恢复失败（守卫内部已回滚）不阻断后续冷回放。
-    if (latestReason_ACU === 'chat_modified_deleted') {
+    if (roundHasDeletion) {
       try {
         await recoverLostCheckpointsAfterMessageDeletion_ACU();
       } catch (e: any) {
@@ -108,7 +118,7 @@ async function runMutationRound_ACU(): Promise<void> {
       logError_ACU(`[聊天变更] 合并数据与 UI 刷新失败: ${e?.message}`);
     }
 
-    const realignDirtyReason = latestReason_ACU;
+    const realignDirtyReason = roundHasDeletion ? 'chat_modified_deleted' : latestReason_ACU;
     const summaryTable = findSummaryTable_ACU();
     if (currentChatFileIdentifier_ACU && summaryTable?.summaryKey) {
       const scopeKey = buildSummaryVectorIndexArchiveScopeKey_ACU({
@@ -160,4 +170,5 @@ export function __resetChatMutationSchedulerForTests_ACU(): void {
   firstRequestAt_ACU = 0;
   running_ACU = false;
   pendingAfterRun_ACU = false;
+  pendingDeletion_ACU = false;
 }

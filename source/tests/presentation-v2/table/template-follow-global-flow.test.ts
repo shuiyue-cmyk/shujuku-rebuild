@@ -75,10 +75,13 @@ describe('runFollowGlobalTemplateFlow_ACU', () => {
     const ui = makeUi();
     mocks.follow
       .mockResolvedValueOnce({ saved: false, blockers: ['删除表「旧表」需要显式确认。'], error: '删除表「旧表」需要显式确认。' })
+      // R10A-04：确认后先不带确认标志重算，待删清单与确认时一致才带标志提交。
+      .mockResolvedValueOnce({ saved: false, blockers: ['删除表「旧表」需要显式确认。'], error: '删除表「旧表」需要显式确认。' })
       .mockResolvedValueOnce({ saved: true, mode: 'inherit_global', presetName: '' });
     expect(await runFollowGlobalTemplateFlow_ACU(ui)).toBe(true);
     expect(mocks.follow).toHaveBeenNthCalledWith(1, expect.objectContaining({ destructiveChangeConfirmed: false }));
-    expect(mocks.follow).toHaveBeenNthCalledWith(2, expect.objectContaining({ destructiveChangeConfirmed: true }));
+    expect(mocks.follow).toHaveBeenNthCalledWith(2, expect.objectContaining({ destructiveChangeConfirmed: false }));
+    expect(mocks.follow).toHaveBeenNthCalledWith(3, expect.objectContaining({ destructiveChangeConfirmed: true }));
 
     const ui2 = makeUi();
     ui2.dialogStore.confirm.mockResolvedValueOnce(false);

@@ -70,6 +70,7 @@ import {
   useDevOptions
 } from "./useDevOptions";
 import { countAiFloors_ACU } from '../../shared/ai-floor';
+import { CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU, isChatActionScopeCurrent_ACU, type ChatActionScope_ACU } from './chat-action-scope';
 
 type MessageKind = "info" | "success" | "warning" | "error";
 type HealthKind = "ok" | "info" | "warning" | "error";
@@ -131,9 +132,22 @@ export interface DashboardPageState {
   logHealthItem: ComputedRef<DashboardHealthItem>;
   contentReplaceGateEnabled: ComputedRef<boolean>;
   refresh: () => Promise<void>;
-  setFlightMode: (enabled: boolean, options?: { confirmTemplateScopeChange?: boolean }) => Promise<FlightModeTransitionResult_ACU>;
+  setFlightMode: (enabled: boolean, options?: DashboardFlightModeOptions) => Promise<DashboardFlightModeResult>;
   setToggle: (key: string, value: boolean) => void;
 }
+
+export interface DashboardFlightModeOptions {
+  confirmTemplateScopeChange?: boolean;
+  /** 弹确认框前拍下的所属聊天；确认后聊天已切换就不执行（R10A-04）。 */
+  scope?: ChatActionScope_ACU | null;
+}
+
+export type DashboardFlightModeResult =
+  | FlightModeTransitionResult_ACU
+  | { ok: false; reason: 'busy' | 'context_changed'; error: string };
+
+/** 飞行模式切换（关闭时会硬删大总结表）全局只允许一个在途。 */
+let flightModeTransitionInFlight_ACU = false;
 
 interface Snapshot {
   chatFileIdentifier: string;
@@ -1038,12 +1052,19 @@ export function useDashboardPage(): DashboardPageState {
 
   async function setFlightMode(
     enabled: boolean,
-    options: { confirmTemplateScopeChange?: boolean } = {},
-  ): Promise<FlightModeTransitionResult_ACU> {
+    options: DashboardFlightModeOptions = {},
+  ): Promise<DashboardFlightModeResult> {
+    if (flightModeTransitionInFlight_ACU) {
+      return { ok: false, reason: "busy", error: "飞行模式正在切换，请等当前操作完成。" };
+    }
+    if (!isChatActionScopeCurrent_ACU(options.scope)) {
+      return { ok: false, reason: "context_changed", error: CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU };
+    }
+    flightModeTransitionInFlight_ACU = true;
     try {
       return enabled
         ? await enableFlightMode_ACU()
-        : await disableFlightMode_ACU(options);
+        : await disableFlightMode_ACU({ confirmTemplateScopeChange: options.confirmTemplateScopeChange });
     } catch (error: any) {
       return {
         ok: false,
@@ -1051,7 +1072,11 @@ export function useDashboardPage(): DashboardPageState {
         error: error?.message || String(error || "飞行模式切换失败。"),
       };
     } finally {
-      await refresh();
+      try {
+        await refresh();
+      } finally {
+        flightModeTransitionInFlight_ACU = false;
+      }
     }
   }
 

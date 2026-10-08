@@ -19,6 +19,12 @@ import {
 // re-export 从 service 层搬迁的业务逻辑函数，保持外部调用方兼容
 export { replaceChatMessage_ACU, getOriginalContent_ACU } from '../../../service/chat/chat-service';
 import {
+  CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU,
+  captureChatMessageWriteTarget_ACU,
+  isChatMessageWriteTargetCurrent_ACU,
+  type ChatMessageWriteTarget_ACU
+} from '../../../service/chat/chat-message-write-target';
+import {
   jQuery_API_ACU
 } from '../../dom-utils';
 
@@ -98,6 +104,8 @@ import {
     
     // 获取原始内容
     const originalContent = getOriginalContent_ACU(messageIndex) || message.mes;
+    // R9-01：AI 在途与对话框打开期间楼层可能被滑动、删除或切聊天；应用前按此快照复核。
+    const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
     
     if (!originalContent) {
       showToastr_ACU('error', '无法获取消息内容');
@@ -136,7 +144,7 @@ import {
         return true;
       }
       
-      showReoptimizationDialog_ACU(messageIndex, result, originalContent);
+      showReoptimizationDialog_ACU(messageIndex, result, originalContent, writeTarget);
       return true;
       
     } catch (error) {
@@ -162,7 +170,7 @@ import {
    * @param {object} result - 优化结果
    * @param {string} originalContent - 原始内容
    */
-  function showReoptimizationDialog_ACU(messageIndex: number, result: any, originalContent: string) {
+  function showReoptimizationDialog_ACU(messageIndex: number, result: any, originalContent: string, writeTarget: ChatMessageWriteTarget_ACU | null) {
     const dialogHtml = `
       <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
         position: fixed;
@@ -184,7 +192,7 @@ import {
         box-sizing: border-box;
       ">
         <h3 style="margin: 0 0 8px 0; color: var(--acu-accent, #7d4940); font-size: 1.1em; letter-spacing: 1px;">🔄 重新优化结果</h3>
-        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">${result.summary}</p>
+        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">${escapeHtml_ACU(String(result.summary || ''))}</p>
         <div class="optimization-list" style="margin-bottom: 16px; max-height: 400px; overflow-y: auto;">
           ${result.optimizations.map((opt: any, i: number) => `
             <div class="optimization-item" style="
@@ -273,11 +281,17 @@ import {
     jQuery_API_ACU('#acu-opt-apply').on('click', async function() {
       jQuery_API_ACU(this).prop('disabled', true).text('应用中...');
       
-      const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, { originalContent: getOriginalContent_ACU(messageIndex) || originalContent });
-      
+      const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, {
+        originalContent: getOriginalContent_ACU(messageIndex) || originalContent,
+        expected: writeTarget,
+      });
+
       if (success) {
         jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
         showToastr_ACU('success', '优化已应用');
+      } else if (!isChatMessageWriteTargetCurrent_ACU(writeTarget)) {
+        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+        showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
       } else {
         jQuery_API_ACU(this).prop('disabled', false).text('应用优化');
         showToastr_ACU('error', '应用失败');
@@ -285,6 +299,15 @@ import {
     });
   }
   
+  /** 写回被拒或失败时的提示：楼层已变化与写入出错分开说明（R9-01）。 */
+  function reportOptimizationWriteBackFailure_ACU(writeTarget: ChatMessageWriteTarget_ACU | null) {
+    if (!isChatMessageWriteTargetCurrent_ACU(writeTarget)) {
+      showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
+    } else {
+      showToastr_ACU('error', '正文优化结果写回失败，原文未改动，详情见运行日志。');
+    }
+  }
+
   /**
    * 自动替换成功写回后登记「已处理」指纹，供下一次自动触发判重。
    * 指纹取写回后聊天数组里该楼的实际正文，避免宿主二次渲染导致内容漂移而漏判。
@@ -349,7 +372,9 @@ import {
       messageId: message.message_id,
       baseContent: content
     });
-    
+    // R9-01：AI 在途期间楼层可能被滑动、删除或切聊天；写回前按此快照复核，不按下标盲写。
+    const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
+
     // [新增] 获取用户消息（用于$8占位符）
     let userMessage = '';
     for (let i = messageIndex - 1; i >= 0; i--) {
@@ -465,16 +490,18 @@ import {
           return true;
         }
         
-        const writtenBack = await replaceChatMessage_ACU(messageIndex, finalOptimizedContent);
-        if (writtenBack) {
-          recordAutoProcessedAfterWriteBack_ACU(messageIndex, finalOptimizedContent);
-        }
-        
+        const writtenBack = await replaceChatMessage_ACU(messageIndex, finalOptimizedContent, { expected: writeTarget });
+
         if (config.seamlessMode) {
           hideOptimizationOverlay_ACU();
         } else {
           hideOptimizationProgressToast_ACU();
         }
+        if (!writtenBack) {
+          reportOptimizationWriteBackFailure_ACU(writeTarget);
+          return false;
+        }
+        recordAutoProcessedAfterWriteBack_ACU(messageIndex, finalOptimizedContent);
         
         if (config.showDiff && !config.seamlessMode) {
           // 自动链已写回：用只读结果对话框展示对比（原文/修改方案/优化），不用 toast。
@@ -491,7 +518,7 @@ import {
         return true;
       } else {
         hideOptimizationProgressToast_ACU();
-        return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, loopCount);
+        return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, loopCount, writeTarget);
       }
       
     } catch (error) {
@@ -519,14 +546,33 @@ import {
    * @param {string} content - 原始内容
    * @param {string} userMessage - 用户消息
    * @param {number} totalLoops - 总循环次数
+   * @param writeTarget - 读取正文时的楼层快照，写回前复核（R9-01）
    * @param {number} currentLoop - 当前循环次数（内部使用）
    * @param {string} currentContent - 当前内容（内部使用）
    * @param {Array} totalOptimizations - 累计优化项（内部使用）
    * @returns {Promise<boolean>} 是否成功
    */
-  async function executeContentOptimizationWithConfirm_ACU(messageIndex: number, content: string, userMessage: string, totalLoops: number, currentLoop = 1, currentContent: string | null = null, totalOptimizations: any[] = []) {
+  async function executeContentOptimizationWithConfirm_ACU(messageIndex: number, content: string, userMessage: string, totalLoops: number, writeTarget: ChatMessageWriteTarget_ACU | null, currentLoop = 1, currentContent: string | null = null, totalOptimizations: any[] = []): Promise<boolean> {
     // 使用传入的当前内容，或者原始内容
     let workingContent = currentContent !== null ? currentContent : content;
+
+    // R9-08：前几轮「应用并继续」只把结果交给下一轮，不写回。后续轮次失败、无需优化或跳过时，
+    // 要写回已确认的内容，否则用户确认过的修改会丢失，界面却报成功。填表只触发一次。
+    const finishWithConfirmedContent = async (confirmedContent: string, confirmedOptimizations: any[]): Promise<boolean> => {
+      if (confirmedOptimizations.length > 0 && confirmedContent !== content) {
+        const written = await replaceChatMessage_ACU(messageIndex, confirmedContent, { expected: writeTarget });
+        if (written) {
+          recordAutoProcessedAfterWriteBack_ACU(messageIndex, confirmedContent);
+          showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${confirmedOptimizations.length} 处改进`);
+        } else {
+          reportOptimizationWriteBackFailure_ACU(writeTarget);
+        }
+      } else {
+        showToastr_ACU('info', '正文无需优化');
+      }
+      await triggerAutomaticUpdateIfNeeded_ACU();
+      return true;
+    };
     
     logDebug_ACU(`[正文优化-手动确认] 执行第 ${currentLoop}/${totalLoops} 轮优化`);
     
@@ -543,9 +589,8 @@ import {
         showToastr_ACU('error', `正文优化失败: ${result.error}`);
         return false;
       }
-      // 如果是后续轮次失败，使用之前的结果触发填表
-      await triggerAutomaticUpdateIfNeeded_ACU();
-      return true;
+      // 后续轮次失败：写回此前已确认的结果，再触发填表
+      return finishWithConfirmedContent(workingContent, totalOptimizations);
     }
     
     // 检查是否有实际优化
@@ -554,16 +599,10 @@ import {
       // 如果没有优化项，检查是否还有下一轮
       if (currentLoop < totalLoops) {
         // 继续下一轮（使用当前内容）
-        return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, currentLoop + 1, workingContent, totalOptimizations);
+        return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop + 1, workingContent, totalOptimizations);
       } else {
-        // 所有轮次完成，触发填表
-        if (totalOptimizations.length > 0) {
-          showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${totalOptimizations.length} 处改进`);
-        } else {
-          showToastr_ACU('info', '正文无需优化');
-        }
-        await triggerAutomaticUpdateIfNeeded_ACU();
-        return true;
+        // 所有轮次完成：写回此前已确认的结果，再触发填表
+        return finishWithConfirmedContent(workingContent, totalOptimizations);
       }
     }
     
@@ -578,7 +617,8 @@ import {
         optimizedContent: result.optimizedContent,
         currentLoop: currentLoop,
         totalLoops: totalLoops,
-        totalOptimizations: newTotalOptimizations
+        totalOptimizations: newTotalOptimizations,
+        writeTarget
       }, async (action: string) => {
         if (action === 'apply') {
           // 用户确认应用
@@ -589,17 +629,15 @@ import {
               content,
               userMessage,
               totalLoops,
+              writeTarget,
               currentLoop + 1,
               result.optimizedContent,
               newTotalOptimizations
             );
             resolve(nextResult);
           } else {
-            // 所有轮次完成，应用最终结果并触发填表
-            const confirmWrittenBack = await replaceChatMessage_ACU(messageIndex, result.optimizedContent);
-            if (confirmWrittenBack) {
-              recordAutoProcessedAfterWriteBack_ACU(messageIndex, result.optimizedContent);
-            }
+            // 所有轮次完成：末轮对话框已按快照复核并写回（只写一次），这里登记已处理并触发填表
+            recordAutoProcessedAfterWriteBack_ACU(messageIndex, result.optimizedContent);
             showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${newTotalOptimizations.length} 处改进`);
             await triggerAutomaticUpdateIfNeeded_ACU();
             resolve(true);
@@ -612,23 +650,15 @@ import {
               content,
               userMessage,
               totalLoops,
+              writeTarget,
               currentLoop + 1,
               workingContent,  // 使用未优化的内容
               totalOptimizations  // 不累积本轮优化项
             );
             resolve(nextResult);
           } else {
-            // 最后一轮跳过
-            if (totalOptimizations.length > 0) {
-              // 如果有之前的优化，应用之前的结果
-              // 注意：这里需要应用之前累积的优化内容
-              await triggerAutomaticUpdateIfNeeded_ACU();
-              showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${totalOptimizations.length} 处改进`);
-            } else {
-              showToastr_ACU('info', '正文优化已跳过');
-            }
-            await triggerAutomaticUpdateIfNeeded_ACU();
-            resolve(true);
+            // 最后一轮跳过：写回此前已确认的结果
+            resolve(await finishWithConfirmedContent(workingContent, totalOptimizations));
           }
         } else {
           // 用户取消，结束优化流程
