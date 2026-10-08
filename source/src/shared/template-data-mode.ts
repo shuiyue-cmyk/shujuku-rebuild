@@ -94,10 +94,3 @@ export function normalizeTemplateDataMode_ACU(mode: unknown): TemplateDataMode_A
   return mode === 'replace' || mode === 'merge' || mode === 'seed' ? mode : null;
 }
 
-/** 判定表是否允许 merge：无法证明唯一业务键时禁止自动 merge（fail-closed） */
-export function canMergeTemplateSheet_ACU(sheet: { sourceData?: { ddl?: string } } | undefined): boolean {
-  const ddl = String(sheet?.sourceData?.ddl ?? '').trim();
-  if (!ddl) return false;
-  // 只有显式 UNIQUE/主键约束才能作为业务身份；缺失时不允许 merge。
-  return /\b(UNIQUE|PRIMARY\s+KEY)\b/i.test(ddl);
-}

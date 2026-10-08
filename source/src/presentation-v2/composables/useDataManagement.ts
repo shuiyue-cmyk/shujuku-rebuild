@@ -6,7 +6,7 @@
  */
 import { computed, reactive, ref } from 'vue';
 import { DEFAULT_MERGE_SUMMARY_PROMPT_ACU, DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU } from '../../shared/defaults-json.js';
-import { normalizeIsolationCode_ACU } from '../../shared/data-constants';
+import { normalizeIsolationCode_ACU, isReservedIsolationCode_ACU, RESERVED_ISOLATION_CODE_MESSAGE_ACU } from '../../shared/data-constants';
 import { ensureSheetOrderNumbers_ACU, logError_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
 import { maskSensitiveText_ACU } from '../../shared/log-buffer';
 import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
@@ -378,6 +378,10 @@ export function useDataManagement() {
 
   async function applyIsolation(): Promise<void> {
     const targetCode = normalizeIsolationCode_ACU(isolationCode.value);
+    if (isReservedIsolationCode_ACU(targetCode)) {
+      toast.error(RESERVED_ISOLATION_CODE_MESSAGE_ACU);
+      return;
+    }
     busyAction.value = 'apply-isolation';
     try {
       await switchIsolationProfile_ACU(targetCode);

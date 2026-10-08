@@ -145,6 +145,23 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
         await api.saveWorldInfo(bookName, data, true);
     }
 
+    /**
+     * 同一本书的「整本读 → 改 → 整本写」串行化（R7-02）：ST 的 loadWorldInfo 返回克隆，
+     * 交错执行的两个写操作各改各的副本，后保存的覆盖先保存的；并发 create 还会拿到同一个 uid。
+     * 前一个写入失败不阻塞后续写入。
+     */
+    const bookWriteChains = new Map<string, Promise<unknown>>();
+    function withBookWriteLock<T>(bookName: string, task: () => Promise<T>): Promise<T> {
+        const previous = bookWriteChains.get(bookName) ?? Promise.resolve();
+        const run = previous.then(task, task);
+        const settled: Promise<void> = run.then((): void => undefined, (): void => undefined);
+        bookWriteChains.set(bookName, settled);
+        void settled.then(() => {
+            if (bookWriteChains.get(bookName) === settled) bookWriteChains.delete(bookName);
+        });
+        return run;
+    }
+
     function entriesDictToOldArray(data: any): OldFlatLorebookEntry_ACU[] {
         const dict = data?.entries ?? {};
         return Object.keys(dict).map(uid => nativeToOldEntry_ACU(dict[uid]));
@@ -157,6 +174,10 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
 
     async function setLorebookEntries(bookName: string, entries: Array<Record<string, any>>): Promise<void> {
         if (!Array.isArray(entries) || entries.length === 0) return;
+        return withBookWriteLock(bookName, () => setLorebookEntriesLocked(bookName, entries));
+    }
+
+    async function setLorebookEntriesLocked(bookName: string, entries: Array<Record<string, any>>): Promise<void> {
         const data = await loadBookOrThrow(bookName);
         let changed = false;
         for (const patch of entries) {
@@ -175,6 +196,14 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
         bookName: string,
         entries: Array<Record<string, any>>,
     ): Promise<{ entries: OldFlatLorebookEntry_ACU[]; new_uids: number[] }> {
+        return withBookWriteLock(bookName, () => createLorebookEntriesLocked(bookName, entries));
+    }
+
+    async function createLorebookEntriesLocked(
+        bookName: string,
+        entries: Array<Record<string, any>>,
+    ): Promise<{ entries: OldFlatLorebookEntry_ACU[]; new_uids: number[] }> {
+        // uid 在临界区内按最新整本重新计算，并发 create 不会撞号。
         const data = await loadBookOrThrow(bookName);
         const existingUids = Object.keys(data.entries).map(Number).filter(Number.isFinite);
         let nextUid = existingUids.length > 0 ? Math.max(...existingUids) + 1 : 0;
@@ -194,6 +223,13 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
     }
 
     async function deleteLorebookEntries(
+        bookName: string,
+        uids: number[],
+    ): Promise<{ entries: OldFlatLorebookEntry_ACU[]; delete_occurred: boolean }> {
+        return withBookWriteLock(bookName, () => deleteLorebookEntriesLocked(bookName, uids));
+    }
+
+    async function deleteLorebookEntriesLocked(
         bookName: string,
         uids: number[],
     ): Promise<{ entries: OldFlatLorebookEntry_ACU[]; delete_occurred: boolean }> {

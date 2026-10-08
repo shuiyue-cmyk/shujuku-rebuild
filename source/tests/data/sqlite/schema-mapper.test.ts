@@ -13,6 +13,7 @@ import {
   parseDDLChineseName,
   parseDDLColumnNames,
   parseDDLColumnComments,
+  updateDDLColumnComment,
   buildColumnNameMap,
   parseDDLColumnInfos_ACU,
   resolveEffectiveDDL,
@@ -172,6 +173,52 @@ describe('parseDDLColumnComments', () => {
 
   it('空 DDL 返回空 Map', () => {
     expect(parseDDLColumnComments('').size).toBe(0);
+  });
+});
+
+describe('R7-07：列注释解析与改写识别字符串、按列定义归属', () => {
+  it('DEFAULT 字符串里的 -- 不当注释起点', () => {
+    const ddl = `CREATE TABLE t (
+      row_id INTEGER PRIMARY KEY, -- 行号
+      note TEXT DEFAULT '--', -- 备注
+      mark TEXT DEFAULT 'a--b' -- 标记
+    );`;
+    const comments = parseDDLColumnComments(ddl);
+    expect(comments.get('note')).toBe('备注');
+    expect(comments.get('mark')).toBe('标记');
+  });
+
+  it('一行写多列时注释归最后一列，不挂到行首列', () => {
+    const ddl = `CREATE TABLE t (row_id INTEGER PRIMARY KEY, name TEXT, -- 名字
+      age INTEGER -- 年龄
+    );`;
+    const comments = parseDDLColumnComments(ddl);
+    expect(comments.has('row_id')).toBe(false);
+    expect(comments.get('name')).toBe('名字');
+    expect(comments.get('age')).toBe('年龄');
+  });
+
+  it('改名时不把 DEFAULT 字符串当注释改坏 DDL', () => {
+    const ddl = `CREATE TABLE t (
+      row_id INTEGER PRIMARY KEY, -- 行号
+      note TEXT DEFAULT '--', -- 备注
+      done INTEGER
+    );`;
+    const updated = updateDDLColumnComment(ddl, 'note', '新备注');
+    expect(updated).toContain("note TEXT DEFAULT '--', -- 新备注");
+    expect(parseDDLColumnComments(updated).get('note')).toBe('新备注');
+    const added = updateDDLColumnComment(updated, 'done', '完成');
+    expect(parseDDLColumnComments(added).get('done')).toBe('完成');
+    expect(added).toContain("note TEXT DEFAULT '--', -- 新备注");
+  });
+
+  it('一行多列时改名只作用于注释所属的列', () => {
+    const ddl = `CREATE TABLE t (row_id INTEGER PRIMARY KEY, name TEXT, -- 名字
+      age INTEGER -- 年龄
+    );`;
+    expect(parseDDLColumnComments(updateDDLColumnComment(ddl, 'name', '姓名')).get('name')).toBe('姓名');
+    // row_id 不是该行注释的归属列：不改动，避免把注释挂错列。
+    expect(updateDDLColumnComment(ddl, 'row_id', '编号')).toBe(ddl);
   });
 });
 

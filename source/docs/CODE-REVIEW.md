@@ -22,7 +22,7 @@
 | 4 | service/continuation + service/agent | 30k | 子代理完成 → `docs/review/block4-continuation-agent.md`；P1 与 R4-05 已修 |
 | 5 | service/vector + data/storage 向量部分 | 12.4k+ | 子代理完成 → `docs/review/block5-vector.md`；已修（R5-04 按产品决定不修，R5-12 rowId 部分未改） |
 | 6 | service/template + template-assistant + worldbook | 13.3k | 子代理完成 → `docs/review/block6-template-worldbook.md`；已修 |
-| 7 | shared/ | 9.8k | 子代理完成 → `docs/review/block7-shared.md`；P1 已修，P2/P3 待修 |
+| 7 | shared/ | 9.8k | 子代理完成 → `docs/review/block7-shared.md`；全部已修（R7-11 locale 一项按风险不修） |
 | 8 | service/ai、plot、optimization、flight-mode、其余小模块 | 5k | 子代理完成 → `docs/review/block8-small-services.md`；P1 已修，P2/P3 待修 |
 | 9 | presentation（旧 bootstrap/triggers/api-groups） | 5.4k | 未开始 |
 | 10 | presentation-v2 逻辑层（stores/composables）+ presentation-v3 | 28k | 未开始 |
@@ -138,6 +138,16 @@
 | R4-06 固定工作流在途期间楼层变化仍落盘 | P2 | 已修：准备阶段后锚定各楼层引用/swipe/正文，前缀刷新与落盘前复核，变化即按 STALE 中止 | agent-main-loop.test「R4-06」 |
 | R4-08 会话段写在工具/隐藏楼层 | P2 | 已修：落在尾部及以前最近的 AI 楼；后面已有会话段的楼时仍写尾部，保持顺序 | agent-conversation-store.test「R4-08」×2 |
 | R7-01 正文单引号被改写 | P1 | 已修：删除单引号处理，正文原样写回 | text-optimization.test「R7-01」×2 |
+| R7-02 原生世界书后端并发读改写互相覆盖 | P2 | 已修：按书名串行化 load→save 临界区，create 在临界区内重算 uid；前一个失败不阻塞后续 | native-st-backend.test「R7-02」×2 |
+| R7-03 屏蔽词子串匹配静默排除正常条目 | P2 | 已修：英文屏蔽词按整词匹配（Scott/cottage 不再中招）；中文仍按子串，但命中条目在页面列出并标注「提示词类，默认不发送」，用户逐条勾选后填表/剧情推进/Agent 均放行；首次默认勾选与全选不连带勾上 | utils.test、worldbook-entry-selection.test、plot-task-engine.test、exposure-tt.test、两个条目列表 test |
+| R7-04 受限 DML 把字符串里的 where 当关键字 | P2 | 已修：引号感知地找字符串外第一个 WHERE | restricted-sql-dml.test「R7-04」×3 |
+| R7-05 隔离标识 default 与默认槽撞 scope | P2 | 已修：default（不分大小写）设为保留名，切换时拒绝并提示；已在用 default 的老数据不做迁移 | data-constants.test、use-data-management.test「R7-05」 |
+| R7-06 deepMerge 吞掉 source 对象 | P3 | 已修：两侧都是普通对象才递归 | utils.test「R7-06」 |
+| R7-07 DDL 列注释按行正则解析错位/改坏 | P3 | 已修：引号/括号感知的逐行扫描，注释归属行内最后一个列定义；改名只改归属行，不归属时原样返回 | schema-mapper.test「R7-07」×4 |
+| R7-08 canMergeTemplateSheet 恒真且无调用方 | P3 | 已修：删除 | — |
+| R7-09 写路径列重绑扫描过宽 | P3 | 已修：跳过目标表名限定链与 VALUES 子句；INSERT 列清单只认表名后紧跟的括号 | sql-mutation-table-rebind.test「R7-09」×3 |
+| R7-10 首列业务表头 id 被当身份列 | P3 | 已修：id 列的值全为空或纯数字才当身份列，否则插入新身份列 | canonical-row-normalizer.test「R7-10」×2 |
+| R7-11 小项 | P3 | 已修：正整数归一化、删转义解析死代码、注释错位、导入暂存等事务完成且打开失败可重试。不修：世界书书名排序的 locale 依赖——签名已写进接管条目，改排序会让现有接管一次性失配，风险大于跨设备收益 | utils.test、idb-import-temp.test |
 | R8-01 飞行模式补偿切聊后打到新聊天（硬删） | P1 | 已修：入口锚定聊天（数组/首楼/文件标识/隔离键），补偿前不一致直接放弃并报可操作错误；协调提交新增 expectedChatContext，首楼不符 fail-closed | flight-mode-transition-chat-switch.test |
 | R8-02 内部 AI 120s 墙钟超时掐断长生成 | P1 | 已修：流式改为空闲超时（等响应头、相邻数据块之间各 120s，逐块读取续期）；非流式按输出上限 20 tok/s 估算放宽，不低于 120s | api-call.test「R8-02」×2、prompt-api-call.test「R8-02」 |
 

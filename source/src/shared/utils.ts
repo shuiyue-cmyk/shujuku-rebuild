@@ -34,8 +34,9 @@ export function deepMerge_ACU(target: any, source: any): any {
   if (isObject(target) && isObject(source)) {
     Object.keys(source).forEach(key => {
       if (!isSafeKey(key)) return;
+      // 两侧都是普通对象才递归；target 侧是 null/字符串/数组时直接取 source（R7-06：否则 source 被展开成 {} 或下标对象）。
       if (isObject(source[key])) {
-        if (!(key in target))
+        if (!isObject(target[key]))
           Object.assign(output, { [key]: source[key] });
         else
           output[key] = deepMerge_ACU(target[key], source[key]);
@@ -91,10 +92,10 @@ export function normalizeNonNegativeInteger_ACU(value: any, fallbackValue: numbe
  * 正整数归一化（fallback 默认 1）
  */
 export function normalizePositiveInteger_ACU(value: any, fallbackValue: number = 1): number {
-  const num = Number(value);
-  if (Number.isFinite(num) && num > 0) return Math.floor(num);
-  const fallback = Number(fallbackValue);
-  return Number.isFinite(fallback) && fallback > 0 ? Math.floor(fallback) : 1;
+  const num = Math.floor(Number(value));
+  if (Number.isFinite(num) && num > 0) return num;
+  const fallback = Math.floor(Number(fallbackValue));
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : 1;
 }
 
 /**
@@ -287,16 +288,6 @@ export   function parseTableTemplateJson_ACU({ stripSeedRows = false, templateId
               obj = parseTemplateJson(cleanTemplate);
           }
 
-          // 转义后解析
-          if (!obj && typeof cleanTemplate === 'string') {
-              try {
-                  const escaped = escapeStringForJson_ACU(cleanTemplate);
-                  obj = parseTemplateJson(escaped);
-              } catch (e) {
-                  // 转义后解析异常
-              }
-          }
-
           if (!obj) {
               // 采样：首次与每 N 次记 error（含 templateId/chat 标识），其余降级为 debug，避免坏模板每轮刷屏。
               templateParseFailureCount_ACU++;
@@ -387,9 +378,12 @@ export   function cloneScopedConfigData_ACU(value: any, fallback: any = null) {
 
   export function isEntryBlocked_ACU(entry: any) {
     if (!entry) return false;
-    const blockedKeywords = ["规则", "思维链", "cot", "MVU", "mvu", "变量", "状态", "Status", "Rule", "rule", "检定", "判断", "叙事", "文风", "InitVar", "格式"];
     const name = String(entry.comment || entry.name || '');
-    return blockedKeywords.some(keyword => name.includes(keyword));
+    // 中文关键词按子串；英文关键词按「前后不是英文字母」的整词匹配（R7-03）：
+    // 子串匹配会把 Scott / Escort / cottage / Ruler 这类正常条目一并屏蔽。
+    const blockedChineseKeywords = ["规则", "思维链", "变量", "状态", "检定", "判断", "叙事", "文风", "格式"];
+    if (blockedChineseKeywords.some(keyword => name.includes(keyword))) return true;
+    return /(?<![A-Za-z])(?:cot|mvu|status|rules?|initvar)(?![A-Za-z])/i.test(name);
   }
 
   /**

@@ -705,3 +705,35 @@ describe('parseTableTemplateJson_ACU', () => {
     expect(Array.isArray(result)).toBe(false);
   });
 });
+
+describe('块 7 复审：utils 小项', () => {
+  it('R7-06：target 值为 null/字符串/数组时不吞掉 source 对象', () => {
+    expect(deepMerge_ACU({ a: null }, { a: { x: 1 } })).toEqual({ a: { x: 1 } });
+    expect(deepMerge_ACU({ a: 'ab' }, { a: { x: 1 } })).toEqual({ a: { x: 1 } });
+    expect(deepMerge_ACU({ a: [1, 2] }, { a: { x: 1 } })).toEqual({ a: { x: 1 } });
+    expect(deepMerge_ACU({ a: { y: 2 } }, { a: { x: 1 } })).toEqual({ a: { x: 1, y: 2 } });
+  });
+
+  it('R7-11：normalizePositiveInteger_ACU 取整后不足 1 时回落默认值', () => {
+    expect(normalizePositiveInteger_ACU(0.5, 3)).toBe(3);
+    expect(normalizePositiveInteger_ACU(2.7, 3)).toBe(2);
+  });
+});
+
+describe('R7-03：屏蔽词的英文按整词匹配', () => {
+  it('英文名里恰好含 cot/rule/status 的正常条目不再被屏蔽', () => {
+    expect(isEntryBlocked_ACU({ comment: 'Scott 的档案' })).toBe(false);
+    expect(isEntryBlocked_ACU({ comment: 'Escort mission' })).toBe(false);
+    expect(isEntryBlocked_ACU({ comment: 'cottage' })).toBe(false);
+    expect(isEntryBlocked_ACU({ comment: 'Ruler of the north' })).toBe(false);
+    expect(isEntryBlocked_ACU({ comment: 'statusquo' })).toBe(false);
+  });
+
+  it('作为独立词出现的英文屏蔽词仍屏蔽', () => {
+    expect(isEntryBlocked_ACU({ comment: 'COT思维链' })).toBe(true);
+    expect(isEntryBlocked_ACU({ comment: '[Rules] 输出要求' })).toBe(true);
+    expect(isEntryBlocked_ACU({ comment: 'Status bar' })).toBe(true);
+    expect(isEntryBlocked_ACU({ comment: 'MVU变量' })).toBe(true);
+    expect(isEntryBlocked_ACU({ comment: 'InitVar' })).toBe(true);
+  });
+});

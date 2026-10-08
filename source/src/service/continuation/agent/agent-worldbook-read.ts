@@ -12,6 +12,7 @@ import { getIsolationPrefix_ACU } from '../../worldbook/injection-engine-state';
 import { getLorebookEntriesByNames_ACU, getWorldbookEntryKeywords_ACU } from '../../worldbook/pipeline';
 import { getCurrentWorldbookConfig_ACU } from '../../settings/settings-readers';
 import { isEntryBlocked_ACU, logWarn_ACU } from '../../../shared/utils';
+import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-selection';
 import {
   isSummaryIndexEntryComment_ACU,
   isSummaryEntryComment_ACU,
@@ -139,7 +140,7 @@ export async function loadAgentWorldbookSnapshot_ACU(): Promise<AgentWorldbookSn
         if (isSummaryEntryComment_ACU(title)) continue;
         if (!uid || !content.trim()) continue;
         if (!isEntrySelected_ACU(bookName, uid, enabledEntriesMap)) continue;
-        if (isEntryBlocked_ACU(raw)) continue;
+        if (isEntryBlocked_ACU(raw) && !isEntryExplicitlySelected_ACU(enabledEntriesMap, bookName, uid)) continue;
         // 纪要索引及其数字分片由快照单独呈现；其余已启用条目交由正常世界书读取方案处理，
         // 不按插件前缀额外屏蔽（TT 移植上游 86be318e，CustomExport 表格导出放行）。
         if (isSummaryIndexEntryComment_ACU(title)) continue;

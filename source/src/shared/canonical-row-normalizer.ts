@@ -283,7 +283,12 @@ export function restoreLegacyRowIdentity_ACU(data: Record<string, any> | null | 
     // identity placeholder spelling (null/undefined/blank/alias) is renamed in
     // place instead — inserting there would create an orphan empty column and
     // shift every business value one column left of its label.
-    const hasIdentityColumn = header.length > 0 && isIdentityPlaceholderHeaderCell_ACU(header[0]);
+    // 「id」既是历史身份列别名，也是常见的业务表头（物品编号等）。只有该列的值全为空或纯数字
+    // （行号/稳定 row_id 形态）时才当身份列；出现业务编号（A-01）就按缺身份列处理（R7-10）。
+    const headerIsAmbiguousId = typeof header[0] === 'string' && header[0].trim().toLowerCase() === 'id';
+    const idColumnLooksLikeIdentity = !headerIsAmbiguousId
+      || [...dataRows, ...seedRows].every(row => isEmptyCanonicalRowId_ACU(row[0]) || looksLikeRowIdValue_ACU(row[0]));
+    const hasIdentityColumn = header.length > 0 && isIdentityPlaceholderHeaderCell_ACU(header[0]) && idColumnLooksLikeIdentity;
 
     // 行级宽度感知：表头有身份列而行宽 = 表头-1 的行缺一格。row[0] 是纯数字
     // （xing 行号/稳定 row_id 格式）→ 身份格在，缺的是尾格；row[0] 是业务值

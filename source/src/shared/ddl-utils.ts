@@ -95,21 +95,93 @@ export function parseDDLColumnComments(ddl: string): Map<string, string> {
 
   const body = getCreateTableDefinitionBody_ACU(ddl);
   if (body === null) return comments;
-  // 按行分割（注释是行级概念，标准 SQL 中 `-- 注释` 到行尾）
-  // 而非按 splitColumnDefinitions 分割（逗号在注释之前，会截断注释）
-  const lines = body.split('\n');
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    // 匹配 column_name ... -- 注释（行内可能有逗号、CHECK 约束等）
-    const match = trimmed.match(/^([^\s,()]+)\s+.*?--\s*(.+?)\s*,?\s*$/);
-    if (match) {
-      comments.set(match[1], match[2]);
-    }
+  // 注释是行级概念（`-- 注释` 到行尾），归属该行最后一个开始的列定义（R7-07）：
+  // 约定写法 `col TEXT, -- 注释` 里逗号在注释之前；一行多列时注释属于最后一列。
+  // 引号内的 `--`（DEFAULT '--'）不是注释起点。
+  for (const line of scanDdlBodyLines_ACU(body)) {
+    if (!line.owner || line.commentStart < 0) continue;
+    const comment = readDdlLineComment_ACU(body, line);
+    if (comment) comments.set(line.owner, comment);
   }
 
   return comments;
+}
+
+interface DdlBodyLine_ACU {
+  start: number;
+  end: number;
+  /** 本行最后一个开始的列定义的首个 token（原样，含引号）；本行没有列定义开始时为 null。 */
+  owner: string | null;
+  /** 本行引号外 `--` 的位置（相对 body）；没有时为 -1。 */
+  commentStart: number;
+}
+
+/**
+ * 引号 / 括号 / 块注释感知地逐行扫描 CREATE TABLE 括号内的定义体。
+ * 列定义从「体首或顶层逗号之后的第一个非空白字符」开始。
+ */
+function scanDdlBodyLines_ACU(body: string): DdlBodyLine_ACU[] {
+  const lines: DdlBodyLine_ACU[] = [];
+  let lineStart = 0;
+  let owner: string | null = null;
+  let commentStart = -1;
+  let depth = 0;
+  let quote: "'" | '"' | '`' | '[' | null = null;
+  let inBlockComment = false;
+  let expectDefinition = true;
+  const finishLine = (end: number) => {
+    lines.push({ start: lineStart, end, owner, commentStart });
+    lineStart = end + 1;
+    owner = null;
+    commentStart = -1;
+  };
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (char === '\n' && !quote) {
+      finishLine(index);
+      continue;
+    }
+    if (quote) {
+      if (quote === '[' ? char === ']' : char === quote) {
+        if (quote !== '[' && body[index + 1] === quote) index += 1;
+        else quote = null;
+      }
+      continue;
+    }
+    if (inBlockComment) {
+      if (char === '*' && body[index + 1] === '/') { inBlockComment = false; index += 1; }
+      continue;
+    }
+    if (char === '-' && body[index + 1] === '-') {
+      commentStart = index;
+      const newline = body.indexOf('\n', index);
+      index = (newline < 0 ? body.length : newline) - 1;
+      continue;
+    }
+    if (char === '/' && body[index + 1] === '*') { inBlockComment = true; index += 1; continue; }
+    if (expectDefinition && depth === 0 && !/[\s,]/.test(char)) {
+      let tokenEnd = index;
+      if (char === "'" || char === '"' || char === '`' || char === '[') {
+        const close = char === '[' ? ']' : char;
+        tokenEnd = body.indexOf(close, index + 1);
+        tokenEnd = tokenEnd < 0 ? body.length : tokenEnd + 1;
+      } else {
+        while (tokenEnd < body.length && !/[\s,()]/.test(body[tokenEnd])) tokenEnd += 1;
+      }
+      owner = body.slice(index, tokenEnd);
+      expectDefinition = false;
+    }
+    if (char === "'" || char === '"' || char === '`' || char === '[') { quote = char; continue; }
+    if (char === '(') depth += 1;
+    else if (char === ')') depth = Math.max(0, depth - 1);
+    else if (char === ',' && depth === 0) expectDefinition = true;
+  }
+  finishLine(body.length);
+  return lines;
+}
+
+function readDdlLineComment_ACU(body: string, line: DdlBodyLine_ACU): string {
+  return body.slice(line.commentStart + 2, line.end).trim().replace(/\s*,\s*$/, '').trim();
 }
 
 /**
@@ -944,47 +1016,40 @@ function canonicalSqlIdentifier_ACU(value: string): string {
 export function updateDDLColumnComment(ddl: string, columnName: string, newComment: string): string {
   if (!ddl || !columnName || !newComment) return ddl;
 
-  const lines = ddl.split('\n');
-  let found = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (!trimmed) continue;
-
-    // 检查该行是否以目标列名开头（列定义行）
-    const colMatch = trimmed.match(/^([^\s,()]+)\s+/);
-    if (!colMatch || colMatch[1] !== columnName) continue;
-
-    // 找到目标列，替换或添加注释
-    found = true;
-    const line = lines[i];
-
-    // 情况 1：行内已有 `-- 注释`，替换注释内容
-    const commentMatch = line.match(/^(.*?)(--\s*).+?(,?\s*)$/);
-    if (commentMatch) {
-      lines[i] = `${commentMatch[1]}-- ${newComment}${commentMatch[3]}`;
-      break;
-    }
-
-    // 情况 2：行内没有注释，需要添加
-    // 先检查行尾是否有逗号
-    const trailingCommaMatch = line.match(/^(.*?)(,\s*)$/);
-    if (trailingCommaMatch) {
-      // 有逗号：在逗号前插入注释 → `  col TEXT, -- 注释`
-      // 按照项目约定格式：逗号在注释前 → `  col TEXT, -- 注释`
-      lines[i] = `${trailingCommaMatch[1]}, -- ${newComment}`;
-    } else {
-      // 无逗号（最后一列）：直接在行尾添加注释
-      lines[i] = `${line.trimEnd()} -- ${newComment}`;
-    }
-    break;
+  const bounds = findCreateTableDefinitionBounds_ACU(ddl);
+  if (!bounds) {
+    logWarn_ACU(`[Schema] updateDDLColumnComment: 无法解析 CREATE TABLE，DDL 未修改`);
+    return ddl;
+  }
+  const bodyOffset = bounds.openingIndex + 1;
+  const body = ddl.slice(bodyOffset, bounds.closingIndex);
+  // 与 parseDDLColumnComments 同一扫描器（R7-07）：只改注释归属该列的那一行；
+  // 列与别的列同行且不是行内最后一列时，注释无处安放，原样返回而不是挂到错列上。
+  const line = scanDdlBodyLines_ACU(body).find(item => item.owner === columnName);
+  if (!line) {
+    logWarn_ACU(`[Schema] updateDDLColumnComment: 未找到注释归属于列 "${columnName}" 的行，DDL 未修改`);
+    return ddl;
   }
 
-  if (!found) {
-    logWarn_ACU(`[Schema] updateDDLColumnComment: 未找到列 "${columnName}"，DDL 未修改`);
+  let replacement: string;
+  if (line.commentStart >= 0) {
+    // 情况 1：行内已有引号外的 `-- 注释`，只替换注释内容
+    const trailingComma = /,\s*$/.test(body.slice(line.commentStart, line.end)) ? ',' : '';
+    replacement = `${body.slice(line.start, line.commentStart)}-- ${newComment}${trailingComma}`;
+  } else {
+    // 情况 2：行内没有注释。项目约定逗号在注释前 → `  col TEXT, -- 注释`
+    const code = body.slice(line.start, line.end);
+    const trailingCommaMatch = code.match(/^([\s\S]*?)(,\s*)$/);
+    replacement = trailingCommaMatch
+      ? `${trailingCommaMatch[1]}, -- ${newComment}`
+      : `${code.trimEnd()} -- ${newComment}`;
+    // 右括号与该列同行：补换行，否则注释会把右括号吞掉。
+    if (line.end === body.length) replacement += '\n';
   }
 
-  return lines.join('\n');
+  const start = bodyOffset + line.start;
+  const end = bodyOffset + line.end;
+  return `${ddl.slice(0, start)}${replacement}${ddl.slice(end)}`;
 }
 
 // ═══════════════════════════════════════════════════════════════

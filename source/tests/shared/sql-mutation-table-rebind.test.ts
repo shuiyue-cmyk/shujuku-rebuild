@@ -766,3 +766,31 @@ describe('sql mutation column rebind', () => {
     ).sql).toBe('SELECT runtime_t.physical_name FROM runtime_t NOT INDEXED');
   });
 
+
+describe('R7-09：写路径列重绑的扫描范围', () => {
+  const aliases = new Map([
+    ['items', new Map([
+      ['row_id', 'row_id'],
+      ['items', 'item_name'],
+      ['物品', 'item_name'],
+      ['created', 'created_at'],
+    ])],
+  ]);
+
+  it('目标表名与某列别名同名时，表名不被改写成列名', () => {
+    const [sql] = rebindSqlMutationColumnsByTarget_ACU(["UPDATE items SET 物品 = '剑' WHERE row_id = 1"], aliases);
+    expect(sql).toBe("UPDATE items SET item_name = '剑' WHERE row_id = 1");
+    const [deleted] = rebindSqlMutationColumnsByTarget_ACU(["DELETE FROM items WHERE items = '剑'"], aliases);
+    expect(deleted).toBe("DELETE FROM items WHERE item_name = '剑'");
+  });
+
+  it('无列清单的 INSERT 不把 VALUES 里的 NULL/函数当列，开启未知列闸门也不误拒', () => {
+    const statements = ["INSERT INTO items VALUES (NULL, '剑', datetime('now'))"];
+    expect(rebindSqlMutationColumnsByTarget_ACU(statements, aliases, { requireKnownInsertColumns: true })).toEqual(statements);
+  });
+
+  it('有列清单的 INSERT 照常重绑列清单', () => {
+    const [sql] = rebindSqlMutationColumnsByTarget_ACU(["INSERT INTO items (物品, created) VALUES ('剑', 'x')"], aliases, { requireKnownInsertColumns: true });
+    expect(sql).toBe("INSERT INTO items (item_name, created_at) VALUES ('剑', 'x')");
+  });
+});

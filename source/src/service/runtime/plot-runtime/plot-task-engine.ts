@@ -135,6 +135,7 @@ import {
   resolveAgentWorldbookFilterAvailability_ACU
 } from '../../agent/agent-worldbook-skill-meta';
 import { isAiFloor_ACU } from '../../../shared/ai-floor';
+import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-selection';
 
   type PlotWorldbookAgentMode_ACU = 'normal' | 'agent-controlled';
 
@@ -1390,7 +1391,7 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
             normalizedComment.startsWith('总结条目') ||
             normalizedComment.startsWith('小总结条目') ||
             normalizedComment.startsWith('重要人物条目');
-          if (!isDbGenerated && isEntryBlocked_ACU(entry)) {
+          if (!isDbGenerated && isEntryBlocked_ACU(entry) && !isEntryExplicitlySelected_ACU(enabledMap, entry.bookName, entry.uid)) {
             logDebug_ACU(`[剧情推进] 条目被屏蔽: "${entry.rawComment || entry.comment || entry.name || ''}"`);
             return false;
           }

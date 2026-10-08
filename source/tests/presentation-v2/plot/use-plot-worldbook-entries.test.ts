@@ -197,6 +197,8 @@ describe('usePlotWorldbookEntries', () => {
       { uid: 2, disabled: true, isConstant: true, agentTakeoverState: 'taken_over', checked: false },
       { uid: 4, disabled: false, isConstant: false, agentTakeoverState: 'native', checked: false },
       { uid: 5, disabled: false, isConstant: false, agentTakeoverState: 'native', checked: false },
+      // R7-03：命中屏蔽词的条目也列出，默认不勾选。
+      { uid: 6, disabled: false, isConstant: false, agentTakeoverState: 'native', checked: false },
     ]);
     expect(settings.plotSettings.plotWorldbookConfig.enabledEntries.MyBook).toEqual([]);
     c.selectAll();
@@ -247,7 +249,7 @@ describe('usePlotWorldbookEntries', () => {
     expect(mockSaveSettings).not.toHaveBeenCalled();
   });
 
-  it('loadEntries 过滤屏蔽词条目', async () => {
+  it('R7-03：屏蔽词条目列出并标注，首次加载与全选都不自动勾选，逐条勾选后保留', async () => {
     mockGetEntries.mockResolvedValue({
       'B': [
         makeEntry(10, '角色规则'),
@@ -259,8 +261,15 @@ describe('usePlotWorldbookEntries', () => {
     const c = await getComposable();
     await c.loadEntries(['B']);
 
-    const uids = c.groups.value[0].entries.map(e => e.uid);
-    expect(uids).toEqual([12]);
+    const entries = c.groups.value[0].entries;
+    expect(entries.map(e => e.uid)).toEqual([10, 11, 12]);
+    expect(entries.map(e => e.blockedByDefault)).toEqual([true, true, false]);
+    expect(entries[0].label).toContain('默认不发送');
+    expect(settings.plotSettings.plotWorldbookConfig.enabledEntries['B']).toEqual([12]);
+
+    c.toggleEntry('B', 10, true);
+    c.selectAll();
+    expect(settings.plotSettings.plotWorldbookConfig.enabledEntries['B']).toEqual([10, 12]);
   });
 
 

@@ -95,6 +95,33 @@ function parseAssignments_ACU(raw: string, mode: 'comma' | 'and'): Record<string
   return result;
 }
 
+/**
+ * 把 UPDATE 拆成表名 / SET 段 / WHERE 段。WHERE 关键字只认字符串外的第一个（R7-04）：
+ * 正则的非贪婪 SET…WHERE 会停在 'go where you want' 里的 where，把合法语句切坏。
+ */
+function matchRestrictedUpdate_ACU(statement: string): { table: string; set: string; where: string } | null {
+  const head = statement.match(/^UPDATE\s+([A-Za-z_][\w]*)\s+SET\s+/i);
+  if (!head) return null;
+  const rest = statement.slice(head[0].length);
+  let quoted = false;
+  for (let index = 0; index < rest.length; index += 1) {
+    const char = rest[index];
+    if (char === "'") {
+      if (quoted && rest[index + 1] === "'") { index += 1; continue; }
+      quoted = !quoted;
+      continue;
+    }
+    if (quoted || !/\s/.test(char)) continue;
+    const keyword = rest.slice(index).match(/^\s+WHERE\s+/i);
+    if (!keyword) continue;
+    const set = rest.slice(0, index).trim();
+    const where = rest.slice(index + keyword[0].length).trim();
+    if (!set || !where) return null;
+    return { table: head[1], set, where };
+  }
+  return null;
+}
+
 function splitStatements_ACU(sql: string): string[] {
   const statements: string[] = [];
   let start = 0;
@@ -128,12 +155,12 @@ export function parseRestrictedSqlDml_ACU(sql: string): RestrictedSqlStatement_A
       if (columns.length !== values.length) throw new Error(`INSERT 字段数与值数量不一致（${columns.length} 个字段、${values.length} 个值）。请逐项核对列名列表与 VALUES 一一对应：不要把正文内容写进列名，也不要漏写值；若正文含单引号，应写成两个单引号。逐栏 write_sql 里 id 和 expected_revision 可以不写`);
       return { kind: 'insert', table: unquoteIdentifier_ACU(match[1]), values: Object.fromEntries(columns.map((column, index) => [column, values[index]])) };
     }
-    match = statement.match(/^UPDATE\s+([A-Za-z_][\w]*)\s+SET\s+([\s\S]+?)\s+WHERE\s+([\s\S]+)$/i);
-    if (match) {
-      const values = parseAssignments_ACU(match[2], 'comma');
-      const where = parseAssignments_ACU(match[3], 'and');
+    const update = matchRestrictedUpdate_ACU(statement);
+    if (update) {
+      const values = parseAssignments_ACU(update.set, 'comma');
+      const where = parseAssignments_ACU(update.where, 'and');
       if (!Object.keys(values).length || !Object.keys(where).length) throw new Error('UPDATE 必须包含 SET 与 WHERE');
-      return { kind: 'update', table: unquoteIdentifier_ACU(match[1]), values, where };
+      return { kind: 'update', table: unquoteIdentifier_ACU(update.table), values, where };
     }
     match = statement.match(/^DELETE\s+FROM\s+([A-Za-z_][\w]*)\s+WHERE\s+([\s\S]+)$/i);
     if (match) {
@@ -202,13 +229,13 @@ function inspectSqlRepairTarget_ACU(text: string): RestrictedSqlRepairTarget_ACU
       if (!/^[A-Za-z_][\w]*$/.test(columns[0] ?? '') || !values.length) return undefined;
       return { table: unquoteIdentifier_ACU(insert[1]), column: columns[0], value: parseValue_ACU(values[0]), columns };
     }
-    const update = text.match(/^UPDATE\s+([A-Za-z_][\w]*)\s+SET\s+([\s\S]+?)\s+WHERE\s+([\s\S]+)$/i);
+    const update = matchRestrictedUpdate_ACU(text);
     if (update) {
-      const where = parseAssignments_ACU(update[3], 'and');
+      const where = parseAssignments_ACU(update.where, 'and');
       if (typeof where.id !== 'string' || !where.id.trim() || Object.keys(where).some(key => !['id', 'expected_revision'].includes(key))) return undefined;
-      const columns = splitSqlAssignments_ACU(update[2], 'comma').map(part => /^([A-Za-z_][\w]*)\s*=/.exec(part)?.[1]?.toLowerCase() ?? '');
+      const columns = splitSqlAssignments_ACU(update.set, 'comma').map(part => /^([A-Za-z_][\w]*)\s*=/.exec(part)?.[1]?.toLowerCase() ?? '');
       if (columns.some(column => !column)) return undefined;
-      return { table: unquoteIdentifier_ACU(update[1]), column: 'id', value: where.id, columns };
+      return { table: unquoteIdentifier_ACU(update.table), column: 'id', value: where.id, columns };
     }
   } catch { /* 不能可靠识别时保留未关联诊断，不猜测目标。 */ }
   return undefined;

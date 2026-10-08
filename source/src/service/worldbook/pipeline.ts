@@ -113,6 +113,7 @@ import {
   updateOutlineTableEntry_ACU,
   updateSummaryTableEntries_ACU
 } from './injection-engine';
+import { isEntryExplicitlySelected_ACU } from '../../shared/worldbook-entry-selection';
 // pipeline.ts
 // 从 05_core_tail.js 迁入
 
@@ -1678,7 +1679,7 @@ export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride 
                     if (normalized.startsWith('总结条目') || normalized.startsWith('小总结条目')) return false;
                 }
                 if (excludeImportTaggedEntries && isImportTaggedLorebookEntry_ACU(entry)) return false;
-                if (isEntryBlocked_ACU(entry)) return false;
+                if (isEntryBlocked_ACU(entry) && !isEntryExplicitlySelected_ACU(enabledEntriesMap, entry.bookName, entry.uid)) return false;
                 return true;
             },
             isSelected: (entry: any) => {

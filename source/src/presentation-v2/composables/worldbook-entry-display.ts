@@ -22,6 +22,8 @@ export interface WorldbookEntryDisplayItem_ACU {
   skillifySelectable: boolean;
   isConstant?: boolean;
   disabled: boolean;
+  /** 命中屏蔽词：默认不发送，只能逐条显式勾选（全选不连带勾上，R7-03）。 */
+  blockedByDefault?: boolean;
 }
 
 export interface WorldbookEntryDisplayGroup_ACU {
@@ -104,8 +106,16 @@ export function isWorldbookEntryVisibleForPageUI_ACU(
       || normalized.startsWith('总结条目')
       || normalized.startsWith('小总结条目')) return false;
   }
-  return !isEntryBlocked_ACU({ comment });
+  // 命中屏蔽词的条目也要列出来（R7-03）：默认不发送，但用户能看到并勾选回来。
+  return true;
 }
+
+/** 条目名命中屏蔽词：默认不发送，仅在用户显式勾选后参与（R7-03）。 */
+export function isWorldbookEntryBlockedByDefault_ACU(entry: any): boolean {
+  return isEntryBlocked_ACU({ comment: String(entry?.comment || entry?.name || '') });
+}
+
+export const WORLDBOOK_BLOCKED_ENTRY_LABEL_SUFFIX_ACU = '（提示词类，默认不发送，勾选后发送）';
 
 export function resolveWorldbookEntryTakeoverState_ACU(
   entry: any,

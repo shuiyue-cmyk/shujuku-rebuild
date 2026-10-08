@@ -87,10 +87,6 @@ export function isStrictLorebookReadError_ACU(error: unknown): boolean {
 }
 
 /**
- * 安全摘要：只输出白名单结构化字段，绝不复制 message/stack。
- * 供 plot runtime 顶层与日志使用；pipeline 内可委托本实现避免双份漂移。
-
-/**
  * 统一运行时错误安全摘要：
  * - strict 错误 → strict 白名单摘要；
  * - 命名 host API 不可用 → 只输出 operation；
@@ -156,6 +152,11 @@ export function normalizeSafePreflightSummary_ACU(error: unknown): Record<string
   }
   return normalized;
 }
+
+/**
+ * 安全摘要：只输出白名单结构化字段，绝不复制 message/stack。
+ * 供 plot runtime 顶层与日志使用；pipeline 内可委托本实现避免双份漂移。
+ */
 export function summarizeStrictLorebookReadError_ACU(error: unknown) {
   if (!isStrictLorebookReadError_ACU(error)) return null;
   const candidate = error as {

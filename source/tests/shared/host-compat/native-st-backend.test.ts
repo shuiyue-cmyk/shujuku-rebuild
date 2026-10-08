@@ -406,3 +406,42 @@ describe('TT 2.3.0 一等工具楼的角色映射', () => {
     expect(onlyAi.map((m: any) => m.message)).toEqual(['回复']);
   });
 });
+
+describe('R7-02：同一本书的读改写串行化', () => {
+  function buildAsyncBookContext() {
+    let stored: any = { entries: { 0: { uid: 0, comment: '旧', content: 'c', key: [], disable: false } } };
+    const delay = () => new Promise(resolve => setTimeout(resolve, 5));
+    return {
+      ctx: buildContext({
+        loadWorldInfo: vi.fn(async () => { await delay(); return structuredClone(stored); }),
+        saveWorldInfo: vi.fn(async (_name: string, data: any) => { await delay(); stored = structuredClone(data); }),
+      }),
+      read: () => stored,
+    };
+  }
+
+  it('并发 create + create + set 后三方改动都在，新 uid 不重复', async () => {
+    const { ctx, read } = buildAsyncBookContext();
+    const backend = createNativeStBackend_ACU(() => ctx);
+    const [first, second] = await Promise.all([
+      backend.createLorebookEntries('书A', [{ comment: '新1', content: 'x' }]),
+      backend.createLorebookEntries('书A', [{ comment: '新2', content: 'y' }]),
+      backend.setLorebookEntries('书A', [{ uid: 0, comment: '改' }]),
+    ]);
+    expect(first.new_uids[0]).not.toBe(second.new_uids[0]);
+    const comments = Object.values(read().entries).map((entry: any) => entry.comment).sort();
+    expect(comments).toEqual(['改', '新1', '新2'].sort());
+  });
+
+  it('前一个写入失败不阻塞后续写入', async () => {
+    const { ctx, read } = buildAsyncBookContext();
+    ctx.saveWorldInfo.mockRejectedValueOnce(new Error('save failed'));
+    const backend = createNativeStBackend_ACU(() => ctx);
+    const results = await Promise.allSettled([
+      backend.setLorebookEntries('书A', [{ uid: 0, comment: '失败' }]),
+      backend.setLorebookEntries('书A', [{ uid: 0, comment: '成功' }]),
+    ]);
+    expect(results.map(result => result.status)).toEqual(['rejected', 'fulfilled']);
+    expect(read().entries[0].comment).toBe('成功');
+  });
+});

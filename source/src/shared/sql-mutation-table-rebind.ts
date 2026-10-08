@@ -65,6 +65,17 @@ function mutationTarget(sql: string, values: Token_ACU[]): Token_ACU | undefined
   return keyword(action, 'DELETE') && keyword(values[actionIndex + 1], 'FROM') ? qualifiedTail(sql, values, actionIndex + 2) : undefined;
 }
 
+/** mutation 目标表名（含 schema.table 限定链）在 token 序列里的下标区间；没有目标时为 null。 */
+function mutationTargetRange(sql: string, values: Token_ACU[]): { head: number; tail: number } | null {
+  const target = mutationTarget(sql, values);
+  if (!target) return null;
+  const tail = values.indexOf(target);
+  let head = tail;
+  while (head > 0 && values[head - 1].depth === target.depth
+    && /^\s*\.\s*$/.test(sql.slice(values[head - 1].end, values[head].start))) head -= 1;
+  return { head, tail };
+}
+
 interface CteScope_ACU { name: string; depth: number; start: number; end: number; }
 
 function skipCteMaterializationHint_ACU(values: Token_ACU[], index: number, depth: number): number {
@@ -426,6 +437,17 @@ function collectMutationColumnReplacements_ACU(
   if (!action) return replacements;
   const actionValue = action.value.toUpperCase();
   const actionDepth = action.depth;
+  const targetRange = mutationTargetRange(sql, values);
+  // INSERT/REPLACE 的 VALUES 子句只有字面量与函数，不含列引用：全语句扫描跳过（到 ON CONFLICT / RETURNING 为止）。
+  let valuesClause: { start: number; end: number } | null = null;
+  if (actionValue === 'INSERT' || actionValue === 'REPLACE') {
+    const valuesIndex = values.findIndex((token, index) => index > actionIndex && token.depth === actionDepth && keyword(token, 'VALUES'));
+    if (valuesIndex >= 0) {
+      const stopIndex = values.findIndex((token, index) => index > valuesIndex && token.depth === actionDepth
+        && (keyword(token, 'ON') || keyword(token, 'RETURNING')));
+      valuesClause = { start: valuesIndex, end: stopIndex < 0 ? values.length : stopIndex };
+    }
+  }
 
   if (actionValue === 'UPDATE') {
     // SET 子句：action 之后找同 depth 的 SET，其后的 `col =` 左侧标识符为列。
@@ -449,8 +471,14 @@ function collectMutationColumnReplacements_ACU(
       }
     }
   } else if (actionValue === 'INSERT' || actionValue === 'REPLACE') {
-    // 列清单：目标表 token 之后第一个 depth+1 的 token 即首列（tokenizer 不产出括号 token）。
-    const openIndex = values.findIndex(token => token.depth === actionDepth + 1 && token.start > action.start);
+    // 列清单：只认「目标表名后紧跟 (」的括号（tokenizer 不产出括号 token）。无列清单的
+    // INSERT … VALUES (NULL, datetime('now')) 里第一个 depth+1 token 落在 VALUES 内，不是列（R7-09）。
+    const columnListIndex = targetRange ? targetRange.tail + 1 : -1;
+    const columnListToken = values[columnListIndex];
+    const openIndex = targetRange && columnListToken && columnListToken.depth === actionDepth + 1
+      && /^\s*\(\s*$/.test(sql.slice(values[targetRange.tail].end, columnListToken.start))
+      ? columnListIndex
+      : -1;
     if (openIndex >= 0) {
       let cursor = openIndex;
       while (cursor < values.length && values[cursor].depth >= actionDepth + 1) {
@@ -468,6 +496,9 @@ function collectMutationColumnReplacements_ACU(
   // 排除函数调用、AS 后别名、限定符点号左侧、关键字。已处理的 token 用 start 去重。
   for (let index = 0; index < values.length; index += 1) {
     const token = values[index];
+    // 目标表名本身（及其限定链）不是列：列别名恰好与表名同名时不能把表名改成列名（R7-09）。
+    if (targetRange && index >= targetRange.head && index <= targetRange.tail) continue;
+    if (valuesClause && index >= valuesClause.start && index < valuesClause.end) continue;
     if (isNonColumnKeyword_ACU(values, index)) continue;
     if (isFunctionCall_ACU(sql, values, index)) continue;
     const previous = values[index - 1];

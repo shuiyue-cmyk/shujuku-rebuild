@@ -95,3 +95,21 @@ describe('受限 SQL DML 容忍管线（移植上游 5f8afe3a）', () => {
     expect(normalizeSqlParenBalance_ACU('SELECT (1))')).toBe('SELECT (1)');
   });
 });
+
+describe('R7-04：UPDATE 的 WHERE 切分要识别字符串', () => {
+  it('SET 字符串里含 where 时仍按引号外的 WHERE 切分', () => {
+    expect(parseRestrictedSqlDml_ACU("UPDATE t SET note = 'go where you want', b = 'x WHERE y' WHERE id = '1'")).toEqual([
+      { kind: 'update', table: 't', values: { note: 'go where you want', b: 'x WHERE y' }, where: { id: '1' } },
+    ]);
+  });
+
+  it('容错版同样接受，且不产生 rejected', () => {
+    const result = parseRestrictedSqlDmlTolerant_ACU("UPDATE t SET note = 'somewhere else' WHERE id = '2'");
+    expect(result.statements).toEqual([{ kind: 'update', table: 't', values: { note: 'somewhere else' }, where: { id: '2' } }]);
+    expect(result.rejected).toEqual([]);
+  });
+
+  it('引号外没有 WHERE 时仍按缺 WHERE 拒绝', () => {
+    expect(() => parseRestrictedSqlDml_ACU("UPDATE t SET note = 'a where b'")).toThrow();
+  });
+});

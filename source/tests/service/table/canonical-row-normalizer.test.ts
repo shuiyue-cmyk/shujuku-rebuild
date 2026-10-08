@@ -123,3 +123,20 @@ describe('canonical-row-normalizer', () => {
     expect(normalization.removedRows).toEqual([]);
   });
 });
+
+describe('R7-10：首列业务表头叫 id 时不当作身份列', () => {
+  it('首列 ID 的值是业务编号（非纯数字）时插入新身份列，业务列保留', () => {
+    const data: any = { sheet_a: { content: [['ID', '名字'], ['A-01', '张三'], ['B-02', '李四']] } };
+    restoreLegacyRowIdentity_ACU(data);
+    expect(data.sheet_a.content[0]).toEqual(['row_id', 'ID', '名字']);
+    expect(data.sheet_a.content.slice(1).map((row: unknown[]) => row.slice(1))).toEqual([['A-01', '张三'], ['B-02', '李四']]);
+  });
+
+  it('首列 id 的值全为空或纯数字时仍按历史身份列原位改名', () => {
+    const data: any = { sheet_a: { content: [['id', '名字'], ['1', '张三'], [null, '李四']] } };
+    restoreLegacyRowIdentity_ACU(data);
+    expect(data.sheet_a.content[0]).toEqual(['row_id', '名字']);
+    expect(data.sheet_a.content[1]).toEqual(['1', '张三']);
+    expect(data.sheet_a.content[2][1]).toBe('李四');
+  });
+});

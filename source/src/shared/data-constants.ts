@@ -26,6 +26,16 @@ export function normalizeIsolationCode_ACU(code: string): string {
   return (typeof code === 'string') ? code.trim() : '';
 }
 
+/**
+ * 隔离标识保留名（R7-05）：默认槽（空标识）在向量索引 scope 里归一成 `default`，
+ * 用户自建同名标识会和默认槽共用一个 scope，热缓存、manifest 比对与回收会互相误伤。
+ */
+export const RESERVED_ISOLATION_CODE_MESSAGE_ACU = '「default」是默认数据的保留名，不能用作隔离标识，请换一个名字。';
+
+export function isReservedIsolationCode_ACU(code: string): boolean {
+  return normalizeIsolationCode_ACU(code).toLowerCase() === 'default';
+}
+
 export function getIsolationSlot_ACU(code: string): string {
   const c = normalizeIsolationCode_ACU(code);
   return c ? encodeURIComponent(c) : DEFAULT_ISOLATION_SLOT_ACU;

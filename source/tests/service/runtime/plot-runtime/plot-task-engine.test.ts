@@ -525,6 +525,9 @@ describe('getWorldbookContentForPlot_ACU', () => {
     expect(options.includeEntry({ normalizedComment: 'TavernDB-ACU-CustomExport-纪要索引-1' })).toBe(false);
     expect(options.includeEntry({ normalizedComment: '普通条目', blocked: true, rawComment: '普通条目' })).toBe(false);
     expect(options.includeEntry({ normalizedComment: 'TavernDB-ACU-自动生成条目', blocked: true })).toBe(true);
+    // R7-03：命中屏蔽词但用户显式勾选的条目照常参与。
+    expect(options.includeEntry({ bookName: '书A', uid: 1, normalizedComment: '角色状态', blocked: true, rawComment: '角色状态' })).toBe(true);
+    expect(options.includeEntry({ bookName: '书A', uid: 2, normalizedComment: '角色状态', blocked: true, rawComment: '角色状态' })).toBe(false);
 
     expect(options.isSelected({ bookName: '书A', uid: 1, normalizedComment: '普通条目' })).toBe(true);
     expect(options.isSelected({ bookName: '书A', uid: 2, normalizedComment: '普通条目' })).toBe(false);

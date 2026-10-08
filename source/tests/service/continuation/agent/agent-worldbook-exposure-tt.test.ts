@@ -79,9 +79,20 @@ describe('Agent 世界书快照暴露范围收窄（TT）', () => {
     hostDoubles.readConfig.mockReturnValue({
       source: 'manual',
       manualSelection: ['设定集'],
-      enabledEntries: { '设定集': ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'] },
+      // 12 命中屏蔽名单且未被显式勾选（R7-03：显式勾选才可越过屏蔽词）。
+      enabledEntries: { '设定集': ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'] },
     });
     seedEntries_ACU();
+  });
+
+  it('R7-03：命中屏蔽名单但被用户显式勾选的条目进快照', async () => {
+    hostDoubles.readConfig.mockReturnValue({
+      source: 'manual',
+      manualSelection: ['设定集'],
+      enabledEntries: { '设定集': ['1', '12'] },
+    });
+    const snapshot = await loadAgentWorldbookSnapshot_ACU();
+    expect(snapshot.entries.map(item => item.uid)).toEqual(['1', '12']);
   });
 
   it('只屏蔽纪要与纪要索引：CustomExport 表格导出、大纲载体、重要人物条目全部进快照', async () => {

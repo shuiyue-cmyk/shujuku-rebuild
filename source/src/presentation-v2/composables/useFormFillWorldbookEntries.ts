@@ -22,8 +22,10 @@ import {
   buildWorldbookEntryDisplayView_ACU,
   buildWorldbookSnapshotEntryIndexByBook_ACU,
   getWorldbookSnapshotEntryForDisplay_ACU,
+  isWorldbookEntryBlockedByDefault_ACU,
   isWorldbookEntryVisibleForPageUI_ACU,
   resolveWorldbookEntryTakeoverState_ACU,
+  WORLDBOOK_BLOCKED_ENTRY_LABEL_SUFFIX_ACU,
   type
   WorldbookEntryDisplayGroup_ACU,
   WorldbookEntryDisplayItem_ACU,
@@ -96,7 +98,10 @@ export function useFormFillWorldbookEntries() {
           const snapshotEntry = getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry);
           const displayView = buildWorldbookEntryDisplayView_ACU(entry, snapshotEntry);
           const agentState = resolveWorldbookEntryTakeoverState_ACU(entry, !!skillMeta, snapshotEntry);
+          const blockedByDefault = isWorldbookEntryBlockedByDefault_ACU(entry);
+          // 命中屏蔽词的条目不属于「默认已发送」，只能靠显式勾选参与（R7-03）。
           const isDefaultActive = cfgSource === 'active'
+            && !blockedByDefault
             && !displayView.disabled
             && (
               (displayView.isConstant && !skillMeta) // 全部挂载的蓝灯
@@ -107,7 +112,7 @@ export function useFormFillWorldbookEntries() {
           return {
             uid: entry.uid,
             bookName,
-            label: buildWorldbookEntryDisplayLabel_ACU(comment, entry.uid),
+            label: `${buildWorldbookEntryDisplayLabel_ACU(comment, entry.uid)}${blockedByDefault ? WORLDBOOK_BLOCKED_ENTRY_LABEL_SUFFIX_ACU : ''}`,
             comment,
             skillMeta,
             hasSkill: !!skillMeta,
@@ -117,6 +122,7 @@ export function useFormFillWorldbookEntries() {
             skillifySelectable: false,
             isConstant: displayView.isConstant,
             disabled,
+            blockedByDefault,
             // @ts-ignore 额外标记供 UI 区分默认已发送
             _isDefaultActive: isDefaultActive,
           } as any;
@@ -166,7 +172,7 @@ export function useFormFillWorldbookEntries() {
     const enabledEntries = ensureEnabledEntries();
     for (const group of groups.value) {
       const extraUids = group.entries
-        .filter((e: any) => !e.disabled && !(e as any)._isDefaultActive)
+        .filter((e: any) => !e.disabled && !(e as any)._isDefaultActive && (!e.blockedByDefault || e.checked))
         .map(e => e.uid);
       enabledEntries[group.bookName] = extraUids;
     }
@@ -177,6 +183,7 @@ export function useFormFillWorldbookEntries() {
       entries: g.entries.map((e: any) => {
         if ((e as any)._isDefaultActive) return { ...e, checked: true };
         if (e.disabled) return { ...e, checked: false };
+        if (e.blockedByDefault) return e;
         return { ...e, checked: true };
       }),
     }));

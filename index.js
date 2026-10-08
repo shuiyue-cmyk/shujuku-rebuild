@@ -2377,8 +2377,9 @@ function deepMerge_ACU(target, source) {
         Object.keys(source).forEach(key => {
             if (!isSafeKey(key))
                 return;
+            // 两侧都是普通对象才递归；target 侧是 null/字符串/数组时直接取 source（R7-06：否则 source 被展开成 {} 或下标对象）。
             if (isObject(source[key])) {
-                if (!(key in target))
+                if (!isObject(target[key]))
                     Object.assign(output, { [key]: source[key] });
                 else
                     output[key] = deepMerge_ACU(target[key], source[key]);
@@ -2432,11 +2433,11 @@ function normalizeNonNegativeInteger_ACU$2(value, fallbackValue = 0) {
  * 正整数归一化（fallback 默认 1）
  */
 function normalizePositiveInteger_ACU$2(value, fallbackValue = 1) {
-    const num = Number(value);
+    const num = Math.floor(Number(value));
     if (Number.isFinite(num) && num > 0)
-        return Math.floor(num);
-    const fallback = Number(fallbackValue);
-    return Number.isFinite(fallback) && fallback > 0 ? Math.floor(fallback) : 1;
+        return num;
+    const fallback = Math.floor(Number(fallbackValue));
+    return Number.isFinite(fallback) && fallback > 0 ? fallback : 1;
 }
 /**
  * 判断表格是否是总结表、总体大纲表或纪要表
@@ -2618,16 +2619,6 @@ function parseTableTemplateJson_ACU({ stripSeedRows = false, templateId = 'built
         if (!obj) {
             obj = parseTemplateJson(cleanTemplate);
         }
-        // 转义后解析
-        if (!obj && typeof cleanTemplate === 'string') {
-            try {
-                const escaped = escapeStringForJson_ACU(cleanTemplate);
-                obj = parseTemplateJson(escaped);
-            }
-            catch (e) {
-                // 转义后解析异常
-            }
-        }
         if (!obj) {
             // 采样：首次与每 N 次记 error（含 templateId/chat 标识），其余降级为 debug，避免坏模板每轮刷屏。
             templateParseFailureCount_ACU++;
@@ -2721,9 +2712,13 @@ function formatPlotScopeUpdatedAt_ACU(updatedAt) {
 function isEntryBlocked_ACU(entry) {
     if (!entry)
         return false;
-    const blockedKeywords = ["规则", "思维链", "cot", "MVU", "mvu", "变量", "状态", "Status", "Rule", "rule", "检定", "判断", "叙事", "文风", "InitVar", "格式"];
     const name = String(entry.comment || entry.name || '');
-    return blockedKeywords.some(keyword => name.includes(keyword));
+    // 中文关键词按子串；英文关键词按「前后不是英文字母」的整词匹配（R7-03）：
+    // 子串匹配会把 Scott / Escort / cottage / Ruler 这类正常条目一并屏蔽。
+    const blockedChineseKeywords = ["规则", "思维链", "变量", "状态", "检定", "判断", "叙事", "文风", "格式"];
+    if (blockedChineseKeywords.some(keyword => name.includes(keyword)))
+        return true;
+    return /(?<![A-Za-z])(?:cot|mvu|status|rules?|initvar)(?![A-Za-z])/i.test(name);
 }
 /**
  * SSRF 防护：校验 HTTP 端点（embedding/rerank 等用户可配置的直连端点）。
@@ -3417,6 +3412,14 @@ const DEFAULT_ISOLATION_SLOT_ACU = '__default__';
 function normalizeIsolationCode_ACU(code) {
     return (typeof code === 'string') ? code.trim() : '';
 }
+/**
+ * 隔离标识保留名（R7-05）：默认槽（空标识）在向量索引 scope 里归一成 `default`，
+ * 用户自建同名标识会和默认槽共用一个 scope，热缓存、manifest 比对与回收会互相误伤。
+ */
+const RESERVED_ISOLATION_CODE_MESSAGE_ACU = '「default」是默认数据的保留名，不能用作隔离标识，请换一个名字。';
+function isReservedIsolationCode_ACU(code) {
+    return normalizeIsolationCode_ACU(code).toLowerCase() === 'default';
+}
 function getIsolationSlot_ACU(code) {
     const c = normalizeIsolationCode_ACU(code);
     return c ? encodeURIComponent(c) : DEFAULT_ISOLATION_SLOT_ACU;
@@ -3436,6 +3439,14 @@ function getProfileTemplateKey_ACU(code) {
 // ── 通用 IDB 工具 ──
 function isIndexedDbAvailable_ACU() {
     return !!(topLevelWindow_ACU && topLevelWindow_ACU.indexedDB);
+}
+/** 写事务以 complete 为准：request 成功后事务仍可能中止（配额、版本变更），那时数据并未落盘。 */
+function idbTransactionDone_ACU(tx) {
+    return new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction aborted'));
+        tx.onerror = () => reject(tx.error || new Error('IndexedDB transaction failed'));
+    });
 }
 function idbRequestToPromise_ACU(req) {
     return new Promise((resolve, reject) => {
@@ -3469,6 +3480,8 @@ function openImportTempDb_ACU() {
             reject(e);
         }
     });
+    // 打开失败不缓存被拒的 Promise：否则本会话之后每次都直接失败，再也不会重试 IDB。
+    importTempDbPromise_ACU.catch(() => { importTempDbPromise_ACU = null; });
     return importTempDbPromise_ACU;
 }
 async function idbGet_ACU(key) {
@@ -3484,16 +3497,20 @@ async function idbSet_ACU(key, value) {
     if (!db)
         return;
     const tx = db.transaction(IMPORT_TEMP_STORE_NAME_ACU, 'readwrite');
+    const done = idbTransactionDone_ACU(tx);
     const store = tx.objectStore(IMPORT_TEMP_STORE_NAME_ACU);
     await idbRequestToPromise_ACU(store.put(value, key));
+    await done;
 }
 async function idbDel_ACU(key) {
     const db = await openImportTempDb_ACU();
     if (!db)
         return;
     const tx = db.transaction(IMPORT_TEMP_STORE_NAME_ACU, 'readwrite');
+    const done = idbTransactionDone_ACU(tx);
     const store = tx.objectStore(IMPORT_TEMP_STORE_NAME_ACU);
     await idbRequestToPromise_ACU(store.delete(key));
+    await done;
 }
 async function importTempGet_ACU(key) {
     try {
@@ -5984,10 +6001,6 @@ function isStrictLorebookReadError_ACU$1(error) {
         && Array.isArray(candidate.staleBookNames);
 }
 /**
- * 安全摘要：只输出白名单结构化字段，绝不复制 message/stack。
- * 供 plot runtime 顶层与日志使用；pipeline 内可委托本实现避免双份漂移。
-
-/**
  * 统一运行时错误安全摘要：
  * - strict 错误 → strict 白名单摘要；
  * - 命名 host API 不可用 → 只输出 operation；
@@ -6055,6 +6068,10 @@ function normalizeSafePreflightSummary_ACU(error) {
     }
     return normalized;
 }
+/**
+ * 安全摘要：只输出白名单结构化字段，绝不复制 message/stack。
+ * 供 plot runtime 顶层与日志使用；pipeline 内可委托本实现避免双份漂移。
+ */
 function summarizeStrictLorebookReadError_ACU$1(error) {
     if (!isStrictLorebookReadError_ACU$1(error))
         return null;
@@ -34559,20 +34576,100 @@ function parseDDLColumnComments(ddl) {
     const body = getCreateTableDefinitionBody_ACU(ddl);
     if (body === null)
         return comments;
-    // 按行分割（注释是行级概念，标准 SQL 中 `-- 注释` 到行尾）
-    // 而非按 splitColumnDefinitions 分割（逗号在注释之前，会截断注释）
-    const lines = body.split('\n');
-    for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed)
+    // 注释是行级概念（`-- 注释` 到行尾），归属该行最后一个开始的列定义（R7-07）：
+    // 约定写法 `col TEXT, -- 注释` 里逗号在注释之前；一行多列时注释属于最后一列。
+    // 引号内的 `--`（DEFAULT '--'）不是注释起点。
+    for (const line of scanDdlBodyLines_ACU(body)) {
+        if (!line.owner || line.commentStart < 0)
             continue;
-        // 匹配 column_name ... -- 注释（行内可能有逗号、CHECK 约束等）
-        const match = trimmed.match(/^([^\s,()]+)\s+.*?--\s*(.+?)\s*,?\s*$/);
-        if (match) {
-            comments.set(match[1], match[2]);
-        }
+        const comment = readDdlLineComment_ACU(body, line);
+        if (comment)
+            comments.set(line.owner, comment);
     }
     return comments;
+}
+/**
+ * 引号 / 括号 / 块注释感知地逐行扫描 CREATE TABLE 括号内的定义体。
+ * 列定义从「体首或顶层逗号之后的第一个非空白字符」开始。
+ */
+function scanDdlBodyLines_ACU(body) {
+    const lines = [];
+    let lineStart = 0;
+    let owner = null;
+    let commentStart = -1;
+    let depth = 0;
+    let quote = null;
+    let inBlockComment = false;
+    let expectDefinition = true;
+    const finishLine = (end) => {
+        lines.push({ start: lineStart, end, owner, commentStart });
+        lineStart = end + 1;
+        owner = null;
+        commentStart = -1;
+    };
+    for (let index = 0; index < body.length; index += 1) {
+        const char = body[index];
+        if (char === '\n' && !quote) {
+            finishLine(index);
+            continue;
+        }
+        if (quote) {
+            if (quote === '[' ? char === ']' : char === quote) {
+                if (quote !== '[' && body[index + 1] === quote)
+                    index += 1;
+                else
+                    quote = null;
+            }
+            continue;
+        }
+        if (inBlockComment) {
+            if (char === '*' && body[index + 1] === '/') {
+                inBlockComment = false;
+                index += 1;
+            }
+            continue;
+        }
+        if (char === '-' && body[index + 1] === '-') {
+            commentStart = index;
+            const newline = body.indexOf('\n', index);
+            index = (newline < 0 ? body.length : newline) - 1;
+            continue;
+        }
+        if (char === '/' && body[index + 1] === '*') {
+            inBlockComment = true;
+            index += 1;
+            continue;
+        }
+        if (expectDefinition && depth === 0 && !/[\s,]/.test(char)) {
+            let tokenEnd = index;
+            if (char === "'" || char === '"' || char === '`' || char === '[') {
+                const close = char === '[' ? ']' : char;
+                tokenEnd = body.indexOf(close, index + 1);
+                tokenEnd = tokenEnd < 0 ? body.length : tokenEnd + 1;
+            }
+            else {
+                while (tokenEnd < body.length && !/[\s,()]/.test(body[tokenEnd]))
+                    tokenEnd += 1;
+            }
+            owner = body.slice(index, tokenEnd);
+            expectDefinition = false;
+        }
+        if (char === "'" || char === '"' || char === '`' || char === '[') {
+            quote = char;
+            continue;
+        }
+        if (char === '(')
+            depth += 1;
+        else if (char === ')')
+            depth = Math.max(0, depth - 1);
+        else if (char === ',' && depth === 0)
+            expectDefinition = true;
+    }
+    finishLine(body.length);
+    return lines;
+}
+function readDdlLineComment_ACU(body, line) {
+    return body.slice(line.commentStart + 2, line.end).trim().replace(/\s*,\s*$/, '').trim();
 }
 /**
  * 构建 DDL 列名 → 中文名的双向映射
@@ -35379,43 +35476,40 @@ function canonicalSqlIdentifier_ACU(value) {
 function updateDDLColumnComment(ddl, columnName, newComment) {
     if (!ddl || !columnName || !newComment)
         return ddl;
-    const lines = ddl.split('\n');
-    let found = false;
-    for (let i = 0; i < lines.length; i++) {
-        const trimmed = lines[i].trim();
-        if (!trimmed)
-            continue;
-        // 检查该行是否以目标列名开头（列定义行）
-        const colMatch = trimmed.match(/^([^\s,()]+)\s+/);
-        if (!colMatch || colMatch[1] !== columnName)
-            continue;
-        // 找到目标列，替换或添加注释
-        found = true;
-        const line = lines[i];
-        // 情况 1：行内已有 `-- 注释`，替换注释内容
-        const commentMatch = line.match(/^(.*?)(--\s*).+?(,?\s*)$/);
-        if (commentMatch) {
-            lines[i] = `${commentMatch[1]}-- ${newComment}${commentMatch[3]}`;
-            break;
-        }
-        // 情况 2：行内没有注释，需要添加
-        // 先检查行尾是否有逗号
-        const trailingCommaMatch = line.match(/^(.*?)(,\s*)$/);
-        if (trailingCommaMatch) {
-            // 有逗号：在逗号前插入注释 → `  col TEXT, -- 注释`
-            // 按照项目约定格式：逗号在注释前 → `  col TEXT, -- 注释`
-            lines[i] = `${trailingCommaMatch[1]}, -- ${newComment}`;
-        }
-        else {
-            // 无逗号（最后一列）：直接在行尾添加注释
-            lines[i] = `${line.trimEnd()} -- ${newComment}`;
-        }
-        break;
+    const bounds = findCreateTableDefinitionBounds_ACU(ddl);
+    if (!bounds) {
+        logWarn_ACU(`[Schema] updateDDLColumnComment: 无法解析 CREATE TABLE，DDL 未修改`);
+        return ddl;
     }
-    if (!found) {
-        logWarn_ACU(`[Schema] updateDDLColumnComment: 未找到列 "${columnName}"，DDL 未修改`);
+    const bodyOffset = bounds.openingIndex + 1;
+    const body = ddl.slice(bodyOffset, bounds.closingIndex);
+    // 与 parseDDLColumnComments 同一扫描器（R7-07）：只改注释归属该列的那一行；
+    // 列与别的列同行且不是行内最后一列时，注释无处安放，原样返回而不是挂到错列上。
+    const line = scanDdlBodyLines_ACU(body).find(item => item.owner === columnName);
+    if (!line) {
+        logWarn_ACU(`[Schema] updateDDLColumnComment: 未找到注释归属于列 "${columnName}" 的行，DDL 未修改`);
+        return ddl;
     }
-    return lines.join('\n');
+    let replacement;
+    if (line.commentStart >= 0) {
+        // 情况 1：行内已有引号外的 `-- 注释`，只替换注释内容
+        const trailingComma = /,\s*$/.test(body.slice(line.commentStart, line.end)) ? ',' : '';
+        replacement = `${body.slice(line.start, line.commentStart)}-- ${newComment}${trailingComma}`;
+    }
+    else {
+        // 情况 2：行内没有注释。项目约定逗号在注释前 → `  col TEXT, -- 注释`
+        const code = body.slice(line.start, line.end);
+        const trailingCommaMatch = code.match(/^([\s\S]*?)(,\s*)$/);
+        replacement = trailingCommaMatch
+            ? `${trailingCommaMatch[1]}, -- ${newComment}`
+            : `${code.trimEnd()} -- ${newComment}`;
+        // 右括号与该列同行：补换行，否则注释会把右括号吞掉。
+        if (line.end === body.length)
+            replacement += '\n';
+    }
+    const start = bodyOffset + line.start;
+    const end = bodyOffset + line.end;
+    return `${ddl.slice(0, start)}${replacement}${ddl.slice(end)}`;
 }
 // ═══════════════════════════════════════════════════════════════
 // 内部工具函数
@@ -36185,7 +36279,12 @@ function restoreLegacyRowIdentity_ACU(data) {
         // identity placeholder spelling (null/undefined/blank/alias) is renamed in
         // place instead — inserting there would create an orphan empty column and
         // shift every business value one column left of its label.
-        const hasIdentityColumn = header.length > 0 && isIdentityPlaceholderHeaderCell_ACU(header[0]);
+        // 「id」既是历史身份列别名，也是常见的业务表头（物品编号等）。只有该列的值全为空或纯数字
+        // （行号/稳定 row_id 形态）时才当身份列；出现业务编号（A-01）就按缺身份列处理（R7-10）。
+        const headerIsAmbiguousId = typeof header[0] === 'string' && header[0].trim().toLowerCase() === 'id';
+        const idColumnLooksLikeIdentity = !headerIsAmbiguousId
+            || [...dataRows, ...seedRows].every(row => isEmptyCanonicalRowId_ACU(row[0]) || looksLikeRowIdValue_ACU(row[0]));
+        const hasIdentityColumn = header.length > 0 && isIdentityPlaceholderHeaderCell_ACU(header[0]) && idColumnLooksLikeIdentity;
         // 行级宽度感知：表头有身份列而行宽 = 表头-1 的行缺一格。row[0] 是纯数字
         // （xing 行号/稳定 row_id 格式）→ 身份格在，缺的是尾格；row[0] 是业务值
         // → 缺的是身份格，行首插 null 保住每个业务格的列位置。
@@ -41428,6 +41527,18 @@ function mutationTarget(sql, values) {
     }
     return keyword(action, 'DELETE') && keyword(values[actionIndex + 1], 'FROM') ? qualifiedTail(sql, values, actionIndex + 2) : undefined;
 }
+/** mutation 目标表名（含 schema.table 限定链）在 token 序列里的下标区间；没有目标时为 null。 */
+function mutationTargetRange(sql, values) {
+    const target = mutationTarget(sql, values);
+    if (!target)
+        return null;
+    const tail = values.indexOf(target);
+    let head = tail;
+    while (head > 0 && values[head - 1].depth === target.depth
+        && /^\s*\.\s*$/.test(sql.slice(values[head - 1].end, values[head].start)))
+        head -= 1;
+    return { head, tail };
+}
 function skipCteMaterializationHint_ACU(values, index, depth) {
     if (values[index]?.depth === depth && keyword(values[index], 'MATERIALIZED'))
         return index + 1;
@@ -41751,6 +41862,17 @@ targetTableName) {
         return replacements;
     const actionValue = action.value.toUpperCase();
     const actionDepth = action.depth;
+    const targetRange = mutationTargetRange(sql, values);
+    // INSERT/REPLACE 的 VALUES 子句只有字面量与函数，不含列引用：全语句扫描跳过（到 ON CONFLICT / RETURNING 为止）。
+    let valuesClause = null;
+    if (actionValue === 'INSERT' || actionValue === 'REPLACE') {
+        const valuesIndex = values.findIndex((token, index) => index > actionIndex && token.depth === actionDepth && keyword(token, 'VALUES'));
+        if (valuesIndex >= 0) {
+            const stopIndex = values.findIndex((token, index) => index > valuesIndex && token.depth === actionDepth
+                && (keyword(token, 'ON') || keyword(token, 'RETURNING')));
+            valuesClause = { start: valuesIndex, end: stopIndex < 0 ? values.length : stopIndex };
+        }
+    }
     if (actionValue === 'UPDATE') {
         // SET 子句：action 之后找同 depth 的 SET，其后的 `col =` 左侧标识符为列。
         let setIndex = -1;
@@ -41781,8 +41903,14 @@ targetTableName) {
         }
     }
     else if (actionValue === 'INSERT' || actionValue === 'REPLACE') {
-        // 列清单：目标表 token 之后第一个 depth+1 的 token 即首列（tokenizer 不产出括号 token）。
-        const openIndex = values.findIndex(token => token.depth === actionDepth + 1 && token.start > action.start);
+        // 列清单：只认「目标表名后紧跟 (」的括号（tokenizer 不产出括号 token）。无列清单的
+        // INSERT … VALUES (NULL, datetime('now')) 里第一个 depth+1 token 落在 VALUES 内，不是列（R7-09）。
+        const columnListIndex = targetRange ? targetRange.tail + 1 : -1;
+        const columnListToken = values[columnListIndex];
+        const openIndex = targetRange && columnListToken && columnListToken.depth === actionDepth + 1
+            && /^\s*\(\s*$/.test(sql.slice(values[targetRange.tail].end, columnListToken.start))
+            ? columnListIndex
+            : -1;
         if (openIndex >= 0) {
             let cursor = openIndex;
             while (cursor < values.length && values[cursor].depth >= actionDepth + 1) {
@@ -41800,6 +41928,11 @@ targetTableName) {
     // 排除函数调用、AS 后别名、限定符点号左侧、关键字。已处理的 token 用 start 去重。
     for (let index = 0; index < values.length; index += 1) {
         const token = values[index];
+        // 目标表名本身（及其限定链）不是列：列别名恰好与表名同名时不能把表名改成列名（R7-09）。
+        if (targetRange && index >= targetRange.head && index <= targetRange.tail)
+            continue;
+        if (valuesClause && index >= valuesClause.start && index < valuesClause.end)
+            continue;
         if (isNonColumnKeyword_ACU(values, index))
             continue;
         if (isFunctionCall_ACU(sql, values, index))
@@ -63201,14 +63334,6 @@ function normalizeTemplateConflictPolicy_ACU(policy) {
 /** 规范化 dataMode：未指定时返回 null（由调用方按上下文推导） */
 function normalizeTemplateDataMode_ACU(mode) {
     return mode === 'replace' || mode === 'merge' || mode === 'seed' ? mode : null;
-}
-/** 判定表是否允许 merge：无法证明唯一业务键时禁止自动 merge（fail-closed） */
-function canMergeTemplateSheet_ACU(sheet) {
-    const ddl = String(sheet?.sourceData?.ddl ?? '').trim();
-    if (!ddl)
-        return false;
-    // 只有显式 UNIQUE/主键约束才能作为业务身份；缺失时不允许 merge。
-    return /\b(UNIQUE|PRIMARY\s+KEY)\b/i.test(ddl);
 }
 
 /**
@@ -90922,6 +91047,21 @@ async function runAgentDecisionForPlot_ACU(params) {
 }
 
 /**
+ * 用户是否在条目勾选列表里显式勾选了这条世界书条目（R7-03）。
+ * 屏蔽词（isEntryBlocked_ACU）只决定「默认不发送」；用户亲手勾选的条目优先于屏蔽词。
+ * 「未配置勾选 = 全部发送」这类默认放行不算显式勾选。
+ */
+function isEntryExplicitlySelected_ACU(enabledEntriesMap, bookName, uid) {
+    if (!enabledEntriesMap || typeof enabledEntriesMap !== 'object')
+        return false;
+    const list = enabledEntriesMap[String(bookName ?? '')];
+    if (!Array.isArray(list))
+        return false;
+    const target = String(uid ?? '').trim();
+    return target !== '' && list.some(item => String(item ?? '').trim() === target);
+}
+
+/**
  * service/runtime/plot-runtime/plot-task-engine.ts
  * 剧情推进 — Task 执行引擎（排序/分组/上下文构建/单任务执行/运行时调度）+ 世界书内容获取
  * 从 helpers-plot-runtime.ts 拆出（L532-L1023 + L1513-L1618）
@@ -92082,7 +92222,7 @@ async function getWorldbookContentForPlot_ACU(apiSettings, userMessage, extraBas
                     normalizedComment.startsWith('总结条目') ||
                     normalizedComment.startsWith('小总结条目') ||
                     normalizedComment.startsWith('重要人物条目');
-                if (!isDbGenerated && isEntryBlocked_ACU(entry)) {
+                if (!isDbGenerated && isEntryBlocked_ACU(entry) && !isEntryExplicitlySelected_ACU(enabledMap, entry.bookName, entry.uid)) {
                     logDebug_ACU(`[剧情推进] 条目被屏蔽: "${entry.rawComment || entry.comment || entry.name || ''}"`);
                     return false;
                 }
@@ -92284,7 +92424,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261007-17"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261008-06"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92303,7 +92443,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261007-17";
+        const stamp = "20261008-06";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -97889,7 +98029,7 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
                 }
                 if (excludeImportTaggedEntries && isImportTaggedLorebookEntry_ACU(entry))
                     return false;
-                if (isEntryBlocked_ACU(entry))
+                if (isEntryBlocked_ACU(entry) && !isEntryExplicitlySelected_ACU(enabledEntriesMap, entry.bookName, entry.uid))
                     return false;
                 return true;
             },
@@ -103623,6 +103763,8 @@ function applyTemplateScopeForCurrentChat_ACU({ isolationKey = getCurrentIsolati
 // [从 data/repositories/isolation-repo.ts 移入] 切换隔离 Profile（业务编排，不属于 data 层）
 async function switchIsolationProfile_ACU(newCodeRaw) {
     const newCode = normalizeIsolationCode_ACU(newCodeRaw);
+    if (isReservedIsolationCode_ACU(newCode))
+        throw new Error(RESERVED_ISOLATION_CODE_MESSAGE_ACU);
     const oldCode = normalizeIsolationCode_ACU(settings_ACU?.dataIsolationCode || '');
     persistSettingsToStorage_ACU(settings_ACU, oldCode);
     loadGlobalMeta_ACU();
@@ -110101,6 +110243,23 @@ function createNativeStBackend_ACU(getStApi) {
         }
         await api.saveWorldInfo(bookName, data, true);
     }
+    /**
+     * 同一本书的「整本读 → 改 → 整本写」串行化（R7-02）：ST 的 loadWorldInfo 返回克隆，
+     * 交错执行的两个写操作各改各的副本，后保存的覆盖先保存的；并发 create 还会拿到同一个 uid。
+     * 前一个写入失败不阻塞后续写入。
+     */
+    const bookWriteChains = new Map();
+    function withBookWriteLock(bookName, task) {
+        const previous = bookWriteChains.get(bookName) ?? Promise.resolve();
+        const run = previous.then(task, task);
+        const settled = run.then(() => undefined, () => undefined);
+        bookWriteChains.set(bookName, settled);
+        void settled.then(() => {
+            if (bookWriteChains.get(bookName) === settled)
+                bookWriteChains.delete(bookName);
+        });
+        return run;
+    }
     function entriesDictToOldArray(data) {
         const dict = data?.entries ?? {};
         return Object.keys(dict).map(uid => nativeToOldEntry_ACU(dict[uid]));
@@ -110112,6 +110271,9 @@ function createNativeStBackend_ACU(getStApi) {
     async function setLorebookEntries(bookName, entries) {
         if (!Array.isArray(entries) || entries.length === 0)
             return;
+        return withBookWriteLock(bookName, () => setLorebookEntriesLocked(bookName, entries));
+    }
+    async function setLorebookEntriesLocked(bookName, entries) {
         const data = await loadBookOrThrow(bookName);
         let changed = false;
         for (const patch of entries) {
@@ -110127,6 +110289,10 @@ function createNativeStBackend_ACU(getStApi) {
             await saveBook(bookName, data);
     }
     async function createLorebookEntries(bookName, entries) {
+        return withBookWriteLock(bookName, () => createLorebookEntriesLocked(bookName, entries));
+    }
+    async function createLorebookEntriesLocked(bookName, entries) {
+        // uid 在临界区内按最新整本重新计算，并发 create 不会撞号。
         const data = await loadBookOrThrow(bookName);
         const existingUids = Object.keys(data.entries).map(Number).filter(Number.isFinite);
         let nextUid = existingUids.length > 0 ? Math.max(...existingUids) + 1 : 0;
@@ -110146,6 +110312,9 @@ function createNativeStBackend_ACU(getStApi) {
         return { entries: entriesDictToOldArray(data), new_uids: newUids };
     }
     async function deleteLorebookEntries(bookName, uids) {
+        return withBookWriteLock(bookName, () => deleteLorebookEntriesLocked(bookName, uids));
+    }
+    async function deleteLorebookEntriesLocked(bookName, uids) {
         const data = await loadBookOrThrow(bookName);
         let deleteOccurred = false;
         for (const uid of Array.isArray(uids) ? uids : []) {
@@ -124523,6 +124692,39 @@ function parseAssignments_ACU(raw, mode) {
     }
     return result;
 }
+/**
+ * 把 UPDATE 拆成表名 / SET 段 / WHERE 段。WHERE 关键字只认字符串外的第一个（R7-04）：
+ * 正则的非贪婪 SET…WHERE 会停在 'go where you want' 里的 where，把合法语句切坏。
+ */
+function matchRestrictedUpdate_ACU(statement) {
+    const head = statement.match(/^UPDATE\s+([A-Za-z_][\w]*)\s+SET\s+/i);
+    if (!head)
+        return null;
+    const rest = statement.slice(head[0].length);
+    let quoted = false;
+    for (let index = 0; index < rest.length; index += 1) {
+        const char = rest[index];
+        if (char === "'") {
+            if (quoted && rest[index + 1] === "'") {
+                index += 1;
+                continue;
+            }
+            quoted = !quoted;
+            continue;
+        }
+        if (quoted || !/\s/.test(char))
+            continue;
+        const keyword = rest.slice(index).match(/^\s+WHERE\s+/i);
+        if (!keyword)
+            continue;
+        const set = rest.slice(0, index).trim();
+        const where = rest.slice(index + keyword[0].length).trim();
+        if (!set || !where)
+            return null;
+        return { table: head[1], set, where };
+    }
+    return null;
+}
 function splitStatements_ACU(sql) {
     const statements = [];
     let start = 0;
@@ -124565,13 +124767,13 @@ function parseRestrictedSqlDml_ACU(sql) {
                 throw new Error(`INSERT 字段数与值数量不一致（${columns.length} 个字段、${values.length} 个值）。请逐项核对列名列表与 VALUES 一一对应：不要把正文内容写进列名，也不要漏写值；若正文含单引号，应写成两个单引号。逐栏 write_sql 里 id 和 expected_revision 可以不写`);
             return { kind: 'insert', table: unquoteIdentifier_ACU(match[1]), values: Object.fromEntries(columns.map((column, index) => [column, values[index]])) };
         }
-        match = statement.match(/^UPDATE\s+([A-Za-z_][\w]*)\s+SET\s+([\s\S]+?)\s+WHERE\s+([\s\S]+)$/i);
-        if (match) {
-            const values = parseAssignments_ACU(match[2], 'comma');
-            const where = parseAssignments_ACU(match[3], 'and');
+        const update = matchRestrictedUpdate_ACU(statement);
+        if (update) {
+            const values = parseAssignments_ACU(update.set, 'comma');
+            const where = parseAssignments_ACU(update.where, 'and');
             if (!Object.keys(values).length || !Object.keys(where).length)
                 throw new Error('UPDATE 必须包含 SET 与 WHERE');
-            return { kind: 'update', table: unquoteIdentifier_ACU(match[1]), values, where };
+            return { kind: 'update', table: unquoteIdentifier_ACU(update.table), values, where };
         }
         match = statement.match(/^DELETE\s+FROM\s+([A-Za-z_][\w]*)\s+WHERE\s+([\s\S]+)$/i);
         if (match) {
@@ -124642,15 +124844,15 @@ function inspectSqlRepairTarget_ACU(text) {
                 return undefined;
             return { table: unquoteIdentifier_ACU(insert[1]), column: columns[0], value: parseValue_ACU(values[0]), columns };
         }
-        const update = text.match(/^UPDATE\s+([A-Za-z_][\w]*)\s+SET\s+([\s\S]+?)\s+WHERE\s+([\s\S]+)$/i);
+        const update = matchRestrictedUpdate_ACU(text);
         if (update) {
-            const where = parseAssignments_ACU(update[3], 'and');
+            const where = parseAssignments_ACU(update.where, 'and');
             if (typeof where.id !== 'string' || !where.id.trim() || Object.keys(where).some(key => !['id', 'expected_revision'].includes(key)))
                 return undefined;
-            const columns = splitSqlAssignments_ACU(update[2], 'comma').map(part => /^([A-Za-z_][\w]*)\s*=/.exec(part)?.[1]?.toLowerCase() ?? '');
+            const columns = splitSqlAssignments_ACU(update.set, 'comma').map(part => /^([A-Za-z_][\w]*)\s*=/.exec(part)?.[1]?.toLowerCase() ?? '');
             if (columns.some(column => !column))
                 return undefined;
-            return { table: unquoteIdentifier_ACU(update[1]), column: 'id', value: where.id, columns };
+            return { table: unquoteIdentifier_ACU(update.table), column: 'id', value: where.id, columns };
         }
     }
     catch { /* 不能可靠识别时保留未关联诊断，不猜测目标。 */ }
@@ -141429,7 +141631,7 @@ async function loadAgentWorldbookSnapshot_ACU() {
                     continue;
                 if (!isEntrySelected_ACU(bookName, uid, enabledEntriesMap))
                     continue;
-                if (isEntryBlocked_ACU(raw))
+                if (isEntryBlocked_ACU(raw) && !isEntryExplicitlySelected_ACU(enabledEntriesMap, bookName, uid))
                     continue;
                 // 纪要索引及其数字分片由快照单独呈现；其余已启用条目交由正常世界书读取方案处理，
                 // 不按插件前缀额外屏蔽（TT 移植上游 86be318e，CustomExport 表格导出放行）。
@@ -154215,7 +154417,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261007-17";
+        const stamp = "20261008-06";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -185887,8 +186089,14 @@ function isWorldbookEntryVisibleForPageUI_ACU(bookName, entry, snapshotEntryInde
             || normalized.startsWith('小总结条目'))
             return false;
     }
-    return !isEntryBlocked_ACU({ comment });
+    // 命中屏蔽词的条目也要列出来（R7-03）：默认不发送，但用户能看到并勾选回来。
+    return true;
 }
+/** 条目名命中屏蔽词：默认不发送，仅在用户显式勾选后参与（R7-03）。 */
+function isWorldbookEntryBlockedByDefault_ACU(entry) {
+    return isEntryBlocked_ACU({ comment: String(entry?.comment || entry?.name || '') });
+}
+const WORLDBOOK_BLOCKED_ENTRY_LABEL_SUFFIX_ACU = '（提示词类，默认不发送，勾选后发送）';
 function resolveWorldbookEntryTakeoverState_ACU(entry, hasSkill, snapshotEntry) {
     if (snapshotEntry) {
         return entry?.enabled !== false && String(entry?.type || '').trim().toLowerCase() === 'constant'
@@ -202986,6 +203194,10 @@ function useDataManagement() {
     }
     async function applyIsolation() {
         const targetCode = normalizeIsolationCode_ACU(isolationCode.value);
+        if (isReservedIsolationCode_ACU(targetCode)) {
+            toast.error(RESERVED_ISOLATION_CODE_MESSAGE_ACU);
+            return;
+        }
         busyAction.value = 'apply-isolation';
         try {
             await switchIsolationProfile_ACU(targetCode);
@@ -206103,7 +206315,8 @@ function usePlotWorldbookConfig() {
  * 持久化到 plotWorldbookConfig.enabledEntries。
  */
 function buildWorldbookEntryLabel_ACU(entry) {
-    return buildWorldbookEntryDisplayLabel_ACU(String(entry?.comment || entry?.name || ''), entry?.uid);
+    const label = buildWorldbookEntryDisplayLabel_ACU(String(entry?.comment || entry?.name || ''), entry?.uid);
+    return isWorldbookEntryBlockedByDefault_ACU(entry) ? `${label}${WORLDBOOK_BLOCKED_ENTRY_LABEL_SUFFIX_ACU}` : label;
 }
 function ensurePlotWorldbookConfig() {
     if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object') {
@@ -206144,7 +206357,9 @@ function usePlotWorldbookEntries() {
                 const visibleBookEntries = bookEntries.filter((entry) => isWorldbookEntryVisibleForPageUI_ACU(bookName, entry, snapshotEntryIndexByBook));
                 const visibleUidSet = new Set(visibleBookEntries.map((entry) => String(entry?.uid)));
                 if (typeof cfg.enabledEntries[bookName] === 'undefined') {
+                    // 首次默认勾选全部启用条目，但命中屏蔽词的条目不自动勾选（默认不发送，R7-03）。
                     cfg.enabledEntries[bookName] = visibleBookEntries
+                        .filter((entry) => !isWorldbookEntryBlockedByDefault_ACU(entry))
                         .filter((entry) => buildWorldbookEntryDisplayView_ACU(entry, getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry)).enabled)
                         .map((entry) => entry.uid);
                     settingsChanged = true;
@@ -206178,6 +206393,7 @@ function usePlotWorldbookEntries() {
                         skillifySelectable: false,
                         isConstant: displayView.isConstant,
                         disabled: displayView.disabled,
+                        blockedByDefault: isWorldbookEntryBlockedByDefault_ACU(entry),
                     };
                 });
                 const visible = buildItems(visibleBookEntries);
@@ -206225,13 +206441,13 @@ function usePlotWorldbookEntries() {
         const cfg = ensurePlotWorldbookConfig();
         for (const group of groups.value) {
             cfg.enabledEntries[group.bookName] = group.entries
-                .filter(e => !e.disabled)
+                .filter(e => !e.disabled && (!e.blockedByDefault || e.checked))
                 .map(e => e.uid);
         }
         saveSettings_ACU();
         groups.value = groups.value.map(g => ({
             ...g,
-            entries: g.entries.map(e => ({ ...e, checked: !e.disabled })),
+            entries: g.entries.map(e => ({ ...e, checked: !e.disabled && (!e.blockedByDefault || e.checked) })),
         }));
     }
     function deselectAll() {
@@ -206684,7 +206900,10 @@ function useFormFillWorldbookEntries() {
                     const snapshotEntry = getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry);
                     const displayView = buildWorldbookEntryDisplayView_ACU(entry, snapshotEntry);
                     const agentState = resolveWorldbookEntryTakeoverState_ACU(entry, !!skillMeta, snapshotEntry);
+                    const blockedByDefault = isWorldbookEntryBlockedByDefault_ACU(entry);
+                    // 命中屏蔽词的条目不属于「默认已发送」，只能靠显式勾选参与（R7-03）。
                     const isDefaultActive = cfgSource === 'active'
+                        && !blockedByDefault
                         && !displayView.disabled
                         && ((displayView.isConstant && !skillMeta) // 全部挂载的蓝灯
                             || agentState === 'final_greenlight' // 正文放行的 skill 化
@@ -206694,7 +206913,7 @@ function useFormFillWorldbookEntries() {
                     return {
                         uid: entry.uid,
                         bookName,
-                        label: buildWorldbookEntryDisplayLabel_ACU(comment, entry.uid),
+                        label: `${buildWorldbookEntryDisplayLabel_ACU(comment, entry.uid)}${blockedByDefault ? WORLDBOOK_BLOCKED_ENTRY_LABEL_SUFFIX_ACU : ''}`,
                         comment,
                         skillMeta,
                         hasSkill: !!skillMeta,
@@ -206704,6 +206923,7 @@ function useFormFillWorldbookEntries() {
                         skillifySelectable: false,
                         isConstant: displayView.isConstant,
                         disabled,
+                        blockedByDefault,
                         // @ts-ignore 额外标记供 UI 区分默认已发送
                         _isDefaultActive: isDefaultActive,
                     };
@@ -206752,7 +206972,7 @@ function useFormFillWorldbookEntries() {
         const enabledEntries = ensureEnabledEntries();
         for (const group of groups.value) {
             const extraUids = group.entries
-                .filter((e) => !e.disabled && !e._isDefaultActive)
+                .filter((e) => !e.disabled && !e._isDefaultActive && (!e.blockedByDefault || e.checked))
                 .map(e => e.uid);
             enabledEntries[group.bookName] = extraUids;
         }
@@ -206764,6 +206984,8 @@ function useFormFillWorldbookEntries() {
                     return { ...e, checked: true };
                 if (e.disabled)
                     return { ...e, checked: false };
+                if (e.blockedByDefault)
+                    return e;
                 return { ...e, checked: true };
             }),
         }));

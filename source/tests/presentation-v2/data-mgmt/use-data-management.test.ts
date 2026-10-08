@@ -87,6 +87,15 @@ describe('useDataManagement', () => {
     expect(d.removeHistory).toHaveBeenCalledWith('gamma');
   });
 
+  it('R7-05：保留名 default（不分大小写）不能作隔离标识，不切换并给出明确提示', async () => {
+    const d = await loadFlow();
+    d.flow.refresh();
+    d.flow.isolationCode.value = ' Default ';
+    await d.flow.applyIsolation();
+    expect(d.switchIsolation).not.toHaveBeenCalled();
+    expect(d.toastError).toHaveBeenCalledWith(expect.stringContaining('保留'));
+  });
+
   it('隐藏入口对应的业务链路仍可独立执行', async () => {
     const d = await loadFlow();
     d.flow.refresh();

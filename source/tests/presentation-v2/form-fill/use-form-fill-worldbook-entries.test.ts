@@ -140,6 +140,8 @@ describe('useFormFillWorldbookEntries', () => {
       { uid: 2, disabled: true, isConstant: true, agentTakeoverState: 'taken_over', checked: false },
       { uid: 4, disabled: false, isConstant: false, agentTakeoverState: 'native', checked: false },
       { uid: 5, disabled: false, isConstant: false, agentTakeoverState: 'native', checked: false },
+      // R7-03：命中屏蔽词的条目也列出，默认不勾选。
+      { uid: 6, disabled: false, isConstant: false, agentTakeoverState: 'native', checked: false },
     ]);
     expect(worldbookConfig.enabledEntries.CharBook).toEqual([]);
     c.selectAll();

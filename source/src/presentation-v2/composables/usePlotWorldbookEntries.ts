@@ -19,8 +19,10 @@ import {
   buildWorldbookEntryDisplayView_ACU,
   buildWorldbookSnapshotEntryIndexByBook_ACU,
   getWorldbookSnapshotEntryForDisplay_ACU,
+  isWorldbookEntryBlockedByDefault_ACU,
   isWorldbookEntryVisibleForPageUI_ACU,
   resolveWorldbookEntryTakeoverState_ACU,
+  WORLDBOOK_BLOCKED_ENTRY_LABEL_SUFFIX_ACU,
   type
   WorldbookEntryDisplayGroup_ACU,
   WorldbookEntryDisplayItem_ACU,
@@ -34,7 +36,8 @@ export type WorldbookEntryGroup = WorldbookEntryDisplayGroup_ACU;
 export type EntryLoadStatus = 'idle' | 'loading' | 'success' | 'error';
 
 function buildWorldbookEntryLabel_ACU(entry: any): string {
-  return buildWorldbookEntryDisplayLabel_ACU(String(entry?.comment || entry?.name || ''), entry?.uid);
+  const label = buildWorldbookEntryDisplayLabel_ACU(String(entry?.comment || entry?.name || ''), entry?.uid);
+  return isWorldbookEntryBlockedByDefault_ACU(entry) ? `${label}${WORLDBOOK_BLOCKED_ENTRY_LABEL_SUFFIX_ACU}` : label;
 }
 
 function ensurePlotWorldbookConfig(): Record<string, any> {
@@ -82,7 +85,9 @@ export function usePlotWorldbookEntries() {
         const visibleUidSet = new Set(visibleBookEntries.map((entry: any) => String(entry?.uid)));
 
         if (typeof cfg.enabledEntries[bookName] === 'undefined') {
+          // 首次默认勾选全部启用条目，但命中屏蔽词的条目不自动勾选（默认不发送，R7-03）。
           cfg.enabledEntries[bookName] = visibleBookEntries
+            .filter((entry: any) => !isWorldbookEntryBlockedByDefault_ACU(entry))
             .filter((entry: any) => buildWorldbookEntryDisplayView_ACU(
               entry,
               getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry),
@@ -120,6 +125,7 @@ export function usePlotWorldbookEntries() {
             skillifySelectable: false,
             isConstant: displayView.isConstant,
             disabled: displayView.disabled,
+            blockedByDefault: isWorldbookEntryBlockedByDefault_ACU(entry),
           };
         });
 
@@ -171,14 +177,14 @@ export function usePlotWorldbookEntries() {
     const cfg = ensurePlotWorldbookConfig();
     for (const group of groups.value) {
       cfg.enabledEntries[group.bookName] = group.entries
-        .filter(e => !e.disabled)
+        .filter(e => !e.disabled && (!e.blockedByDefault || e.checked))
         .map(e => e.uid);
     }
     saveSettings_ACU();
 
     groups.value = groups.value.map(g => ({
       ...g,
-      entries: g.entries.map(e => ({ ...e, checked: !e.disabled })),
+      entries: g.entries.map(e => ({ ...e, checked: !e.disabled && (!e.blockedByDefault || e.checked) })),
     }));
   }
 
