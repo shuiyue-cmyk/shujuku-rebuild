@@ -12,9 +12,7 @@
 // ═══════════════════════════════════════════════════════════════
 // 运行时环境（必须最先导入并设置模式）
 // ═══════════════════════════════════════════════════════════════
-import { _forceExtensionMode, checkAndMarkInstance, releaseInstanceMark } from './shared/runtime-env';
-
-_forceExtensionMode();
+import { checkAndMarkInstance, releaseInstanceMark } from './shared/runtime-env';
 
 // ═══════════════════════════════════════════════════════════════
 // shared 层

@@ -54,6 +54,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
 import { extractBusinessKeyColumns_ACU } from '../template/template-data-preflight';
 import { getTableLockIdentitiesForSheet_ACU } from '../runtime/helpers-table-lock';
 import { buildLockRevertPlanForSheet_ACU, formatLockRevertSummary_ACU, type LockRevertItem_ACU } from './table-lock-enforcement';
+import { splitSqlStatements_ACU } from '../../shared/sql-statement-splitter';
 
 export interface SnapshotSqlApplyResult_ACU extends ApplyEditsResult {
   workingData?: TableDataObject_ACU;
@@ -1958,12 +1959,17 @@ export class SqlTableService implements ITableStorageProvider {
     }
 
     const materializedSqlTexts: string[] = [];
+    // R2A-10：与 statements 逐条对齐的分组下标（执行方插入的补种语句为 -1）。引擎报「第 N 条语句失败」
+    // 时按实际执行的语句计数，出错分组只能在这里换算，调用方按原文条数倒推会被物化/过滤/补种打乱。
+    const statementGroupIndexes: number[] = reseedPlan.inserts.map(() => -1);
     let cursor = 0;
-    for (const group of normalizedGroups) {
+    normalizedGroups.forEach((group, groupIndex) => {
+      const groupStatements = materializedStatements.slice(cursor, cursor + group.length);
       // 空串 = INSERT SELECT 结果为空被物化成无操作，不进日志文本。
-      materializedSqlTexts.push(materializedStatements.slice(cursor, cursor + group.length).filter(Boolean).join(';\n'));
+      materializedSqlTexts.push(groupStatements.filter(Boolean).join(';\n'));
+      groupStatements.forEach(statement => { if (statement) statementGroupIndexes.push(groupIndex); });
       cursor += group.length;
-    }
+    });
 
     const statements = [...reseedPlan.inserts, ...materializedStatements.filter(Boolean)];
     // 运行时 AI 写路径的锁定强制执行必须在 COMMIT 前完成：finalize 回调运行于
@@ -2011,6 +2017,11 @@ export class SqlTableService implements ITableStorageProvider {
       };
     } catch (e: any) {
       // 去重：只 throw，由顶层调用链统一记日志，底层不再记 error。
+      const failedStatement = /^第 (\d+) 条语句失败/.exec(String(e?.message || ''));
+      const failedGroupIndex = failedStatement ? statementGroupIndexes[Number(failedStatement[1]) - 1] : undefined;
+      if (e && typeof e === 'object' && typeof failedGroupIndex === 'number' && failedGroupIndex >= 0) {
+        e.failedGroupIndex = failedGroupIndex;
+      }
       throw e;
     }
   }
@@ -2586,8 +2597,14 @@ function enforceTableLocksAfterSqlApply_ACU(
   const allStatements: string[] = [];
   const allReverted: LockRevertItem_ACU[] = [];
   let physicalNames: ReadonlyMap<string, string> | null = null;
+  // R2A-12：不能只比对语句直接写的表——引擎开着外键，作者 DDL 的 ON DELETE CASCADE 等会改到别的表。
+  // 所有表都参与比对；没有锁的表在下面 identities.hasAny 处即跳过，代价只是一次锁查询。
+  const candidateSheetKeys = [...new Set([
+    ...modifiedKeys,
+    ...Object.keys(beforeData || {}).filter(key => key.startsWith('sheet_')),
+  ])];
 
-  for (const sheetKey of modifiedKeys) {
+  for (const sheetKey of candidateSheetKeys) {
     const beforeSheet = (beforeData as any)?.[sheetKey];
     const beforeContent = beforeSheet?.content;
     if (!Array.isArray(beforeContent) || !Array.isArray(beforeContent[0])) continue;
@@ -2769,47 +2786,10 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * 按分号拆分 SQL 语句（跳过字符串内的分号）
+ * 按分号拆分 SQL 语句：委托 shared/sql-statement-splitter 的唯一实现（R1-05，识别引号与注释）。
  */
 export function splitSqlStatements(sql: string): string[] {
-  const statements: string[] = [];
-  let current = '';
-  let inString = false;
-  let stringChar = '';
-
-  for (let i = 0; i < sql.length; i++) {
-    const char = sql[i];
-
-    if (inString) {
-      current += char;
-      // 检查字符串结束（处理转义的引号 ''）
-      if (char === stringChar) {
-        if (i + 1 < sql.length && sql[i + 1] === stringChar) {
-          // 转义的引号，跳过
-          current += sql[i + 1];
-          i++;
-        } else {
-          inString = false;
-        }
-      }
-    } else if (char === "'" || char === '"') {
-      inString = true;
-      stringChar = char;
-      current += char;
-    } else if (char === ';') {
-      const trimmed = current.trim();
-      if (trimmed) statements.push(trimmed);
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-
-  // 最后一条语句（可能没有分号结尾）
-  const trimmed = current.trim();
-  if (trimmed) statements.push(trimmed);
-
-  return statements;
+  return splitSqlStatements_ACU(sql);
 }
 
 

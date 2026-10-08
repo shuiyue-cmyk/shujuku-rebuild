@@ -3796,9 +3796,20 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     expect(mocks.saveChatStrict).toHaveBeenCalledTimes(1);
     for (const tagData of Object.values(historical.TavernDB_ACU_IsolatedData) as any[]) {
       expect(tagData.independentData?.sheet_b).toBeUndefined();
-      expect(tagData.storageFrame.checkpoint.data.sheet_b).toBeUndefined();
       expect(tagData.storageFrame.perSheetCheckpoints.sheet_b).toBeUndefined();
     }
+    // R2B-07：同隔离键只留目标楼层这一个 full 根；历史根同事务降级为帧内 data_replace fallback（不含已删表）。
+    const historicalFrame = historical.TavernDB_ACU_IsolatedData[''].storageFrame;
+    expect(historicalFrame.checkpoint).toBeUndefined();
+    expect(historicalFrame.logEntries[0]).toMatchObject({
+      seq: 0,
+      operations: [{ kind: 'data_replace', reason: 'checkpoint_fallback' }],
+    });
+    expect(historicalFrame.logEntries[0].operations[0].data.sheet_a).toBeDefined();
+    expect(historicalFrame.logEntries[0].operations[0].data.sheet_b).toBeUndefined();
+    // 其他隔离键不受影响：仍是自己的根，只清掉已删表。
+    expect(historical.TavernDB_ACU_IsolatedData.archive.storageFrame.checkpoint.data.sheet_b).toBeUndefined();
+    expect(historical.TavernDB_ACU_IsolatedData.archive.storageFrame.checkpoint.data.sheet_a).toBeDefined();
     expect(historical.TavernDB_ACU_IndependentData).toBeUndefined();
     expect(historical.TavernDB_ACU_Data).toBeUndefined();
     expect(historical.TavernDB_ACU_SummaryData).toBeUndefined();
@@ -4164,6 +4175,43 @@ describe('persistTableMutationLogBatchV2_ACU', () => {
     expect(mocks.saveChatStrict).toHaveBeenCalledOnce();
     expect(mocks.saveChat).not.toHaveBeenCalled();
     expect(checkpointMessage.TavernDB_ACU_IsolatedData[''].storageFrame.logEntries).toHaveLength(1);
+    expect(laterMessage.TavernDB_ACU_IsolatedData[''].storageFrame.logEntries).toHaveLength(1);
+  });
+
+  // R2B-09：候选聊天不再整份深克隆（长聊天正文每批 stringify+parse）；非目标消息直接复用原对象。
+  it('R2B-09：batch 候选只替换目标消息，非目标消息复用原对象且原消息在保存前不被改动', async () => {
+    const checkpointMessage = seedFrame({ logEntries: [] });
+    const userMessage = { is_user: true, mes: '很长的正文'.repeat(100) };
+    const laterMessage = { is_user: false, TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: appendableFrame() } } };
+    mocks.chat.splice(0, mocks.chat.length, checkpointMessage, userMessage, laterMessage);
+    const laterFieldBefore = laterMessage.TavernDB_ACU_IsolatedData;
+    const candidateChats: any[][] = [];
+    mocks.loadReplayDetailed.mockImplementation(async (chat: any[]) => {
+      if (chat !== mocks.chat) {
+        candidateChats.push(chat);
+        // 校验阶段原消息还未被写入。
+        expect(laterMessage.TavernDB_ACU_IsolatedData).toBe(laterFieldBefore);
+      }
+      return { baseKind: 'full_checkpoint', data: { mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: { ...sheetB, content: [['row_id', 'value'], ['2', 'inserted']] } } };
+    });
+    const afterData = {
+      mate: { type: 'acu' },
+      sheet_a: sheetA,
+      sheet_b: { ...sheetB, content: [['row_id', 'value'], ['2', 'inserted']] },
+    };
+
+    const result = await persistTableMutationLogBatchV2_ACU(makeBatchOptions(afterData, [
+      { targetMessageIndex: 2, changedSheetKeys: ['sheet_b'], operations: [{ kind: 'row_upsert', sheetKey: 'sheet_b', rowId: '2', cells: ['2', 'inserted'] }] },
+    ]));
+
+    expect(result).toMatchObject({ saved: true, messageIndices: [2] });
+    expect(candidateChats.length).toBeGreaterThan(0);
+    for (const candidateChat of candidateChats) {
+      expect(candidateChat[0]).toBe(checkpointMessage);
+      expect(candidateChat[1]).toBe(userMessage);
+      expect(candidateChat[2]).not.toBe(laterMessage);
+    }
+    expect(mocks.chat[2]).toBe(laterMessage);
     expect(laterMessage.TavernDB_ACU_IsolatedData[''].storageFrame.logEntries).toHaveLength(1);
   });
 
@@ -5126,6 +5174,8 @@ describe('demoteTemplateOnlyRootToScopeOnly_ACU 契约（四行真值表）', ()
     });
     mocks.saveChatStrict.mockClear();
     mocks.saveChat.mockClear();
+    // 自足：不依赖前面 describe 遗留的事务 mock 实现。
+    mocks.runTransaction.mockReset().mockImplementation(async (_options: any, task: any) => task({}));
   });
 
   it('空聊天：无回放根 → noReplayRoot: true，不构成阻断', async () => {
@@ -5242,6 +5292,38 @@ describe('demoteTemplateOnlyRootToScopeOnly_ACU 契约（四行真值表）', ()
     expect(mocks.saveChatStrict).toHaveBeenCalled();
     // 降级后无 full checkpoint。
     expect(collectV2FullCheckpointIndices_ACU(mocks.chat, '')).toEqual([]);
+  });
+
+  it('template_only_root 降级严格保存失败时还原根消息（回放根与身份不丢）', async () => {
+    const headerOnlyData = {
+      mate: { type: 'acu' },
+      sheet_a: { ...sheetA, content: [['row_id', 'value']] },
+    };
+    const checkpointResult = buildCanonicalFullCheckpoint_ACU({
+      createdAt: Date.now(),
+      reason: 'init',
+      data: headerOnlyData,
+      event: { filledSheetKeys: [], changedSheetKeys: ['sheet_a'], groupKeys: [] },
+      context: { messageIndex: 0, aiFloor: 0, isolationKey: '' },
+    });
+    if (!checkpointResult.checkpoint) throw new Error('构造 header-only init checkpoint 失败');
+    const rootField = {
+      '': {
+        _acu_storage_version: 2,
+        storageFrame: { version: 2, checkpoint: checkpointResult.checkpoint, perSheetCheckpoints: {}, logEntries: [], headRevision: '3:header-only-root' },
+      },
+    };
+    const rootMessage: any = { is_user: false, TavernDB_ACU_IsolatedData: rootField, TavernDB_ACU_Identity: 'old-identity' };
+    mocks.chat.splice(0, mocks.chat.length, rootMessage);
+    mocks.loadReplayDetailed.mockResolvedValueOnce({ data: headerOnlyData, baseKind: 'temporary_template_baseline' });
+    mocks.saveChatStrict.mockRejectedValueOnce(new Error('host save failed'));
+
+    const demotion = await demoteTemplateOnlyRootToScopeOnly_ACU({ isolationKey: '' });
+
+    expect(demotion).toMatchObject({ ok: false, demoted: false, reason: expect.stringContaining('host save failed') });
+    expect(rootMessage.TavernDB_ACU_IsolatedData).toBe(rootField);
+    expect(rootMessage.TavernDB_ACU_Identity).toBe('old-identity');
+    expect(collectV2FullCheckpointIndices_ACU(mocks.chat, '')).toEqual([0]);
   });
 
   it('P0 仅 updateConfig.updateFrequency 不同：降级成功且零 full checkpoint', async () => {

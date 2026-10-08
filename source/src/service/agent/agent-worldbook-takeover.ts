@@ -61,6 +61,7 @@ import {
   writeAgentWorldbookStateToWorldbook_ACU,
 } from './agent-worldbook-config-meta';
 import { runExclusiveAgentWorldbookOperation_ACU } from './agent-worldbook-operation-lock';
+import { decideAgentWorldbookEntryRestore_ACU, doesAgentTakeoverCommentHashMatch_ACU, hasAgentTakeoverMetaBlock_ACU, isAgentWorldbookEntryRestored_ACU, selectRestorableSnapshotEntries_ACU, type AgentWorldbookRestorePatch_ACU } from './agent-worldbook-restore-core';
 
 export interface AgentWorldbookTakeoverEntryUpdate_ACU {
   bookName: string;
@@ -385,37 +386,8 @@ function stripTakeoverMetaBlock_ACU(comment: unknown): string {
   return stripAgentTakeoverMetaBlockStrict_ACU(comment);
 }
 
-function hasTakeoverMetaBlock_ACU(comment: unknown): boolean {
-  return new RegExp(createAgentTakeoverMetaPattern_ACU().source).test(normalizeCommentText_ACU(comment));
-}
-
-function hasUnsupportedTakeoverMetaBlock_ACU(comment: unknown): boolean {
-  const text = normalizeCommentText_ACU(comment);
-  const pattern = createAgentTakeoverMetaPattern_ACU();
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text))) {
-    try {
-      const meta = JSON.parse(match[1].trim()) as Record<string, unknown>;
-      if (meta.version !== 1 || meta.kind !== 'agent_worldbook_takeover') return true;
-    } catch {
-      return true;
-    }
-  }
-  return false;
-}
-
 function normalizeTakeoverComparableComment_ACU(comment: unknown): string {
   return stripWorldbookSkillMetaBlock_ACU(stripTakeoverMetaBlock_ACU(comment));
-}
-
-function doesTakeoverSnapshotCommentHashMatch_ACU(snapshotCommentHash: string | undefined, currentComment: string): boolean {
-  if (!snapshotCommentHash) return true;
-  const strippedComment = stripTakeoverMetaBlock_ACU(currentComment);
-  const comparableComment = stripWorldbookSkillMetaBlock_ACU(strippedComment);
-
-  return hashUserInput_ACU(comparableComment) === snapshotCommentHash
-    // Legacy snapshots created before Skill metadata was excluded from the comparable comment stored hashes that kept Skill metadata.
-    || hashUserInput_ACU(strippedComment) === snapshotCommentHash;
 }
 
 function parseTakeoverMetaFromComment_ACU(comment: unknown): AgentWorldbookTakeoverMeta_ACU | null {
@@ -614,8 +586,8 @@ async function backfillMissingTakeoverMeta_ACU(snapshot: AgentWorldbookControlSn
         const snapshotEntry = snapshotEntriesByUid.get(String(entry?.uid));
         if (!snapshotEntry) return [];
         const currentComment = normalizeCommentText_ACU(entry?.comment);
-        if (hasTakeoverMetaBlock_ACU(currentComment)
-          || !doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment)
+        if (hasAgentTakeoverMetaBlock_ACU(currentComment)
+          || !doesAgentTakeoverCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment)
           || (entry?.enabled !== false && !isFinalGenerationBlueLightEntry_ACU(entry))) return [];
         return [{
           uid: entry.uid,
@@ -956,80 +928,44 @@ async function restoreSnapshotEntries_ACU(snapshot: AgentWorldbookControlSnapsho
   const report: AgentWorldbookEntryPatchReport_ACU = { applied: [], failed: [] };
   // 宿主已确认不存在的条目：无可恢复对象，直接视为完成并从账本剔除，否则接管永远无法收敛。
   const missing: AgentWorldbookTakeoverEntryUpdate_ACU[] = [];
+  const skipMessages: Record<string, string> = {
+    unsupported_meta: '包含不受支持的接管元数据版本',
+    missing_comment_hash: '缺少 comment 指纹，避免覆盖用户修改',
+    comment_changed: 'comment 已变化，避免覆盖用户修改',
+  };
 
   for (const [bookName, snapshotEntries] of Object.entries(snapshot.books || {})) {
     const normalizedBookName = String(bookName || '').trim();
-    const entriesToRestore = Array.isArray(snapshotEntries)
-      ? snapshotEntries.filter(entry => entry.takeoverStatus !== 'pending') : [];
+    // 逐条目决策与「已恢复」判定走共用核心（R4-07），与 scope 变更路径同口径。
+    const entriesToRestore = selectRestorableSnapshotEntries_ACU(snapshotEntries);
     if (!normalizedBookName || entriesToRestore.length === 0) continue;
-    const patches: any[] = [];
+    const patches: AgentWorldbookRestorePatch_ACU[] = [];
     let currentEntriesRead = false;
     try {
       const currentEntries = await getLorebookEntries_ACU(normalizedBookName);
       currentEntriesRead = true;
       const currentByUid = new Map((currentEntries || []).map(entry => [String(entry?.uid), entry]));
       for (const snapshotEntry of entriesToRestore) {
-        if (!hasValidWorldbookUid_ACU(snapshotEntry?.uid)) {
-          logWarn_ACU(
-            `[Agent世界书] 跳过恢复世界书条目：${normalizedBookName} 中存在无效 uid。`,
-            snapshotEntry?.uid,
-          );
+        const decision = decideAgentWorldbookEntryRestore_ACU(snapshotEntry, currentByUid.get(String(snapshotEntry?.uid)), { missingCommentHash: 'skip', metaStripMode: 'strict' });
+        if (decision.kind === 'invalid_uid') {
+          logWarn_ACU(`[Agent世界书] 跳过恢复世界书条目：${normalizedBookName} 中存在无效 uid。`, snapshotEntry?.uid);
           skipped += 1;
-          continue;
-        }
-        const currentEntry = currentByUid.get(String(snapshotEntry.uid));
-        if (!currentEntry) {
-          logWarn_ACU(`[Agent世界书] 世界书条目 ${normalizedBookName}#${snapshotEntry.uid} 已被删除，从接管账本移除。`);
-          missing.push({ bookName: normalizedBookName, uid: snapshotEntry.uid });
-          continue;
-        }
-        const currentComment = typeof currentEntry.comment === 'string' ? currentEntry.comment : '';
-        if (hasUnsupportedTakeoverMetaBlock_ACU(currentComment)) {
-          logWarn_ACU(
-            `[Agent世界书] 跳过恢复世界书条目：${normalizedBookName}#${snapshotEntry.uid} 包含不受支持的接管元数据版本。`,
-          );
+        } else if (decision.kind === 'missing') {
+          logWarn_ACU(`[Agent世界书] 世界书条目 ${normalizedBookName}#${decision.uid} 已被删除，从接管账本移除。`);
+          missing.push({ bookName: normalizedBookName, uid: decision.uid });
+        } else if (decision.kind === 'skip') {
+          logWarn_ACU(`[Agent世界书] 跳过恢复世界书条目：${normalizedBookName}#${decision.uid} ${skipMessages[decision.reason]}。`);
           skipped += 1;
-          continue;
+        } else {
+          patches.push(decision.patch);
         }
-        const strippedComment = stripTakeoverMetaBlock_ACU(currentComment);
-        if (!snapshotEntry.commentHash) {
-          logWarn_ACU(
-            `[Agent世界书] 跳过恢复世界书条目：${normalizedBookName}#${snapshotEntry.uid} 缺少 comment 指纹，避免覆盖用户修改。`,
-          );
-          skipped += 1;
-          continue;
-        }
-        if (!doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment)) {
-          logWarn_ACU(
-            `[Agent世界书] 跳过恢复世界书条目：${normalizedBookName}#${snapshotEntry.uid} comment 已变化，避免覆盖用户修改。`,
-          );
-          skipped += 1;
-          continue;
-        }
-        patches.push({
-          uid: snapshotEntry.uid,
-          comment: strippedComment,
-          enabled: snapshotEntry.previousEnabled !== false,
-          keys: Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [],
-          type: snapshotEntry.previousType,
-        });
       }
       if (patches.length > 0) {
         await setLorebookEntries_ACU(normalizedBookName, patches);
         const patchedEntriesByUid = new Map((await getLorebookEntries_ACU(normalizedBookName) || []).map(entry => [String(entry?.uid), entry]));
-        for (const patch of patches) {
-          const currentEntry = patchedEntriesByUid.get(String(patch.uid));
-          // [L5] keys 按集合比较（长度相同 + 逐元素 includes），不再依赖 JSON.stringify 的数组顺序。
-          const snapshotKeys = Array.isArray(patch.keys) ? patch.keys.map((key: unknown) => String(key)) : [];
-          const currentKeys = Array.isArray(currentEntry?.keys) ? (currentEntry.keys as unknown[]).map((key: unknown) => String(key)) : [];
-          const keysMatch = currentKeys.length === snapshotKeys.length && snapshotKeys.every((key: string) => currentKeys.includes(key));
-          const restoredEntry = currentEntry
-            && currentEntry.enabled === patch.enabled
-            && currentEntry.type === patch.type
-            && keysMatch
-            && !hasTakeoverMetaBlock_ACU(currentEntry.comment);
-          const update = { bookName: normalizedBookName, uid: patch.uid };
-          if (restoredEntry) {
+        for (const restorePatch of patches) {
+          const update = { bookName: normalizedBookName, uid: restorePatch.uid };
+          if (isAgentWorldbookEntryRestored_ACU(patchedEntriesByUid.get(String(restorePatch.uid)), restorePatch)) {
             restored += 1;
             report.applied.push(update);
           } else {
@@ -1041,7 +977,7 @@ async function restoreSnapshotEntries_ACU(snapshot: AgentWorldbookControlSnapsho
     } catch (error) {
       logWarn_ACU(`[Agent世界书] 恢复世界书条目失败：${normalizedBookName}`, error);
       const failedUpdates = currentEntriesRead
-        ? patches.map(patch => ({ bookName: normalizedBookName, uid: patch.uid }))
+        ? patches.map(restorePatch => ({ bookName: normalizedBookName, uid: restorePatch.uid }))
         : entriesToRestore
           .filter(entry => hasValidWorldbookUid_ACU(entry?.uid))
           .map(entry => ({ bookName: normalizedBookName, uid: entry.uid }));
@@ -1069,8 +1005,8 @@ async function collectRecoveredPendingSnapshotUpdates_ACU(
         recovered.push({ bookName, uid: snapshotEntry.uid });
         continue;
       }
-      if (hasTakeoverMetaBlock_ACU(entry.comment)) continue;
-      if (!snapshotEntry.commentHash || !doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, String(entry.comment || ''))) continue;
+      if (hasAgentTakeoverMetaBlock_ACU(entry.comment)) continue;
+      if (!snapshotEntry.commentHash || !doesAgentTakeoverCommentHashMatch_ACU(snapshotEntry.commentHash, String(entry.comment || ''))) continue;
       const previousKeys = Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [];
       const keys = Array.isArray(entry.keys) ? entry.keys : [];
       if (entry.enabled !== (snapshotEntry.previousEnabled !== false)
@@ -1112,7 +1048,7 @@ async function writeFinalGenerationGreenlightsExclusive_ACU(greenlights: unknown
       const shouldRestoreLegacyClearedKeys = liveKeys.length === 0
         && previousKeys.length > 0
         && !!snapshotEntry?.commentHash
-        && doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, String(entry?.comment || ''));
+        && doesAgentTakeoverCommentHashMatch_ACU(snapshotEntry.commentHash, String(entry?.comment || ''));
       if (isFinalGenerationBlueLightEntry_ACU(entry) && !shouldRestoreLegacyClearedKeys) return null;
       return {
         uid: entry.uid,

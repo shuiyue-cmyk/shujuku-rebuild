@@ -10,7 +10,6 @@
 import { TavernHelper_API_ACU, SillyTavern_API_ACU } from '../../shared/host-api';
 import { getCharLorebooks_ACU, getCurrentCharacterWorldbookBinding_ACU } from './character-gateway';
 import { logWarn_ACU } from '../../shared/utils';
-import { isExtensionMode } from '../../shared/runtime-env';
 import { classifyLorebookReadError_ACU } from '../../shared/lorebook-read-error';
 import { nativeToOldEntry_ACU } from '../../shared/host-compat/entry-format';
 
@@ -409,14 +408,9 @@ let worldInfoModulePromise_ACU: Promise<any> | null = null;
 /**
  * 动态 import 宿主 world-info 模块（带缓存）。
  * 失败时清空缓存，让宿主尚未加载完的早期调用有机会重试。
- *
- * 只在插件模式（宿主主窗口）下尝试：油猴模式跑在酒馆助手创建的 iframe 里，
- * 同一 URL 在 iframe realm 会加载出「第二个」world-info 实例（selected_world_info 恒为空，
- * 且会把 script.js/power-user.js 整条宿主模块图在 iframe 里重新执行一遍），既读不到真值又有副作用。
- * 油猴模式下 window 全局链与 TavernHelper 通道仍然有效，这里直接返回 null 走既有降级。
+ * 插件运行在宿主主窗口，与宿主共享同一模块实例（油猴 iframe 形态已移除，R1-06）。
  */
 export function loadHostWorldInfoModule_ACU(): Promise<any> {
-  if (!isExtensionMode()) return Promise.resolve(null);
   if (!worldInfoModulePromise_ACU) {
     const loadModule = async (): Promise<any> => {
       try {

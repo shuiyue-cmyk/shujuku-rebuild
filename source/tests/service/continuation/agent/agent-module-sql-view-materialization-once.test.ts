@@ -102,24 +102,24 @@ beforeEach(() => {
 });
 
 describe('P1-m 同一次提交只物化一次视图（结构不变量）', () => {
-  it('整行事务提交：恰好 1 次物化 + 1 次释放', async () => {
+  // R4-09：整行事务 / webRefs / 约束登记之后的 SQL 复算失败一律被吞、对结果毫无影响，已移除——
+  // 这几种提交不再物化视图，结果与 JSON 事务链逐字相同。逐栏提交的 SQL 分栏门（真正会拒收）不受影响。
+  it('R4-09：整行事务提交不再物化视图，结果与 JSON 事务链逐字相同', async () => {
     const base = snapshot_ACU();
     const applied = await applyAgentModuleDeltaViaSql_ACU(base, hookDelta_ACU('H1') as never, ['hooks'], 4, []);
 
     expect(applied.snapshot.revisions.hooks).toBe(1);
-    const counters = __readAgentModuleSqlViewCountersForTests_ACU();
-    expect(counters.materializations).toBe(1);
-    expect(counters.disposed).toBe(1);
+    expect(applied).toEqual(applyAgentModuleDelta_ACU(base, hookDelta_ACU('H1') as never, ['hooks'], 4, []));
+    expect(__readAgentModuleSqlViewCountersForTests_ACU()).toEqual({ materializations: 0, disposed: 0 });
   });
 
-  it('webRefs 事务提交与约束登记提交：各自恰好 1 次物化 + 1 次释放', async () => {
+  it('R4-09：webRefs 事务提交与约束登记提交不再物化视图', async () => {
     await applyAgentWebRefsDeltaViaSql_ACU(snapshot_ACU(), webRefsOutput_ACU() as never, 0);
-    expect(__readAgentModuleSqlViewCountersForTests_ACU()).toEqual({ materializations: 1, disposed: 1 });
+    expect(__readAgentModuleSqlViewCountersForTests_ACU()).toEqual({ materializations: 0, disposed: 0 });
 
-    __resetAgentModuleSqlViewCountersForTests_ACU();
     const registered = await applyAgentConstraintRegistrationViaSql_ACU(snapshot_ACU(), ['禁止 OOC'], [], 4);
     expect(registered.snapshot.constraints).toHaveLength(1);
-    expect(__readAgentModuleSqlViewCountersForTests_ACU()).toEqual({ materializations: 1, disposed: 1 });
+    expect(__readAgentModuleSqlViewCountersForTests_ACU()).toEqual({ materializations: 0, disposed: 0 });
   });
 
   it('逐栏提交：一条 write_sql 里 3 条语句仍只物化 1 次（语句数不放大门禁成本）', async () => {
@@ -145,7 +145,7 @@ describe('P1-m 同一次提交只物化一次视图（结构不变量）', () =>
     expect(__readAgentModuleSqlViewCountersForTests_ACU()).toEqual({ materializations: 1, disposed: 1 });
   });
 
-  it('固定工作流的一次派工结算：恰好 1 次物化 + 1 次释放', async () => {
+  it('固定工作流的一次整行派工结算：不物化视图（R4-09）', async () => {
     const result = await runContinuationMaterialRepair_ACU({
       settings: buildDefaultContinuationSettings_ACU(),
       snapshot: {
@@ -165,7 +165,7 @@ describe('P1-m 同一次提交只物化一次视图（结构不变量）', () =>
     } as never);
 
     expect(result.snapshot.revisions.webRefs).toBe(1);
-    expect(__readAgentModuleSqlViewCountersForTests_ACU()).toEqual({ materializations: 1, disposed: 1 });
+    expect(__readAgentModuleSqlViewCountersForTests_ACU()).toEqual({ materializations: 0, disposed: 0 });
   });
 
   it('同一派工不会既走逐栏提交又走整行复算：usedFieldWrites 派工的结算段零物化', async () => {
@@ -247,53 +247,4 @@ describe('P1-m 损坏必须仍然被拒（复用视图不许削弱门）', () =>
     expect(__readAgentModuleSqlViewCountersForTests_ACU()).toEqual({ materializations: 1, disposed: 1 });
   });
 
-  it('整行事务：物化后领域 payload 被篡改 → 复算抛原错误并 fail-closed 回退 JSON 链（错误分类逐字不变）', () => {
-    // 基线里已有一条旧伏笔：本批只 upsert 新条目 H1，旧条目不参与 diff，
-    // 因此篡改它的 payload 不会被写批次修复——只有「批末读回逐模块 stringify
-    // 全量比对」这道 P1 门能抓住（不动 revision，连乐观锁都看不出问题）。
-    const base = snapshot_ACU({ hooks: [existingHook_ACU('H0')] as never });
-    const delta = hookDelta_ACU('H1') as never;
-    const jsonOnly = applyAgentModuleDelta_ACU(base, delta, ['hooks'], 4, []);
-    harness.apply = view => {
-      view.engine.run('UPDATE mod_hooks SET payload = ? WHERE id = ?', [JSON.stringify({ ...existingHook_ACU('H0'), summary: '被篡改' }), 'H0']);
-    };
-    __resetAgentModuleSqlViewCountersForTests_ACU();
-
-    const applied = applyAgentModuleDeltaViaSql_ACU(base, delta, ['hooks'], 4, []);
-
-    // fail-closed：门开火后回退 JSON 链结果，与旧实现逐字相同。
-    return applied.then(result => {
-      expect(result).toEqual(jsonOnly);
-      expect(result.appliedModules).toEqual(['hooks']);
-      // 错误分类逐字不变：AgentModuleSqlViewError_ACU + 原句 + 原 module 字段。
-      expect(harness.sqlViewErrors).toEqual([{
-        name: 'AgentModuleSqlViewError_ACU',
-        message: '模块 hooks SQL 复算结果与事务结果不一致',
-        module: 'hooks',
-        expected: undefined,
-        actual: undefined,
-      }]);
-      expect(__readAgentModuleSqlViewCountersForTests_ACU()).toEqual({ materializations: 1, disposed: 1 });
-    });
-  });
-
-  it('对照组：未注入破坏时同一提交照常通过（证明上一条不是恒真断言）', () => {
-    const base = snapshot_ACU({ hooks: [existingHook_ACU('H0')] as never });
-    const delta = hookDelta_ACU('H1') as never;
-    const readBacks: number[] = [];
-    harness.apply = view => {
-      const original = view.readSnapshot;
-      view.readSnapshot = () => { readBacks.push(1); return original(); };
-    };
-
-    const applied = applyAgentModuleDeltaViaSql_ACU(base, delta, ['hooks'], 4, []);
-
-    // 批末完整复算确实读了回来（readSnapshot + 逐模块 stringify 全量比对），
-    // 且没有抛任何结构化错误。
-    return applied.then(result => {
-      expect(readBacks.length).toBe(1);
-      expect(harness.sqlViewErrors).toEqual([]);
-      expect(result).toEqual(applyAgentModuleDelta_ACU(base, delta, ['hooks'], 4, []));
-    });
-  });
 });

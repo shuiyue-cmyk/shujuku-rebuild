@@ -24,6 +24,7 @@ import {
   purgeManualRefillIncrementalSheetKeysFromMessage_ACU,
   purgeSheetKeysFromMessage_ACU,
   clearAllTableFields_ACU,
+  clearTableFieldsForIsolation_ACU,
   hasAnyTableData_ACU,
   cloneIsolatedData_ACU,
   scanResidualTableFields_ACU,
@@ -1767,6 +1768,17 @@ describe('hasAnyTableData_ACU', () => {
     expect(hasAnyTableData_ACU(null)).toBe(false);
   });
 
+  // R1-04：V2 存储帧（storageFrame）也是表格数据，不能只认 V1 independentData。
+  it('R1-04：指定 isolationKey 时认 V2 storageFrame', () => {
+    const msg = {
+      TavernDB_ACU_IsolatedData: {
+        tag1: { _acu_storage_version: 2, storageFrame: { version: 2, logEntries: [] } },
+      },
+    };
+    expect(hasAnyTableData_ACU(msg, 'tag1')).toBe(true);
+    expect(hasAnyTableData_ACU(msg, 'tag2')).toBe(false);
+  });
+
   it('指定 isolationKey 检查新版数据', () => {
     const msg = {
       TavernDB_ACU_IsolatedData: {
@@ -2033,5 +2045,29 @@ describe('patchIsolatedTagMetadata_ACU', () => {
     const tagData = msg.TavernDB_ACU_IsolatedData.tag1;
     expect(tagData.storageFrame).toEqual(original.storageFrame);
     expect(tagData.independentData).toEqual(original.independentData);
+  });
+});
+
+// R1-03：不就地改解析缓存/原容器，整体换字段（与同文件「整体换字段」契约一致）。
+describe('clearTableFieldsForIsolation_ACU', () => {
+  it('R1-03：删除隔离槽时整体换字段，不改动原容器对象', () => {
+    const originalContainer = { tag1: { independentData: { sheet_0: {} } }, tag2: { independentData: { sheet_1: {} } } };
+    const msg: any = { TavernDB_ACU_IsolatedData: originalContainer };
+
+    expect(clearTableFieldsForIsolation_ACU(msg, 'tag1', { enabled: true, code: 'tag1' })).toBe(true);
+
+    expect(msg.TavernDB_ACU_IsolatedData).not.toBe(originalContainer);
+    expect(Object.keys(msg.TavernDB_ACU_IsolatedData)).toEqual(['tag2']);
+    expect(Object.keys(originalContainer)).toEqual(['tag1', 'tag2']);
+  });
+
+  it('R1-03：字符串形态字段删除后解析结果与字段一致', () => {
+    const msg: any = { TavernDB_ACU_IsolatedData: JSON.stringify({ tag1: { independentData: { sheet_0: {} } }, tag2: {} }) };
+    const before = readIsolatedDataContainer_ACU(msg);
+
+    clearTableFieldsForIsolation_ACU(msg, 'tag1', { enabled: true, code: 'tag1' });
+
+    expect(Object.keys(before || {})).toEqual(['tag1', 'tag2']);
+    expect(Object.keys(readIsolatedDataContainer_ACU(msg) || {})).toEqual(['tag2']);
   });
 });

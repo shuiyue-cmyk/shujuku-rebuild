@@ -2177,14 +2177,14 @@ describe('orchestrateManualUpdate_ACU', () => {
 
   it('正在更新中时返回错误', async () => {
     mockIsAutoUpdating = true;
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(false);
     expect(result.error).toContain('正在进行中');
   });
 
   it('API 未就绪时返回错误', async () => {
     mockCoreApisReady = false;
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(false);
     expect(result.error).toContain('API未就绪');
   });
@@ -2193,14 +2193,14 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockSettings.apiMode = 'custom';
     mockSettings.apiConfig = { url: '', model: '' };
     mockSettings.tavernProfile = '';
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(false);
     expect(result.error).toContain('API未配置');
   });
 
   it('数据库未加载时返回错误', async () => {
     mockCurrentJsonTableData = null;
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(false);
     expect(result.error).toContain('数据库未加载');
   });
@@ -2209,7 +2209,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
     vi.mocked(getChatArray_ACU).mockReturnValue([]);
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(false);
     expect(result.error).toContain('聊天记录为空');
   });
@@ -2221,7 +2221,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       { is_user: true },
     ]);
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(false);
     expect(result.error).toContain('尚未检测到AI回复');
   });
@@ -2233,7 +2233,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       { is_user: false },
     ]);
 
-    const result = await orchestrateManualUpdate_ACU([], mockProcessBatch, mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU([], mockRefreshData);
     expect(result.success).toBe(false);
     expect(result.error).toContain('未选择');
   });
@@ -2249,7 +2249,7 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(true);
     expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
   });
@@ -2279,7 +2279,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCurrentJsonTableData = { sheet_0: { name: '测试表', updateConfig: {}, content: [['row_id', 'v2']] } };
 
     const processBatch = vi.fn().mockResolvedValue({ success: true });
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('锚点预检');
@@ -2331,7 +2331,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       return { status: 'committed', planId };
     });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
 
     expect(mockPrepareV2Recovery).toHaveBeenCalledTimes(1);
     expect(mockCommitPreparedV2Recovery).toHaveBeenCalledWith('plan-converge');
@@ -2360,7 +2360,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCurrentJsonTableData = { sheet_0: { name: '测试表', updateConfig: {}, content: [['row_id', 'v1']] } };
 
     const processBatch = vi.fn().mockResolvedValue({ success: true });
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('锚点预检');
@@ -2397,7 +2397,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     } as any);
 
     const processBatch = vi.fn().mockResolvedValue({ success: true });
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('锚点预检');
@@ -2420,7 +2420,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     };
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     expect(result.success).toBe(true);
     // 只清理本次范围内的选中表，不触碰范围外数据与未选中的表。
     expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
@@ -2470,7 +2470,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     };
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     expect(result.success).toBe(false);
     expect(result.error).toContain('导入检查点');
     // 阻断必须发生在破坏性清理之前：选中表历史不得被清。
@@ -2503,7 +2503,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     };
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     expect(result.success).toBe(false);
     expect(result.error).toContain('导入检查点');
     expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
@@ -2537,7 +2537,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     };
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     expect(result.success).toBe(false);
     expect(result.error).toContain('导入检查点');
     expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
@@ -2580,7 +2580,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     };
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     expect(result.success).toBe(false);
     expect(result.error).toContain('导入检查点');
     expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
@@ -2621,7 +2621,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     };
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     expect(result.success).toBe(false);
     expect(result.error).toContain('导入检查点');
     expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
@@ -2661,7 +2661,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     };
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     expect(result.success, result.error).toBe(true);
     expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
   });
@@ -2701,7 +2701,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     };
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     expect(result.success, result.error).toBe(true);
     expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
   });
@@ -2728,7 +2728,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     });
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success, result.error).toBe(true);
     expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
@@ -2759,7 +2759,6 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     const result = await orchestrateManualUpdate_ACU(
       ['sheet_0', 'sheet_1'],
-      processBatch,
       refreshData,
       { clearBeforeUpdate: true, executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_1'] } },
     );
@@ -2798,7 +2797,6 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     const result = await orchestrateManualUpdate_ACU(
       ['sheet_0', 'sheet_1'],
-      processBatch,
       refreshData,
       { clearBeforeUpdate: true, executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_1'] } },
     );
@@ -2826,7 +2824,6 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     const result = await orchestrateManualUpdate_ACU(
       ['sheet_0'],
-      processBatch,
       refreshData,
       { clearBeforeUpdate: true, executionSnapshot: { sheetKeys: [] } },
     );
@@ -2854,7 +2851,6 @@ describe('orchestrateManualUpdate_ACU', () => {
     // 未传 clearBeforeUpdate（非重填路径），但显式提供空快照 → 保护必须启用并阻断，不得静默降级
     const result = await orchestrateManualUpdate_ACU(
       ['sheet_0'],
-      processBatch,
       refreshData,
       { executionSnapshot: { sheetKeys: [] } },
     );
@@ -2882,7 +2878,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       throw new Error('ordinary progress observer failed');
     });
 
-    await expect(orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, { onProgress }))
+    await expect(orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { onProgress }))
       .rejects.toThrow('ordinary progress observer failed');
 
     expect(processBatch).not.toHaveBeenCalled();
@@ -2894,7 +2890,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCurrentJsonTableData = { sheet_0: { name: 'chronicle', updateConfig: {}, content: [['row_id', 'code_index']] } };
     mockClearManualRefillSheetDataInRange.mockRejectedValueOnce(new Error('purge transaction rejected'));
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('purge transaction rejected');
@@ -2919,7 +2915,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       throw new Error('progress observer failed');
     });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, {
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, {
       clearBeforeUpdate: true,
       onProgress,
     });
@@ -2958,7 +2954,6 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     const result = await orchestrateManualUpdate_ACU(
       ['sheet_0', 'sheet_1'],
-      processBatch,
       mockRefreshData,
       { clearBeforeUpdate: true, executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_1'] } },
     );
@@ -3002,7 +2997,6 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     const result = await orchestrateManualUpdate_ACU(
       ['sheet_0', 'sheet_1'],
-      processBatch,
       mockRefreshData,
       { clearBeforeUpdate: true, executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_1'] } },
     );
@@ -3053,7 +3047,6 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     const result = await orchestrateManualUpdate_ACU(
       ['sheet_0', 'sheet_1'],
-      vi.fn().mockResolvedValue({ success: true }),
       mockRefreshData,
       { clearBeforeUpdate: true, executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_1'] } },
     );
@@ -3099,7 +3092,6 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     const result = await orchestrateManualUpdate_ACU(
       ['sheet_0', 'sheet_1'],
-      processBatch,
       mockRefreshData,
       { executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_1'] } },
     );
@@ -3149,7 +3141,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     };
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(true);
     expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
@@ -3173,7 +3165,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     };
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(true);
     expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
@@ -3230,7 +3222,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
 
     const processBatch = vi.fn().mockResolvedValue({ success: true });
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(true);
     // 无 full checkpoint 也直接清理范围内选中表，让用户可以从头开始填表。
@@ -3275,7 +3267,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCallCustomOpenAI.mockRejectedValueOnce(new Error('API 404'));
     const refreshData = vi.fn().mockResolvedValue(undefined);
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), refreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], refreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
     expect(mockRollbackManualRefillRangeSnapshot).toHaveBeenCalledTimes(1);
@@ -3326,7 +3318,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     });
     const refreshData = vi.fn().mockResolvedValue(undefined);
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), refreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], refreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
     // 已提交成果必须保留：整段回滚会覆盖它。
@@ -3371,7 +3363,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockSettings.skipUpdateFloors = 1;
     mockCurrentJsonTableData = { sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A']] } };
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), vi.fn().mockResolvedValue(undefined), { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue(undefined), { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('手动重填被回放根准入阻断');
@@ -3406,7 +3398,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       return 1;
     });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), vi.fn().mockResolvedValue(undefined), { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue(undefined), { clearBeforeUpdate: true });
 
     // 回滚与失败原因无关：只要清理已发生且零提交，旧数据就必须回来。
     expect(result.success).toBe(false);
@@ -3483,7 +3475,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
 
     const processBatch = vi.fn().mockResolvedValue({ success: true });
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(true);
     expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([0, 2, 4], ['sheet_0'], expect.objectContaining({
@@ -3543,7 +3535,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCallCustomOpenAI.mockRejectedValue(new Error('AI 调用失败'));
     mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('AI 调用失败');
@@ -3624,7 +3616,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     }));
 
     try {
-      const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, {
+      const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, {
         clearBeforeUpdate: true,
         executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_other'] },
       });
@@ -3670,7 +3662,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCallCustomOpenAI.mockRejectedValue(new Error('AI 调用失败'));
 
     const discardSpiesBefore = stagingDiscardSpies.length;
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, {
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, {
       clearBeforeUpdate: true,
       executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_other'] },
     });
@@ -3708,7 +3700,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCallCustomOpenAI.mockClear();
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, {
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, {
       clearBeforeUpdate: true,
       executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_other'] },
     });
@@ -3767,7 +3759,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     });
 
     try {
-      const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, {
+      const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1'], mockRefreshData, {
         executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_1'] },
       });
 
@@ -3818,7 +3810,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     });
 
     try {
-      const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, {
+      const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1'], mockRefreshData, {
         executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_1'] },
       });
 
@@ -3872,7 +3864,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
     const processBatch = vi.fn().mockResolvedValue({ success: true });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, {
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, {
       clearBeforeUpdate: false,
       contextScopeIndices: [0, 2, 4],
     } as any);
@@ -3917,7 +3909,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       return { saved: true, messageIndex: 0 };
     });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(true);
     expect(commitManualRefillSheetSnapshotInRangeAtomic_ACU).toHaveBeenCalledWith(expect.objectContaining({
@@ -3955,7 +3947,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       appliedEdits: 0,
     }));
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result).toEqual(expect.objectContaining({ success: false, error: expect.stringContaining('strict save failed') }));
     // 已提交 bucket 保留、不整段回滚（只有「零提交且清理交回了句柄」才会回滚清理），仅按聊天记录重新同步运行时。
@@ -3990,7 +3982,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
     mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
     // 已提交 bucket 保留、不整段回滚（只有「零提交且清理交回了句柄」才会回滚清理），仅按聊天记录重新同步运行时。
@@ -4031,7 +4023,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       }
     });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result).toEqual(expect.objectContaining({ success: false, error: expect.stringContaining('分组后聊天同步失败') }));
     expect(loadAllChatMessages_ACU).toHaveBeenCalledTimes(4);
@@ -4055,7 +4047,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockSettings.tableMaxRetries = 1;
     mockCallCustomOpenAI.mockResolvedValue('无效响应');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(false);
     expect(result.error).toContain('尝试后仍失败');
   });
@@ -4068,7 +4060,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     ]);
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result: any = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
+    const result: any = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(true);
     expect('autoMergeTriggered' in result).toBe(false);
   });
@@ -4082,7 +4074,7 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
 
     const { _set_manualExtraHint_ACU, _set_isAutoUpdatingCard_ACU } = await import('../../../src/service/runtime/state-manager');
     expect(_set_manualExtraHint_ACU).toHaveBeenCalledWith('');
@@ -4102,7 +4094,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockShouldRotateBoundaryCheckpoint.mockReturnValue(true);
     mockEnsureBoundaryCheckpoint.mockResolvedValue({ success: false, error: 'boundary checkpoint failed' });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(true);
     expect(result.checkpointWarning).toContain('boundary checkpoint failed');
@@ -4121,7 +4113,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     ]);
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
 
     expect(result.success).toBe(true);
     expect(result.checkpointWarning).toBeUndefined();
@@ -4141,7 +4133,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       return { saved: true, messageIndex: 3 };
     });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('终止');
@@ -4164,7 +4156,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       return { saved: true, messageIndex: 1 };
     });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('终止');
@@ -4184,7 +4176,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
     mockPersistTablesToChatMessage.mockResolvedValue({ saved: false, error: '保存失败' });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
     // 名实相符：清理没交回句柄（beforeEach 的清理 mock 不调 onRollbackSnapshot）⇒ 无从回滚，
@@ -4217,7 +4209,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     });
     mockCallCustomOpenAI.mockRejectedValueOnce(new Error('API 404'));
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
     expect(result.rolledBackCleanup).toBeUndefined();
@@ -4235,7 +4227,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
     mockEnsureBoundaryCheckpoint.mockResolvedValueOnce({ success: false, changed: false, error: '边界 checkpoint 写入失败' });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
 
     expect(result.success).toBe(true);
     expect(result.checkpointWarning).toContain('边界 checkpoint 写入失败');
@@ -4253,7 +4245,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
     mockEnsureBoundaryCheckpoint.mockRejectedValueOnce(checkpointError);
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
 
     expect(result.success).toBe(true);
     expect(result.checkpointWarning).toContain('checkpoint boom');
@@ -4269,7 +4261,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockSettings.tableMaxRetries = 1;
     mockCallCustomOpenAI.mockResolvedValue('无效响应');
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
 
     expect(result.success).toBe(false);
     expect(mockEnsureBoundaryCheckpoint).not.toHaveBeenCalled();
@@ -4307,7 +4299,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       .mockResolvedValueOnce('<tableEdit>sheet_2</tableEdit>');
     const onProgress = vi.fn();
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1', 'sheet_2'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { onProgress });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1', 'sheet_2'], mockRefreshData, { onProgress });
 
     expect(result.success).toBe(true);
     expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(3);
@@ -4348,7 +4340,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       .mockResolvedValueOnce('<tableEdit>sheet_1</tableEdit>');
     mockShouldRotateBoundaryCheckpoint.mockReturnValue(true);
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1'], mockRefreshData);
 
     expect(result.success).toBe(true);
     expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(2);
@@ -4402,7 +4394,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(count);
     };
 
-    const resultPromise = orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1', 'sheet_2'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const resultPromise = orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1', 'sheet_2'], mockRefreshData);
     await waitForAiCallCount(2);
     expect(resolvers).toHaveLength(2);
 
@@ -4441,7 +4433,7 @@ describe('orchestrateManualUpdate_ACU', () => {
       return { success: true, modifiedKeys: ['sheet_0', 'sheet_1'], appliedEdits: 2 };
     });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1'], mockRefreshData);
 
     expect(result.success).toBe(true);
     expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
@@ -4860,7 +4852,7 @@ describe('orchestrateManualUpdate_ACU — 表级 API 预设覆盖', () => {
     // parseTableTemplateJson_ACU mock 返回 { sheet_0: { name: '测试表' } }
     mockSettings.tableApiPresetOverridesByName = { '测试表': 'special-preset' };
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(true);
 
     // 验证 callCustomOpenAI 被调用时携带了 requestOptions.tableApiPreset
@@ -4880,7 +4872,7 @@ describe('orchestrateManualUpdate_ACU — 表级 API 预设覆盖', () => {
 
     mockSettings.tableApiPresetOverridesByName = {};
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(true);
 
     const openAICall = mockCallCustomOpenAI.mock.calls[0];
@@ -4899,7 +4891,7 @@ describe('orchestrateManualUpdate_ACU — 表级 API 预设覆盖', () => {
 
     mockSettings.tableApiPresetOverridesByName = { '': 'should-not-apply' };
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(true);
 
     const openAICall = mockCallCustomOpenAI.mock.calls[0];
@@ -4920,7 +4912,7 @@ describe('orchestrateManualUpdate_ACU — 表级 API 预设覆盖', () => {
     // 因为决议用的是 parseTableTemplateJson_ACU 的返回值
     mockSettings.tableApiPresetOverridesByName = { '测试表': 'trimmed-preset' };
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData);
     expect(result.success).toBe(true);
 
     const openAICall = mockCallCustomOpenAI.mock.calls[0];
@@ -4954,7 +4946,7 @@ describe('orchestrateManualUpdate_ACU — 表级 API 预设覆盖', () => {
       `<tableEdit>${options.targetSheetKeys.join(' ')}</tableEdit>`
     );
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0', 'sheet_1'], mockRefreshData);
 
     expect(result.success).toBe(true);
     expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(2);
@@ -6069,6 +6061,43 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
     expect(mockUpdateReadableLorebookEntry).not.toHaveBeenCalled();
     expect(mockEnqueueSummaryVectorIndexFlush).not.toHaveBeenCalled();
     expect(mockCurrentJsonTableData.sheet_0.content).toEqual([['row_id', 'value'], ['1', 'base-a']]);
+    vi.mocked(isSqliteMode).mockReturnValue(false);
+  });
+
+  // R2A-10：出错分组以执行方标出的 failedGroupIndex 为准（它按实际执行的语句计），
+  // 不再由编排层按原文条数倒推（物化/补种/过滤会让两边条数对不上）。
+  it('R2A-10：provider 标出 failedGroupIndex 时，SQL 失败归到该分组而非按原文条数倒推', async () => {
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+    const inventoryDDL = `CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);`;
+    const notesDDL = `CREATE TABLE notes (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);`;
+    const baseSnapshot = {
+      mate: { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } },
+      sheet_0: { uid: 'inventory', name: '表A', sourceData: { ddl: inventoryDDL }, content: [['row_id', 'value'], ['1', 'base-a']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
+      sheet_1: { uid: 'notes', name: '表B', sourceData: { ddl: notesDDL }, content: [['row_id', 'value'], ['1', 'base-b']], updateConfig: {}, exportConfig: {}, orderNo: 1 },
+    } as any;
+    const groupASql = "INSERT INTO inventory (value) VALUES ('a1');";
+    const groupBSql = "INSERT INTO notes (value) VALUES ('b1');";
+    const responses = [
+      { success: true, attempt: 1, aiResponse: `<tableEdit>${groupASql}</tableEdit>`, tableEditText: groupASql, job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      { success: true, attempt: 1, aiResponse: `<tableEdit>${groupBSql}</tableEdit>`, tableEditText: groupBSql, job: { groupKey: 'b', groupId: 2, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+    ];
+    // 序号 1 按原文倒推会落在 A 组；provider 明确标的是 B 组（例如前面有执行方插入的语句）。
+    const failure = Object.assign(new Error('第 1 条语句失败: INSERT INTO notes → boom'), { failedGroupIndex: 1 });
+    mockEnsureStorageProviderReady.mockResolvedValue({
+      mode: 'sqlite',
+      isReady: () => true,
+      getCurrentData: () => mockCurrentJsonTableData,
+      applyEditsWithSystemRowIds: () => { throw failure; },
+    } as any);
+
+    mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
+    const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('groupId=2,batch=1,targets=1 SQL 执行失败');
+    expect(result.error).not.toContain('groupId=1');
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
     vi.mocked(isSqliteMode).mockReturnValue(false);
   });
 
@@ -7895,7 +7924,7 @@ describe('processGroupedRuntimeChunk_ACU', () => {
 
     const legacyProcessBatch = vi.fn().mockResolvedValue({ success: true });
     const refreshData = vi.fn().mockResolvedValue(undefined);
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], legacyProcessBatch, refreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], refreshData);
 
     expect(result.success).toBe(true);
     expect(legacyProcessBatch).not.toHaveBeenCalled();
@@ -7911,7 +7940,7 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     mockCallCustomOpenAI.mockResolvedValue('无效响应');
 
     const refreshData = vi.fn().mockResolvedValue(undefined);
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), refreshData);
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], refreshData);
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('填表在 1 次尝试后仍失败');
@@ -7939,7 +7968,7 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     const refreshData = vi.fn().mockResolvedValue(undefined);
 
     try {
-      const result = await orchestrateManualUpdate_ACU(['sheet_0'], legacyProcessBatch, refreshData);
+      const result = await orchestrateManualUpdate_ACU(['sheet_0'], refreshData);
 
       expect(result.success).toBe(true);
       expect(legacyProcessBatch).not.toHaveBeenCalled();
@@ -9279,7 +9308,7 @@ describe('orchestrateManualUpdate_ACU — 手动重填纪要向量镜像 wiring'
     mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
 
     const processBatch = vi.fn().mockResolvedValue({ success: true });
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     vi.mocked(isSummaryOrOutlineTable_ACU).mockImplementation(() => false);
 
     expect(result.success).toBe(true);
@@ -9362,7 +9391,7 @@ describe('orchestrateManualUpdate_ACU — 手动重填纪要向量镜像 wiring'
       sheet_0: { name: '纪要表', updateConfig: {}, content: [['row_id', '事件'], ['3', '旧值']] },
     };
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     vi.mocked(isSummaryOrOutlineTable_ACU).mockImplementation(() => false);
 
     // 判据已按上游建议改变：整表替换类操作天生没有行级信息 ⇒ 不再中止整次重填，而是把该纪要表的
@@ -9431,7 +9460,7 @@ describe('orchestrateManualUpdate_ACU — 手动重填纪要向量镜像 wiring'
     vi.mocked(logWarn_ACU).mockClear();
     mockCurrentJsonTableData = { sheet_0: { name: '纪要表', updateConfig: {}, content: [['row_id', '事件'], ['3', '旧值']] } };
 
-    await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     vi.mocked(isSummaryOrOutlineTable_ACU).mockImplementation(() => false);
 
     // 只排除能精确定位的那一行；整表行号（9/10）不许并进来。
@@ -9495,7 +9524,7 @@ describe('orchestrateManualUpdate_ACU — 手动重填纪要向量镜像 wiring'
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
     mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
     vi.mocked(isSummaryOrOutlineTable_ACU).mockImplementation(() => false);
 
     expect(result.success, result.error).toBe(true);

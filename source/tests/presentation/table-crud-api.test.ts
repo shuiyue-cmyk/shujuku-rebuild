@@ -155,9 +155,7 @@ vi.mock('../../src/service/table/table-history', () => ({
   })),
 }));
 
-vi.mock('../../src/presentation/triggers/update-process', () => ({
-  saveCurrentDataForTable_ACU: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('../../src/presentation/triggers/update-process', () => ({}));
 
 vi.mock('../../src/presentation/components/pipeline-ui-helpers', () => ({
   refreshMergedDataAndNotifyWithUI_ACU: vi.fn().mockResolvedValue(undefined),
@@ -587,8 +585,6 @@ describe('createTableCrudApi — SQLite 模式', () => {
         hasTrackedUpdate: true,
       });
       await api.updateCell('背包物品表', 1, '数量', '10');
-      const { saveCurrentDataForTable_ACU } = await import('../../src/presentation/triggers/update-process');
-      expect(vi.mocked(saveCurrentDataForTable_ACU)).not.toHaveBeenCalled();
       expect(mockPersistTablesToChatMessage).toHaveBeenCalledWith(expect.objectContaining({
         source: 'manual_crud',
         targetSheetKeys: ['sheet_0'],

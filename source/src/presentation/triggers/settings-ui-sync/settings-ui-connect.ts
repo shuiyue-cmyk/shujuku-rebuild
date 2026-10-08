@@ -33,7 +33,6 @@ import {
   jQuery_API_ACU
 } from '../../dom-utils';
 import {
-  isExtensionMode,
   getHostWindow
 } from '../../../shared/runtime-env';
 import {
@@ -183,23 +182,18 @@ import {
     else $apiStatusDisplay_ACU.html(`<span style="color:#ffcc80;">未配置自定义API。数据库更新功能可能不可用。</span>`);
   }
   export function attemptToLoadCoreApis_ACU() {
-    // 根据运行模式选择宿主窗口
+    // 插件运行在酒馆主窗口中，宿主窗口即自身
     const hostWin: any = getHostWindow();
-    const mode = isExtensionMode() ? '插件' : '油猴脚本';
-    logDebug_ACU(`[CoreAPI] 运行模式: ${mode}, hostWin === window: ${hostWin === window}`);
 
     // ═══════════════════════════════════════════════════════════════
-    // 插件模式特殊处理：主窗口的 window.SillyTavern 只有 {libs, getContext}
-    // 所有真正的 API（chatId/eventSource/eventTypes/chat/saveChat 等）必须通过
-    // SillyTavern.getContext() 才能拿到，而且 getContext() 返回的是"当前快照"，
-    // 属性值会随酒馆状态变化。所以用 Proxy 包装：每次属性读取都重新调用 getContext()
-    // 取最新快照，这样既不用改所有消费者代码，又保证读到最新值。
-    //
-    // 油猴脚本模式下，iframe 的 window.SillyTavern 本身就是扁平化的 API 对象
-    // （由酒馆助手封装），保持原样直接赋值。
+    // 主窗口的 window.SillyTavern 只有 {libs, getContext}，所有真正的 API
+    // （chatId/eventSource/eventTypes/chat/saveChat 等）必须通过 SillyTavern.getContext()
+    // 才能拿到，而且 getContext() 返回的是"当前快照"，属性值会随酒馆状态变化。
+    // 所以用 Proxy 包装：每次属性读取都重新调用 getContext() 取最新快照。
+    // （R1-06：油猴 iframe 模式已不存在，删除其扁平 API 分支。）
     // ═══════════════════════════════════════════════════════════════
     let stApi: any;
-    if (isExtensionMode()) {
+    {
       const rawST = hostWin.SillyTavern || (window as any).SillyTavern;
       if (rawST && typeof rawST.getContext === 'function') {
         // Proxy：每次属性读取都通过 getContext() 拿当前快照
@@ -228,30 +222,6 @@ import {
         // getContext 不存在，降级为直接使用 rawST（避免整个系统崩溃）
         stApi = rawST;
         logWarn_ACU('[CoreAPI] 插件模式：SillyTavern.getContext 不可用，降级为直接访问 SillyTavern 对象');
-      }
-    } else {
-      // ═══════════════════════════════════════════════════════════════
-      // 油猴脚本模式：运行在酒馆助手创建的 iframe 中。
-      //
-      // 关键事实：iframe 自身的 window.SillyTavern 是酒馆助手注入的
-      // 扁平化 API 对象（包含 chatId/eventSource/eventTypes 等），
-      // 而 window.parent（hostWin）上的 SillyTavern 只有
-      // {libs, getContext} 骨架，不含业务字段。
-      //
-      // 因此必须优先使用 iframe 自身的对象，把 parent 作为 fallback。
-      // 这与旧版 userscript 的行为一致：
-      //   SillyTavern_API_ACU = typeof SillyTavern !== 'undefined'
-      //     ? SillyTavern : parentWin.SillyTavern;
-      // ═══════════════════════════════════════════════════════════════
-      const iframeST = typeof (window as any).SillyTavern !== 'undefined' ? (window as any).SillyTavern : undefined;
-      const parentST = typeof hostWin.SillyTavern !== 'undefined' ? hostWin.SillyTavern : undefined;
-      // 优先使用 iframe 自身的扁平化 API（含 chatId 等业务字段），
-      // fallback 到 parent 的骨架对象
-      stApi = iframeST || parentST;
-      if (iframeST) {
-        logDebug_ACU('[CoreAPI] 油猴脚本模式：使用 iframe 自身的 SillyTavern 扁平 API');
-      } else if (parentST) {
-        logWarn_ACU('[CoreAPI] 油猴脚本模式：iframe 自身无 SillyTavern，降级使用 parent 的骨架对象（可能缺少 chatId 等字段）');
       }
     }
 

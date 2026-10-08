@@ -281,6 +281,54 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     ]);
   });
 
+  // R2B-10：回放对已存储语句再分句；带参数的语句若被（注释里的分号）切成多条，后续参数全部错位。
+  function chatWithSqlSheetBatch(statements: string[], params: any[][]) {
+    return [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: makeCheckpointData(), event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] } },
+            logEntries: [{
+              seq: 1, entryId: 'v2_sql_params_align', createdAt: 2, source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+              operations: [{ kind: 'sql_sheet_batch', sheetKey: 'sheet_0', statements, params, tableName: 'inventory', reason: 'system' }],
+            }],
+          },
+        },
+      },
+    }];
+  }
+
+  it('R2B-10：带参数语句里的注释分号不再把语句切断，参数按存储语句一一对齐', async () => {
+    const chat = chatWithSqlSheetBatch(
+      ['UPDATE inventory SET name = ? WHERE row_id = ? -- 改名; 备注', 'INSERT INTO inventory VALUES (?, ?)'],
+      [['钢剑', 1], [2, '药水']],
+    );
+
+    const result = await loadTableStateFromFramesV2_ACU(chat, '');
+
+    expect(result?.sheet_0.content).toEqual([
+      ['row_id', 'name'],
+      ['1', '钢剑'],
+      ['2', '药水'],
+    ]);
+  });
+
+  it('R2B-10：带参数的单条存储语句切出多条时 fail-closed，不错位绑定', async () => {
+    const chat = chatWithSqlSheetBatch(
+      ['UPDATE inventory SET name = ? WHERE row_id = ?; INSERT INTO inventory VALUES (?, ?)'],
+      [['钢剑', 1]],
+    );
+
+    const result = await loadTableStateFromFramesV2Detailed_ACU(chat, '', { updateRuntimeState: false, compatibilityMode: 'disabled' })
+      .catch((error: any) => ({ error: String(error?.message || error) }));
+
+    expect(JSON.stringify(result)).toContain('参数无法对齐');
+  });
+
   it('已物化的 SQL INSERT 回放与实时快照一致，删除中间 ID 后仍保留 max + 1 身份', async () => {
     const baseSnapshot = makeCheckpointData();
     baseSnapshot.sheet_0.content = [

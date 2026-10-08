@@ -27,6 +27,8 @@ import { assertSummaryVectorMirrorFrameInvariantsV2_ACU } from '../vector/summar
 import { scheduleSummaryVectorMirrorFlushAfterPersist_ACU } from '../vector/summary-vector-index-flush-queue';
 import { isAiFloor_ACU } from '../../shared/ai-floor';
 import { isDataBearingMessage_ACU } from '../../shared/ai-floor';
+import { downgradeOtherFullCheckpoints_ACU } from './v2-full-checkpoint-downgrade';
+import { cloneChatWithTableFields_ACU } from './chat-table-field-swap';
 
 export interface TableCheckpointGenerationConfig_ACU {
   maxEntriesAfterCheckpoint: number;
@@ -1377,7 +1379,8 @@ function classifyTemplateCommitStorageStateAfterDeletedSheets_ACU(
   deletedSheetKeys: string[],
 ): TemplateCommitStorageState_ACU {
   if (deletedSheetKeys.length === 0) return classifyTemplateCommitStorageState_ACU(chat, isolationKey);
-  const simulatedChat = deepClone_ACU(chat);
+  // 只深拷贝表格字段（R2B-09）：清理只改写表格字段，正文无需 JSON 往返。
+  const simulatedChat = cloneChatWithTableFields_ACU(chat);
   for (const message of simulatedChat) {
     if (isDataBearingMessage_ACU(message)) purgeSheetKeysFromMessage_ACU(message, deletedSheetKeys);
   }
@@ -1472,7 +1475,7 @@ export async function demoteTemplateOnlyRootToScopeOnly_ACU(options: {
       const backupFrame = deepClone_ACU(sourceFrame);
 
       // 构造候选聊天：移除该 frame 的 checkpoint / perSheetCheckpoints / headRevision。
-      const candidateChat = deepClone_ACU(chat);
+      const candidateChat = cloneChatWithTableFields_ACU(chat);
       const candidateContainer = readIsolatedDataContainer_ACU(candidateChat[rootIndex]) || {};
       // 写 recoveryBackup 必须放在「整条移除」判空之前：正常路径 frame 降级为
       // {version:2, logEntries:[]} 标准空帧（tagData 保留，backup 随 tagData 落盘）；
@@ -1556,6 +1559,11 @@ export async function demoteTemplateOnlyRootToScopeOnly_ACU(options: {
       // 正常路径（frame 降级为 {version:2, logEntries:[]} 标准空帧）保留 tagData，
       // recoveryBackup 随 tagData 一起落盘；仅畸形空壳才整条移除 tagData。
       const candidateFinalContainer = candidateChat[rootIndex].TavernDB_ACU_IsolatedData;
+      // 严格保存失败必须还原根消息（文档契约「失败则完整还原内存」），否则内存里回放根已没、磁盘上还在。
+      const hadRootIsolatedData = Object.prototype.hasOwnProperty.call(rootMessage, 'TavernDB_ACU_IsolatedData');
+      const previousRootIsolatedData = rootMessage.TavernDB_ACU_IsolatedData;
+      const hadRootIdentity = Object.prototype.hasOwnProperty.call(rootMessage, 'TavernDB_ACU_Identity');
+      const previousRootIdentity = rootMessage.TavernDB_ACU_Identity;
       if (candidateFinalContainer === undefined) delete rootMessage.TavernDB_ACU_IsolatedData;
       else rootMessage.TavernDB_ACU_IsolatedData = candidateFinalContainer;
       writeMessageIdentity_ACU(rootMessage, {
@@ -1563,8 +1571,16 @@ export async function demoteTemplateOnlyRootToScopeOnly_ACU(options: {
         code: settings_ACU.dataIsolationCode,
       });
 
+      try {
+        await saveChatToHostStrict_ACU();
+      } catch (error) {
+        if (hadRootIsolatedData) rootMessage.TavernDB_ACU_IsolatedData = previousRootIsolatedData;
+        else delete rootMessage.TavernDB_ACU_IsolatedData;
+        if (hadRootIdentity) rootMessage.TavernDB_ACU_Identity = previousRootIdentity;
+        else delete rootMessage.TavernDB_ACU_Identity;
+        throw error;
+      }
       logDebug_ACU(`[V2 Persist] template_only_root 降级完成: requestId=${options.requestId || 'unknown'}, rootIndex=${rootIndex}, reason=${rootCheckpoint.reason}, fingerprint=${afterFingerprint}。`);
-      await saveChatToHostStrict_ACU();
       return { ok: true, demoted: true };
     });
   } catch (error: any) {
@@ -2941,9 +2957,19 @@ async function persistTableMutationLogBatchV2Core_ACU(
     return { saved: false, error: `V2 batch 写入前无法验证 provisional replay：${message}` };
   }
 
-  const candidateChat = deepClone_ACU(chat);
+  // R2B-09：不整份深克隆聊天（长聊天正文每批一次 stringify+parse）。候选数组浅拷贝，只有要改写的
+  // 消息换成浅拷贝对象；改写只替换顶层字段，isolatedData 本身由 cloneIsolatedData_ACU 深拷贝，原消息不受影响。
+  const candidateChat = chat.slice();
+  const copiedCandidateIndices = new Set<number>();
+  const candidateMessageForWrite = (index: number): any => {
+    if (!copiedCandidateIndices.has(index) && candidateChat[index] && typeof candidateChat[index] === 'object') {
+      candidateChat[index] = { ...candidateChat[index] };
+      copiedCandidateIndices.add(index);
+    }
+    return candidateChat[index];
+  };
   for (const [targetIndex, target] of targetByIndex) {
-    const message = candidateChat[targetIndex];
+    const message = candidateMessageForWrite(targetIndex);
     let isolatedData = cloneIsolatedData_ACU(message) as Record<string, any>;
     let tagData = isolatedData[isolationKey];
     if (!isV2TagData_ACU(tagData)) return { saved: false, error: `V2 batch write target ${targetIndex} has no V2 storage frame.` };
@@ -2965,7 +2991,7 @@ async function persistTableMutationLogBatchV2Core_ACU(
       if (anchorData.error) {
         return { saved: false, error: anchorData.error };
       }
-      const rootMessage = candidateChat[latestCheckpoint.index];
+      const rootMessage = candidateMessageForWrite(latestCheckpoint.index);
       if (!rootMessage) {
         return { saved: false, error: `V2 batch 收敛缺少既有 full checkpoint 根消息（index=${latestCheckpoint.index}），已拒绝。` };
       }
@@ -4319,11 +4345,13 @@ export async function commitCurrentFloorTemplateChanges_ACU(
         persistedCheckpoints = [];
         hardDeleteCheckpointCreated = true;
 
-        const candidateChat = deepClone_ACU(chat);
+        const candidateChat = cloneChatWithTableFields_ACU(chat);
         for (const message of candidateChat) {
           if (isDataBearingMessage_ACU(message)) purgeSheetKeysFromMessage_ACU(message, deletedSheetKeys);
         }
         candidateChat[target.index].TavernDB_ACU_IsolatedData = isolatedData;
+        // R2B-07：终态根写在目标楼层后，同隔离键其余 full 同事务降级，维持单根（候选与下方真实提交同口径）。
+        downgradeOtherFullCheckpoints_ACU(candidateChat, isolationKey, target.index);
         const candidateValidationError = await validateHardDeleteCandidate_ACU(
           candidateChat, isolationKey, target.index, deletedSheetKeys, terminalData,
         );
@@ -4356,7 +4384,11 @@ export async function commitCurrentFloorTemplateChanges_ACU(
       target.message.TavernDB_ACU_IsolatedData = isolatedData;
       // isolatedData 在异步准备前已克隆；重新挂回目标消息后必须同步应用删除，
       // 否则会把刚刚从真实消息清理掉的目标 frame 旧快照覆盖回来。
-      if (deletedSheetKeys.length > 0) purgeSheetKeysFromMessage_ACU(target.message, deletedSheetKeys);
+      if (deletedSheetKeys.length > 0) {
+        purgeSheetKeysFromMessage_ACU(target.message, deletedSheetKeys);
+        // R2B-07：其余 full 降级为帧内 fallback（messageSnapshots 已深拷贝这些字段，失败时随之回滚）。
+        downgradeOtherFullCheckpoints_ACU(chat, isolationKey, target.index);
+      }
       writeMessageIdentity_ACU(target.message, {
         enabled: settings_ACU.dataIsolationEnabled,
         code: settings_ACU.dataIsolationCode,

@@ -562,7 +562,8 @@ interface SheetMeta {
  * 保留批量写入的可行动诊断，但绝不把 INSERT 的 VALUES（用户业务数据）传播到日志或 UI。
  */
 function formatSqliteLoadFailure_ACU(errorMessage: string): string {
-  const batchFailure = /^第 (\d+) 条语句失败:\s*([\s\S]*?)\s*→\s*([\s\S]+)$/.exec(errorMessage);
+  // R1-07：按最后一个「→」切分（贪婪匹配）——用户数据本身可能含「→」，按第一个切会把后半段 VALUES 带进诊断。
+  const batchFailure = /^第 (\d+) 条语句失败:\s*([\s\S]*)\s*→\s*([\s\S]+)$/.exec(errorMessage);
   if (!batchFailure) return errorMessage;
 
   const [, statementIndex, statement, sqliteError] = batchFailure;

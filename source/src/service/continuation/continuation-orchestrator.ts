@@ -1149,21 +1149,24 @@ export class ContinuationOrchestrator_ACU {
     const chatIdentity = this.requireChatIdentity_ACU();
     this.invalidateLease_ACU(chatIdentity);
     if (replanInstruction) await this.recordUserMessage_ACU(replanInstruction, '要求重新规划大纲');
-    // 与 continueTask 同型登记控制器：否则 UI 重规划路径 planOutline_ACU 取不到 signal，「停止」无法中断这条最长 8192 token 的大纲请求。
-    const controller = new AbortController();
-    abortControllersByChat_ACU.set(chatIdentity, controller);
     return this.withLease_ACU(async (_identity, lease) => {
-      const taskId = this.requireTask_ACU(this.readEnvelopeWithReconciledCursor_ACU()).taskId;
-      const stoppedBeforeReplan = await this.stopIfDeadlineReached_ACU(chatIdentity, taskId, lease);
-      if (stoppedBeforeReplan) return taskResult_ACU(stoppedBeforeReplan);
+      // 与 continueTask 同型登记控制器：否则 UI 重规划路径 planOutline_ACU 取不到 signal，「停止」无法中断这条最长 8192 token 的大纲请求。
+      // 登记放在租约回调内、清理覆盖整个回调（R4-11）：拿租约失败（BUSY）或提前返回时不在表里留下孤儿控制器。
+      const controller = new AbortController();
+      abortControllersByChat_ACU.set(chatIdentity, controller);
       try {
-        const outcome = await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, replanInstruction, 'paused');
-        if (outcome.envelope.activeTask?.stopReason === 'duration_reached') this.clearDeadlineTimer_ACU(chatIdentity);
-        else if (outcome.envelope.activeTask) this.scheduleDeadline_ACU(chatIdentity, outcome.envelope.activeTask.taskId, outcome.envelope.activeTask.deadlineAt);
-        return taskResult_ACU(outcome.envelope, outcome.planning);
-      } catch (error) {
-        await this.pauseWithError_ACU(chatIdentity, taskId, error, 'outline_call', '阶段规划失败', lease);
-        throw error;
+        const taskId = this.requireTask_ACU(this.readEnvelopeWithReconciledCursor_ACU()).taskId;
+        const stoppedBeforeReplan = await this.stopIfDeadlineReached_ACU(chatIdentity, taskId, lease);
+        if (stoppedBeforeReplan) return taskResult_ACU(stoppedBeforeReplan);
+        try {
+          const outcome = await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, replanInstruction, 'paused');
+          if (outcome.envelope.activeTask?.stopReason === 'duration_reached') this.clearDeadlineTimer_ACU(chatIdentity);
+          else if (outcome.envelope.activeTask) this.scheduleDeadline_ACU(chatIdentity, outcome.envelope.activeTask.taskId, outcome.envelope.activeTask.deadlineAt);
+          return taskResult_ACU(outcome.envelope, outcome.planning);
+        } catch (error) {
+          await this.pauseWithError_ACU(chatIdentity, taskId, error, 'outline_call', '阶段规划失败', lease);
+          throw error;
+        }
       } finally {
         if (abortControllersByChat_ACU.get(chatIdentity) === controller) abortControllersByChat_ACU.delete(chatIdentity);
       }

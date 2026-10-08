@@ -861,7 +861,7 @@ describe('FormFillPage · 手动填表面板', () => {
 
     expect(orchestrate).toHaveBeenCalled();
     expect(orchestrate.mock.calls[0][0]).toEqual(['sheet_a', 'sheet_b']);
-    expect(orchestrate.mock.calls[0][3]).toEqual(expect.objectContaining({
+    expect(orchestrate.mock.calls[0][2]).toEqual(expect.objectContaining({
       clearBeforeUpdate: true,
       onProgress: expect.any(Function),
     }));
@@ -944,10 +944,10 @@ describe('FormFillPage · 手动填表面板', () => {
   });
 
   it('手动填表展示 orchestrator 的具体进度文案，不把分组数显示成重试次数', async () => {
-    const { mount, orchestrate, executeCore } = await mountFormFillPage();
+    const { mount, orchestrate } = await mountFormFillPage();
     let releaseCore = () => {};
-    executeCore.mockImplementation(async (...args: any[]) => {
-      const onProgress = args[9] as ((event: any) => void) | undefined;
+    orchestrate.mockImplementation(async (_targetKeys: string[], _refreshData: any, options: any) => {
+      const onProgress = options?.onProgress as ((event: any) => void) | undefined;
       expect(onProgress).toEqual(expect.any(Function));
       onProgress?.({
         phase: 'calling_ai',
@@ -959,13 +959,6 @@ describe('FormFillPage · 手动填表面板', () => {
       });
       await new Promise<void>(resolve => {
         releaseCore = resolve;
-      });
-      return { success: true, modifiedKeys: [] };
-    });
-    orchestrate.mockImplementation(async (_targetKeys: string[], processBatch: any) => {
-      await processBatch([7], 'manual_independent', {
-        targetSheetKeys: ['sheet_a'],
-        batchSize: 1,
       });
       return { success: true };
     });
@@ -992,7 +985,7 @@ describe('FormFillPage · 手动填表面板', () => {
   it('手动填表展示 service grouped 路径转发的重试进度', async () => {
     const { mount, orchestrate } = await mountFormFillPage();
     let releaseOrchestrate = () => {};
-    orchestrate.mockImplementation(async (_targetKeys: string[], _processBatch: any, _refreshData: any, options: any) => {
+    orchestrate.mockImplementation(async (_targetKeys: string[], _refreshData: any, options: any) => {
       options.onProgress?.({
         phase: 'calling_ai',
         currentBatch: 2,

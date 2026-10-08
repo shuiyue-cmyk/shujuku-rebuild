@@ -15,12 +15,12 @@
 
 | # | 块 | 约行数 | 状态 |
 |---|----|------|------|
-| 1 | data/（storage、sqlite、repositories、gateways、models） | 9.7k | 完成（向量存储并入块 5） |
-| 2A | service/table 填表流水线（orchestrator、sql-table-service、事务、调度） | 15k | 子代理完成 → `docs/review/block2a-fill-pipeline.md`；P1 已修，P2 待修 |
-| 2B | service/table 存储帧/回放/迁移 | 15k | 子代理完成 → `docs/review/block2b-storage-replay.md`；P1 已修，P2 待修 |
-| 3 | service/chat + service/runtime + service/settings | 17.8k | 子代理完成 → `docs/review/block3-chat-runtime-settings.md`；P1/P2 全部已修（R3-08 只做备份，「合法但零表模板」仍按损坏处理），P3 部分修 |
-| 4 | service/continuation + service/agent | 30k | 子代理完成 → `docs/review/block4-continuation-agent.md`；P1 与 R4-05 已修 |
-| 5 | service/vector + data/storage 向量部分 | 12.4k+ | 子代理完成 → `docs/review/block5-vector.md`；已修（R5-04 按产品决定不修，R5-12 rowId 部分未改） |
+| 1 | data/（storage、sqlite、repositories、gateways、models） | 9.7k | 完成（向量存储并入块 5）；全部已修（R1-07 中 sql-normalizer 一项无害不修） |
+| 2A | service/table 填表流水线（orchestrator、sql-table-service、事务、调度） | 15k | 子代理完成 → `docs/review/block2a-fill-pipeline.md`；全部已修（R2A-09 为设计取舍，改正注释） |
+| 2B | service/table 存储帧/回放/迁移 | 15k | 子代理完成 → `docs/review/block2b-storage-replay.md`；全部已修 |
+| 3 | service/chat + service/runtime + service/settings | 17.8k | 子代理完成 → `docs/review/block3-chat-runtime-settings.md`；全部已修（R3-08 只做备份，「合法但零表模板」仍按损坏处理） |
+| 4 | service/continuation + service/agent | 30k | 子代理完成 → `docs/review/block4-continuation-agent.md`；全部已修（R4-10 按风险不修） |
+| 5 | service/vector + data/storage 向量部分 | 12.4k+ | 子代理完成 → `docs/review/block5-vector.md`；已修（R5-04 按产品决定不修，R5-12 rowId 部分按影响面不改） |
 | 6 | service/template + template-assistant + worldbook | 13.3k | 子代理完成 → `docs/review/block6-template-worldbook.md`；已修 |
 | 7 | shared/ | 9.8k | 子代理完成 → `docs/review/block7-shared.md`；全部已修（R7-11 locale 一项按风险不修） |
 | 8 | service/ai、plot、optimization、flight-mode、其余小模块 | 5k | 子代理完成 → `docs/review/block8-small-services.md`；全部已修 |
@@ -48,22 +48,22 @@
 - 已核：`summary-vector-index-chat-deletion-gc.ts` 的可达性 GC（flush 后按 scope 节流）会回收无引用对象，故只是「延迟回收」而非永久泄漏。降为 P3。
 - 修法方向：清空前先读 tagData 收集 manifest。
 
-**R1-03 [P2] `clearTableFieldsForIsolation_ACU` 就地改写缓存容器**
+**R1-03 [P2｜已修] `clearTableFieldsForIsolation_ACU` 就地改写缓存容器**
 - `src/data/repositories/chat-message-data-repo.ts:1461-1470`：对 `parseIsolatedDataField` 返回的对象（字符串形态时是 WeakMap 缓存的解析结果，对象形态时是消息原对象）直接 `delete`。
 - 与同文件 1750 行注释所立的「整体换字段、不就地改」契约相悖；字符串形态下解析缓存与消息字段短暂不一致。当前调用方无快照回滚，暂无实害，属契约破口。
 
-**R1-04 [P2] `hasAnyTableData_ACU` 只认 V1 `independentData`，不认 V2 `storageFrame`**
+**R1-04 [P2｜已修] `hasAnyTableData_ACU` 只认 V1 `independentData`，不认 V2 `storageFrame`**
 - `chat-message-data-repo.ts:1527-1532`。唯一调用方 `table-history.ts:231-238` 已先判 V2 storageFrame 再回落，故当前无实害；函数名与语义不符，后续新调用方易踩。
 
-**R1-05 [P2] SQL 分句器多处复制、且都不识别 `--` / `/* */` 注释**
+**R1-05 [P2｜已修] SQL 分句器多处复制、且都不识别 `--` / `/* */` 注释**
 - 复制品：`sql-table-service.ts:2770 splitSqlStatements`、`storage-frame-v2-replay.ts:1200`（逐字复制）、`restricted-sql-dml.ts:98`、`presentation/bootstrap/api-groups/sql-api.ts:248`、`sql-normalizer.ts`（也不认块注释、双引号标识符）。
 - 风险：AI 写 `-- 更新角色; 补充` 这类带分号的注释会被切断成坏语句；写入期与回放期若某处修了另一处没修，回放与原执行结果分叉。
 - 建议：收敛为 shared 单一实现 + 共用测试。
 
-**R1-06 [P3] 油猴（userscript）模式分支全部是死代码**
+**R1-06 [P3｜已修] 油猴（userscript）模式分支全部是死代码**
 - `entry-extension.ts:17` 恒 `_forceExtensionMode()`；`tavern-storage.ts:31-77,121-156,167-177` 的 bridge 注入 / `import('./script.js')` 等永不执行。其他 `isExtensionMode()` 分支同理（共 8 处）。
 
-**R1-07 [P3] 小项**
+**R1-07 [P3｜已修（sql-normalizer 一项不修）] 小项**
 - `sqlite-engine.ts:202-227` `query()` 用 `exec` 会执行多语句、只返回首个结果集；需在块 2 确认 AI/控制台只读 SQL 是否先经单语句校验（`read-only-sql-validation.ts` 有 `hasMultipleStatements_ACU`，待核对所有入口都走它）。
 - `sqlite-engine.ts:434-442` `loadFromBinary` 先 dispose 再 `new Database(data)`，坏数据时旧库已丢；需看调用方是否把它当可失败操作。
 - `sql-normalizer.ts:347-352` UPDATE 正则在字符串值里含 ` where ` 时截断，结果是「不规范化」而非改坏，无害。
@@ -103,7 +103,7 @@
 | R3-07 按表全删后无根空帧挡住填表 | P2 | 已修：无整库根且剩余帧全空时移除空信封 | chat-service.test R3-07 |
 | R3-08 模板解析失败被默认覆盖无备份 | P2 | 已修：覆盖前备份到 .bak | profile-repo.test、settings-service.test「R3-08」 |
 | R3-09 维护事务等锁跨切聊 | P2 | 已修：事务新增 guardChatSwitch（chat-service 维护类与删楼恢复启用）；删楼恢复另复核聊天数组身份 | table-write-transaction.test「guardChatSwitch」、checkpoint-delete-guard.test「聊天数组被替换」 |
-| R3-10 死代码跨标识清表 | P3 | 部分：删除 clearTableDataAtFloors_ACU 及用例；另三个无害死代码保留（saveCurrentDataForTable 仍在对外 API） | — |
+| R3-10 死代码跨标识清表 | P3 | 已修：删除 clearTableDataAtFloors_ACU、clearManualRefillIncrementalDataInRange_ACU、replaceManualRefillSheetBaselineInRangeAtomic_ACU、saveCurrentDataForTable_ACU（update-process 的 re-export 无任何调用方，不在 window API 上）及其专属私有函数与用例 | — |
 | R3-11 删向量文件前非严格保存 | P3 | 已修：有向量文件待删时严格保存 | chat-service.test「走严格保存」 |
 | R6-01 全删生成条目误删别的环境/外部条目 | P1 | 已修：去掉按当前配置前缀兜底判定，只认本插件生成条目 | pipeline.test「块 6 复审：生成条目判定」 |
 | R6-02 合并世界书内容混入别的隔离环境条目 | P1 | 已修：剥当前隔离前缀后判定，排除其他环境前缀与本插件生成条目 | pipeline.test「块 6 复审」 |
@@ -162,11 +162,27 @@
 | R8-12 剧情推进标记随聊天文件落盘 | P3 | 已修：改为按消息对象登记在 WeakMap，写入时清掉旧版残留字段 | plot-orchestrator.test、plot-history-preset.test |
 | R8-13 填表占位符吃掉 $10/$100 | P3 | 已修：占位符加右边界（后跟数字/字母不算），已核默认提示词无依赖；正文优化同口径 | prompt-api-call.test「R8-13」 |
 | R8-14 死代码 | P3 | 已修：删除 getOptimizationApiConfig_ACU 与合并模块 | — |
+| R1-03 清隔离槽就地改缓存容器 | P2 | 已修：浅拷贝后整体换字段，解析缓存与原容器不被改动 | chat-message-data-repo.test「R1-03」×2 |
+| R1-04 hasAnyTableData 不认 V2 帧 | P2 | 已修：指定隔离键时同样认 V2 storageFrame（判据同 isV2TagData_ACU） | chat-message-data-repo.test「R1-04」 |
+| R1-05 SQL 分句器多处复制、不识别注释 | P2 | 已修：收敛为 shared/sql-statement-splitter 唯一实现（引号/方括号/反引号感知，-- 与 /* */ 视为空白并剥除）；sql-table-service、回放、受限 DML、SQL API 全部委托；AI 输出先去 HTML 注释标记再分句 | sql-statement-splitter.test |
+| R1-06 油猴模式死代码 | P3 | 已修：删除 iframe 模式探测、设置桥注入与动态 import、各处油猴分支；存储键名 __userscript_settings_v1 / __userscripts 保持不变 | tavern-storage.test、runtime-env.test |
+| R1-07 小项 | P3 | 已修：loadFromBinary 先建新库并读一次 schema 再释放旧库；落库失败诊断按最后一个「→」切分不再漏出正文；配置缓存加载去掉 new Promise(async)。query 多语句：只读入口已由引擎逐条编译拒绝，已无问题。sql-normalizer 截断无害，不修 | sqlite-engine.test「R1-07」、sync-bridge.test「R1-07」 |
+| R2A-09 live 基底无视 maxMessageIndex | P3 | 设计取舍：SQL 就在 live 库执行，基底必须与之一致（否则重复 INSERT）；改正自相矛盾的注释 | — |
+| R2A-10 SQL 失败归错分组 | P3 | 已修：执行方按实际执行语句换算出 failedGroupIndex 随错误抛出，编排层优先采用；兜底倒推改用与 SQL 一一对应的分组列表（原先传的是含被屏蔽分组的全量列表） | sql-table-service.test、update-orchestrator.test「R2A-10」 |
+| R2A-11 手动填表死参数与死代码 | P3 | 已修：删除 orchestrateManualUpdate_ACU 从未调用的 processBatch 参数及两个入口为它构造的回调 | — |
+| R2A-12 外键级联绕过锁定 | P3 | 已修：锁定比对覆盖所有表（无锁表即时跳过），级联改到被锁子表时补偿；补偿撞外键则整批 fail-closed | sql-table-service.test「R2A-12」 |
+| R2B-07 硬删表写出第二个 full 根 | P3 | 已修：终态根写入后同事务把同隔离键其余 full 降级为帧内 data_replace fallback（降级逻辑抽为 v2-full-checkpoint-downgrade 与混合提交共用），候选校验同口径 | storage-frame-v2-persist.test「仅删表」、flight-mode-lifecycle.test |
+| R2B-08 迁移/混合提交整聊天克隆替换 | P3 | 已修：chat-table-field-swap 只逐条替换表格字段，消息对象身份不变，失败回滚还原原字段引用 | mixed-storage-commit.test、storage-v2-migration.test「R2B-08」、chat-table-field-swap.test |
+| R2B-09 batch 写入每批深克隆整个聊天 | P3 | 已修：batch 候选只浅拷贝要改写的消息；硬删候选、删表模拟、临时根降级改为只深拷贝表格字段。另修：临时根降级严格保存失败时未还原根消息（与其文档契约不符） | storage-frame-v2-persist.test「R2B-09」「降级严格保存失败」 |
+| R2B-10 回放再分句让参数错位 | P3 | 已修：带参数的操作按存储语句一一对应，切出不是恰好一条即 fail-closed（原先会静默绑错参数写出空值） | storage-frame-v2-replay.test「R2B-10」×2 |
+| R4-07 两套世界书恢复实现 | P2 | 已修：逐条目决策、patch 构造与恢复判定收敛到 agent-worldbook-restore-core；pending 条目不再被恢复覆盖、用户改过注释的条目两条路径都整条跳过；剩余两处差异（缺指纹策略、剥离口径）改为显式策略参数 | agent-worldbook-snapshot-restore.test |
+| R4-09 SQL 视图冗余校验 | P3 | 已修：删除与 JSON 链重复的整表 SQL 视图物化校验（逐列写闸门不变） | agent-module-sql-view-materialization-once.test |
+| R4-10 时间线无上限 | P3 | 不修：阶段游标与 progressSelections 直接按时间线下标寻址，截断会让存量游标错位，收益未量化 | — |
+| R4-11 重规划中止控制器登记在租约外 | P3 | 已修：登记移入租约回调内，外层 finally 注销 | — |
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
-R2B-08/09（迁移、混合提交、batch 写入的整聊天克隆替换）与上面同一模式但无 await 窗口，未改，留作 P3。
 
-待修：R4-07（两套世界书恢复实现，P2 重构，当前无错误结果）；块 7 P2（R7-02~05）、块 8 P2（R8-03~07）；各块 P3；块 9、10 未复审。
+待修：无（块 1–8 全部收口；不修项均已注明理由）。块 9、10 未复审。
 R4-02 遗留：模型放弃补齐时，草稿（partial）不会阻止水位推进——只在提升路径堵住了「写齐却看不见」，「没写齐就收工」仍按旧口径。
 
 测试稳定性：重型页面套件首个用例冷导入整张 V2 模块图单跑 11–15s，贴着原全局 15s 上限，本机并行全量必超时（发布基线同样失败）；全局 testTimeout 调为 60s。

@@ -97,6 +97,7 @@ import { isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-stra
 import { getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU } from '../flight-mode/flight-mode-hidden-rows';
 import { getCurrentFlightModeState_ACU, stageFlightModeHiddenRowIds_ACU } from '../flight-mode/flight-mode-state';
 import { isAiFloor_ACU, isDataBearingMessage_ACU } from '../../shared/ai-floor';
+import { stripHtmlCommentMarkersOutsideSqlLiterals_ACU } from './sql-protocol-markers';
 
 interface ManualRefillSummaryVectorCleanup_ACU {
     sourceTableKey: string;
@@ -1304,6 +1305,9 @@ export async function buildBatchMergeBase_ACU(
     try {
         const hasBoundedScope = Number.isInteger(options.maxMessageIndex);
         const replayOptions = hasBoundedScope ? { maxMessageIndex: options.maxMessageIndex } : {};
+        // 本批 SQL 直接在 live runtime 上执行时，基底必须就是 live runtime（即使有 maxMessageIndex）：
+        // 若改用边界内回放，AI 看不到已存在的行，会重复 INSERT 撞 UNIQUE 或把行数翻倍。
+        // 下方「不越过 maxMessageIndex」的约束只约束非 live 执行的路径（stage_only / 非 SQLite / runtime 不可用）。
         if (options.liveRuntimeAuthoritative) {
             const liveRuntimeBase = await readLiveSqliteRuntimeMergeBase_ACU(batchNumber);
             if (liveRuntimeBase) return { data: liveRuntimeBase, error: null };
@@ -1319,7 +1323,7 @@ export async function buildBatchMergeBase_ACU(
                     error: `历史表格数据回放失败（已自动尝试全部兼容读取层仍失败），已中止填表以避免写出冲突增量。请在数据管理中导出原始数据后执行 V2 恢复：${v2ReplayResult.failed}`,
                 };
             }
-            // 有历史边界时不能让 SQLite latest runtime 越过 maxMessageIndex；
+            // （非 live 执行路径）有历史边界时不能让 SQLite latest runtime 越过 maxMessageIndex；
             // 若当前聊天已进入 V2 replay 语义但边界内无可用基底，同样不能退回最新 runtime，
             // 否则会把目标范围之后的未来表格状态带回 prompt。只有非 SQLite 且未命中 V2 replay
             // 的旧路径才允许沿用 runtime fallback，以保留连续 bucket 的既有行为。
@@ -1554,7 +1558,8 @@ export async function collectGroupFillResponse_ACU(
                     // 隐藏列保护使用请求前冻结的 live runtime schema 证据，而不是 baseSnapshot：
                     // 历史快照可能缺失 descriptor 或含旧表头，会把 live 合法列误判为隐藏列。
                     assertNoHiddenPhysicalColumnMutations_ACU(
-                        splitSqlStatements(tableEditText),
+                        // 与提交路径同口径：先去 HTML 注释标记再分句（分句器把 -- 视为 SQL 注释）。
+                        splitSqlStatements(stripHtmlCommentMarkersOutsideSqlLiterals_ACU(tableEditText)),
                         job.sqlApplyScope?.runtimeData ? job.sqlApplyScope.runtimeData as any : job.baseSnapshot,
                     );
                 } catch (error: any) {
@@ -2003,7 +2008,10 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
                 const isInfrastructureError = error instanceof SqlRuntimeSnapshotError_ACU
                     || error instanceof SqlRuntimeSchemaInvalidError_ACU
                     || error instanceof SqlRuntimeSchemaStaleError_ACU;
-                const failedGroupKey = findSqlFailureGroupKey_ACU(sqlTexts, sortedResponses, rawErrorMessage);
+                // R2A-10：优先用执行方按实际执行语句换算出的分组下标；倒推只作为兜底。
+                const failedGroupIndex = typeof error?.failedGroupIndex === 'number' ? error.failedGroupIndex : -1;
+                const failedGroupKey = (failedGroupIndex >= 0 ? sqlResponses[failedGroupIndex]?.job?.groupKey : null)
+                    || findSqlFailureGroupKey_ACU(sqlTexts, sqlResponses, rawErrorMessage);
                 return {
                     success: false,
                     error: error instanceof SqlRowIdMaterializationError_ACU
@@ -5033,14 +5041,12 @@ async function ensureManualRefillAnchorHealth_ACU(
  * presentation 层负责：收集 manualSelection、设置 manualExtraHint、刷新 UI、显示 toast、弹出确认框。
  *
  * @param targetKeys 手动选择的目标表格键列表
- * @param processBatch 批处理执行回调
  * @param refreshData 数据刷新回调
  * @param options 可选参数：
  *   - clearBeforeUpdate: 兼容旧调用名；启用事务式手动重填。普通可回放路径按 bucket 原子替换历史增量；仅跨 checkpoint 特例会预清理并等待最终 snapshot。
  */
 export async function orchestrateManualUpdate_ACU(
     targetKeys: string[],
-    processBatch: (indices: number[], mode: string, options: any) => Promise<BatchUpdateResult>,
     refreshData: () => Promise<void>,
     options: {
         clearBeforeUpdate?: boolean;

@@ -18,12 +18,9 @@ import {
 import { getSortedSheetKeys_ACU } from '../../service/template/chat-scope';
 import { collectV2CheckpointFloorsFromChat_ACU } from '../../service/table/table-history';
 import {
-  executeCardUpdateCore_ACU,
   orchestrateManualCatchUp_ACU,
   orchestrateManualUpdate_ACU,
   prepareManualCatchUpPlan_ACU,
-  processUpdatesBatch_ACU,
-  type BatchUpdateProgressContext,
   type CardUpdateProgressEvent,
 } from '../../service/table/update-orchestrator';
 import { resolveManualUpdateBatchSize_ACU, resolveManualUpdateContextDepth_ACU } from '../../service/table/manual-update-settings';
@@ -547,31 +544,8 @@ export function useManualUpdate(): ManualUpdateState {
         }
       };
 
-      const runProcessBatch = (indices: number[], mode: string, options: any) =>
-        processUpdatesBatch_ACU(indices, mode, options, (
-          messagesToUse: any[],
-          saveTargetIndex: number,
-          updateMode: string,
-          isSilentMode: boolean,
-          targetSheetKeys: string[] | null,
-          requestOptions: Record<string, any> | null,
-          progressContext: BatchUpdateProgressContext,
-        ) => executeCardUpdateCore_ACU(
-          messagesToUse,
-          saveTargetIndex,
-          false,
-          updateMode,
-          isSilentMode,
-          targetSheetKeys,
-          requestOptions,
-          new AbortController(),
-          progressContext,
-          handleProgress,
-        ));
-
       const result = await orchestrateManualUpdate_ACU(
           targetManualTableKeys,
-          runProcessBatch,
           async () => { await refreshMergedDataAndNotify_ACU(); },
           {
             clearBeforeUpdate,

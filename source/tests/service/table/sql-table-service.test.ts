@@ -859,6 +859,36 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
       expect(statements[1]).toBe(`UPDATE "beibaowupinbiao" SET "quantity" = '3' WHERE "row_id" = '1';`);
     });
 
+    // R2A-12：锁定比对原先只看语句直接写的表；外键级联改到被锁的子表时锁会被绕过。
+    it('R2A-12：外键级联删除波及被锁子表行时不得静默丢失锁定行', async () => {
+      mockLockSettings.value.tableUpdateLocks = {
+        [LOCK_SCOPE_KEY]: { sheet_child: { v: 2, rowIds: ['1'], colNames: [], cells: [] } },
+      };
+      const fkSnapshot: any = {
+        mate: snapshotTableData.mate,
+        sheet_parent: {
+          uid: 'parent_t', name: '父表',
+          sourceData: { ddl: 'CREATE TABLE parent_t (row_id INTEGER PRIMARY KEY, name TEXT NOT NULL);' },
+          content: [['row_id', 'name'], ['1', '甲']],
+          updateConfig: {}, exportConfig: {}, orderNo: 0,
+        },
+        sheet_child: {
+          uid: 'child_t', name: '子表',
+          sourceData: { ddl: 'CREATE TABLE child_t (row_id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES fubiao(row_id) ON DELETE CASCADE, note TEXT);' },
+          content: [['row_id', 'parent_id', 'note'], ['1', '1', '锁定的子行']],
+          updateConfig: {}, exportConfig: {}, orderNo: 1,
+        },
+      };
+      const result = await applySqlEditsToTableDataSnapshot_ACU(
+        'DELETE FROM fubiao WHERE row_id = 1;',
+        JSON.parse(JSON.stringify(fkSnapshot)),
+      );
+
+      // 父行已删，补偿重插子行必然撞外键：整批 fail-closed，而不是成功提交且锁定子行消失。
+      expect(result.success).toBe(false);
+      expect(result.workingData ?? null).toBeNull();
+    });
+
     it('锁定行被 DELETE：整行恢复', async () => {
       mockLockSettings.value.tableUpdateLocks = {
         [LOCK_SCOPE_KEY]: { sheet_0: { v: 2, rowIds: ['1'], colNames: [], cells: [] } },
@@ -2151,6 +2181,23 @@ describe('SqlTableService', () => {
       expect(() => service.executeQuery('SELECT * FROM qitabiao')).toThrow();
       expect(mockGetCurrentChatTemplateScopeState).toHaveBeenCalledWith({ chat: originalChat, isolationKey: 'scope-a' });
       expect(switchedChat).toEqual([{ mes: 'chat-b' }]);
+    });
+
+    it('R2A-10：执行失败时按实际执行的语句标出出错分组（failedGroupIndex）', () => {
+      let thrown: any = null;
+      try {
+        service.applyEditsWithSystemRowIds([
+          "INSERT INTO inventory (item_name, quantity) VALUES ('木盾', 1);\nINSERT INTO inventory (item_name, quantity) VALUES ('皮甲', 1);",
+          'UPDATE inventory SET missing_col = 1 WHERE row_id = 1;',
+        ]);
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeTruthy();
+      expect(String(thrown.message)).toContain('missing_col');
+      expect(thrown.failedGroupIndex).toBe(1);
+      expect(service.executeQuery('SELECT COUNT(*) AS cnt FROM inventory').values[0][0]).toBe(0);
     });
 
     it('提交前 finalize 严格导出失败时回滚补种与 AI SQL', () => {

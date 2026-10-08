@@ -970,6 +970,32 @@ describe('migrateLegacyStorageToV2OnLoad_ACU', () => {
   });
 
 
+  // R2B-08：迁移只替换表格字段，消息对象身份不变；保存失败回滚还原原字段引用而非克隆。
+  it('R2B-08：迁移成功与保存失败回滚都保持消息对象身份', async () => {
+    const data = { sheet_0: sheet('背包') } as any;
+    const legacyField = { sheet_0: data.sheet_0 };
+    mockChatRef.value = [
+      { is_user: false, TavernDB_ACU_IndependentData: legacyField, TavernDB_ACU_ModifiedKeys: ['sheet_0'] },
+      { is_user: true, mes: 'user' },
+      { is_user: false, mes: 'latest ai' },
+    ];
+    const messagesBefore = [...mockChatRef.value];
+    mockSaveChatToHost.mockRejectedValueOnce(new Error('host write failed'));
+
+    const failed = await migrateLegacyStorageToV2OnLoad_ACU({ data, isolationKey: '', isolationConfig: { enabled: false, code: '' } });
+
+    expect(failed.migrated).toBe(false);
+    messagesBefore.forEach((message, index) => expect(mockChatRef.value[index]).toBe(message));
+    expect(mockChatRef.value[0].TavernDB_ACU_IndependentData).toBe(legacyField);
+
+    const migrated = await migrateLegacyStorageToV2OnLoad_ACU({ data, isolationKey: '', isolationConfig: { enabled: false, code: '' } });
+
+    expect(migrated).toMatchObject({ migrated: true, messageIndex: 2 });
+    messagesBefore.forEach((message, index) => expect(mockChatRef.value[index]).toBe(message));
+    expect(mockChatRef.value[0].TavernDB_ACU_IndependentData).toBeUndefined();
+    expect(mockChatRef.value[2].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.kind).toBe('full');
+  });
+
   it('严格保存失败时恢复整个 legacy chat，不留下半迁移状态', async () => {
     const data = { sheet_0: sheet('背包') } as any;
     setLegacyMigrationChat(data);

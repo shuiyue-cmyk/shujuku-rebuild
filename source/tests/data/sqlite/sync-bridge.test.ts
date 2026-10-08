@@ -307,6 +307,35 @@ describe('SyncBridge', () => {
       ]);
     });
 
+    // R1-07：脱敏按最后一个「→」切分；用户数据里自带「→」时不能把后半段 VALUES 漏进诊断。
+    it('R1-07：用户数据含「→」时诊断仍不泄露 VALUES 内容', () => {
+      const invalidSheet = makeSheet({
+        uid: 'checked_value',
+        name: '受约束表',
+        sourceData: {
+          note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '',
+          ddl: `CREATE TABLE checked_value (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  name TEXT NOT NULL CHECK(length(name) <= 5) -- 名称
+);`,
+        },
+        content: [
+          ['row_id', '名称'],
+          ['1', '机密→后半段私密正文'],
+        ],
+      });
+
+      let message = '';
+      try {
+        bridge.loadFromTableData(makeTableData({ sheet_invalid: invalidSheet }), { strict: true });
+      } catch (error: any) {
+        message = String(error?.message || error);
+      }
+      expect(message).toContain('SQLite 写入失败');
+      expect(message).toContain('CHECK constraint failed');
+      expect(message).not.toContain('后半段私密正文');
+    });
+
     it('strict hydrate 的 SQLite 写入失败保留脱敏后的语句位置、操作与约束诊断', () => {
       const privateChronicleText = '这段纪要正文不得出现在 SQLite 错误诊断中。';
       const invalidSheet = makeSheet({

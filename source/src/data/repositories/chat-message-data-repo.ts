@@ -1460,13 +1460,15 @@ export function clearTableFieldsForIsolation_ACU(
     // ── 新版：删除指定隔离标签的槽 ──
     const container = parseIsolatedDataField(msg);
     if (container && container[isolationKey]) {
-        delete container[isolationKey];
+        // R1-03：不就地 delete——container 可能是解析缓存或消息原对象；浅拷贝后整体换字段。
+        const nextContainer = { ...container };
+        delete nextContainer[isolationKey];
         changed = true;
         // 如果容器里已经没有任何标签槽了，删除整个字段
-        if (Object.keys(container).length === 0) {
+        if (Object.keys(nextContainer).length === 0) {
             delete msg.TavernDB_ACU_IsolatedData;
         } else {
-            msg.TavernDB_ACU_IsolatedData = container;
+            msg.TavernDB_ACU_IsolatedData = nextContainer;
         }
     }
 
@@ -1528,6 +1530,11 @@ export function hasAnyTableData_ACU(
     if (isolationKey) {
         const tagData = readIsolatedTagData_ACU(msg, isolationKey);
         if (tagData?.independentData && Object.keys(tagData.independentData).some(k => k.startsWith('sheet_'))) {
+            return true;
+        }
+        // R1-04：V2 存储帧同样是表格数据（判据与 storage-strategy-resolver 的 isV2TagData_ACU 一致）。
+        const frame = (tagData as any)?.storageFrame;
+        if (frame && typeof frame === 'object' && frame.version === 2 && Array.isArray(frame.logEntries)) {
             return true;
         }
     } else {

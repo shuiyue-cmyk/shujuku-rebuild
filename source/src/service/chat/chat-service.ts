@@ -24,13 +24,12 @@ import { logDebug_ACU, logError_ACU, logWarn_ACU, isSummaryOrOutlineTable_ACU } 
 import { getLastOptimizationBase_ACU, setLastOptimizationBase_ACU } from '../optimization/content-optimization';
 import { settings_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
 import { sanitizeSheetForStorage_ACU } from '../template/chat-scope';
-import { MESSAGE_TABLE_FIELDS_ACU, clearTableFieldsForIsolation_ACU, collectSheetIdentityAliasesForPurge_ACU, isLegacyMatchForIsolation_ACU, purgeManualRefillIncrementalSheetKeysFromMessage_ACU, purgeSheetKeysFromMessage_ACU, purgeSheetKeysFromMessageForIsolation_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
-import { MAX_CHECKPOINT_RISK_DETAILS_ACU, scanTargetKeysResidue_ACU } from '../../data/repositories/target-keys-diagnostics';
+import { MESSAGE_TABLE_FIELDS_ACU, clearTableFieldsForIsolation_ACU, collectSheetIdentityAliasesForPurge_ACU, isLegacyMatchForIsolation_ACU, purgeSheetKeysFromMessage_ACU, purgeSheetKeysFromMessageForIsolation_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
+import { MAX_CHECKPOINT_RISK_DETAILS_ACU } from '../../data/repositories/target-keys-diagnostics';
 import { LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU } from '../../data/storage/chat-history';
 import { peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
 import { normalizeSummaryVectorIsolationKey_ACU } from '../../shared/summary-vector-index-scope';
 import { runTableUpdateCommit_ACU } from '../table/table-update-commit';
-import { getLatestAiMessageIndexFromChat_ACU, resolveTableHistoryStateFromChat_ACU } from '../table/table-history';
 import { cleanupUnreachableSummaryVectorIndexFiles_ACU, deleteSummaryVectorIndexExternal_ACU } from '../vector/summary-vector-index-storage-service';
 import { assignSummaryVectorIndexStateToTagData_ACU, readSummaryVectorIndexStateFromTagData_ACU } from '../vector/summary-vector-index-state-service';
 import type { IsolationConfig_ACU } from '../../data/models/chat-message-data';
@@ -1226,65 +1225,6 @@ export function getOriginalContent_ACU(messageIndex: number) {
 }
 
 /**
- * 保存当前表格数据到聊天记录
- * 从 presentation/triggers/update-process.ts 搬迁
- */
-export async function saveCurrentDataForTable_ACU(sheetKey: string) {
-    try {
-        if (!currentJsonTableData_ACU || !currentJsonTableData_ACU[sheetKey]) {
-            logWarn_ACU('saveCurrentDataForTable_ACU: No data to save.');
-            return;
-        }
-
-        const chat = getChatArray_ACU();
-        if (!chat || chat.length === 0) {
-            logWarn_ACU('saveCurrentDataForTable_ACU: No chat history.');
-            return;
-        }
-
-        const sheet = currentJsonTableData_ACU[sheetKey];
-        const history = resolveTableHistoryStateFromChat_ACU(chat, {
-            sheetKey,
-            isSummaryTable: isSummaryOrOutlineTable_ACU(sheet.name),
-            isolationKey: getCurrentIsolationKey_ACU(),
-            settings: settings_ACU,
-        });
-        const fallbackLatestAiIndex = getLatestAiMessageIndexFromChat_ACU(chat);
-        const targetMessageIndex = history.latestDataMessageIndex !== -1
-            ? history.latestDataMessageIndex
-            : fallbackLatestAiIndex;
-
-        if (targetMessageIndex === -1) {
-            logWarn_ACU('saveCurrentDataForTable_ACU: No AI message available for persistence.');
-            return;
-        }
-
-        const commitResult = await runTableUpdateCommit_ACU<void>({
-            source: 'system',
-            reason: 'saveCurrentDataForTable',
-            isolationKey: getCurrentIsolationKey_ACU(),
-            writeSet: [{ kind: 'sheet', sheetKey }],
-            revisionWriteSet: [{ kind: 'sheet', sheetKey }],
-            initialData: currentJsonTableData_ACU,
-            targetMessageIndex,
-            targetSheetKeys: [sheetKey],
-            updateGroupKeys: null,
-            trackingSheetKeys: [sheetKey],
-            trackAsUpdate: history.latestDataMessageIndex === -1,
-            operations: [{ kind: 'sheet_replace', sheetKey, sheet: (currentJsonTableData_ACU as any)[sheetKey], reason: 'system' }],
-        }, () => ({
-            success: true,
-            tableData: currentJsonTableData_ACU as any,
-        }));
-        if (!commitResult.success) {
-            logWarn_ACU(`saveCurrentDataForTable_ACU: commit failed: ${commitResult.error || 'unknown error'}`);
-        }
-    } catch (e) {
-        logError_ACU('saveCurrentDataForTable_ACU failed:', e);
-    }
-}
-
-/**
  * 清理超出保留层数的旧本地数据（表格数据 + 剧情推进数据）
  * 从 presentation/triggers/settings-ui-sync/settings-ui-config.ts 搬迁
  * 
@@ -2337,115 +2277,6 @@ export async function overrideLatestLayerWithTemplateCore_ACU(templateData: any)
 }
 
 
-async function clearManualRefillIncrementalDataInRangeCore_ACU(targetMessageIndices: number[], targetSheetKeys: string[] | null = null): Promise<number> {
-    if (!targetMessageIndices || targetMessageIndices.length === 0) return 0;
-    if (!Array.isArray(targetSheetKeys) || targetSheetKeys.length === 0) {
-        throw new Error('手动重填增量清理必须指定目标表。');
-    }
-
-    const chat = getChatArray_ACU();
-    if (!chat || chat.length === 0) return 0;
-
-    const isolationKey = getCurrentIsolationKey_ACU();
-    const targetAliases = resolveSheetIdentityAliasesForClear_ACU(chat, isolationKey, targetSheetKeys, '手动重填预清理');
-    const purgeSheetKeys = targetAliases.sheetKeys;
-    const knownSqlTableNames = new Set(targetAliases.sqlTableNames);
-    const clearsSummaryOrOutline = tableListContainsSummaryOrOutline_ACU(purgeSheetKeys);
-    let clearedCount = 0;
-    // 外置向量文件删除推迟到聊天保存成功后：保存失败时引用仍在，删除会造成悬空指针。
-    const vectorManifestsToDeleteAfterCommit: any[] = [];
-
-    for (const idx of targetMessageIndices) {
-        if (idx < 0 || idx >= chat.length) continue;
-        const msg = chat[idx];
-        if (!msg || msg.is_user) continue;
-
-        const changed = purgeManualRefillIncrementalSheetKeysFromMessage_ACU(msg, isolationKey, purgeSheetKeys, knownSqlTableNames);
-        if (clearsSummaryOrOutline) {
-            const isolatedData = msg?.TavernDB_ACU_IsolatedData;
-            const tagData = isolatedData && typeof isolatedData === 'object' && !Array.isArray(isolatedData)
-                ? isolatedData[isolationKey]
-                : null;
-            // 只剥离 tagData 上的引用并收集 manifest，聊天保存成功后才物理删除外置文件。
-            if (await deleteVectorIndexManifestFromTagData_ACU(tagData, { deleteExternal: false, onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest) })) {
-                logDebug_ACU(`[手动重填预清理] 已标记消息索引 ${idx} 上的交火向量索引外置文件引用待删除。`);
-            }
-        }
-        if (changed) {
-            clearedCount++;
-            logDebug_ACU(`[手动重填预清理] 已清理消息索引 ${idx} 上选中表的增量数据 (标签: ${isolationKey || '无'})`);
-        }
-    }
-
-    const residueSummary = {
-        exactHits: 0,
-        runtimeV1Hits: 0,
-        substringOnlyPathCount: 0,
-        checkpointDataRiskCount: 0,
-        scheduleSummaryRiskCount: 0,
-        checkpointDataRiskDetailCount: 0,
-        checkpointDataRiskDetails: [] as Array<{
-            messageIndex: number;
-            tagKey: string;
-            targetKey: string;
-            reason?: string;
-            createdAt?: number;
-        }>,
-    };
-    for (const idx of targetMessageIndices) {
-        if (idx < 0 || idx >= chat.length) continue;
-        const msg = chat[idx];
-        if (!msg || msg.is_user) continue;
-        const report = scanTargetKeysResidue_ACU(msg, isolationKey, purgeSheetKeys, idx);
-        residueSummary.exactHits += report.exactHits;
-        residueSummary.runtimeV1Hits += report.runtimeV1Hits;
-        residueSummary.substringOnlyPathCount += report.substringOnlyPaths.length;
-        if (report.checkpointDataRisk) residueSummary.checkpointDataRiskCount++;
-        if (report.scheduleSummaryRisk) residueSummary.scheduleSummaryRiskCount++;
-        residueSummary.checkpointDataRiskDetailCount += report.checkpointDataRisks.length;
-        const remainingDetailSlots = MAX_CHECKPOINT_RISK_DETAILS_ACU - residueSummary.checkpointDataRiskDetails.length;
-        if (remainingDetailSlots > 0) {
-            residueSummary.checkpointDataRiskDetails.push(...report.checkpointDataRisks.slice(0, remainingDetailSlots));
-        }
-    }
-    const hasResidue = residueSummary.exactHits > 0
-        || residueSummary.runtimeV1Hits > 0
-        || residueSummary.substringOnlyPathCount > 0
-        || residueSummary.checkpointDataRiskCount > 0
-        || residueSummary.scheduleSummaryRiskCount > 0;
-    if (hasResidue) {
-        logDebug_ACU('[手动重填诊断] 选中表清理后残留摘要', {
-            clearedCount,
-            targetKeys: targetSheetKeys,
-            fields: ['event', 'operations', 'patches', 'writeSet', 'revision', 'progress'],
-            residue: residueSummary,
-        });
-    }
-    if (clearedCount > 0) {
-        await saveChatToHost_ACU();
-        // 聊天引用已提交后才物理删除外置向量文件；保存抛错时不执行，宁可泄漏不误删。
-        await cleanupVectorIndexManifestsAfterCommit_ACU(vectorManifestsToDeleteAfterCommit);
-        logDebug_ACU(`[手动重填预清理] 共清理 ${clearedCount} 条消息的选中表增量数据，聊天已保存。`);
-    }
-
-    return clearedCount;
-}
-
-export async function clearManualRefillIncrementalDataInRange_ACU(targetMessageIndices: number[], targetSheetKeys: string[] | null = null): Promise<number> {
-    if (!Array.isArray(targetSheetKeys) || targetSheetKeys.length === 0) {
-        throw new Error('手动重填增量清理必须指定目标表。');
-    }
-    const writeSet = targetSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey }));
-    return runTableWriteTransaction_ACU({
-        source: 'system_cleanup',
-        reason: 'clearIncrementalOnly',
-        isolationKey: getCurrentIsolationKey_ACU(),
-        writeSet,
-        maintenanceMode: 'exclusive',
-        guardChatSwitch: true,
-    }, () => clearManualRefillIncrementalDataInRangeCore_ACU(targetMessageIndices, targetSheetKeys));
-}
-
 function cloneMessageFieldValue_ACU<T>(value: T, seen = new WeakMap<object, any>(), originals = new WeakMap<object, any>()): T {
     if (value === null || typeof value !== 'object') return value;
     const existing = seen.get(value);
@@ -2515,14 +2346,6 @@ function resolveManualRefillReplayAnchor_ACU(chat: any[], isolationKey: string, 
         .filter((index): index is number => Number.isInteger(index) && index >= 0 && index < chat.length && isAiFloor_ACU(chat[index]))
         .sort((left, right) => left - right)[0] ?? -1;
     return { fullCheckpointIndices, fallbackRootIndex: earliestV2FrameIndex >= 0 ? earliestV2FrameIndex : firstTargetAiIndex };
-}
-
-function findManualRefillSheetBaselineTargetIndex_ACU(chat: any[], isolationKey: string, targetMessageIndices: number[], requestedTargetMessageIndex?: number): number {
-    const anchor = resolveManualRefillReplayAnchor_ACU(chat, isolationKey, targetMessageIndices);
-    if (anchor.fullCheckpointIndices.length !== 1) return -1;
-    const targetMessageIndex = anchor.fullCheckpointIndices[0];
-    if (requestedTargetMessageIndex !== undefined && requestedTargetMessageIndex !== targetMessageIndex) return -1;
-    return targetMessageIndex;
 }
 
 function getMaxFrameSequence_ACU(frame: TableStorageFrameV2_ACU): number {
@@ -2939,106 +2762,6 @@ export async function establishManualRefillTemplateRoot_ACU(options: {
     }
 }
 
-
-export async function replaceManualRefillSheetBaselineInRangeAtomic_ACU(
-    options: ManualRefillSheetBaselineReplaceOptions_ACU,
-): Promise<ManualRefillSheetBaselineReplaceResult_ACU> {
-    if (!Array.isArray(options.targetSheetKeys) || options.targetSheetKeys.length === 0) {
-        return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: '手动重填基底替换必须指定目标表。' };
-    }
-    if (!Array.isArray(options.targetMessageIndices) || options.targetMessageIndices.length === 0) {
-        return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: '手动重填基底替换必须指定目标消息范围。' };
-    }
-    const missingBaselineSheet = options.targetSheetKeys.find(sheetKey => !options.baselineData || !options.baselineData[sheetKey] || typeof options.baselineData[sheetKey] !== 'object');
-    if (missingBaselineSheet) {
-        return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: `手动重填基底替换失败：缺少目标表 ${missingBaselineSheet} 的重建基底。` };
-    }
-
-
-
-    const writeSet = options.targetSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey }));
-    return runTableWriteTransaction_ACU({
-        source: 'system_cleanup',
-        reason: 'replaceManualRefillSheetBaselineInRange',
-        isolationKey: options.isolationKey,
-        writeSet,
-        maintenanceMode: 'exclusive',
-        guardChatSwitch: true,
-    }, async () => {
-        const chat = getChatArray_ACU();
-        if (!Array.isArray(chat) || chat.length === 0) {
-            return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: '聊天记录为空，无法替换手动重填基底。' };
-        }
-
-        const normalizedIndices = [...new Set(options.targetMessageIndices.filter((idx): idx is number => Number.isInteger(idx) && idx >= 0 && idx < chat.length))].sort((a, b) => a - b);
-        const targetMessageIndex = findManualRefillSheetBaselineTargetIndex_ACU(chat, options.isolationKey, normalizedIndices, options.targetMessageIndex);
-        if (targetMessageIndex < 0) {
-            return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: '手动重填基底替换失败：本次范围内找不到可承载单表 checkpoint 的整库 full checkpoint。' };
-        }
-
-        const targetMsg = chat[targetMessageIndex];
-        if (!targetMsg || targetMsg.is_user) {
-            return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, targetMessageIndex, error: `手动重填基底替换失败：targetMessageIndex=${targetMessageIndex} 不是有效 AI 楼层。` };
-        }
-
-        const snapshotIndices = [...new Set([...normalizedIndices, targetMessageIndex])];
-        const snapshots = new Map<number, ReturnType<typeof messageFieldSnapshot_ACU>>();
-        snapshotIndices.forEach(idx => snapshots.set(idx, messageFieldSnapshot_ACU(chat[idx])));
-
-        try {
-            const targetAliases = resolveSheetIdentityAliasesForClear_ACU(chat, options.isolationKey, options.targetSheetKeys, '手动重填基底替换');
-            const clearsSummaryOrOutline = tableListContainsSummaryOrOutline_ACU(targetAliases.sheetKeys);
-            const vectorManifestsToDeleteAfterCommit: any[] = [];
-            let clearedCount = 0;
-            for (const idx of normalizedIndices) {
-                const msg = chat[idx];
-                if (!msg || msg.is_user) continue;
-                const removedBaseline = purgeSheetKeysFromMessageForIsolation_ACU(msg, options.isolationKey, targetAliases.sheetKeys, targetAliases.sqlTableNames);
-                const removedIncremental = purgeManualRefillIncrementalSheetKeysFromMessage_ACU(msg, options.isolationKey, targetAliases.sheetKeys, targetAliases.sqlTableNames);
-                if (clearsSummaryOrOutline) {
-                    const tagData = readIsolatedTagData_ACU(msg, options.isolationKey);
-                    await deleteVectorIndexManifestFromTagData_ACU(tagData, { deleteExternal: false, onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest) });
-                }
-                if (removedBaseline || removedIncremental) clearedCount += 1;
-            }
-
-            if (!targetMsg.TavernDB_ACU_IsolatedData || typeof targetMsg.TavernDB_ACU_IsolatedData !== 'object' || Array.isArray(targetMsg.TavernDB_ACU_IsolatedData)) {
-                targetMsg.TavernDB_ACU_IsolatedData = {};
-            }
-            const existingTagData = targetMsg.TavernDB_ACU_IsolatedData[options.isolationKey];
-            const existingFrame = isV2TagData_ACU(existingTagData) ? existingTagData.storageFrame : null;
-            if (!existingFrame?.checkpoint || existingFrame.checkpoint.kind !== 'full') {
-                throw new Error('手动重填基底替换失败：清理后目标楼层不再包含整库 full checkpoint。');
-            }
-
-            const createdAt = Date.now();
-            const collectedScheduleSummary = collectScheduleSummaryFromFramesV2_ACU(chat, options.isolationKey, { maxMessageIndex: targetMessageIndex });
-            const scheduleSummary = collectedScheduleSummary && typeof collectedScheduleSummary === 'object' && !Array.isArray(collectedScheduleSummary) ? collectedScheduleSummary : {};
-            const perSheetCheckpoints = { ...(existingFrame.perSheetCheckpoints || {}) };
-            for (const sheetKey of options.targetSheetKeys) {
-                const sheetData = cloneMessageFieldValue_ACU(options.baselineData[sheetKey]) as Sheet_ACU;
-                perSheetCheckpoints[sheetKey] = {
-                    kind: 'sheet_full',
-                    createdAt,
-                    reason: 'manual',
-                    sheetKey,
-                    data: sheetData,
-                    ...(scheduleSummary[sheetKey] ? { scheduleSummary: cloneMessageFieldValue_ACU(scheduleSummary[sheetKey]) } : {}),
-                };
-            }
-            existingFrame.perSheetCheckpoints = perSheetCheckpoints;
-            writeMessageIdentity_ACU(targetMsg, { enabled: settings_ACU.dataIsolationEnabled, code: settings_ACU.dataIsolationCode });
-
-            await saveChatToHostStrict_ACU();
-            const cleanupWarnings = await cleanupVectorIndexManifestsAfterCommit_ACU(vectorManifestsToDeleteAfterCommit);
-            logDebug_ACU(`[手动重填基底替换] 已在 AI 楼层 #${targetMessageIndex} 为 ${options.targetSheetKeys.join(', ')} 写入单表 checkpoint，并原子清理范围旧数据。`);
-            return { success: true, changed: clearedCount > 0 || options.targetSheetKeys.length > 0, clearedCount, checkpointCount: options.targetSheetKeys.length, targetMessageIndex, ...(cleanupWarnings.length ? { cleanupWarnings } : {}) };
-        } catch (error: any) {
-            snapshots.forEach((snapshot, idx) => restoreMessageFieldSnapshot_ACU(chat[idx], snapshot));
-            return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, targetMessageIndex, error: error?.message || String(error || '手动重填基底替换失败。') };
-        }
-    });
-}
 
 async function clearManualRefillSheetDataInRangeCore_ACU(
     targetMessageIndices: number[],

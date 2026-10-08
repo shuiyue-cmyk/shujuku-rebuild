@@ -27,7 +27,6 @@ import {
   logDebug_ACU
 } from '../../shared/utils';
 // re-export 从 service 层搬迁的业务逻辑函数，保持外部调用方兼容
-export { saveCurrentDataForTable_ACU } from '../../service/chat/chat-service';
 import {
   toastr_API_ACU
 } from '../../shared/host-api';
@@ -408,10 +407,6 @@ export async function handleManualUpdate_ACU() {
 
         const result = await orchestrateManualUpdate_ACU(
             targetKeys,
-            // processBatch 回调保留给兼容路径；当前手动填表主路径由 service grouped helper 执行。
-            async (indices, batchMode, batchOptions) => {
-                return processUpdates_ACU(indices, batchMode, batchOptions);
-            },
             // refreshData 回调（纯数据刷新 + UI 刷新）
             async () => {
                 await refreshMergedDataAndNotifyWithUI_ACU();
@@ -448,5 +443,4 @@ export async function handleManualUpdate_ACU() {
     }
 }
 
-// saveCurrentDataForTable_ACU 已搬迁到 service/chat/chat-service.ts
 // 通过文件顶部的 re-export 保持外部调用方兼容

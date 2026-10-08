@@ -245,82 +245,13 @@ function stripSqlCommentsAndStrings_ACU(sql: string): string {
     return output;
 }
 
-function splitTopLevelSqlStatements_ACU(sql: string): string[] {
-    const statements: string[] = [];
-    let current = '';
-    let inString: string | null = null;
-    let inLineComment = false;
-    let inBlockComment = false;
-
-    for (let i = 0; i < sql.length; i += 1) {
-        const char = sql[i];
-        const next = sql[i + 1];
-
-        if (inLineComment) {
-            current += char;
-            if (char === '\n') inLineComment = false;
-            continue;
-        }
-        if (inBlockComment) {
-            current += char;
-            if (char === '*' && next === '/') {
-                current += next;
-                inBlockComment = false;
-                i += 1;
-            }
-            continue;
-        }
-        if (inString) {
-            current += char;
-            if (char === inString) {
-                if (next === inString) {
-                    current += next;
-                    i += 1;
-                } else {
-                    inString = null;
-                }
-            }
-            continue;
-        }
-
-        if (char === '-' && next === '-') {
-            current += char + next;
-            inLineComment = true;
-            i += 1;
-            continue;
-        }
-        if (char === '/' && next === '*') {
-            current += char + next;
-            inBlockComment = true;
-            i += 1;
-            continue;
-        }
-        if (char === '\'' || char === '"' || char === '`') {
-            inString = char;
-            current += char;
-            continue;
-        }
-        if (char === ';') {
-            const trimmed = current.trim();
-            if (trimmed) statements.push(trimmed);
-            current = '';
-            continue;
-        }
-        current += char;
-    }
-
-    const trimmed = current.trim();
-    if (trimmed) statements.push(trimmed);
-    return statements;
-}
-
 function containsWriteKeyword_ACU(sql: string): boolean {
     const cleaned = stripSqlCommentsAndStrings_ACU(sql);
     return /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE|VACUUM|ATTACH|DETACH|REINDEX|ANALYZE)\b/i.test(cleaned);
 }
 
 export function isSqlReadStatement_ACU(sql: string): boolean {
-    const statements = splitTopLevelSqlStatements_ACU(sql);
+    const statements = splitSqlStatements(sql);
     if (statements.length !== 1) return false;
     const statement = statements[0].trim();
     if (/^PRAGMA\b/i.test(statement)) return validateReadOnlySql_ACU(statement).valid;

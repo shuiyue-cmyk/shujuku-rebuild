@@ -76,7 +76,9 @@ describe('restoreAgentWorldbookSnapshotEntries_ACU', () => {
     expect(mockSetEntries).not.toHaveBeenCalled();
   });
 
-  it('does not overwrite a user-edited entry but removes takeover metadata', async () => {
+  // R4-07：与接管停用同口径——用户改过注释的条目整条跳过，连接管块也不剥（块里是之后恢复的依据），
+  // 不再「先剥再靠整体回滚补救」。
+  it('does not touch a user-edited entry at all (keeps takeover metadata, counts as skipped)', async () => {
     const comment = '用户修改后的正文\n<!-- ACU_AGENT_WORLDBOOK_TAKEOVER_META_START\n{}\nACU_AGENT_WORLDBOOK_TAKEOVER_META_END -->';
     entriesByBook.set('世界书', [{ uid: 'entry-1', comment, enabled: false, keys: [] }]);
 
@@ -89,14 +91,22 @@ describe('restoreAgentWorldbookSnapshotEntries_ACU', () => {
       skipped: 1,
       failed: 0,
       signatureMatched: true,
-      rollbackPatchesByBook: {
-        世界书: [{ uid: 'entry-1', comment }],
-      },
-      restoredPatchesByBook: {
-        世界书: [{ uid: 'entry-1', comment: '用户修改后的正文' }],
-      },
+      rollbackPatchesByBook: {},
+      restoredPatchesByBook: {},
     });
-    expect(mockSetEntries).toHaveBeenCalledWith('世界书', [{ uid: 'entry-1', comment: '用户修改后的正文' }]);
+    expect(mockSetEntries).not.toHaveBeenCalled();
+  });
+
+  it('R4-07：pending 条目从未被接管改动，不恢复也不覆盖其 keys/type', async () => {
+    entriesByBook.set('世界书', [{ uid: 'entry-1', comment: '正文', enabled: true, keys: ['现关键词'], type: 'constant' }]);
+
+    const result = await restoreAgentWorldbookSnapshotEntries_ACU(activeSnapshot([
+      { uid: 'entry-1', takeoverStatus: 'pending', previousEnabled: true, previousKeys: ['快照关键词'], previousType: 'selective' },
+    ]), ['世界书']);
+
+    expect(result).toMatchObject({ restored: 0, skipped: 0, failed: 0, signatureMatched: true });
+    expect(mockSetEntries).not.toHaveBeenCalled();
+    expect(entriesByBook.get('世界书')![0]).toMatchObject({ keys: ['现关键词'], type: 'constant' });
   });
 
   it('captures only patches confirmed after a partial gateway write rejects', async () => {

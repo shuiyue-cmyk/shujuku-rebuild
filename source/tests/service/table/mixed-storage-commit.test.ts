@@ -186,6 +186,30 @@ describe('mixed-storage-commit', () => {
     expect(chatRef.value).toEqual(before);
   });
 
+  // R2B-08：只替换表格字段，消息对象身份不变（删楼保管库等按对象引用判定楼层）；失败回滚还原原字段引用。
+  it('R2B-08：提交成功与保存失败回滚都保持消息对象身份', async () => {
+    const legacy = { sheet_0: sheet([['1', '药水'], ['2', '卷轴']]) } as any;
+    chatRef.value = buildChat(legacy, { sheet_0: sheet([['1', '药水']]) }, false, true);
+    const messagesBefore = [...chatRef.value];
+    const anchorFieldBefore = chatRef.value[1].TavernDB_ACU_IsolatedData;
+    const decision = await decisionFor(chatRef.value, legacy);
+    saveStrict.mockRejectedValueOnce(new Error('host write failed'));
+
+    const failed = await commitMixedStorageDecision_ACU({ decision, action: 'commit_merge_candidate', isolationConfig: { enabled: false, code: '' } });
+
+    expect(failed.status).toBe('commit_failed_rolled_back');
+    messagesBefore.forEach((message, index) => expect(chatRef.value[index]).toBe(message));
+    expect(chatRef.value[1].TavernDB_ACU_IsolatedData).toBe(anchorFieldBefore);
+    expect(chatRef.value[2].TavernDB_ACU_IsolatedData).toBeUndefined();
+
+    const committed = await commitMixedStorageDecision_ACU({ decision, action: 'commit_merge_candidate', isolationConfig: { enabled: false, code: '' } });
+
+    expect(committed.status).toBe('committed');
+    messagesBefore.forEach((message, index) => expect(chatRef.value[index]).toBe(message));
+    expect(chatRef.value[2].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.kind).toBe('full');
+    expect(chatRef.value[0].TavernDB_ACU_Data).toBeUndefined();
+  });
+
   it('scope 或 evidence 漂移时不保存也不写入', async () => {
     const legacy = { sheet_0: sheet([['1', '药水']]) } as any;
     chatRef.value = buildChat(legacy, structuredClone(legacy));

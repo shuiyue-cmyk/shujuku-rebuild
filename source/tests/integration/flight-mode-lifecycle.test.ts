@@ -198,9 +198,12 @@ describe.each(['native', 'sqlite'] as const)('flight mode lifecycle (%s)', (mode
     expect(terminalFrame.checkpoint).toMatchObject({ kind: 'full', reason: 'schema_change' });
     expect(terminalFrame.logEntries).toEqual([]);
     expect(terminalFrame.perSheetCheckpoints).toBeUndefined();
+    // R2B-07：硬删后只留最新楼层这一个 full 根，其余根降级为帧内 data_replace fallback（降级前已清掉大总结）。
+    expect(h.chat.filter((message: any) => message.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint?.kind === 'full')).toHaveLength(1);
     for (const message of h.chat) {
-      expect(message.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data[summaryKey]).toBeUndefined();
-      expect(message.TavernDB_ACU_IsolatedData[''].storageFrame.perSheetCheckpoints?.[summaryKey]).toBeUndefined();
+      const frame = message.TavernDB_ACU_IsolatedData[''].storageFrame;
+      expect(frame.checkpoint?.data?.[summaryKey]).toBeUndefined();
+      expect(frame.perSheetCheckpoints?.[summaryKey]).toBeUndefined();
     }
 
     // data_replace 保持整库语义，硬删除不能只清 checkpoint/单表日志而让它在下一次 replay 复活。
@@ -305,9 +308,12 @@ describe.each(['native', 'sqlite'] as const)('flight mode lifecycle (%s)', (mode
       // 停用后原表仍有效：fallback DDL 保留、数据不变。
       expect(h.data.sheet_chronicle.sourceData.ddl).toContain('row_id INTEGER PRIMARY KEY');
       expect(h.data.sheet_quan_ju.sourceData.ddl).toContain('row_id INTEGER PRIMARY KEY');
+      // R2B-07：硬删后只留最新楼层这一个 full 根，其余根降级为帧内 data_replace fallback（降级前已清掉大总结）。
+      expect(h.chat.filter((message: any) => message.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint?.kind === 'full')).toHaveLength(1);
       for (const message of h.chat) {
-        expect(message.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data[summaryKey]).toBeUndefined();
-        expect(message.TavernDB_ACU_IsolatedData[''].storageFrame.perSheetCheckpoints?.[summaryKey]).toBeUndefined();
+        const frame = message.TavernDB_ACU_IsolatedData[''].storageFrame;
+        expect(frame.checkpoint?.data?.[summaryKey]).toBeUndefined();
+        expect(frame.perSheetCheckpoints?.[summaryKey]).toBeUndefined();
       }
     });
   });

@@ -277,8 +277,8 @@ describe('useManualUpdate destructive refill confirmation', () => {
 
     expect(orchestrateManualUpdate_ACU).toHaveBeenCalledTimes(1);
     expect(orchestrateManualUpdate_ACU.mock.calls[0][0]).toEqual(['sheet_0']);
-    expect(orchestrateManualUpdate_ACU.mock.calls[0][3]).toEqual(expect.objectContaining({ clearBeforeUpdate: true }));
-    expect(orchestrateManualUpdate_ACU.mock.calls[0][3]).not.toHaveProperty('confirmBoundaryReset');
+    expect(orchestrateManualUpdate_ACU.mock.calls[0][2]).toEqual(expect.objectContaining({ clearBeforeUpdate: true }));
+    expect(orchestrateManualUpdate_ACU.mock.calls[0][2]).not.toHaveProperty('confirmBoundaryReset');
     __resetToastStoreForTests();
   });
 
@@ -558,7 +558,7 @@ describe('useManualUpdate purge 后执行边界守卫', () => {
 
     expect(orchestrateManualUpdate_ACU).toHaveBeenCalledTimes(1);
     expect(orchestrateManualUpdate_ACU.mock.calls[0][0]).toEqual(['sheet_0']);
-    expect(orchestrateManualUpdate_ACU.mock.calls[0][3].executionSnapshot.sheetKeys).toEqual(['sheet_0', 'sheet_1']);
+    expect(orchestrateManualUpdate_ACU.mock.calls[0][2].executionSnapshot.sheetKeys).toEqual(['sheet_0', 'sheet_1']);
     expect(confirmMessage).toContain('sheet_0');
     expect(confirmMessage).not.toContain('sheet_1');
     __resetToastStoreForTests();

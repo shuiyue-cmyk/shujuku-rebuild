@@ -461,9 +461,18 @@ export class SqliteEngine {
     // 统一走单一运行时初始化入口（T5：消除 loadFromBinary 独立 initSqlJs 旁路，
     // 确保与 init() 共用同一运行时与失败重试语义）
     this.sqlJs = await this.initializeRuntime();
+    // R1-07：先用新数据建库，成功后再释放旧库——坏数据抛错时旧库仍可用。
+    const nextDb = new this.sqlJs.Database(data);
+    try {
+      nextDb.run('PRAGMA foreign_keys = ON;');
+      // 打开不读文件头；读一次 schema 才能发现「file is not a database」。
+      nextDb.exec('SELECT count(*) FROM sqlite_master');
+    } catch (error) {
+      nextDb.close();
+      throw error;
+    }
     this.dispose();
-    this.db = new this.sqlJs.Database(data);
-    this.db.run('PRAGMA foreign_keys = ON;');
+    this.db = nextDb;
     logDebug_ACU('[SQLite引擎] 数据库恢复完成');
   }
 

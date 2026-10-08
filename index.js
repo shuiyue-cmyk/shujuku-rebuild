@@ -1,77 +1,15 @@
 /**
- * shared/runtime-env.ts — 运行时环境检测
+ * shared/runtime-env.ts — 运行时环境
  *
- * 检测当前脚本运行在哪种环境中：
- * - 油猴脚本模式（Userscript）：运行在酒馆助手创建的 iframe 中，window.parent 指向酒馆主窗口
- * - 酒馆插件模式（Extension）：运行在酒馆主窗口中，window 就是酒馆主窗口
- *
- * 所有需要区分环境的代码都应通过此模块的函数来判断，而非自行检测。
+ * 本项目只以酒馆插件形态运行（入口在酒馆主窗口中加载）。早期的油猴脚本（iframe）形态
+ * 已移除（R1-06）：其模式探测与各处分支都是永不执行的死代码。
  */
 /** 互斥检测全局标记键名 */
 const ACU_INSTANCE_FLAG = '__ACU_STAR_DB_III_LOADED__';
-/** 缓存检测结果，避免重复计算 */
-let _cachedMode = null;
-/**
- * 由插件入口在启动时调用，强制设置为插件模式。
- * 必须在任何其他模块访问 runtime-env 之前调用。
- */
-function _forceExtensionMode() {
-    _cachedMode = "extension" /* RuntimeMode.Extension */;
-}
-/**
- * 检测当前运行模式。
- *
- * 检测逻辑：
- * 1. 如果已被 _forceExtensionMode() 强制设置，直接返回 Extension
- * 2. 如果 window !== window.parent 且 window.parent 可访问，说明在 iframe 中 → Userscript
- * 3. 否则 → Extension（主窗口环境）
- */
-function detectRuntimeMode() {
-    if (_cachedMode !== null)
-        return _cachedMode;
-    try {
-        // 如果 window.parent 存在且不等于 window，说明在 iframe 中
-        if (typeof window.parent !== 'undefined' && window.parent !== window) {
-            // 尝试访问 parent 的属性，确认不是跨域 iframe
-            void window.parent.document;
-            _cachedMode = "userscript" /* RuntimeMode.Userscript */;
-        }
-        else {
-            _cachedMode = "extension" /* RuntimeMode.Extension */;
-        }
-    }
-    catch (e) {
-        // 跨域 iframe 访问 parent.document 会抛错，这种情况不太可能出现在酒馆环境
-        // 保守地认为是油猴脚本模式
-        _cachedMode = "userscript" /* RuntimeMode.Userscript */;
-    }
-    return _cachedMode;
-}
-/** 是否为油猴脚本模式 */
-function isUserscriptMode() {
-    return detectRuntimeMode() === "userscript" /* RuntimeMode.Userscript */;
-}
-/** 是否为酒馆插件模式 */
-function isExtensionMode() {
-    return detectRuntimeMode() === "extension" /* RuntimeMode.Extension */;
-}
-/**
- * 获取酒馆主窗口引用。
- *
- * - 油猴脚本模式：返回 window.parent（酒馆主窗口）
- * - 插件模式：返回 window（自身就是主窗口）
- */
+/** 获取酒馆主窗口引用：插件运行在主窗口中，即 window 自身。 */
 function getHostWindow() {
     if (typeof window === 'undefined') {
         return globalThis;
-    }
-    if (isUserscriptMode()) {
-        try {
-            return window.parent || window;
-        }
-        catch (e) {
-            return window;
-        }
     }
     return window;
 }
@@ -93,7 +31,7 @@ function checkAndMarkInstance() {
             hostWin[ACU_INSTANCE_FLAG] = true;
             return false;
         }
-        console.warn('[UnbirthDB] 检测到另一个实例已在运行，跳过初始化。请勿同时安装油猴脚本和酒馆插件。');
+        console.warn('[UnbirthDB] 检测到另一个实例已在运行，跳过初始化。请勿重复安装本插件。');
         return true; // 已有实例
     }
     hostWin[ACU_INSTANCE_FLAG] = true;
@@ -3555,181 +3493,68 @@ async function importTempRemove_ACU(key) {
  * 负责在 SillyTavern 的 extensionSettings 中读写脚本设置。
  */
 const USE_TAVERN_SETTINGS_STORAGE_ACU = true;
+// 命名空间与下方 __userscripts 容器名沿用历史（油猴时代）键名：这是用户已落盘设置的存储位置，不能改。
 const TAVERN_SETTINGS_NAMESPACE_ACU = `${SCRIPT_ID_PREFIX_ACU}__userscript_settings_v1`;
 let tavernSaveSettingsFn_ACU = null;
 let tavernExtensionSettingsRoot_ACU = null;
-const TAVERN_BRIDGE_GLOBAL_KEY_ACU = '__ACU_USERSCRIPT_BRIDGE__';
-const TAVERN_BRIDGE_INJECTED_FLAG_ACU = '__ACU_USERSCRIPT_BRIDGE_INJECTED__';
-const sleep_ACU = (ms) => new Promise(r => setTimeout(r, ms));
-let tavernBridgeErrorReported_ACU = false;
-// ── userscript 路径专用状态（插件路径不使用这些变量）──
-/** userscript 模式下 bridge 初始化是否已完成（无论成功或失败） */
-let _tavernBridgeInitCompleted_ACU = false;
-/** userscript 模式下是否已报告过"根对象不可用"（防止重复刷屏） */
-let _tavernRootUnavailableWarnReported_ACU = false;
-// ── 桥接函数 ──
-function tryReadBridgeFromTop_ACU() {
-    try {
-        const bridge = topLevelWindow_ACU?.[TAVERN_BRIDGE_GLOBAL_KEY_ACU];
-        if (bridge && typeof bridge === 'object') {
-            if (bridge.error && !tavernBridgeErrorReported_ACU) {
-                tavernBridgeErrorReported_ACU = true;
-                console.warn(`[${SCRIPT_ID_PREFIX_ACU}] Tavern bridge 初始化失败：`, bridge.error);
-            }
-            if (bridge.extension_settings && !tavernExtensionSettingsRoot_ACU)
-                tavernExtensionSettingsRoot_ACU = bridge.extension_settings;
-            if (!tavernSaveSettingsFn_ACU)
-                tavernSaveSettingsFn_ACU = bridge.saveSettingsDebounced || bridge.saveSettings || null;
-            return !!(tavernExtensionSettingsRoot_ACU);
-        }
-    }
-    catch (e) { /* ignore */ }
-    return false;
-}
-async function injectTavernBridgeIntoTopWindow_ACU() {
-    try {
-        if (topLevelWindow_ACU?.[TAVERN_BRIDGE_INJECTED_FLAG_ACU])
-            return true;
-        topLevelWindow_ACU[TAVERN_BRIDGE_INJECTED_FLAG_ACU] = true;
-        const doc = topLevelWindow_ACU.document;
-        if (!doc || !doc.createElement)
-            return false;
-        const s = doc.createElement('script');
-        s.type = 'module';
-        s.textContent = `
-            (async () => {
-                try {
-                    const ext = await import('/scripts/extensions.js');
-                    const main = await import('/script.js');
-                    window['${TAVERN_BRIDGE_GLOBAL_KEY_ACU}'] = window['${TAVERN_BRIDGE_GLOBAL_KEY_ACU}'] || {};
-                    window['${TAVERN_BRIDGE_GLOBAL_KEY_ACU}'].extension_settings = ext?.extension_settings || null;
-                    window['${TAVERN_BRIDGE_GLOBAL_KEY_ACU}'].saveSettingsDebounced = main?.saveSettingsDebounced || null;
-                    window['${TAVERN_BRIDGE_GLOBAL_KEY_ACU}'].saveSettings = main?.saveSettings || null;
-                } catch (e) {
-                    window['${TAVERN_BRIDGE_GLOBAL_KEY_ACU}'] = window['${TAVERN_BRIDGE_GLOBAL_KEY_ACU}'] || {};
-                    window['${TAVERN_BRIDGE_GLOBAL_KEY_ACU}'].error = String(e && (e.message || e));
-                }
-            })();
-        `;
-        (doc.head || doc.documentElement || doc.body).appendChild(s);
-        return true;
-    }
-    catch (e) {
-        return false;
-    }
-}
+/** 是否已报告过「根对象不可用」（防止重复刷屏） */
+let tavernRootUnavailableWarnReported_ACU = false;
+// ── 初始化 ──
+// 只有酒馆插件一种运行形态（入口恒为插件模式，R1-06 已删除油猴 iframe 桥接的死代码）。
+// 插件运行在酒馆主窗口中。主窗口的 window.SillyTavern 只有 {libs, getContext}，
+// 所有真正的 API 都必须通过 SillyTavern.getContext() 这个函数调用来获取。
+// 酒馆源码证实：extensionSettings 和 saveSettingsDebounced 都在 getContext() 返回值中。
 async function initTavernSettingsBridge_ACU() {
     if (!USE_TAVERN_SETTINGS_STORAGE_ACU)
         return false;
-    logDebug_ACU('[TavernStorage] 开始初始化酒馆设置桥接...');
-    // ── 插件模式快速路径 ──
-    // 插件运行在酒馆主窗口中。主窗口的 window.SillyTavern 只有 {libs, getContext}，
-    // 所有真正的 API 都必须通过 SillyTavern.getContext() 这个函数调用来获取。
-    // 酒馆源码证实：extensionSettings 和 saveSettingsDebounced 都在 getContext() 返回值中。
-    if (isExtensionMode()) {
-        logDebug_ACU('[TavernStorage] 插件模式：通过 SillyTavern.getContext() 获取设置对象...');
-        try {
-            const st = window.SillyTavern;
-            if (st && typeof st.getContext === 'function') {
-                const ctx = st.getContext();
-                if (ctx) {
-                    if (ctx.extensionSettings) {
-                        tavernExtensionSettingsRoot_ACU = ctx.extensionSettings;
-                        logDebug_ACU('[TavernStorage] 插件模式：extensionSettings 获取成功');
-                    }
-                    else {
-                        logWarn_ACU('[TavernStorage] 插件模式：getContext().extensionSettings 为空');
-                    }
-                    if (typeof ctx.saveSettingsDebounced === 'function') {
-                        tavernSaveSettingsFn_ACU = ctx.saveSettingsDebounced;
-                        logDebug_ACU('[TavernStorage] 插件模式：saveSettingsDebounced 获取成功');
-                    }
-                    else {
-                        logWarn_ACU('[TavernStorage] 插件模式：getContext().saveSettingsDebounced 不是函数');
-                    }
+    logDebug_ACU('[TavernStorage] 通过 SillyTavern.getContext() 获取设置对象...');
+    try {
+        const st = window.SillyTavern;
+        if (st && typeof st.getContext === 'function') {
+            const ctx = st.getContext();
+            if (ctx) {
+                if (ctx.extensionSettings) {
+                    tavernExtensionSettingsRoot_ACU = ctx.extensionSettings;
+                    logDebug_ACU('[TavernStorage] extensionSettings 获取成功');
                 }
                 else {
-                    logWarn_ACU('[TavernStorage] 插件模式：getContext() 返回空值');
+                    logWarn_ACU('[TavernStorage] getContext().extensionSettings 为空');
+                }
+                if (typeof ctx.saveSettingsDebounced === 'function') {
+                    tavernSaveSettingsFn_ACU = ctx.saveSettingsDebounced;
+                    logDebug_ACU('[TavernStorage] saveSettingsDebounced 获取成功');
+                }
+                else {
+                    logWarn_ACU('[TavernStorage] getContext().saveSettingsDebounced 不是函数');
                 }
             }
             else {
-                logWarn_ACU('[TavernStorage] 插件模式：SillyTavern.getContext 不可用');
+                logWarn_ACU('[TavernStorage] getContext() 返回空值');
             }
         }
-        catch (e) {
-            logError_ACU('[TavernStorage] 插件模式：调用 getContext() 失败:', e);
-        }
-        logDebug_ACU(`[TavernStorage] 插件模式初始化完成: settings=${!!tavernExtensionSettingsRoot_ACU}, save=${!!tavernSaveSettingsFn_ACU}`);
-        return !!tavernExtensionSettingsRoot_ACU;
-    }
-    // ── 油猴脚本模式（原有逻辑）──
-    tryReadBridgeFromTop_ACU();
-    try {
-        if (typeof topLevelWindow_ACU.saveSettingsDebounced === 'function')
-            tavernSaveSettingsFn_ACU = topLevelWindow_ACU.saveSettingsDebounced;
-        else if (typeof window.saveSettingsDebounced === 'function')
-            tavernSaveSettingsFn_ACU = window.saveSettingsDebounced;
-        else if (typeof topLevelWindow_ACU.saveSettings === 'function')
-            tavernSaveSettingsFn_ACU = topLevelWindow_ACU.saveSettings;
-        else if (typeof window.saveSettings === 'function')
-            tavernSaveSettingsFn_ACU = window.saveSettings;
-    }
-    catch (e) { /* ignore */ }
-    tryReadBridgeFromTop_ACU();
-    if (!tavernExtensionSettingsRoot_ACU) {
-        await injectTavernBridgeIntoTopWindow_ACU();
-        for (let i = 0; i < 40 && !tavernExtensionSettingsRoot_ACU; i++) {
-            tryReadBridgeFromTop_ACU();
-            if (tavernExtensionSettingsRoot_ACU)
-                break;
-            await sleep_ACU(50);
+        else {
+            logWarn_ACU('[TavernStorage] SillyTavern.getContext 不可用');
         }
     }
-    try {
-        const mod = await import('./data/storage/script.js');
-        if (mod) {
-            if (typeof mod.saveSettingsDebounced === 'function')
-                tavernSaveSettingsFn_ACU = mod.saveSettingsDebounced;
-            else if (typeof mod.saveSettings === 'function')
-                tavernSaveSettingsFn_ACU = mod.saveSettings;
-        }
+    catch (e) {
+        logError_ACU('[TavernStorage] 调用 getContext() 失败:', e);
     }
-    catch (e) { /* ignore */ }
-    try {
-        const ext = await import('./data/storage/scripts/extensions.js');
-        if (ext && ext.extension_settings) {
-            tavernExtensionSettingsRoot_ACU = ext.extension_settings;
-        }
-    }
-    catch (e) { /* ignore */ }
-    // ── userscript 路径：标记 bridge 初始化已完成（无论是否成功获取 root）──
-    _tavernBridgeInitCompleted_ACU = true;
+    logDebug_ACU(`[TavernStorage] 初始化完成: settings=${!!tavernExtensionSettingsRoot_ACU}, save=${!!tavernSaveSettingsFn_ACU}`);
     return !!tavernExtensionSettingsRoot_ACU;
 }
 function getTavernSettingsNamespace_ACU() {
-    tryReadBridgeFromTop_ACU();
     const root = tavernExtensionSettingsRoot_ACU;
     if (!root) {
-        // ── 插件模式：扩展加载时 extensionSettings 已就绪；未拿到则告警 ──
-        if (isExtensionMode()) {
+        // 扩展加载时 extensionSettings 已就绪；未拿到则告警一次，调用方走 IndexedDB/localStorage 回退。
+        if (!tavernRootUnavailableWarnReported_ACU) {
+            tavernRootUnavailableWarnReported_ACU = true;
             logWarn_ACU('[TavernStorage] 酒馆设置根对象不可用, 返回 null');
-            return null;
-        }
-        // ── userscript 模式：bridge 初始化未完成时安静降级，完成后只告警一次 ──
-        if (!_tavernBridgeInitCompleted_ACU) {
-            // bridge 还在初始化中，不打印任何告警，安静返回 null 让调用方走 IndexedDB/localStorage 回退
-            return null;
-        }
-        // bridge 初始化已完成但仍拿不到 root → 只告警一次
-        if (!_tavernRootUnavailableWarnReported_ACU) {
-            _tavernRootUnavailableWarnReported_ACU = true;
-            logWarn_ACU('[TavernStorage] 酒馆设置根对象不可用, 返回 null（后续将使用 IndexedDB/localStorage 降级存储）');
         }
         return null;
     }
     // root 可用 → 如果之前标记过不可用，清除标记以便后续状态变化能重新报告
-    if (_tavernRootUnavailableWarnReported_ACU) {
-        _tavernRootUnavailableWarnReported_ACU = false;
+    if (tavernRootUnavailableWarnReported_ACU) {
+        tavernRootUnavailableWarnReported_ACU = false;
         logDebug_ACU('[TavernStorage] 酒馆设置根对象已恢复可用');
     }
     if (!root.__userscripts)
@@ -3745,7 +3570,6 @@ function getTavernSettingsNamespace_ACU() {
  */
 function persistTavernSettings_ACU() {
     try {
-        tryReadBridgeFromTop_ACU();
         const hostWindow = typeof window !== 'undefined' ? window : null;
         if (typeof tavernSaveSettingsFn_ACU === 'function') {
             return tavernSaveSettingsFn_ACU() === false ? 'failed' : 'saved';
@@ -3813,45 +3637,47 @@ function loadConfigIdbCache_ACU() {
         configIdbCacheLoaded_ACU = true;
         return Promise.resolve();
     }
-    configIdbCacheLoadingPromise_ACU = new Promise(async (resolve) => {
+    // R1-07：不用 new Promise(async …)——执行器里的异常不会进 reject；改为 async IIFE，游标遍历单独包一层 Promise。
+    const markLoadFailed = (error) => {
+        logWarn_ACU('[TavernStorage] IndexedDB 配置缓存加载失败:', error);
+        configIdbCacheLoadFailed_ACU = true;
+        configIdbCacheLoaded_ACU = true;
+    };
+    configIdbCacheLoadingPromise_ACU = (async () => {
         try {
             const db = await openConfigDb_ACU();
             if (!db) {
                 configIdbCacheLoaded_ACU = true;
-                resolve();
                 return;
             }
-            const tx = db.transaction(CONFIG_IDB_STORE_NAME_ACU, 'readonly');
-            const store = tx.objectStore(CONFIG_IDB_STORE_NAME_ACU);
-            const req = store.openCursor();
-            req.onsuccess = () => {
-                const cursor = req.result;
-                if (cursor) {
-                    const key = cursor.key;
-                    if (!configIdbDeletedKeys_ACU.has(key) && !configIdbCache_ACU.has(key)) {
-                        configIdbCache_ACU.set(key, cursor.value);
+            await new Promise((resolve) => {
+                const tx = db.transaction(CONFIG_IDB_STORE_NAME_ACU, 'readonly');
+                const store = tx.objectStore(CONFIG_IDB_STORE_NAME_ACU);
+                const req = store.openCursor();
+                req.onsuccess = () => {
+                    const cursor = req.result;
+                    if (cursor) {
+                        const key = cursor.key;
+                        if (!configIdbDeletedKeys_ACU.has(key) && !configIdbCache_ACU.has(key)) {
+                            configIdbCache_ACU.set(key, cursor.value);
+                        }
+                        cursor.continue();
                     }
-                    cursor.continue();
-                }
-                else {
-                    configIdbCacheLoaded_ACU = true;
+                    else {
+                        configIdbCacheLoaded_ACU = true;
+                        resolve();
+                    }
+                };
+                req.onerror = () => {
+                    markLoadFailed(req.error);
                     resolve();
-                }
-            };
-            req.onerror = () => {
-                logWarn_ACU('[TavernStorage] IndexedDB 配置缓存加载失败:', req.error);
-                configIdbCacheLoadFailed_ACU = true;
-                configIdbCacheLoaded_ACU = true;
-                resolve();
-            };
+                };
+            });
         }
         catch (e) {
-            logWarn_ACU('[TavernStorage] IndexedDB 配置缓存加载失败:', e);
-            configIdbCacheLoadFailed_ACU = true;
-            configIdbCacheLoaded_ACU = true;
-            resolve();
+            markLoadFailed(e);
         }
-    });
+    })();
     return configIdbCacheLoadingPromise_ACU;
 }
 function ensureConfigIdbCacheLoaded_ACU() {
@@ -3996,10 +3822,8 @@ function _set_pendingSettingsReloadFromIdb_ACU(v) { pendingSettingsReloadFromIdb
 function _resetTavernStorageState_ACU() {
     tavernExtensionSettingsRoot_ACU = null;
     tavernSaveSettingsFn_ACU = null;
-    tavernBridgeErrorReported_ACU = false;
     lastConfigPersistenceStatus_ACU = 'other';
-    _tavernBridgeInitCompleted_ACU = false;
-    _tavernRootUnavailableWarnReported_ACU = false;
+    tavernRootUnavailableWarnReported_ACU = false;
 }
 
 /**
@@ -6883,15 +6707,9 @@ let worldInfoModulePromise_ACU = null;
 /**
  * 动态 import 宿主 world-info 模块（带缓存）。
  * 失败时清空缓存，让宿主尚未加载完的早期调用有机会重试。
- *
- * 只在插件模式（宿主主窗口）下尝试：油猴模式跑在酒馆助手创建的 iframe 里，
- * 同一 URL 在 iframe realm 会加载出「第二个」world-info 实例（selected_world_info 恒为空，
- * 且会把 script.js/power-user.js 整条宿主模块图在 iframe 里重新执行一遍），既读不到真值又有副作用。
- * 油猴模式下 window 全局链与 TavernHelper 通道仍然有效，这里直接返回 null 走既有降级。
+ * 插件运行在宿主主窗口，与宿主共享同一模块实例（油猴 iframe 形态已移除，R1-06）。
  */
 function loadHostWorldInfoModule_ACU() {
-    if (!isExtensionMode())
-        return Promise.resolve(null);
     if (!worldInfoModulePromise_ACU) {
         const loadModule = async () => {
             try {
@@ -7373,6 +7191,95 @@ function buildWorldbookEntryDisplayLabel_ACU(comment, uid) {
     return cleaned || `条目 ${uid}`;
 }
 
+function stripTakeoverMeta_ACU(comment, mode) {
+    return mode === 'loose' ? stripAgentTakeoverMetaBlockLoose_ACU(comment) : stripAgentTakeoverMetaBlockStrict_ACU(comment);
+}
+function commentText_ACU(comment) {
+    return typeof comment === 'string' ? comment : '';
+}
+function hasValidAgentWorldbookUid_ACU(uid) {
+    return uid !== null && uid !== undefined && String(uid).trim() !== '';
+}
+function hasAgentTakeoverMetaBlock_ACU(comment) {
+    return new RegExp(createAgentTakeoverMetaPattern_ACU().source).test(commentText_ACU(comment));
+}
+/** 注释里有本版本识别不了的接管块（未知 version/kind 或非 JSON）：恢复必须跳过，不能盲剥。 */
+function hasUnsupportedAgentTakeoverMetaBlock_ACU(comment) {
+    const text = commentText_ACU(comment);
+    const pattern = createAgentTakeoverMetaPattern_ACU();
+    let match;
+    while ((match = pattern.exec(text))) {
+        try {
+            const meta = JSON.parse(match[1].trim());
+            if (meta.version !== 1 || meta.kind !== 'agent_worldbook_takeover')
+                return true;
+        }
+        catch {
+            return true;
+        }
+    }
+    return false;
+}
+/** 当前注释与快照指纹比对：去掉接管块与 Skill 块后比；旧快照的指纹含 Skill 块，也认。 */
+function doesAgentTakeoverCommentHashMatch_ACU(snapshotCommentHash, currentComment, mode = 'strict') {
+    if (!snapshotCommentHash)
+        return true;
+    const strippedComment = stripTakeoverMeta_ACU(currentComment, mode);
+    const comparableComment = stripWorldbookSkillMetaBlock_ACU(strippedComment);
+    return hashUserInput_ACU(comparableComment) === snapshotCommentHash
+        || hashUserInput_ACU(strippedComment) === snapshotCommentHash;
+}
+/** 只有已真正禁用过的条目才是恢复对象：pending 条目从未被改动过，恢复它会把 keys/type 覆盖成快照值。 */
+function selectRestorableSnapshotEntries_ACU(entries) {
+    return Array.isArray(entries) ? entries.filter(entry => entry?.takeoverStatus !== 'pending') : [];
+}
+function decideAgentWorldbookEntryRestore_ACU(snapshotEntry, currentEntry, policy) {
+    if (!hasValidAgentWorldbookUid_ACU(snapshotEntry?.uid))
+        return { kind: 'invalid_uid' };
+    const uid = snapshotEntry.uid;
+    // 宿主已删除：无可恢复对象，交给调用方从账本剔除 / 不计 skipped。
+    if (!currentEntry)
+        return { kind: 'missing', uid };
+    const currentComment = commentText_ACU(currentEntry.comment);
+    if (policy.metaStripMode === 'strict' && hasUnsupportedAgentTakeoverMetaBlock_ACU(currentComment))
+        return { kind: 'skip', uid, reason: 'unsupported_meta' };
+    if (!snapshotEntry.commentHash && policy.missingCommentHash === 'skip')
+        return { kind: 'skip', uid, reason: 'missing_comment_hash' };
+    // 注释已被用户改过：不覆盖，也不剥接管块——块里是之后恢复所需的依据。
+    if (!doesAgentTakeoverCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment, policy.metaStripMode))
+        return { kind: 'skip', uid, reason: 'comment_changed' };
+    return {
+        kind: 'restore',
+        uid,
+        patch: {
+            uid,
+            comment: stripTakeoverMeta_ACU(currentComment, policy.metaStripMode),
+            enabled: snapshotEntry.previousEnabled !== false,
+            keys: Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [],
+            type: snapshotEntry.previousType,
+        },
+        preImage: {
+            uid,
+            comment: currentEntry.comment,
+            enabled: currentEntry.enabled,
+            keys: currentEntry.keys,
+            type: currentEntry.type,
+        },
+    };
+}
+/** 写入后读回判定是否已恢复：启用状态、类型一致，keys 按集合比较，且接管块已不在注释里。 */
+function isAgentWorldbookEntryRestored_ACU(entry, patch) {
+    if (!entry || String(entry.uid) !== String(patch.uid))
+        return false;
+    const patchKeys = Array.isArray(patch.keys) ? patch.keys.map(key => String(key)) : [];
+    const currentKeys = Array.isArray(entry.keys) ? entry.keys.map(key => String(key)) : [];
+    const keysMatch = currentKeys.length === patchKeys.length && patchKeys.every(key => currentKeys.includes(key));
+    return entry.enabled === patch.enabled
+        && entry.type === patch.type
+        && keysMatch
+        && !hasAgentTakeoverMetaBlock_ACU(entry.comment);
+}
+
 function isSamePatchValue_ACU(left, right) {
     return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -7436,22 +7343,6 @@ async function rollbackAgentWorldbookSnapshotRestore_ACU(rollbackPatchesByBook, 
 function buildAgentWorldbookSelectionSignature_ACU(bookNames) {
     return buildAgentWorldbookSnapshotSelectionSignature_ACU(bookNames);
 }
-function hasValidUid_ACU(value) {
-    return value !== null && value !== undefined && String(value).trim() !== '';
-}
-function stripTakeoverMeta_ACU(comment) {
-    return stripAgentTakeoverMetaBlockLoose_ACU(comment);
-}
-function comparableComment_ACU(comment) {
-    return stripTakeoverMeta_ACU(comment).replace(createSkillMetaPattern_ACU(), '\n').replace(/\n{3,}/g, '\n\n').trim();
-}
-function isCommentHashMatched_ACU(snapshotHash, currentComment) {
-    if (!snapshotHash)
-        return true;
-    const stripped = stripTakeoverMeta_ACU(currentComment);
-    return hashUserInput_ACU(comparableComment_ACU(currentComment)) === snapshotHash
-        || hashUserInput_ACU(stripped) === snapshotHash;
-}
 async function restoreAgentWorldbookSnapshotEntries_ACU(snapshot, expectedBookNames) {
     const expectedSignature = buildAgentWorldbookSelectionSignature_ACU(expectedBookNames);
     if (snapshot.active !== true || snapshot.selectionSignature !== expectedSignature) {
@@ -7471,7 +7362,9 @@ async function restoreAgentWorldbookSnapshotEntries_ACU(snapshot, expectedBookNa
     const restoredPatchesByBook = {};
     for (const [rawBookName, rawSnapshotEntries] of Object.entries(snapshot.books || {})) {
         const bookName = String(rawBookName || '').trim();
-        const snapshotEntries = Array.isArray(rawSnapshotEntries) ? rawSnapshotEntries : [];
+        // 逐条目决策与「已恢复」判定走共用核心（R4-07），与接管停用同口径：pending 条目不碰；
+        // 注释被改过的条目跳过且保留接管块（不再先剥后靠整体回滚补救）。缺指纹照常恢复、宽松剥离残留接管块是 scope 路径的既定口径。
+        const snapshotEntries = selectRestorableSnapshotEntries_ACU(rawSnapshotEntries);
         if (!bookName || snapshotEntries.length === 0)
             continue;
         try {
@@ -7479,41 +7372,17 @@ async function restoreAgentWorldbookSnapshotEntries_ACU(snapshot, expectedBookNa
             const currentByUid = new Map((entries || []).map(entry => [String(entry?.uid), entry]));
             const patches = [];
             const rollbackPatches = [];
-            let restoredInBook = 0;
             for (const snapshotEntry of snapshotEntries) {
-                if (!hasValidUid_ACU(snapshotEntry?.uid)) {
-                    skipped += 1;
-                    continue;
-                }
-                const current = currentByUid.get(String(snapshotEntry.uid));
+                const decision = decideAgentWorldbookEntryRestore_ACU(snapshotEntry, currentByUid.get(String(snapshotEntry?.uid)), { missingCommentHash: 'restore', metaStripMode: 'loose' });
                 // 条目已被宿主删除：无可恢复对象，不算 skipped（否则 scope 变更永远被拒）。
-                if (!current)
+                if (decision.kind === 'missing')
                     continue;
-                if (!isCommentHashMatched_ACU(snapshotEntry.commentHash, current.comment)) {
-                    const strippedComment = stripTakeoverMeta_ACU(current.comment);
-                    if (strippedComment !== String(current.comment || '')) {
-                        patches.push({ uid: snapshotEntry.uid, comment: strippedComment });
-                        rollbackPatches.push({ uid: snapshotEntry.uid, comment: current.comment });
-                    }
+                if (decision.kind !== 'restore') {
                     skipped += 1;
                     continue;
                 }
-                const patch = {
-                    uid: snapshotEntry.uid,
-                    comment: stripTakeoverMeta_ACU(current.comment),
-                    enabled: snapshotEntry.previousEnabled !== false,
-                    keys: Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [],
-                    type: snapshotEntry.previousType,
-                };
-                patches.push(patch);
-                rollbackPatches.push({
-                    uid: snapshotEntry.uid,
-                    comment: current.comment,
-                    enabled: current.enabled,
-                    keys: current.keys,
-                    type: current.type,
-                });
-                restoredInBook += 1;
+                patches.push(decision.patch);
+                rollbackPatches.push(decision.preImage);
             }
             if (patches.length > 0) {
                 // 宿主批量写在 reject 前仍可能已应用部分 patch，因此先保留完整 pre-image。
@@ -7528,27 +7397,29 @@ async function restoreAgentWorldbookSnapshotEntries_ACU(snapshot, expectedBookNa
                     logWarn_ACU(`[Agent世界书] 恢复世界书条目写入失败：${bookName}`, error);
                 }
                 try {
-                    const confirmed = await readConfirmedPatches_ACU(bookName, patches);
-                    const confirmedUidSet = new Set(confirmed.map(patch => String(patch.uid)));
-                    rollbackPatchesByBook[bookName] = rollbackPatches.filter(patch => confirmedUidSet.has(String(patch.uid)));
-                    restoredPatchesByBook[bookName] = patches.filter(patch => confirmedUidSet.has(String(patch.uid)));
+                    const afterByUid = new Map((await getLorebookEntries_ACU(bookName) || []).map(entry => [String(entry?.uid), entry]));
+                    const confirmedUidSet = new Set(patches
+                        .filter(restorePatch => isAgentWorldbookEntryRestored_ACU(afterByUid.get(String(restorePatch.uid)), restorePatch))
+                        .map(restorePatch => String(restorePatch.uid)));
+                    rollbackPatchesByBook[bookName] = rollbackPatches.filter(rollbackPatch => confirmedUidSet.has(String(rollbackPatch.uid)));
+                    restoredPatchesByBook[bookName] = patches.filter(restorePatch => confirmedUidSet.has(String(restorePatch.uid)));
                     if (rollbackPatchesByBook[bookName].length === 0)
                         delete rollbackPatchesByBook[bookName];
                     if (restoredPatchesByBook[bookName].length === 0)
                         delete restoredPatchesByBook[bookName];
-                    if (writeFailed || confirmed.length !== patches.length) {
-                        restoredInBook = 0;
+                    if (writeFailed || confirmedUidSet.size !== patches.length) {
                         failed += snapshotEntries.length;
+                    }
+                    else {
+                        restored += patches.length;
                     }
                 }
                 catch (error) {
                     // 无法读回时不能假定零副作用；保留完整 pre-image 交由上层补偿。
-                    restoredInBook = 0;
                     failed += snapshotEntries.length;
                     logWarn_ACU(`[Agent世界书] 恢复世界书条目后确认失败：${bookName}`, error);
                 }
             }
-            restored += restoredInBook;
         }
         catch (error) {
             logWarn_ACU(`[Agent世界书] 恢复世界书条目失败：${bookName}`, error);
@@ -8407,9 +8278,19 @@ class SqliteEngine {
         // 统一走单一运行时初始化入口（T5：消除 loadFromBinary 独立 initSqlJs 旁路，
         // 确保与 init() 共用同一运行时与失败重试语义）
         this.sqlJs = await this.initializeRuntime();
+        // R1-07：先用新数据建库，成功后再释放旧库——坏数据抛错时旧库仍可用。
+        const nextDb = new this.sqlJs.Database(data);
+        try {
+            nextDb.run('PRAGMA foreign_keys = ON;');
+            // 打开不读文件头；读一次 schema 才能发现「file is not a database」。
+            nextDb.exec('SELECT count(*) FROM sqlite_master');
+        }
+        catch (error) {
+            nextDb.close();
+            throw error;
+        }
         this.dispose();
-        this.db = new this.sqlJs.Database(data);
-        this.db.run('PRAGMA foreign_keys = ON;');
+        this.db = nextDb;
         logDebug_ACU('[SQLite引擎] 数据库恢复完成');
     }
     /** 内部方法：确保数据库已初始化 */
@@ -37071,7 +36952,8 @@ const metaPhysicalNameIndexCache_ACU = new WeakMap();
  * 保留批量写入的可行动诊断，但绝不把 INSERT 的 VALUES（用户业务数据）传播到日志或 UI。
  */
 function formatSqliteLoadFailure_ACU(errorMessage) {
-    const batchFailure = /^第 (\d+) 条语句失败:\s*([\s\S]*?)\s*→\s*([\s\S]+)$/.exec(errorMessage);
+    // R1-07：按最后一个「→」切分（贪婪匹配）——用户数据本身可能含「→」，按第一个切会把后半段 VALUES 带进诊断。
+    const batchFailure = /^第 (\d+) 条语句失败:\s*([\s\S]*)\s*→\s*([\s\S]+)$/.exec(errorMessage);
     if (!batchFailure)
         return errorMessage;
     const [, statementIndex, statement, sqliteError] = batchFailure;
@@ -37700,8 +37582,8 @@ function normalizeTemplateRowIds_ACU(templateData, options = {}) {
  * owned by commitCurrentFloorTemplateChanges_ACU; this function deliberately has no I/O.
  */
 async function reconcileChatTemplate_ACU(input) {
-    const baselineData = clone_ACU$7(input.baselineData);
-    const rawTemplateData = clone_ACU$7(input.templateData);
+    const baselineData = clone_ACU$8(input.baselineData);
+    const rawTemplateData = clone_ACU$8(input.templateData);
     const blockers = [];
     const deletedSheetKeys = [];
     const hiddenSheetKeys = [];
@@ -37731,7 +37613,7 @@ async function reconcileChatTemplate_ACU(input) {
         }
     }
     const candidateData = stripRuntimeSeedRows_ACU(baselineData);
-    candidateData.mate = clone_ACU$7(templateData.mate || baselineData.mate);
+    candidateData.mate = clone_ACU$8(templateData.mate || baselineData.mate);
     for (const [key, sheet] of listSheets_ACU(baselineData)) {
         try {
             validateBaselineSheetRows_ACU(sheet);
@@ -37898,10 +37780,10 @@ async function reconcileChatTemplate_ACU(input) {
     }
     // 隐藏表：产出 hide change（sheetData 携带 baseline 结构，persist 层据此定位并保留数据）。
     for (const key of hiddenSheetKeys) {
-        sheetChanges.push({ kind: 'hide', sheetKey: key, sheetData: clone_ACU$7(baselineData[key]) });
+        sheetChanges.push({ kind: 'hide', sheetKey: key, sheetData: clone_ACU$8(baselineData[key]) });
         audit.find(item => item.sheetKey === key)?.operations.push({ kind: 'hide' });
     }
-    candidateData.mate = clone_ACU$7(candidateData.mate);
+    candidateData.mate = clone_ACU$8(candidateData.mate);
     if (input.storageMode !== 'native') {
         for (const [key, sheet] of listSheets_ACU(candidateData)) {
             try {
@@ -37950,7 +37832,7 @@ async function reconcileChatTemplate_ACU(input) {
     return { candidateData, sheetChanges, deletedSheetKeys, hiddenSheetKeys, audit, blockers: [] };
 }
 function stripRuntimeSeedRows_ACU(data) {
-    const clone = clone_ACU$7(data);
+    const clone = clone_ACU$8(data);
     for (const [, sheet] of listSheets_ACU(clone))
         delete sheet.seedRows;
     return clone;
@@ -37965,7 +37847,7 @@ function emptyPlan_ACU(candidateData, audit, blockers) {
         blockers,
     };
 }
-function clone_ACU$7(value) {
+function clone_ACU$8(value) {
     return JSON.parse(JSON.stringify(value));
 }
 function listSheets_ACU(data) {
@@ -38208,7 +38090,7 @@ function headers_ACU(sheet) {
  * 两种形态都要求 uid 等于 key，且 seedRows 不随 sheet 落盘（数据已在 content 中）。
  */
 function asIntroducedSheet_ACU(sheet, sheetKey) {
-    const clone = clone_ACU$7(sheet);
+    const clone = clone_ACU$8(sheet);
     clone.uid = sheetKey;
     const headers = headers_ACU(clone);
     const templateRows = Array.isArray(clone.content) ? clone.content.slice(1) : [];
@@ -38279,8 +38161,8 @@ function validateBaselineSheetRows_ACU(sheet) {
  * 协调结果投影不合法时直接抛错，由 persist 层事务回滚兜底，绝不落盘半协调数据。
  */
 function reconcileRevealedSheetWithTemplate_ACU(restoredSheet, templateSheet, sheetKey, contract) {
-    const restored = clone_ACU$7(restoredSheet);
-    const template = clone_ACU$7(templateSheet);
+    const restored = clone_ACU$8(restoredSheet);
+    const template = clone_ACU$8(templateSheet);
     try {
         validateBaselineSheetRows_ACU(restored);
     }
@@ -38501,7 +38383,7 @@ function reconcileMatchedSheet_ACU(before, template, sheetKey, templateSheetKey,
         fillByTargetCanonical.set(target.canonical, value);
         fillAudit.push({ physicalName: target.physical, kind, literal: value });
     }
-    const sheet = clone_ACU$7(template);
+    const sheet = clone_ACU$8(template);
     sheet.uid = before.uid;
     const retainedHiddenHeaders = hiddenEntries.map(entry => entry.header);
     // 迁移后数据行（纯 JS 直通，替代契约驱动迁移）：匹配列原值直通，新列取填充值，隐藏列原值保留。
@@ -38532,7 +38414,7 @@ function reconcileMatchedSheet_ACU(before, template, sheetKey, templateSheetKey,
         ? adoptTemplateRowsForMatchedSheet_ACU(templateRows, targetEntries.length, retainedHiddenHeaders.length)
         : migratedRows;
     sheet.content = [nextHeaders, ...adoptedRows];
-    sheet.sourceData = clone_ACU$7(template.sourceData || {});
+    sheet.sourceData = clone_ACU$8(template.sourceData || {});
     // 物化收尾契约分支：sqlite 重建 DDL 并沁用旧物理名；native 不生成/不解析 DDL，
     // 保留模板 sourceData.ddl 原值（结构变更后旧 DDL 与新表头列数必然不一致，
     // 投影层会退回按表头名解析隐藏列——这正是 native 隐藏集的身份契约）。
@@ -38601,7 +38483,7 @@ function reconcileMatchedSheet_ACU(before, template, sheetKey, templateSheetKey,
     accumulateTableAliases_ACU(sheet, before, template);
     delete sheet.seedRows;
     const meta = buildPersistentMetadataUpdate_ACU(before, sheet);
-    const beforeProjection = clone_ACU$7(before);
+    const beforeProjection = clone_ACU$8(before);
     delete beforeProjection.seedRows;
     const changed = JSON.stringify(beforeProjection) !== JSON.stringify(sheet);
     return { sheet, changed, meta, audit: { sheetKey, resolvedSheetKey: sheetKey, match: 'matched', baselineSheetKey: sheetKey, templateSheetKey, baselineName: before.name,
@@ -38741,8 +38623,8 @@ function buildRetainedColumnDDL_ACU(before, template, targetColumns, targetHeade
     return `CREATE TABLE ${tableName} (\n${entries.map((entry, index) => `  ${entry.definition}${index < entries.length - 1 ? ',' : ''}${entry.comment}`).join('\n')}\n)${suffix ? ` ${suffix}` : ''};`;
 }
 function buildPersistentMetadataUpdate_ACU(before, template) {
-    const beforeSourceData = clone_ACU$7(before.sourceData || {});
-    const targetSourceData = clone_ACU$7(template.sourceData || {});
+    const beforeSourceData = clone_ACU$8(before.sourceData || {});
+    const targetSourceData = clone_ACU$8(template.sourceData || {});
     delete beforeSourceData.ddl;
     delete targetSourceData.ddl;
     const removedSourceDataKeys = Object.keys(beforeSourceData).filter(key => !Object.prototype.hasOwnProperty.call(targetSourceData, key));
@@ -38753,11 +38635,11 @@ function buildPersistentMetadataUpdate_ACU(before, template) {
     if (before.orderNo !== template.orderNo)
         meta.orderNo = template.orderNo;
     if (Object.keys(sourceDataDelta).length > 0 || removedSourceDataKeys.length > 0)
-        meta.sourceData = clone_ACU$7(targetSourceData);
+        meta.sourceData = clone_ACU$8(targetSourceData);
     if (!sameValue_ACU(before.updateConfig, template.updateConfig))
-        meta.updateConfig = clone_ACU$7(template.updateConfig);
+        meta.updateConfig = clone_ACU$8(template.updateConfig);
     if (!sameValue_ACU(before.exportConfig, template.exportConfig))
-        meta.exportConfig = clone_ACU$7(template.exportConfig);
+        meta.exportConfig = clone_ACU$8(template.exportConfig);
     return Object.keys(meta).length > 0 ? meta : undefined;
 }
 function sameValue_ACU(left, right) {
@@ -40219,14 +40101,16 @@ function clearTableFieldsForIsolation_ACU(msg, isolationKey, isolationConfig) {
     // ── 新版：删除指定隔离标签的槽 ──
     const container = parseIsolatedDataField(msg);
     if (container && container[isolationKey]) {
-        delete container[isolationKey];
+        // R1-03：不就地 delete——container 可能是解析缓存或消息原对象；浅拷贝后整体换字段。
+        const nextContainer = { ...container };
+        delete nextContainer[isolationKey];
         changed = true;
         // 如果容器里已经没有任何标签槽了，删除整个字段
-        if (Object.keys(container).length === 0) {
+        if (Object.keys(nextContainer).length === 0) {
             delete msg.TavernDB_ACU_IsolatedData;
         }
         else {
-            msg.TavernDB_ACU_IsolatedData = container;
+            msg.TavernDB_ACU_IsolatedData = nextContainer;
         }
     }
     // ── 旧版：仅在消息属于当前隔离标签时才删除 ──
@@ -40280,6 +40164,11 @@ function hasAnyTableData_ACU(msg, isolationKey, isolationConfig) {
     if (isolationKey) {
         const tagData = readIsolatedTagData_ACU(msg, isolationKey);
         if (tagData?.independentData && Object.keys(tagData.independentData).some(k => k.startsWith('sheet_'))) {
+            return true;
+        }
+        // R1-04：V2 存储帧同样是表格数据（判据与 storage-strategy-resolver 的 isV2TagData_ACU 一致）。
+        const frame = tagData?.storageFrame;
+        if (frame && typeof frame === 'object' && frame.version === 2 && Array.isArray(frame.logEntries)) {
             return true;
         }
     }
@@ -44596,6 +44485,72 @@ function computeReplayHeadRevisionDigest_ACU(chat, isolationKey) {
     return digest;
 }
 
+function splitSqlStatements_ACU(sql, options = {}) {
+    const source = String(sql ?? '');
+    const statements = [];
+    let current = '';
+    let quote = null;
+    const pushCurrent = () => {
+        const trimmed = current.trim();
+        if (trimmed)
+            statements.push(trimmed);
+        current = '';
+    };
+    for (let index = 0; index < source.length; index += 1) {
+        const char = source[index];
+        const next = source[index + 1];
+        if (quote) {
+            current += char;
+            if (char === quote) {
+                // 方括号标识符没有转义；其余引号成对出现即转义。
+                if (quote !== ']' && next === quote) {
+                    current += next;
+                    index += 1;
+                }
+                else {
+                    quote = null;
+                }
+            }
+            continue;
+        }
+        if (char === '-' && next === '-') {
+            const lineEnd = source.indexOf('\n', index + 2);
+            if (lineEnd === -1)
+                break;
+            current += '\n';
+            index = lineEnd;
+            continue;
+        }
+        if (char === '/' && next === '*') {
+            const commentEnd = source.indexOf('*/', index + 2);
+            current += ' ';
+            if (commentEnd === -1)
+                break;
+            index = commentEnd + 1;
+            continue;
+        }
+        if (char === '\'' || char === '"' || char === '`') {
+            quote = char;
+            current += char;
+            continue;
+        }
+        if (char === '[') {
+            quote = ']';
+            current += char;
+            continue;
+        }
+        if (char === ';') {
+            pushCurrent();
+            continue;
+        }
+        current += char;
+    }
+    if (quote && options.strictQuotes)
+        throw new Error('SQL 字符串字面量未闭合');
+    pushCurrent();
+    return statements;
+}
+
 /**
  * 阶段 G2：in-flight replay 去重（只对并发/紧邻的相同纯只读调用生效）。
  *
@@ -45406,49 +45361,25 @@ function getValidatedTimelineCheckpointsForFrame_ACU(checkpoints) {
     // 按 frame 物理位置补齐。同一 frame 内的真实生效顺序继续由 afterSeq 决定。
     return checkpoints.filter(checkpoint => checkpoint.timeline !== undefined);
 }
-function splitSqlStatementsForReplay_ACU(sql) {
-    const statements = [];
-    let current = '';
-    let inString = false;
-    let stringChar = '';
-    for (let i = 0; i < sql.length; i += 1) {
-        const char = sql[i];
-        if (inString) {
-            current += char;
-            if (char === stringChar) {
-                if (i + 1 < sql.length && sql[i + 1] === stringChar) {
-                    current += sql[i + 1];
-                    i += 1;
-                }
-                else {
-                    inString = false;
-                }
-            }
-        }
-        else if (char === "'" || char === '"') {
-            inString = true;
-            stringChar = char;
-            current += char;
-        }
-        else if (char === ';') {
-            const trimmed = current.trim();
-            if (trimmed)
-                statements.push(trimmed);
-            current = '';
-        }
-        else {
-            current += char;
-        }
-    }
-    const tail = current.trim();
-    if (tail)
-        statements.push(tail);
-    return statements;
+// 分句与写入期共用 shared/sql-statement-splitter（R1-05），写入与回放切分口径一致。
+function normalizeSqlStatementForReplay_ACU(statement) {
+    return normalizeStatementValues(normalizeSqlStructure(statement));
 }
-function normalizeSqlStatementsForReplay_ACU(statements) {
+function normalizeSqlStatementsForReplay_ACU(statements, options = {}) {
+    if (options.alignedParams) {
+        // R2B-10：带参数时每条存储语句对应一组参数（写入期按单条语句绑定执行），不能再分句后整体过滤，
+        // 否则后面的参数全部错位。存储语句切出的不是恰好一条时 fail-closed。
+        return statements.map((statement, index) => {
+            const pieces = splitSqlStatements_ACU(stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(statement || '')).trim());
+            if (pieces.length !== 1) {
+                throw new Error(`参数化 SQL 回放：第 ${index + 1} 条存储语句切分后为 ${pieces.length} 条，参数无法对齐，已拒绝回放。`);
+            }
+            return normalizeSqlStatementForReplay_ACU(pieces[0]);
+        });
+    }
     return statements
-        .flatMap(statement => splitSqlStatementsForReplay_ACU(stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(statement || '')).trim()))
-        .map(statement => normalizeStatementValues(normalizeSqlStructure(statement)))
+        .flatMap(statement => splitSqlStatements_ACU(stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(statement || '')).trim()))
+        .map(normalizeSqlStatementForReplay_ACU)
         .filter(Boolean);
 }
 function normalizeReplayState_ACU(state, context) {
@@ -45903,7 +45834,9 @@ function buildReplaySqlTableAliases_ACU(state, operation, metrics, context) {
     return { aliases, conflicts, physicalNames: resolvedPhysicalNames };
 }
 async function applySqlBatchOperationV2_ACU(state, operation, runtime, supplementalTemplate, options = {}, context) {
-    const statements = normalizeSqlStatementsForReplay_ACU(operation.statements || []);
+    const statements = normalizeSqlStatementsForReplay_ACU(operation.statements || [], {
+        alignedParams: Array.isArray(operation.params),
+    });
     if (statements.length === 0)
         return;
     if (options.metrics)
@@ -58362,7 +58295,7 @@ function cloneChatForCandidate_ACU(chat) {
  * 候选克隆于 replay 与等锁之前，期间宿主可能追加或编辑消息：只回写这些字段，绝不整体替换聊天。
  * 目标楼层在窗口内被替换或其表格字段被改动时拒绝。返回逐字段回滚函数。
  */
-function applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat, baseline, anchorIndex, identityMessageIndex) {
+function applyCandidateTableFieldsToLiveChat_ACU$1(chat, candidateChat, baseline, anchorIndex, identityMessageIndex) {
     const changes = [];
     candidateChat.forEach((candidateMessage, index) => {
         if (isolatedFieldText_ACU(candidateMessage) === baseline.isolatedFieldTexts[index])
@@ -58914,7 +58847,7 @@ async function establishProvisionalBridge_ACU(runId, selectedSheetKeys, rangeSta
         try {
             committed = await ctx.runCommit(async () => {
                 ctx.assertFresh('bridge direct chat mutation after commit lock');
-                const rollback = applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat, candidateBaseline, rangeStartMessageIndex, rangeStartMessageIndex);
+                const rollback = applyCandidateTableFieldsToLiveChat_ACU$1(chat, candidateChat, candidateBaseline, rangeStartMessageIndex, rangeStartMessageIndex);
                 try {
                     await saveChatToHostStrict_ACU();
                     return {
@@ -59116,7 +59049,7 @@ async function finalizeProvisionalBridge_ACU(runId, options) {
         try {
             committed = await ctx.runCommit(async () => {
                 ctx.assertFresh('bridge direct chat mutation after commit lock');
-                const rollback = applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat, candidateBaseline, bridge.originalFullCheckpointIndex, bridge.originalFullCheckpointIndex);
+                const rollback = applyCandidateTableFieldsToLiveChat_ACU$1(chat, candidateChat, candidateBaseline, bridge.originalFullCheckpointIndex, bridge.originalFullCheckpointIndex);
                 try {
                     await saveChatToHostStrict_ACU();
                     return {
@@ -59209,7 +59142,7 @@ async function rollbackProvisionalBridge_ACU(runId, options = {}) {
         try {
             committed = await ctx.runCommit(async () => {
                 ctx.assertFresh('bridge direct chat mutation after commit lock');
-                const rollback = applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat, candidateBaseline, bridge.originalFullCheckpointIndex, null);
+                const rollback = applyCandidateTableFieldsToLiveChat_ACU$1(chat, candidateChat, candidateBaseline, bridge.originalFullCheckpointIndex, null);
                 try {
                     await saveChatToHostStrict_ACU();
                     return { ok: true };
@@ -59301,6 +59234,152 @@ async function recoverProvisionalBridgeSession_ACU(options = {}) {
     }
     logWarn_ACU(`[ManualCatchUpBridge] 崩溃残留自动 finalize：runId=${bridge.runId}（${bridge.lastCommittedTargetIndex + 1} 个已提交 bucket）。`);
     return { ok: true, action: 'finalized' };
+}
+
+/**
+ * V2 单根不变量的共用工具：同一隔离键同一时刻只允许一个 full checkpoint。
+ * 由混合存储提交（mixed-storage-commit）抽出，硬删表的终态根也复用（R2B-07）。
+ */
+function clone_ACU$7(value) { return JSON.parse(JSON.stringify(value)); }
+function aiFloor_ACU$1(chat, index) { return countAiFloors_ACU(chat.slice(0, index + 1)); }
+/**
+ * 写入新根（migration 根 / 硬删表后的终态根）后，同一隔离键下其余 full checkpoint（原 V2 anchor 及更早的根）
+ * 必须同事务降级，否则形成多根：回放只认最后一个 full，之前增量全部失效，且后续
+ * 手动重填会被锚点预检阻断。降级语义对齐 chat-service 的 checkpoint fallback：
+ * checkpoint.data（含 perSheetCheckpoints 覆盖）转为 seq ≤ 0 的 data_replace fallback
+ * logEntry 前置到原帧，随后删除 checkpoint——数学上不改变回放输出（降级帧位于新根
+ * 之前，回放从新根起步）且原数据无损保留在帧内。
+ */
+function downgradeOtherFullCheckpoints_ACU(chat, isolationKey, keepIndex) {
+    let downgraded = 0;
+    for (let index = 0; index < chat.length; index += 1) {
+        if (index === keepIndex)
+            continue;
+        const message = chat[index];
+        if (!message || message.is_user)
+            continue;
+        const tagData = readIsolatedTagData_ACU(message, isolationKey);
+        if (!isV2TagData_ACU(tagData))
+            continue;
+        const frame = tagData.storageFrame;
+        const checkpoint = frame.checkpoint;
+        if (checkpoint?.kind !== 'full')
+            continue;
+        const existingEntries = Array.isArray(frame.logEntries) ? frame.logEntries : [];
+        const finiteSeqs = existingEntries.map((entry) => Number(entry?.seq)).filter(Number.isFinite);
+        const seq = Math.min(0, (finiteSeqs.length > 0 ? Math.min(...finiteSeqs) : 1) - 1);
+        const fallbackData = clone_ACU$7(checkpoint.data || {});
+        const sheetCheckpoints = frame.perSheetCheckpoints;
+        if (sheetCheckpoints && typeof sheetCheckpoints === 'object' && !Array.isArray(sheetCheckpoints)) {
+            for (const [sheetKey, sheetCheckpoint] of Object.entries(sheetCheckpoints)) {
+                if (!sheetKey.startsWith('sheet_')
+                    || !sheetCheckpoint
+                    || sheetCheckpoint.kind !== 'sheet_full'
+                    || sheetCheckpoint.sheetKey !== sheetKey
+                    || !sheetCheckpoint.data
+                    || typeof sheetCheckpoint.data !== 'object'
+                    || Array.isArray(sheetCheckpoint.data))
+                    continue;
+                fallbackData[sheetKey] = clone_ACU$7(sheetCheckpoint.data);
+            }
+        }
+        const sheetKeys = Object.keys(fallbackData).filter(key => key.startsWith('sheet_'));
+        // 导入语义必须随降级一起保留：reason==='import' 的 full 根是用户显式导入的权威快照，
+        // 手动重填的 importOverlap 守卫与 chat-message-data-repo 的范围清理守卫都据此保护它。
+        // 降级若一律改写成 checkpoint_fallback + source:'system'，删除 checkpoint 后这一帧在两个
+        // 守卫眼里都退化成普通历史增量，破坏性重填会静默覆盖导入数据（V2-b 高危）。
+        const isImportCheckpoint = checkpoint.reason === 'import';
+        frame.logEntries = [{
+                seq,
+                entryId: `downgraded-checkpoint-${index}-${checkpoint.createdAt || Date.now()}`,
+                createdAt: checkpoint.createdAt || Date.now(),
+                source: isImportCheckpoint ? 'import' : 'system',
+                targetMessageIndex: index,
+                aiFloor: aiFloor_ACU$1(chat, index),
+                filledSheetKeys: sheetKeys,
+                changedSheetKeys: sheetKeys,
+                groupKeys: [],
+                operations: [{ kind: 'data_replace', data: fallbackData, reason: isImportCheckpoint ? 'import' : 'checkpoint_fallback' }],
+                writeSet: [{ kind: 'all' }],
+            }, ...existingEntries];
+        delete frame.checkpoint;
+        downgraded += 1;
+    }
+    return downgraded;
+}
+
+/**
+ * 把「由 live chat 同步克隆并改写」的候选聊天写回 live chat（R2B-08）。
+ * 只逐条替换表格相关字段，不整体 splice：宿主/插件持有的消息对象引用（删楼保管库按对象引用判定楼层
+ * 是否幸存）保持有效；返回的回滚函数还原原字段引用，而不是再换一批克隆。
+ */
+const CHAT_TABLE_MESSAGE_FIELDS_ACU = [
+    'TavernDB_ACU_IsolatedData',
+    'TavernDB_ACU_Identity',
+    'TavernDB_ACU_IndependentData',
+    'TavernDB_ACU_Data',
+    'TavernDB_ACU_SummaryData',
+    'TavernDB_ACU_ModifiedKeys',
+    'TavernDB_ACU_UpdateGroupKeys',
+];
+/**
+ * 构造可安全改写表格字段的候选聊天：每条消息浅拷贝，只深拷贝表格字段。
+ * 用于「先在候选上清理/改写，再校验或写回」的路径，避免把整段聊天正文做一次 JSON 往返（R2B-09）。
+ * 候选只能改写表格字段；其他字段与原消息共享引用。
+ */
+function cloneChatWithTableFields_ACU(chat) {
+    return chat.map(message => {
+        if (!message || typeof message !== 'object')
+            return message;
+        const copy = { ...message };
+        for (const field of CHAT_TABLE_MESSAGE_FIELDS_ACU) {
+            if (Object.prototype.hasOwnProperty.call(copy, field) && copy[field] !== undefined) {
+                copy[field] = JSON.parse(JSON.stringify(copy[field]));
+            }
+        }
+        return copy;
+    });
+}
+function sameJson_ACU(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+}
+function applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat) {
+    if (!Array.isArray(chat) || !Array.isArray(candidateChat) || chat.length !== candidateChat.length) {
+        throw new Error('候选聊天与当前聊天长度不一致，拒绝写回表格字段。');
+    }
+    const restores = [];
+    const rollback = () => {
+        for (let index = restores.length - 1; index >= 0; index -= 1) {
+            const { message, field, hadValue, value } = restores[index];
+            if (hadValue)
+                message[field] = value;
+            else
+                delete message[field];
+        }
+    };
+    try {
+        chat.forEach((message, index) => {
+            const candidate = candidateChat[index];
+            if (!message || typeof message !== 'object' || !candidate || typeof candidate !== 'object')
+                return;
+            for (const field of CHAT_TABLE_MESSAGE_FIELDS_ACU) {
+                const hadValue = Object.prototype.hasOwnProperty.call(message, field);
+                const candidateHasValue = Object.prototype.hasOwnProperty.call(candidate, field);
+                if (hadValue === candidateHasValue && (!hadValue || sameJson_ACU(message[field], candidate[field])))
+                    continue;
+                restores.push({ message, field, hadValue, value: message[field] });
+                if (candidateHasValue)
+                    message[field] = candidate[field];
+                else
+                    delete message[field];
+            }
+        });
+    }
+    catch (error) {
+        rollback();
+        throw error;
+    }
+    return rollback;
 }
 
 function assertTemplateCommitChatContext_ACU(expectedChat, options) {
@@ -60284,7 +60363,8 @@ function classifyTemplateCommitStorageState_ACU(chat, isolationKey) {
 function classifyTemplateCommitStorageStateAfterDeletedSheets_ACU(chat, isolationKey, deletedSheetKeys) {
     if (deletedSheetKeys.length === 0)
         return classifyTemplateCommitStorageState_ACU(chat, isolationKey);
-    const simulatedChat = deepClone_ACU(chat);
+    // 只深拷贝表格字段（R2B-09）：清理只改写表格字段，正文无需 JSON 往返。
+    const simulatedChat = cloneChatWithTableFields_ACU(chat);
     for (const message of simulatedChat) {
         if (isDataBearingMessage_ACU(message))
             purgeSheetKeysFromMessage_ACU(message, deletedSheetKeys);
@@ -60374,7 +60454,7 @@ async function demoteTemplateOnlyRootToScopeOnly_ACU(options = {}) {
             const sourceFrame = tagData.storageFrame;
             const backupFrame = deepClone_ACU(sourceFrame);
             // 构造候选聊天：移除该 frame 的 checkpoint / perSheetCheckpoints / headRevision。
-            const candidateChat = deepClone_ACU(chat);
+            const candidateChat = cloneChatWithTableFields_ACU(chat);
             const candidateContainer = readIsolatedDataContainer_ACU(candidateChat[rootIndex]) || {};
             // 写 recoveryBackup 必须放在「整条移除」判空之前：正常路径 frame 降级为
             // {version:2, logEntries:[]} 标准空帧（tagData 保留，backup 随 tagData 落盘）；
@@ -60459,6 +60539,11 @@ async function demoteTemplateOnlyRootToScopeOnly_ACU(options = {}) {
             // 正常路径（frame 降级为 {version:2, logEntries:[]} 标准空帧）保留 tagData，
             // recoveryBackup 随 tagData 一起落盘；仅畸形空壳才整条移除 tagData。
             const candidateFinalContainer = candidateChat[rootIndex].TavernDB_ACU_IsolatedData;
+            // 严格保存失败必须还原根消息（文档契约「失败则完整还原内存」），否则内存里回放根已没、磁盘上还在。
+            const hadRootIsolatedData = Object.prototype.hasOwnProperty.call(rootMessage, 'TavernDB_ACU_IsolatedData');
+            const previousRootIsolatedData = rootMessage.TavernDB_ACU_IsolatedData;
+            const hadRootIdentity = Object.prototype.hasOwnProperty.call(rootMessage, 'TavernDB_ACU_Identity');
+            const previousRootIdentity = rootMessage.TavernDB_ACU_Identity;
             if (candidateFinalContainer === undefined)
                 delete rootMessage.TavernDB_ACU_IsolatedData;
             else
@@ -60467,8 +60552,21 @@ async function demoteTemplateOnlyRootToScopeOnly_ACU(options = {}) {
                 enabled: settings_ACU.dataIsolationEnabled,
                 code: settings_ACU.dataIsolationCode,
             });
+            try {
+                await saveChatToHostStrict_ACU();
+            }
+            catch (error) {
+                if (hadRootIsolatedData)
+                    rootMessage.TavernDB_ACU_IsolatedData = previousRootIsolatedData;
+                else
+                    delete rootMessage.TavernDB_ACU_IsolatedData;
+                if (hadRootIdentity)
+                    rootMessage.TavernDB_ACU_Identity = previousRootIdentity;
+                else
+                    delete rootMessage.TavernDB_ACU_Identity;
+                throw error;
+            }
             logDebug_ACU(`[V2 Persist] template_only_root 降级完成: requestId=${options.requestId || 'unknown'}, rootIndex=${rootIndex}, reason=${rootCheckpoint.reason}, fingerprint=${afterFingerprint}。`);
-            await saveChatToHostStrict_ACU();
             return { ok: true, demoted: true };
         });
     }
@@ -61690,9 +61788,19 @@ async function persistTableMutationLogBatchV2Core_ACU(options) {
         const message = error instanceof Error ? error.message : String(error);
         return { saved: false, error: `V2 batch 写入前无法验证 provisional replay：${message}` };
     }
-    const candidateChat = deepClone_ACU(chat);
+    // R2B-09：不整份深克隆聊天（长聊天正文每批一次 stringify+parse）。候选数组浅拷贝，只有要改写的
+    // 消息换成浅拷贝对象；改写只替换顶层字段，isolatedData 本身由 cloneIsolatedData_ACU 深拷贝，原消息不受影响。
+    const candidateChat = chat.slice();
+    const copiedCandidateIndices = new Set();
+    const candidateMessageForWrite = (index) => {
+        if (!copiedCandidateIndices.has(index) && candidateChat[index] && typeof candidateChat[index] === 'object') {
+            candidateChat[index] = { ...candidateChat[index] };
+            copiedCandidateIndices.add(index);
+        }
+        return candidateChat[index];
+    };
     for (const [targetIndex, target] of targetByIndex) {
-        const message = candidateChat[targetIndex];
+        const message = candidateMessageForWrite(targetIndex);
         let isolatedData = cloneIsolatedData_ACU(message);
         let tagData = isolatedData[isolationKey];
         if (!isV2TagData_ACU(tagData))
@@ -61708,7 +61816,7 @@ async function persistTableMutationLogBatchV2Core_ACU(options) {
             if (anchorData.error) {
                 return { saved: false, error: anchorData.error };
             }
-            const rootMessage = candidateChat[latestCheckpoint.index];
+            const rootMessage = candidateMessageForWrite(latestCheckpoint.index);
             if (!rootMessage) {
                 return { saved: false, error: `V2 batch 收敛缺少既有 full checkpoint 根消息（index=${latestCheckpoint.index}），已拒绝。` };
             }
@@ -62977,12 +63085,14 @@ async function commitCurrentFloorTemplateChanges_ACU(options) {
                     frame.headRevision = buildCommitRevision_ACU('checkpoint', generateEntryId_ACU());
                     persistedCheckpoints = [];
                     hardDeleteCheckpointCreated = true;
-                    const candidateChat = deepClone_ACU(chat);
+                    const candidateChat = cloneChatWithTableFields_ACU(chat);
                     for (const message of candidateChat) {
                         if (isDataBearingMessage_ACU(message))
                             purgeSheetKeysFromMessage_ACU(message, deletedSheetKeys);
                     }
                     candidateChat[target.index].TavernDB_ACU_IsolatedData = isolatedData;
+                    // R2B-07：终态根写在目标楼层后，同隔离键其余 full 同事务降级，维持单根（候选与下方真实提交同口径）。
+                    downgradeOtherFullCheckpoints_ACU(candidateChat, isolationKey, target.index);
                     const candidateValidationError = await validateHardDeleteCandidate_ACU(candidateChat, isolationKey, target.index, deletedSheetKeys, terminalData);
                     if (candidateValidationError)
                         throw new Error(candidateValidationError);
@@ -63008,8 +63118,11 @@ async function commitCurrentFloorTemplateChanges_ACU(options) {
                 target.message.TavernDB_ACU_IsolatedData = isolatedData;
                 // isolatedData 在异步准备前已克隆；重新挂回目标消息后必须同步应用删除，
                 // 否则会把刚刚从真实消息清理掉的目标 frame 旧快照覆盖回来。
-                if (deletedSheetKeys.length > 0)
+                if (deletedSheetKeys.length > 0) {
                     purgeSheetKeysFromMessage_ACU(target.message, deletedSheetKeys);
+                    // R2B-07：其余 full 降级为帧内 fallback（messageSnapshots 已深拷贝这些字段，失败时随之回滚）。
+                    downgradeOtherFullCheckpoints_ACU(chat, isolationKey, target.index);
+                }
                 writeMessageIdentity_ACU(target.message, {
                     enabled: settings_ACU.dataIsolationEnabled,
                     code: settings_ACU.dataIsolationCode,
@@ -65641,71 +65754,6 @@ function latestSafeAiTarget_ACU(chat, isolationKey) {
     return null;
 }
 function aiFloor_ACU(chat, index) { return countAiFloors_ACU(chat.slice(0, index + 1)); }
-/**
- * 写入新 migration 根后，同一隔离键下其余 full checkpoint（原 V2 anchor 及更早的根）
- * 必须同事务降级，否则形成多根：回放只认最后一个 full，之前增量全部失效，且后续
- * 手动重填会被锚点预检阻断。降级语义对齐 chat-service 的 checkpoint fallback：
- * checkpoint.data（含 perSheetCheckpoints 覆盖）转为 seq ≤ 0 的 data_replace fallback
- * logEntry 前置到原帧，随后删除 checkpoint——数学上不改变回放输出（降级帧位于新根
- * 之前，回放从新根起步）且原数据无损保留在帧内。
- */
-function downgradeOtherFullCheckpoints_ACU(chat, isolationKey, keepIndex) {
-    let downgraded = 0;
-    for (let index = 0; index < chat.length; index += 1) {
-        if (index === keepIndex)
-            continue;
-        const message = chat[index];
-        if (!message || message.is_user)
-            continue;
-        const tagData = readIsolatedTagData_ACU(message, isolationKey);
-        if (!isV2TagData_ACU(tagData))
-            continue;
-        const frame = tagData.storageFrame;
-        const checkpoint = frame.checkpoint;
-        if (checkpoint?.kind !== 'full')
-            continue;
-        const existingEntries = Array.isArray(frame.logEntries) ? frame.logEntries : [];
-        const finiteSeqs = existingEntries.map((entry) => Number(entry?.seq)).filter(Number.isFinite);
-        const seq = Math.min(0, (finiteSeqs.length > 0 ? Math.min(...finiteSeqs) : 1) - 1);
-        const fallbackData = clone_ACU$5(checkpoint.data || {});
-        const sheetCheckpoints = frame.perSheetCheckpoints;
-        if (sheetCheckpoints && typeof sheetCheckpoints === 'object' && !Array.isArray(sheetCheckpoints)) {
-            for (const [sheetKey, sheetCheckpoint] of Object.entries(sheetCheckpoints)) {
-                if (!sheetKey.startsWith('sheet_')
-                    || !sheetCheckpoint
-                    || sheetCheckpoint.kind !== 'sheet_full'
-                    || sheetCheckpoint.sheetKey !== sheetKey
-                    || !sheetCheckpoint.data
-                    || typeof sheetCheckpoint.data !== 'object'
-                    || Array.isArray(sheetCheckpoint.data))
-                    continue;
-                fallbackData[sheetKey] = clone_ACU$5(sheetCheckpoint.data);
-            }
-        }
-        const sheetKeys = Object.keys(fallbackData).filter(key => key.startsWith('sheet_'));
-        // 导入语义必须随降级一起保留：reason==='import' 的 full 根是用户显式导入的权威快照，
-        // 手动重填的 importOverlap 守卫与 chat-message-data-repo 的范围清理守卫都据此保护它。
-        // 降级若一律改写成 checkpoint_fallback + source:'system'，删除 checkpoint 后这一帧在两个
-        // 守卫眼里都退化成普通历史增量，破坏性重填会静默覆盖导入数据（V2-b 高危）。
-        const isImportCheckpoint = checkpoint.reason === 'import';
-        frame.logEntries = [{
-                seq,
-                entryId: `downgraded-checkpoint-${index}-${checkpoint.createdAt || Date.now()}`,
-                createdAt: checkpoint.createdAt || Date.now(),
-                source: isImportCheckpoint ? 'import' : 'system',
-                targetMessageIndex: index,
-                aiFloor: aiFloor_ACU(chat, index),
-                filledSheetKeys: sheetKeys,
-                changedSheetKeys: sheetKeys,
-                groupKeys: [],
-                operations: [{ kind: 'data_replace', data: fallbackData, reason: isImportCheckpoint ? 'import' : 'checkpoint_fallback' }],
-                writeSet: [{ kind: 'all' }],
-            }, ...existingEntries];
-        delete frame.checkpoint;
-        downgraded += 1;
-    }
-    return downgraded;
-}
 function stableJson_ACU$1(value) {
     return JSON.stringify(value, (_key, item) => {
         if (!item || typeof item !== 'object' || Array.isArray(item))
@@ -65852,13 +65900,13 @@ async function commitMixedStorageDecision_ACU(options) {
     const finalScopeError = scopeError_ACU(decision);
     if (finalScopeError)
         return commitFailure_ACU(decision, finalScopeError);
-    const originalChat = clone_ACU$5(chat);
-    chat.splice(0, chat.length, ...candidateChat);
+    // R2B-08：只写回表格字段，保持消息对象身份；失败时还原原字段引用。
+    const rollbackLiveChat = applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat);
     try {
         await saveChatToHostStrict_ACU();
     }
     catch (error) {
-        chat.splice(0, chat.length, ...originalChat);
+        rollbackLiveChat();
         return commitFailure_ACU(decision, `host save failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const expectedStorageMode = getCurrentStorageMode();
@@ -66726,13 +66774,13 @@ async function migrateLegacyStorageToV2OnLoad_ACU(options) {
                     const keepV2ScopeError = getLegacyMigrationScopeChangeError_ACU(scopeSnapshot);
                     if (keepV2ScopeError)
                         return { migrated: false, mixedDecision, error: keepV2ScopeError };
-                    const chatBeforeKeepV2 = deepClone_ACU(chat);
-                    chat.splice(0, chat.length, ...keepV2Chat);
+                    // R2B-08：只写回表格字段，保持消息对象身份；失败时还原原字段引用。
+                    const rollbackKeepV2 = applyCandidateTableFieldsToLiveChat_ACU(chat, keepV2Chat);
                     try {
                         await saveChatToHostStrict_ACU();
                     }
                     catch (error) {
-                        chat.splice(0, chat.length, ...chatBeforeKeepV2);
+                        rollbackKeepV2();
                         return { migrated: false, mixedDecision, error: `mixed self-heal (keep_v2) save failed: ${error instanceof Error ? error.message : String(error)}` };
                     }
                     logWarn_ACU(`[V2 Migration] 混合存储（${mixedDecision.kind}）静默自愈：V2 anchor（#${anchorIndex}）`
@@ -66884,13 +66932,13 @@ async function migrateLegacyStorageToV2OnLoad_ACU(options) {
     if (scopeChangeError) {
         return { migrated: false, error: scopeChangeError };
     }
-    const originalChat = deepClone_ACU(chat);
-    chat.splice(0, chat.length, ...candidateChat);
+    // R2B-08：只写回表格字段，保持消息对象身份；失败时还原原字段引用。
+    const rollbackMigration = applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat);
     try {
         await saveChatToHostStrict_ACU();
     }
     catch (error) {
-        chat.splice(0, chat.length, ...originalChat);
+        rollbackMigration();
         return { migrated: false, error: `legacy migration save failed: ${error instanceof Error ? error.message : String(error)}` };
     }
     logDebug_ACU(`[V2 Migration] legacy-v1 migrated to V2 checkpoint: messageIndex=${target.index}, skipUpdateFloors=${skipUpdateFloors}, isolationKey=[${options.isolationKey || '无标签'}], sheets=${sheetKeys.length}`);
@@ -70761,12 +70809,18 @@ class SqlTableService {
             throw new SqlRowIdMaterializationError_ACU(error?.message || String(error));
         }
         const materializedSqlTexts = [];
+        // R2A-10：与 statements 逐条对齐的分组下标（执行方插入的补种语句为 -1）。引擎报「第 N 条语句失败」
+        // 时按实际执行的语句计数，出错分组只能在这里换算，调用方按原文条数倒推会被物化/过滤/补种打乱。
+        const statementGroupIndexes = reseedPlan.inserts.map(() => -1);
         let cursor = 0;
-        for (const group of normalizedGroups) {
+        normalizedGroups.forEach((group, groupIndex) => {
+            const groupStatements = materializedStatements.slice(cursor, cursor + group.length);
             // 空串 = INSERT SELECT 结果为空被物化成无操作，不进日志文本。
-            materializedSqlTexts.push(materializedStatements.slice(cursor, cursor + group.length).filter(Boolean).join(';\n'));
+            materializedSqlTexts.push(groupStatements.filter(Boolean).join(';\n'));
+            groupStatements.forEach(statement => { if (statement)
+                statementGroupIndexes.push(groupIndex); });
             cursor += group.length;
-        }
+        });
         const statements = [...reseedPlan.inserts, ...materializedStatements.filter(Boolean)];
         // 运行时 AI 写路径的锁定强制执行必须在 COMMIT 前完成：finalize 回调运行于
         // runBatchWithFinalize 已开启的事务内，补偿语句与用户语句原子提交/原子回滚。
@@ -70803,6 +70857,11 @@ class SqlTableService {
         }
         catch (e) {
             // 去重：只 throw，由顶层调用链统一记日志，底层不再记 error。
+            const failedStatement = /^第 (\d+) 条语句失败/.exec(String(e?.message || ''));
+            const failedGroupIndex = failedStatement ? statementGroupIndexes[Number(failedStatement[1]) - 1] : undefined;
+            if (e && typeof e === 'object' && typeof failedGroupIndex === 'number' && failedGroupIndex >= 0) {
+                e.failedGroupIndex = failedGroupIndex;
+            }
             throw e;
         }
     }
@@ -71357,7 +71416,13 @@ function enforceTableLocksAfterSqlApply_ACU(engine, syncBridge, beforeData, inte
     const allStatements = [];
     const allReverted = [];
     let physicalNames = null;
-    for (const sheetKey of modifiedKeys) {
+    // R2A-12：不能只比对语句直接写的表——引擎开着外键，作者 DDL 的 ON DELETE CASCADE 等会改到别的表。
+    // 所有表都参与比对；没有锁的表在下面 identities.hasAny 处即跳过，代价只是一次锁查询。
+    const candidateSheetKeys = [...new Set([
+            ...modifiedKeys,
+            ...Object.keys(beforeData || {}).filter(key => key.startsWith('sheet_')),
+        ])];
+    for (const sheetKey of candidateSheetKeys) {
         const beforeSheet = beforeData?.[sheetKey];
         const beforeContent = beforeSheet?.content;
         if (!Array.isArray(beforeContent) || !Array.isArray(beforeContent[0]))
@@ -71512,49 +71577,10 @@ async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _u
 // 工具函数
 // ═══════════════════════════════════════════════════════════════
 /**
- * 按分号拆分 SQL 语句（跳过字符串内的分号）
+ * 按分号拆分 SQL 语句：委托 shared/sql-statement-splitter 的唯一实现（R1-05，识别引号与注释）。
  */
 function splitSqlStatements(sql) {
-    const statements = [];
-    let current = '';
-    let inString = false;
-    let stringChar = '';
-    for (let i = 0; i < sql.length; i++) {
-        const char = sql[i];
-        if (inString) {
-            current += char;
-            // 检查字符串结束（处理转义的引号 ''）
-            if (char === stringChar) {
-                if (i + 1 < sql.length && sql[i + 1] === stringChar) {
-                    // 转义的引号，跳过
-                    current += sql[i + 1];
-                    i++;
-                }
-                else {
-                    inString = false;
-                }
-            }
-        }
-        else if (char === "'" || char === '"') {
-            inString = true;
-            stringChar = char;
-            current += char;
-        }
-        else if (char === ';') {
-            const trimmed = current.trim();
-            if (trimmed)
-                statements.push(trimmed);
-            current = '';
-        }
-        else {
-            current += char;
-        }
-    }
-    // 最后一条语句（可能没有分号结尾）
-    const trimmed = current.trim();
-    if (trimmed)
-        statements.push(trimmed);
-    return statements;
+    return splitSqlStatements_ACU(sql);
 }
 /**
  * 从 SQL 语句中提取实际 mutation 目标表。
@@ -82185,36 +82211,8 @@ function buildInactiveSnapshot_ACU(selectionSignature = '') {
 function stripTakeoverMetaBlock_ACU(comment) {
     return stripAgentTakeoverMetaBlockStrict_ACU(comment);
 }
-function hasTakeoverMetaBlock_ACU(comment) {
-    return new RegExp(createAgentTakeoverMetaPattern_ACU().source).test(normalizeCommentText_ACU$1(comment));
-}
-function hasUnsupportedTakeoverMetaBlock_ACU(comment) {
-    const text = normalizeCommentText_ACU$1(comment);
-    const pattern = createAgentTakeoverMetaPattern_ACU();
-    let match;
-    while ((match = pattern.exec(text))) {
-        try {
-            const meta = JSON.parse(match[1].trim());
-            if (meta.version !== 1 || meta.kind !== 'agent_worldbook_takeover')
-                return true;
-        }
-        catch {
-            return true;
-        }
-    }
-    return false;
-}
 function normalizeTakeoverComparableComment_ACU(comment) {
     return stripWorldbookSkillMetaBlock_ACU(stripTakeoverMetaBlock_ACU(comment));
-}
-function doesTakeoverSnapshotCommentHashMatch_ACU(snapshotCommentHash, currentComment) {
-    if (!snapshotCommentHash)
-        return true;
-    const strippedComment = stripTakeoverMetaBlock_ACU(currentComment);
-    const comparableComment = stripWorldbookSkillMetaBlock_ACU(strippedComment);
-    return hashUserInput_ACU(comparableComment) === snapshotCommentHash
-        // Legacy snapshots created before Skill metadata was excluded from the comparable comment stored hashes that kept Skill metadata.
-        || hashUserInput_ACU(strippedComment) === snapshotCommentHash;
 }
 function parseTakeoverMetaFromComment_ACU(comment) {
     const text = normalizeCommentText_ACU$1(comment);
@@ -82380,8 +82378,8 @@ async function backfillMissingTakeoverMeta_ACU(snapshot) {
                 if (!snapshotEntry)
                     return [];
                 const currentComment = normalizeCommentText_ACU$1(entry?.comment);
-                if (hasTakeoverMetaBlock_ACU(currentComment)
-                    || !doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment)
+                if (hasAgentTakeoverMetaBlock_ACU(currentComment)
+                    || !doesAgentTakeoverCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment)
                     || (entry?.enabled !== false && !isFinalGenerationBlueLightEntry_ACU(entry)))
                     return [];
                 return [{
@@ -82698,10 +82696,15 @@ async function restoreSnapshotEntries_ACU(snapshot) {
     const report = { applied: [], failed: [] };
     // 宿主已确认不存在的条目：无可恢复对象，直接视为完成并从账本剔除，否则接管永远无法收敛。
     const missing = [];
+    const skipMessages = {
+        unsupported_meta: '包含不受支持的接管元数据版本',
+        missing_comment_hash: '缺少 comment 指纹，避免覆盖用户修改',
+        comment_changed: 'comment 已变化，避免覆盖用户修改',
+    };
     for (const [bookName, snapshotEntries] of Object.entries(snapshot.books || {})) {
         const normalizedBookName = String(bookName || '').trim();
-        const entriesToRestore = Array.isArray(snapshotEntries)
-            ? snapshotEntries.filter(entry => entry.takeoverStatus !== 'pending') : [];
+        // 逐条目决策与「已恢复」判定走共用核心（R4-07），与 scope 变更路径同口径。
+        const entriesToRestore = selectRestorableSnapshotEntries_ACU(snapshotEntries);
         if (!normalizedBookName || entriesToRestore.length === 0)
             continue;
         const patches = [];
@@ -82711,58 +82714,29 @@ async function restoreSnapshotEntries_ACU(snapshot) {
             currentEntriesRead = true;
             const currentByUid = new Map((currentEntries || []).map(entry => [String(entry?.uid), entry]));
             for (const snapshotEntry of entriesToRestore) {
-                if (!hasValidWorldbookUid_ACU$1(snapshotEntry?.uid)) {
+                const decision = decideAgentWorldbookEntryRestore_ACU(snapshotEntry, currentByUid.get(String(snapshotEntry?.uid)), { missingCommentHash: 'skip', metaStripMode: 'strict' });
+                if (decision.kind === 'invalid_uid') {
                     logWarn_ACU(`[Agent世界书] 跳过恢复世界书条目：${normalizedBookName} 中存在无效 uid。`, snapshotEntry?.uid);
                     skipped += 1;
-                    continue;
                 }
-                const currentEntry = currentByUid.get(String(snapshotEntry.uid));
-                if (!currentEntry) {
-                    logWarn_ACU(`[Agent世界书] 世界书条目 ${normalizedBookName}#${snapshotEntry.uid} 已被删除，从接管账本移除。`);
-                    missing.push({ bookName: normalizedBookName, uid: snapshotEntry.uid });
-                    continue;
+                else if (decision.kind === 'missing') {
+                    logWarn_ACU(`[Agent世界书] 世界书条目 ${normalizedBookName}#${decision.uid} 已被删除，从接管账本移除。`);
+                    missing.push({ bookName: normalizedBookName, uid: decision.uid });
                 }
-                const currentComment = typeof currentEntry.comment === 'string' ? currentEntry.comment : '';
-                if (hasUnsupportedTakeoverMetaBlock_ACU(currentComment)) {
-                    logWarn_ACU(`[Agent世界书] 跳过恢复世界书条目：${normalizedBookName}#${snapshotEntry.uid} 包含不受支持的接管元数据版本。`);
+                else if (decision.kind === 'skip') {
+                    logWarn_ACU(`[Agent世界书] 跳过恢复世界书条目：${normalizedBookName}#${decision.uid} ${skipMessages[decision.reason]}。`);
                     skipped += 1;
-                    continue;
                 }
-                const strippedComment = stripTakeoverMetaBlock_ACU(currentComment);
-                if (!snapshotEntry.commentHash) {
-                    logWarn_ACU(`[Agent世界书] 跳过恢复世界书条目：${normalizedBookName}#${snapshotEntry.uid} 缺少 comment 指纹，避免覆盖用户修改。`);
-                    skipped += 1;
-                    continue;
+                else {
+                    patches.push(decision.patch);
                 }
-                if (!doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment)) {
-                    logWarn_ACU(`[Agent世界书] 跳过恢复世界书条目：${normalizedBookName}#${snapshotEntry.uid} comment 已变化，避免覆盖用户修改。`);
-                    skipped += 1;
-                    continue;
-                }
-                patches.push({
-                    uid: snapshotEntry.uid,
-                    comment: strippedComment,
-                    enabled: snapshotEntry.previousEnabled !== false,
-                    keys: Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [],
-                    type: snapshotEntry.previousType,
-                });
             }
             if (patches.length > 0) {
                 await setLorebookEntries_ACU(normalizedBookName, patches);
                 const patchedEntriesByUid = new Map((await getLorebookEntries_ACU(normalizedBookName) || []).map(entry => [String(entry?.uid), entry]));
-                for (const patch of patches) {
-                    const currentEntry = patchedEntriesByUid.get(String(patch.uid));
-                    // [L5] keys 按集合比较（长度相同 + 逐元素 includes），不再依赖 JSON.stringify 的数组顺序。
-                    const snapshotKeys = Array.isArray(patch.keys) ? patch.keys.map((key) => String(key)) : [];
-                    const currentKeys = Array.isArray(currentEntry?.keys) ? currentEntry.keys.map((key) => String(key)) : [];
-                    const keysMatch = currentKeys.length === snapshotKeys.length && snapshotKeys.every((key) => currentKeys.includes(key));
-                    const restoredEntry = currentEntry
-                        && currentEntry.enabled === patch.enabled
-                        && currentEntry.type === patch.type
-                        && keysMatch
-                        && !hasTakeoverMetaBlock_ACU(currentEntry.comment);
-                    const update = { bookName: normalizedBookName, uid: patch.uid };
-                    if (restoredEntry) {
+                for (const restorePatch of patches) {
+                    const update = { bookName: normalizedBookName, uid: restorePatch.uid };
+                    if (isAgentWorldbookEntryRestored_ACU(patchedEntriesByUid.get(String(restorePatch.uid)), restorePatch)) {
                         restored += 1;
                         report.applied.push(update);
                     }
@@ -82776,7 +82750,7 @@ async function restoreSnapshotEntries_ACU(snapshot) {
         catch (error) {
             logWarn_ACU(`[Agent世界书] 恢复世界书条目失败：${normalizedBookName}`, error);
             const failedUpdates = currentEntriesRead
-                ? patches.map(patch => ({ bookName: normalizedBookName, uid: patch.uid }))
+                ? patches.map(restorePatch => ({ bookName: normalizedBookName, uid: restorePatch.uid }))
                 : entriesToRestore
                     .filter(entry => hasValidWorldbookUid_ACU$1(entry?.uid))
                     .map(entry => ({ bookName: normalizedBookName, uid: entry.uid }));
@@ -82801,9 +82775,9 @@ async function collectRecoveredPendingSnapshotUpdates_ACU(snapshot) {
                 recovered.push({ bookName, uid: snapshotEntry.uid });
                 continue;
             }
-            if (hasTakeoverMetaBlock_ACU(entry.comment))
+            if (hasAgentTakeoverMetaBlock_ACU(entry.comment))
                 continue;
-            if (!snapshotEntry.commentHash || !doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, String(entry.comment || '')))
+            if (!snapshotEntry.commentHash || !doesAgentTakeoverCommentHashMatch_ACU(snapshotEntry.commentHash, String(entry.comment || '')))
                 continue;
             const previousKeys = Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [];
             const keys = Array.isArray(entry.keys) ? entry.keys : [];
@@ -82845,7 +82819,7 @@ async function writeFinalGenerationGreenlightsExclusive_ACU(greenlights) {
             const shouldRestoreLegacyClearedKeys = liveKeys.length === 0
                 && previousKeys.length > 0
                 && !!snapshotEntry?.commentHash
-                && doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, String(entry?.comment || ''));
+                && doesAgentTakeoverCommentHashMatch_ACU(snapshotEntry.commentHash, String(entry?.comment || ''));
             if (isFinalGenerationBlueLightEntry_ACU(entry) && !shouldRestoreLegacyClearedKeys)
                 return null;
             return {
@@ -106490,61 +106464,6 @@ function getOriginalContent_ACU(messageIndex) {
     return extra._acu_original_content || null;
 }
 /**
- * 保存当前表格数据到聊天记录
- * 从 presentation/triggers/update-process.ts 搬迁
- */
-async function saveCurrentDataForTable_ACU(sheetKey) {
-    try {
-        if (!currentJsonTableData_ACU || !currentJsonTableData_ACU[sheetKey]) {
-            logWarn_ACU('saveCurrentDataForTable_ACU: No data to save.');
-            return;
-        }
-        const chat = getChatArray_ACU();
-        if (!chat || chat.length === 0) {
-            logWarn_ACU('saveCurrentDataForTable_ACU: No chat history.');
-            return;
-        }
-        const sheet = currentJsonTableData_ACU[sheetKey];
-        const history = resolveTableHistoryStateFromChat_ACU(chat, {
-            sheetKey,
-            isSummaryTable: isSummaryOrOutlineTable_ACU(sheet.name),
-            isolationKey: getCurrentIsolationKey_ACU(),
-            settings: settings_ACU,
-        });
-        const fallbackLatestAiIndex = getLatestAiMessageIndexFromChat_ACU(chat);
-        const targetMessageIndex = history.latestDataMessageIndex !== -1
-            ? history.latestDataMessageIndex
-            : fallbackLatestAiIndex;
-        if (targetMessageIndex === -1) {
-            logWarn_ACU('saveCurrentDataForTable_ACU: No AI message available for persistence.');
-            return;
-        }
-        const commitResult = await runTableUpdateCommit_ACU({
-            source: 'system',
-            reason: 'saveCurrentDataForTable',
-            isolationKey: getCurrentIsolationKey_ACU(),
-            writeSet: [{ kind: 'sheet', sheetKey }],
-            revisionWriteSet: [{ kind: 'sheet', sheetKey }],
-            initialData: currentJsonTableData_ACU,
-            targetMessageIndex,
-            targetSheetKeys: [sheetKey],
-            updateGroupKeys: null,
-            trackingSheetKeys: [sheetKey],
-            trackAsUpdate: history.latestDataMessageIndex === -1,
-            operations: [{ kind: 'sheet_replace', sheetKey, sheet: currentJsonTableData_ACU[sheetKey], reason: 'system' }],
-        }, () => ({
-            success: true,
-            tableData: currentJsonTableData_ACU,
-        }));
-        if (!commitResult.success) {
-            logWarn_ACU(`saveCurrentDataForTable_ACU: commit failed: ${commitResult.error || 'unknown error'}`);
-        }
-    }
-    catch (e) {
-        logError_ACU('saveCurrentDataForTable_ACU failed:', e);
-    }
-}
-/**
  * 清理超出保留层数的旧本地数据（表格数据 + 剧情推进数据）
  * 从 presentation/triggers/settings-ui-sync/settings-ui-config.ts 搬迁
  *
@@ -107534,109 +107453,6 @@ async function overrideLatestLayerWithTemplateCore_ACU(templateData) {
     }
     return commitResult.value || 0;
 }
-async function clearManualRefillIncrementalDataInRangeCore_ACU(targetMessageIndices, targetSheetKeys = null) {
-    if (!targetMessageIndices || targetMessageIndices.length === 0)
-        return 0;
-    if (!Array.isArray(targetSheetKeys) || targetSheetKeys.length === 0) {
-        throw new Error('手动重填增量清理必须指定目标表。');
-    }
-    const chat = getChatArray_ACU();
-    if (!chat || chat.length === 0)
-        return 0;
-    const isolationKey = getCurrentIsolationKey_ACU();
-    const targetAliases = resolveSheetIdentityAliasesForClear_ACU(chat, isolationKey, targetSheetKeys, '手动重填预清理');
-    const purgeSheetKeys = targetAliases.sheetKeys;
-    const knownSqlTableNames = new Set(targetAliases.sqlTableNames);
-    const clearsSummaryOrOutline = tableListContainsSummaryOrOutline_ACU(purgeSheetKeys);
-    let clearedCount = 0;
-    // 外置向量文件删除推迟到聊天保存成功后：保存失败时引用仍在，删除会造成悬空指针。
-    const vectorManifestsToDeleteAfterCommit = [];
-    for (const idx of targetMessageIndices) {
-        if (idx < 0 || idx >= chat.length)
-            continue;
-        const msg = chat[idx];
-        if (!msg || msg.is_user)
-            continue;
-        const changed = purgeManualRefillIncrementalSheetKeysFromMessage_ACU(msg, isolationKey, purgeSheetKeys, knownSqlTableNames);
-        if (clearsSummaryOrOutline) {
-            const isolatedData = msg?.TavernDB_ACU_IsolatedData;
-            const tagData = isolatedData && typeof isolatedData === 'object' && !Array.isArray(isolatedData)
-                ? isolatedData[isolationKey]
-                : null;
-            // 只剥离 tagData 上的引用并收集 manifest，聊天保存成功后才物理删除外置文件。
-            if (await deleteVectorIndexManifestFromTagData_ACU(tagData, { deleteExternal: false, onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest) })) {
-                logDebug_ACU(`[手动重填预清理] 已标记消息索引 ${idx} 上的交火向量索引外置文件引用待删除。`);
-            }
-        }
-        if (changed) {
-            clearedCount++;
-            logDebug_ACU(`[手动重填预清理] 已清理消息索引 ${idx} 上选中表的增量数据 (标签: ${isolationKey || '无'})`);
-        }
-    }
-    const residueSummary = {
-        exactHits: 0,
-        runtimeV1Hits: 0,
-        substringOnlyPathCount: 0,
-        checkpointDataRiskCount: 0,
-        scheduleSummaryRiskCount: 0,
-        checkpointDataRiskDetailCount: 0,
-        checkpointDataRiskDetails: [],
-    };
-    for (const idx of targetMessageIndices) {
-        if (idx < 0 || idx >= chat.length)
-            continue;
-        const msg = chat[idx];
-        if (!msg || msg.is_user)
-            continue;
-        const report = scanTargetKeysResidue_ACU(msg, isolationKey, purgeSheetKeys, idx);
-        residueSummary.exactHits += report.exactHits;
-        residueSummary.runtimeV1Hits += report.runtimeV1Hits;
-        residueSummary.substringOnlyPathCount += report.substringOnlyPaths.length;
-        if (report.checkpointDataRisk)
-            residueSummary.checkpointDataRiskCount++;
-        if (report.scheduleSummaryRisk)
-            residueSummary.scheduleSummaryRiskCount++;
-        residueSummary.checkpointDataRiskDetailCount += report.checkpointDataRisks.length;
-        const remainingDetailSlots = MAX_CHECKPOINT_RISK_DETAILS_ACU - residueSummary.checkpointDataRiskDetails.length;
-        if (remainingDetailSlots > 0) {
-            residueSummary.checkpointDataRiskDetails.push(...report.checkpointDataRisks.slice(0, remainingDetailSlots));
-        }
-    }
-    const hasResidue = residueSummary.exactHits > 0
-        || residueSummary.runtimeV1Hits > 0
-        || residueSummary.substringOnlyPathCount > 0
-        || residueSummary.checkpointDataRiskCount > 0
-        || residueSummary.scheduleSummaryRiskCount > 0;
-    if (hasResidue) {
-        logDebug_ACU('[手动重填诊断] 选中表清理后残留摘要', {
-            clearedCount,
-            targetKeys: targetSheetKeys,
-            fields: ['event', 'operations', 'patches', 'writeSet', 'revision', 'progress'],
-            residue: residueSummary,
-        });
-    }
-    if (clearedCount > 0) {
-        await saveChatToHost_ACU();
-        // 聊天引用已提交后才物理删除外置向量文件；保存抛错时不执行，宁可泄漏不误删。
-        await cleanupVectorIndexManifestsAfterCommit_ACU(vectorManifestsToDeleteAfterCommit);
-        logDebug_ACU(`[手动重填预清理] 共清理 ${clearedCount} 条消息的选中表增量数据，聊天已保存。`);
-    }
-    return clearedCount;
-}
-async function clearManualRefillIncrementalDataInRange_ACU(targetMessageIndices, targetSheetKeys = null) {
-    if (!Array.isArray(targetSheetKeys) || targetSheetKeys.length === 0) {
-        throw new Error('手动重填增量清理必须指定目标表。');
-    }
-    const writeSet = targetSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
-    return runTableWriteTransaction_ACU({
-        source: 'system_cleanup',
-        reason: 'clearIncrementalOnly',
-        isolationKey: getCurrentIsolationKey_ACU(),
-        writeSet,
-        maintenanceMode: 'exclusive',
-        guardChatSwitch: true,
-    }, () => clearManualRefillIncrementalDataInRangeCore_ACU(targetMessageIndices, targetSheetKeys));
-}
 function cloneMessageFieldValue_ACU(value, seen = new WeakMap(), originals = new WeakMap()) {
     if (value === null || typeof value !== 'object')
         return value;
@@ -107705,15 +107521,6 @@ function resolveManualRefillReplayAnchor_ACU(chat, isolationKey, targetMessageIn
         .filter((index) => Number.isInteger(index) && index >= 0 && index < chat.length && isAiFloor_ACU(chat[index]))
         .sort((left, right) => left - right)[0] ?? -1;
     return { fullCheckpointIndices, fallbackRootIndex: earliestV2FrameIndex >= 0 ? earliestV2FrameIndex : firstTargetAiIndex };
-}
-function findManualRefillSheetBaselineTargetIndex_ACU(chat, isolationKey, targetMessageIndices, requestedTargetMessageIndex) {
-    const anchor = resolveManualRefillReplayAnchor_ACU(chat, isolationKey, targetMessageIndices);
-    if (anchor.fullCheckpointIndices.length !== 1)
-        return -1;
-    const targetMessageIndex = anchor.fullCheckpointIndices[0];
-    if (requestedTargetMessageIndex !== undefined && requestedTargetMessageIndex !== targetMessageIndex)
-        return -1;
-    return targetMessageIndex;
 }
 function getMaxFrameSequence_ACU(frame) {
     if (!Array.isArray(frame.logEntries))
@@ -108106,96 +107913,6 @@ async function establishManualRefillTemplateRoot_ACU(options) {
         logError_ACU('[手动重填临时根] 建立 strict save 失败，已原位恢复聊天内存状态:', error);
         return { success: false, changed: false, targetMessageIndex: -1, error: `手动重填临时根建立失败：${failureError}` };
     }
-}
-async function replaceManualRefillSheetBaselineInRangeAtomic_ACU(options) {
-    if (!Array.isArray(options.targetSheetKeys) || options.targetSheetKeys.length === 0) {
-        return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: '手动重填基底替换必须指定目标表。' };
-    }
-    if (!Array.isArray(options.targetMessageIndices) || options.targetMessageIndices.length === 0) {
-        return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: '手动重填基底替换必须指定目标消息范围。' };
-    }
-    const missingBaselineSheet = options.targetSheetKeys.find(sheetKey => !options.baselineData || !options.baselineData[sheetKey] || typeof options.baselineData[sheetKey] !== 'object');
-    if (missingBaselineSheet) {
-        return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: `手动重填基底替换失败：缺少目标表 ${missingBaselineSheet} 的重建基底。` };
-    }
-    const writeSet = options.targetSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
-    return runTableWriteTransaction_ACU({
-        source: 'system_cleanup',
-        reason: 'replaceManualRefillSheetBaselineInRange',
-        isolationKey: options.isolationKey,
-        writeSet,
-        maintenanceMode: 'exclusive',
-        guardChatSwitch: true,
-    }, async () => {
-        const chat = getChatArray_ACU();
-        if (!Array.isArray(chat) || chat.length === 0) {
-            return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: '聊天记录为空，无法替换手动重填基底。' };
-        }
-        const normalizedIndices = [...new Set(options.targetMessageIndices.filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < chat.length))].sort((a, b) => a - b);
-        const targetMessageIndex = findManualRefillSheetBaselineTargetIndex_ACU(chat, options.isolationKey, normalizedIndices, options.targetMessageIndex);
-        if (targetMessageIndex < 0) {
-            return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: '手动重填基底替换失败：本次范围内找不到可承载单表 checkpoint 的整库 full checkpoint。' };
-        }
-        const targetMsg = chat[targetMessageIndex];
-        if (!targetMsg || targetMsg.is_user) {
-            return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, targetMessageIndex, error: `手动重填基底替换失败：targetMessageIndex=${targetMessageIndex} 不是有效 AI 楼层。` };
-        }
-        const snapshotIndices = [...new Set([...normalizedIndices, targetMessageIndex])];
-        const snapshots = new Map();
-        snapshotIndices.forEach(idx => snapshots.set(idx, messageFieldSnapshot_ACU(chat[idx])));
-        try {
-            const targetAliases = resolveSheetIdentityAliasesForClear_ACU(chat, options.isolationKey, options.targetSheetKeys, '手动重填基底替换');
-            const clearsSummaryOrOutline = tableListContainsSummaryOrOutline_ACU(targetAliases.sheetKeys);
-            const vectorManifestsToDeleteAfterCommit = [];
-            let clearedCount = 0;
-            for (const idx of normalizedIndices) {
-                const msg = chat[idx];
-                if (!msg || msg.is_user)
-                    continue;
-                const removedBaseline = purgeSheetKeysFromMessageForIsolation_ACU(msg, options.isolationKey, targetAliases.sheetKeys, targetAliases.sqlTableNames);
-                const removedIncremental = purgeManualRefillIncrementalSheetKeysFromMessage_ACU(msg, options.isolationKey, targetAliases.sheetKeys, targetAliases.sqlTableNames);
-                if (clearsSummaryOrOutline) {
-                    const tagData = readIsolatedTagData_ACU(msg, options.isolationKey);
-                    await deleteVectorIndexManifestFromTagData_ACU(tagData, { deleteExternal: false, onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest) });
-                }
-                if (removedBaseline || removedIncremental)
-                    clearedCount += 1;
-            }
-            if (!targetMsg.TavernDB_ACU_IsolatedData || typeof targetMsg.TavernDB_ACU_IsolatedData !== 'object' || Array.isArray(targetMsg.TavernDB_ACU_IsolatedData)) {
-                targetMsg.TavernDB_ACU_IsolatedData = {};
-            }
-            const existingTagData = targetMsg.TavernDB_ACU_IsolatedData[options.isolationKey];
-            const existingFrame = isV2TagData_ACU(existingTagData) ? existingTagData.storageFrame : null;
-            if (!existingFrame?.checkpoint || existingFrame.checkpoint.kind !== 'full') {
-                throw new Error('手动重填基底替换失败：清理后目标楼层不再包含整库 full checkpoint。');
-            }
-            const createdAt = Date.now();
-            const collectedScheduleSummary = collectScheduleSummaryFromFramesV2_ACU(chat, options.isolationKey, { maxMessageIndex: targetMessageIndex });
-            const scheduleSummary = collectedScheduleSummary && typeof collectedScheduleSummary === 'object' && !Array.isArray(collectedScheduleSummary) ? collectedScheduleSummary : {};
-            const perSheetCheckpoints = { ...(existingFrame.perSheetCheckpoints || {}) };
-            for (const sheetKey of options.targetSheetKeys) {
-                const sheetData = cloneMessageFieldValue_ACU(options.baselineData[sheetKey]);
-                perSheetCheckpoints[sheetKey] = {
-                    kind: 'sheet_full',
-                    createdAt,
-                    reason: 'manual',
-                    sheetKey,
-                    data: sheetData,
-                    ...(scheduleSummary[sheetKey] ? { scheduleSummary: cloneMessageFieldValue_ACU(scheduleSummary[sheetKey]) } : {}),
-                };
-            }
-            existingFrame.perSheetCheckpoints = perSheetCheckpoints;
-            writeMessageIdentity_ACU(targetMsg, { enabled: settings_ACU.dataIsolationEnabled, code: settings_ACU.dataIsolationCode });
-            await saveChatToHostStrict_ACU();
-            const cleanupWarnings = await cleanupVectorIndexManifestsAfterCommit_ACU(vectorManifestsToDeleteAfterCommit);
-            logDebug_ACU(`[手动重填基底替换] 已在 AI 楼层 #${targetMessageIndex} 为 ${options.targetSheetKeys.join(', ')} 写入单表 checkpoint，并原子清理范围旧数据。`);
-            return { success: true, changed: clearedCount > 0 || options.targetSheetKeys.length > 0, clearedCount, checkpointCount: options.targetSheetKeys.length, targetMessageIndex, ...(cleanupWarnings.length ? { cleanupWarnings } : {}) };
-        }
-        catch (error) {
-            snapshots.forEach((snapshot, idx) => restoreMessageFieldSnapshot_ACU(chat[idx], snapshot));
-            return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, targetMessageIndex, error: error?.message || String(error || '手动重填基底替换失败。') };
-        }
-    });
 }
 async function clearManualRefillSheetDataInRangeCore_ACU(targetMessageIndices, targetSheetKeys = null, options = {}) {
     if (!targetMessageIndices || targetMessageIndices.length === 0)
@@ -115298,6 +115015,9 @@ async function buildBatchMergeBase_ACU(batchNumber, options = {}, replayEvidence
     try {
         const hasBoundedScope = Number.isInteger(options.maxMessageIndex);
         const replayOptions = hasBoundedScope ? { maxMessageIndex: options.maxMessageIndex } : {};
+        // 本批 SQL 直接在 live runtime 上执行时，基底必须就是 live runtime（即使有 maxMessageIndex）：
+        // 若改用边界内回放，AI 看不到已存在的行，会重复 INSERT 撞 UNIQUE 或把行数翻倍。
+        // 下方「不越过 maxMessageIndex」的约束只约束非 live 执行的路径（stage_only / 非 SQLite / runtime 不可用）。
         if (options.liveRuntimeAuthoritative) {
             const liveRuntimeBase = await readLiveSqliteRuntimeMergeBase_ACU(batchNumber);
             if (liveRuntimeBase)
@@ -115315,7 +115035,7 @@ async function buildBatchMergeBase_ACU(batchNumber, options = {}, replayEvidence
                     error: `历史表格数据回放失败（已自动尝试全部兼容读取层仍失败），已中止填表以避免写出冲突增量。请在数据管理中导出原始数据后执行 V2 恢复：${v2ReplayResult.failed}`,
                 };
             }
-            // 有历史边界时不能让 SQLite latest runtime 越过 maxMessageIndex；
+            // （非 live 执行路径）有历史边界时不能让 SQLite latest runtime 越过 maxMessageIndex；
             // 若当前聊天已进入 V2 replay 语义但边界内无可用基底，同样不能退回最新 runtime，
             // 否则会把目标范围之后的未来表格状态带回 prompt。只有非 SQLite 且未命中 V2 replay
             // 的旧路径才允许沿用 runtime fallback，以保留连续 bucket 的既有行为。
@@ -115539,7 +115259,9 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
                 try {
                     // 隐藏列保护使用请求前冻结的 live runtime schema 证据，而不是 baseSnapshot：
                     // 历史快照可能缺失 descriptor 或含旧表头，会把 live 合法列误判为隐藏列。
-                    assertNoHiddenPhysicalColumnMutations_ACU(splitSqlStatements(tableEditText), job.sqlApplyScope?.runtimeData ? job.sqlApplyScope.runtimeData : job.baseSnapshot);
+                    assertNoHiddenPhysicalColumnMutations_ACU(
+                    // 与提交路径同口径：先去 HTML 注释标记再分句（分句器把 -- 视为 SQL 注释）。
+                    splitSqlStatements(stripHtmlCommentMarkersOutsideSqlLiterals_ACU(tableEditText)), job.sqlApplyScope?.runtimeData ? job.sqlApplyScope.runtimeData : job.baseSnapshot);
                 }
                 catch (error) {
                     diagnoseResponse('sql_column_mutation_rejected', attempt);
@@ -115945,7 +115667,10 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
                 const isInfrastructureError = error instanceof SqlRuntimeSnapshotError_ACU
                     || error instanceof SqlRuntimeSchemaInvalidError_ACU
                     || error instanceof SqlRuntimeSchemaStaleError_ACU;
-                const failedGroupKey = findSqlFailureGroupKey_ACU(sqlTexts, sortedResponses, rawErrorMessage);
+                // R2A-10：优先用执行方按实际执行语句换算出的分组下标；倒推只作为兜底。
+                const failedGroupIndex = typeof error?.failedGroupIndex === 'number' ? error.failedGroupIndex : -1;
+                const failedGroupKey = (failedGroupIndex >= 0 ? sqlResponses[failedGroupIndex]?.job?.groupKey : null)
+                    || findSqlFailureGroupKey_ACU(sqlTexts, sqlResponses, rawErrorMessage);
                 return {
                     success: false,
                     error: error instanceof SqlRowIdMaterializationError_ACU
@@ -118676,12 +118401,11 @@ async function ensureManualRefillAnchorHealth_ACU(liveChat, isolationKey, option
  * presentation 层负责：收集 manualSelection、设置 manualExtraHint、刷新 UI、显示 toast、弹出确认框。
  *
  * @param targetKeys 手动选择的目标表格键列表
- * @param processBatch 批处理执行回调
  * @param refreshData 数据刷新回调
  * @param options 可选参数：
  *   - clearBeforeUpdate: 兼容旧调用名；启用事务式手动重填。普通可回放路径按 bucket 原子替换历史增量；仅跨 checkpoint 特例会预清理并等待最终 snapshot。
  */
-async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData, options = {}) {
+async function orchestrateManualUpdate_ACU(targetKeys, refreshData, options = {}) {
     let committedBucketCount = 0;
     // 与 committedBucketCount 分开计数：伪提交（帧只落进度/事件，modifiedKeys 为空）推前者不推后者。
     let committedDataBucketCount = 0;
@@ -120590,22 +120314,17 @@ function updateApiStatusDisplay_ACU() {
         $apiStatusDisplay_ACU.html(`<span style="color:#ffcc80;">未配置自定义API。数据库更新功能可能不可用。</span>`);
 }
 function attemptToLoadCoreApis_ACU() {
-    // 根据运行模式选择宿主窗口
+    // 插件运行在酒馆主窗口中，宿主窗口即自身
     const hostWin = getHostWindow();
-    const mode = isExtensionMode() ? '插件' : '油猴脚本';
-    logDebug_ACU(`[CoreAPI] 运行模式: ${mode}, hostWin === window: ${hostWin === window}`);
     // ═══════════════════════════════════════════════════════════════
-    // 插件模式特殊处理：主窗口的 window.SillyTavern 只有 {libs, getContext}
-    // 所有真正的 API（chatId/eventSource/eventTypes/chat/saveChat 等）必须通过
-    // SillyTavern.getContext() 才能拿到，而且 getContext() 返回的是"当前快照"，
-    // 属性值会随酒馆状态变化。所以用 Proxy 包装：每次属性读取都重新调用 getContext()
-    // 取最新快照，这样既不用改所有消费者代码，又保证读到最新值。
-    //
-    // 油猴脚本模式下，iframe 的 window.SillyTavern 本身就是扁平化的 API 对象
-    // （由酒馆助手封装），保持原样直接赋值。
+    // 主窗口的 window.SillyTavern 只有 {libs, getContext}，所有真正的 API
+    // （chatId/eventSource/eventTypes/chat/saveChat 等）必须通过 SillyTavern.getContext()
+    // 才能拿到，而且 getContext() 返回的是"当前快照"，属性值会随酒馆状态变化。
+    // 所以用 Proxy 包装：每次属性读取都重新调用 getContext() 取最新快照。
+    // （R1-06：油猴 iframe 模式已不存在，删除其扁平 API 分支。）
     // ═══════════════════════════════════════════════════════════════
     let stApi;
-    if (isExtensionMode()) {
+    {
         const rawST = hostWin.SillyTavern || window.SillyTavern;
         if (rawST && typeof rawST.getContext === 'function') {
             // Proxy：每次属性读取都通过 getContext() 拿当前快照
@@ -120638,32 +120357,6 @@ function attemptToLoadCoreApis_ACU() {
             // getContext 不存在，降级为直接使用 rawST（避免整个系统崩溃）
             stApi = rawST;
             logWarn_ACU('[CoreAPI] 插件模式：SillyTavern.getContext 不可用，降级为直接访问 SillyTavern 对象');
-        }
-    }
-    else {
-        // ═══════════════════════════════════════════════════════════════
-        // 油猴脚本模式：运行在酒馆助手创建的 iframe 中。
-        //
-        // 关键事实：iframe 自身的 window.SillyTavern 是酒馆助手注入的
-        // 扁平化 API 对象（包含 chatId/eventSource/eventTypes 等），
-        // 而 window.parent（hostWin）上的 SillyTavern 只有
-        // {libs, getContext} 骨架，不含业务字段。
-        //
-        // 因此必须优先使用 iframe 自身的对象，把 parent 作为 fallback。
-        // 这与旧版 userscript 的行为一致：
-        //   SillyTavern_API_ACU = typeof SillyTavern !== 'undefined'
-        //     ? SillyTavern : parentWin.SillyTavern;
-        // ═══════════════════════════════════════════════════════════════
-        const iframeST = typeof window.SillyTavern !== 'undefined' ? window.SillyTavern : undefined;
-        const parentST = typeof hostWin.SillyTavern !== 'undefined' ? hostWin.SillyTavern : undefined;
-        // 优先使用 iframe 自身的扁平化 API（含 chatId 等业务字段），
-        // fallback 到 parent 的骨架对象
-        stApi = iframeST || parentST;
-        if (iframeST) {
-            logDebug_ACU('[CoreAPI] 油猴脚本模式：使用 iframe 自身的 SillyTavern 扁平 API');
-        }
-        else if (parentST) {
-            logWarn_ACU('[CoreAPI] 油猴脚本模式：iframe 自身无 SillyTavern，降级使用 parent 的骨架对象（可能缺少 chatId 等字段）');
         }
     }
     _set_SillyTavern_API_ACU(stApi);
@@ -121668,10 +121361,6 @@ async function handleManualUpdate_ACU() {
             },
         });
         const result = await orchestrateManualUpdate_ACU(targetKeys, 
-        // processBatch 回调保留给兼容路径；当前手动填表主路径由 service grouped helper 执行。
-        async (indices, batchMode, batchOptions) => {
-            return processUpdates_ACU(indices, batchMode, batchOptions);
-        }, 
         // refreshData 回调（纯数据刷新 + UI 刷新）
         async () => {
             await refreshMergedDataAndNotifyWithUI_ACU();
@@ -121706,7 +121395,6 @@ async function handleManualUpdate_ACU() {
             resetManualUpdateButton_ACU();
     }
 }
-// saveCurrentDataForTable_ACU 已搬迁到 service/chat/chat-service.ts
 // 通过文件顶部的 re-export 保持外部调用方兼容
 
 /**
@@ -124521,31 +124209,8 @@ function matchRestrictedUpdate_ACU(statement) {
     return null;
 }
 function splitStatements_ACU(sql) {
-    const statements = [];
-    let start = 0;
-    let quoted = false;
-    for (let index = 0; index < sql.length; index += 1) {
-        const char = sql[index];
-        if (char === "'") {
-            if (quoted && sql[index + 1] === "'") {
-                index += 1;
-                continue;
-            }
-            quoted = !quoted;
-        }
-        else if (char === ';' && !quoted) {
-            const statement = sql.slice(start, index).trim();
-            if (statement)
-                statements.push(statement);
-            start = index + 1;
-        }
-    }
-    const tail = sql.slice(start).trim();
-    if (tail)
-        statements.push(tail);
-    if (quoted)
-        throw new Error('SQL 字符串字面量未闭合');
-    return statements;
+    // 与写入期/回放期共用唯一分句实现（R1-05）；受限 DML 要求字符串必须闭合。
+    return splitSqlStatements_ACU(sql, { strictQuotes: true });
 }
 function parseRestrictedSqlDml_ACU(sql) {
     const source = String(sql ?? '').replace(/```sql|```/gi, '').trim();
@@ -127289,104 +126954,24 @@ function applyAgentConstraintRegistration_ACU(snapshot, add, retire, settledInde
         return { snapshot: next, pendingFixes: pending, appliedModules: [] };
     }
 }
-/* ===================== SQL 易失视图校验变体（TT 只读复算） =====================
- * 业务合并仍由既有 JSON 事务链完成（保留全部领域校验、P1 证据门与 pendingFixes
- * 语义），结果再经 SQL 易失视图按元素行级复算校验：物化应用前快照 → 逐模块 diff
- * 出 upsert/remove 行 → SQL 层 revision 乐观锁 + 写回比对。SQL 物化或执行失败时
- * fail-closed 回退 JSON 链结果，不静默产出空资料；CONTINUATION_AGENT_WRITE_REJECTED
- * 语义不变。行视图绝不成为写旁路：exportDelta 不接入任何持久化路径。
+/* ===================== *ViaSql 兼容入口 =====================
+ * 原先在 JSON 事务链之后再物化一份 sql.js 易失视图复算校验，但失败一律被 catch 吞掉、
+ * 照常返回 JSON 链结果——这层校验对结果没有任何影响，只是每次结算/修复/约束登记都多建一个库（R4-09）。
+ * 已移除复算；保留异步签名，调用方不变。业务校验、证据门与 pendingFixes 语义全部在 JSON 事务链里。
  */
-function diffModuleRows_ACU(before, after) {
-    const idOf = (item) => item !== null && typeof item === 'object' && !Array.isArray(item) && typeof item.id === 'string'
-        ? item.id
-        : '';
-    const previousById = new Map(before.map(item => [idOf(item), item]));
-    const nextIds = new Set(after.map(item => idOf(item)));
-    const upserts = after.filter(item => {
-        const id = idOf(item);
-        const prior = previousById.get(id);
-        return !prior || JSON.stringify(prior) !== JSON.stringify(item);
-    });
-    const removedIds = before.map(item => idOf(item)).filter(id => id && !nextIds.has(id));
-    return { upserts, removedIds };
-}
-async function verifyAgentModuleRowsViaSql_ACU(before, after, modules) {
-    const view = await materializeAgentModuleSqlView_ACU(before);
-    try {
-        for (const module of modules) {
-            const previous = before[module];
-            const nextItems = after[module];
-            const diff = diffModuleRows_ACU(previous, nextItems);
-            if (!diff.upserts.length && !diff.removedIds.length)
-                continue;
-            const rowWrite = {
-                module,
-                upserts: diff.upserts,
-                expectedRevision: before.revisions[module],
-            };
-            if (diff.removedIds.length)
-                rowWrite.removedIds = diff.removedIds;
-            const nextRevision = view.applyRowWrite(rowWrite);
-            if (nextRevision !== after.revisions[module]) {
-                throw new AgentModuleSqlViewError_ACU(`模块 ${module} SQL 复算 revision 不一致：视图 ${nextRevision}，事务结果 ${after.revisions[module]}`, { module, expected: after.revisions[module], actual: nextRevision });
-            }
-        }
-        const verified = view.readSnapshot();
-        for (const module of modules) {
-            if (JSON.stringify(after[module]) !== JSON.stringify(verified[module])) {
-                throw new AgentModuleSqlViewError_ACU(`模块 ${module} SQL 复算结果与事务结果不一致`, { module });
-            }
-        }
-    }
-    finally {
-        view.dispose();
-    }
-}
-/**
- * applyAgentModuleDelta_ACU 的 SQL 视图变体。
- * 业务合并仍由既有 JSON 事务链完成（保留全部领域校验与 pendingFixes 语义），
- * 结果再经 SQL 易失视图按元素行级复算校验。SQL 物化或执行失败时 fail-closed
- * 回退 JSON 链结果，CONTINUATION_AGENT_WRITE_REJECTED 语义不变。
- */
+/** applyAgentModuleDelta_ACU 的兼容入口（异步签名保留）。 */
 async function applyAgentModuleDeltaViaSql_ACU(snapshot, delta, allowedWrites, settledIndex, completedStageNumbers = [], sixth, seventh) {
-    const applied = applyAgentModuleDelta_ACU(snapshot, delta, allowedWrites, settledIndex, completedStageNumbers, sixth, seventh);
-    if (!applied.appliedModules.length)
-        return applied;
-    try {
-        await verifyAgentModuleRowsViaSql_ACU(snapshot, applied.snapshot, applied.appliedModules);
-    }
-    catch {
-        // fail-closed：SQL 易失视图不可用或复算不一致时回退既有 JSON 校验链结果
-    }
-    return applied;
+    return applyAgentModuleDelta_ACU(snapshot, delta, allowedWrites, settledIndex, completedStageNumbers, sixth, seventh);
 }
-/** applyAgentWebRefsDelta_ACU 的 SQL 视图变体；失败 fail-closed 回退 JSON 链。 */
+/** applyAgentWebRefsDelta_ACU 的兼容入口（异步签名保留）。 */
 async function applyAgentWebRefsDeltaViaSql_ACU(snapshot, output, expectedRevision, nowOrOptions = Date.now(), maybeOptions) {
-    const applied = typeof nowOrOptions === 'object'
+    return typeof nowOrOptions === 'object'
         ? applyAgentWebRefsDelta_ACU(snapshot, output, expectedRevision, nowOrOptions)
         : applyAgentWebRefsDelta_ACU(snapshot, output, expectedRevision, nowOrOptions, maybeOptions);
-    if (!applied.appliedModules.length)
-        return applied;
-    try {
-        await verifyAgentModuleRowsViaSql_ACU(snapshot, applied.snapshot, ['webRefs']);
-    }
-    catch {
-        // fail-closed 回退 JSON 链
-    }
-    return applied;
 }
-/** applyAgentConstraintRegistration_ACU 的 SQL 视图变体；失败 fail-closed 回退 JSON 链。 */
+/** applyAgentConstraintRegistration_ACU 的兼容入口（异步签名保留）。 */
 async function applyAgentConstraintRegistrationViaSql_ACU(snapshot, add, retire, settledIndex, options) {
-    const applied = applyAgentConstraintRegistration_ACU(snapshot, add, retire, settledIndex, options);
-    if (!applied.appliedModules.length)
-        return applied;
-    try {
-        await verifyAgentModuleRowsViaSql_ACU(snapshot, applied.snapshot, ['constraints']);
-    }
-    catch {
-        // fail-closed 回退 JSON 链
-    }
-    return applied;
+    return applyAgentConstraintRegistration_ACU(snapshot, add, retire, settledIndex, options);
 }
 
 /**
@@ -139732,25 +139317,28 @@ class ContinuationOrchestrator_ACU {
         this.invalidateLease_ACU(chatIdentity);
         if (replanInstruction)
             await this.recordUserMessage_ACU(replanInstruction, '要求重新规划大纲');
-        // 与 continueTask 同型登记控制器：否则 UI 重规划路径 planOutline_ACU 取不到 signal，「停止」无法中断这条最长 8192 token 的大纲请求。
-        const controller = new AbortController();
-        abortControllersByChat_ACU.set(chatIdentity, controller);
         return this.withLease_ACU(async (_identity, lease) => {
-            const taskId = this.requireTask_ACU(this.readEnvelopeWithReconciledCursor_ACU()).taskId;
-            const stoppedBeforeReplan = await this.stopIfDeadlineReached_ACU(chatIdentity, taskId, lease);
-            if (stoppedBeforeReplan)
-                return taskResult_ACU(stoppedBeforeReplan);
+            // 与 continueTask 同型登记控制器：否则 UI 重规划路径 planOutline_ACU 取不到 signal，「停止」无法中断这条最长 8192 token 的大纲请求。
+            // 登记放在租约回调内、清理覆盖整个回调（R4-11）：拿租约失败（BUSY）或提前返回时不在表里留下孤儿控制器。
+            const controller = new AbortController();
+            abortControllersByChat_ACU.set(chatIdentity, controller);
             try {
-                const outcome = await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, replanInstruction, 'paused');
-                if (outcome.envelope.activeTask?.stopReason === 'duration_reached')
-                    this.clearDeadlineTimer_ACU(chatIdentity);
-                else if (outcome.envelope.activeTask)
-                    this.scheduleDeadline_ACU(chatIdentity, outcome.envelope.activeTask.taskId, outcome.envelope.activeTask.deadlineAt);
-                return taskResult_ACU(outcome.envelope, outcome.planning);
-            }
-            catch (error) {
-                await this.pauseWithError_ACU(chatIdentity, taskId, error, 'outline_call', '阶段规划失败', lease);
-                throw error;
+                const taskId = this.requireTask_ACU(this.readEnvelopeWithReconciledCursor_ACU()).taskId;
+                const stoppedBeforeReplan = await this.stopIfDeadlineReached_ACU(chatIdentity, taskId, lease);
+                if (stoppedBeforeReplan)
+                    return taskResult_ACU(stoppedBeforeReplan);
+                try {
+                    const outcome = await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, replanInstruction, 'paused');
+                    if (outcome.envelope.activeTask?.stopReason === 'duration_reached')
+                        this.clearDeadlineTimer_ACU(chatIdentity);
+                    else if (outcome.envelope.activeTask)
+                        this.scheduleDeadline_ACU(chatIdentity, outcome.envelope.activeTask.taskId, outcome.envelope.activeTask.deadlineAt);
+                    return taskResult_ACU(outcome.envelope, outcome.planning);
+                }
+                catch (error) {
+                    await this.pauseWithError_ACU(chatIdentity, taskId, error, 'outline_call', '阶段规划失败', lease);
+                    throw error;
+                }
             }
             finally {
                 if (abortControllersByChat_ACU.get(chatIdentity) === controller)
@@ -153623,80 +153211,12 @@ function stripSqlCommentsAndStrings_ACU(sql) {
     }
     return output;
 }
-function splitTopLevelSqlStatements_ACU(sql) {
-    const statements = [];
-    let current = '';
-    let inString = null;
-    let inLineComment = false;
-    let inBlockComment = false;
-    for (let i = 0; i < sql.length; i += 1) {
-        const char = sql[i];
-        const next = sql[i + 1];
-        if (inLineComment) {
-            current += char;
-            if (char === '\n')
-                inLineComment = false;
-            continue;
-        }
-        if (inBlockComment) {
-            current += char;
-            if (char === '*' && next === '/') {
-                current += next;
-                inBlockComment = false;
-                i += 1;
-            }
-            continue;
-        }
-        if (inString) {
-            current += char;
-            if (char === inString) {
-                if (next === inString) {
-                    current += next;
-                    i += 1;
-                }
-                else {
-                    inString = null;
-                }
-            }
-            continue;
-        }
-        if (char === '-' && next === '-') {
-            current += char + next;
-            inLineComment = true;
-            i += 1;
-            continue;
-        }
-        if (char === '/' && next === '*') {
-            current += char + next;
-            inBlockComment = true;
-            i += 1;
-            continue;
-        }
-        if (char === '\'' || char === '"' || char === '`') {
-            inString = char;
-            current += char;
-            continue;
-        }
-        if (char === ';') {
-            const trimmed = current.trim();
-            if (trimmed)
-                statements.push(trimmed);
-            current = '';
-            continue;
-        }
-        current += char;
-    }
-    const trimmed = current.trim();
-    if (trimmed)
-        statements.push(trimmed);
-    return statements;
-}
 function containsWriteKeyword_ACU(sql) {
     const cleaned = stripSqlCommentsAndStrings_ACU(sql);
     return /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE|VACUUM|ATTACH|DETACH|REINDEX|ANALYZE)\b/i.test(cleaned);
 }
 function isSqlReadStatement_ACU(sql) {
-    const statements = splitTopLevelSqlStatements_ACU(sql);
+    const statements = splitSqlStatements(sql);
     if (statements.length !== 1)
         return false;
     const statement = statements[0].trim();
@@ -205280,8 +204800,7 @@ function useManualUpdate() {
                     refreshTick.value++;
                 }
             };
-            const runProcessBatch = (indices, mode, options) => processUpdatesBatch_ACU(indices, mode, options, (messagesToUse, saveTargetIndex, updateMode, isSilentMode, targetSheetKeys, requestOptions, progressContext) => executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, false, updateMode, isSilentMode, targetSheetKeys, requestOptions, new AbortController(), progressContext, handleProgress));
-            const result = await orchestrateManualUpdate_ACU(targetManualTableKeys, runProcessBatch, async () => { await refreshMergedDataAndNotify_ACU(); }, {
+            const result = await orchestrateManualUpdate_ACU(targetManualTableKeys, async () => { await refreshMergedDataAndNotify_ACU(); }, {
                 clearBeforeUpdate,
                 onProgress: handleProgress,
                 // 把确认前快照传给 service 层：orchestrator 在破坏性清理前会再次校验 runtime。
@@ -210582,7 +210101,6 @@ function bootstrapAcuV2() {
 // ═══════════════════════════════════════════════════════════════
 // 运行时环境（必须最先导入并设置模式）
 // ═══════════════════════════════════════════════════════════════
-_forceExtensionMode();
 /**
  * 等待宿主 API 就绪：主窗口的 window.SillyTavern 只有 {libs, getContext}，
  * 真正的 API 都要经 SillyTavern.getContext() 拿到，所以就绪判定就是

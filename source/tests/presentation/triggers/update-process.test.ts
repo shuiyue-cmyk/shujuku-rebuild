@@ -22,7 +22,6 @@ async function importTrigger() {
   }));
   vi.doMock('../../../src/service/chat/chat-service', () => ({
     getChatArray_ACU: vi.fn(() => [{ is_user: false, mes: 'AI 1' }]),
-    saveCurrentDataForTable_ACU: vi.fn(),
   }));
   vi.doMock('../../../src/service/settings/settings-readers', () => ({
     getSelectedManualTableKeys_ACU: vi.fn(() => ['sheet_0']),
@@ -112,8 +111,8 @@ describe('handleManualUpdate_ACU destructive refill confirmation', () => {
     expect(orchestrateManualUpdate_ACU).toHaveBeenCalledTimes(1);
     expect(showCustomConfirm_ACU).toHaveBeenCalledTimes(1);
     expect(orchestrateManualUpdate_ACU.mock.calls[0][0]).toEqual(['sheet_0']);
-    expect(orchestrateManualUpdate_ACU.mock.calls[0][3]).toEqual(expect.objectContaining({ clearBeforeUpdate: true }));
-    expect(orchestrateManualUpdate_ACU.mock.calls[0][3]).not.toHaveProperty('confirmBoundaryReset');
+    expect(orchestrateManualUpdate_ACU.mock.calls[0][2]).toEqual(expect.objectContaining({ clearBeforeUpdate: true }));
+    expect(orchestrateManualUpdate_ACU.mock.calls[0][2]).not.toHaveProperty('confirmBoundaryReset');
   });
 
   it('orchestrator 失败时展示 error toast', async () => {

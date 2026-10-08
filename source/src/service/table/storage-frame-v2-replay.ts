@@ -27,6 +27,7 @@ import { runTableWriteTransaction_ACU } from './table-write-transaction';
 import { getUiSurface_ACU, showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
 import { buildReplayOptionsFingerprint_ACU, computeReplayHeadRevisionDigest_ACU, validateV2ReplayEvidenceFresh_ACU } from './v2-replay-session';
 import { isAiFloor_ACU } from '../../shared/ai-floor';
+import { splitSqlStatements_ACU } from '../../shared/sql-statement-splitter';
 
 interface V2FrameRef_ACU {
   messageIndex: number;
@@ -1198,44 +1199,26 @@ function getValidatedTimelineCheckpointsForFrame_ACU(
   return checkpoints.filter(checkpoint => checkpoint.timeline !== undefined);
 }
 
-function splitSqlStatementsForReplay_ACU(sql: string): string[] {
-  const statements: string[] = [];
-  let current = '';
-  let inString = false;
-  let stringChar = '';
-  for (let i = 0; i < sql.length; i += 1) {
-    const char = sql[i];
-    if (inString) {
-      current += char;
-      if (char === stringChar) {
-        if (i + 1 < sql.length && sql[i + 1] === stringChar) {
-          current += sql[i + 1];
-          i += 1;
-        } else {
-          inString = false;
-        }
-      }
-    } else if (char === "'" || char === '"') {
-      inString = true;
-      stringChar = char;
-      current += char;
-    } else if (char === ';') {
-      const trimmed = current.trim();
-      if (trimmed) statements.push(trimmed);
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  const tail = current.trim();
-  if (tail) statements.push(tail);
-  return statements;
+// 分句与写入期共用 shared/sql-statement-splitter（R1-05），写入与回放切分口径一致。
+function normalizeSqlStatementForReplay_ACU(statement: string): string {
+  return normalizeStatementValues(normalizeSqlStructure(statement));
 }
 
-function normalizeSqlStatementsForReplay_ACU(statements: string[]): string[] {
+function normalizeSqlStatementsForReplay_ACU(statements: string[], options: { alignedParams?: boolean } = {}): string[] {
+  if (options.alignedParams) {
+    // R2B-10：带参数时每条存储语句对应一组参数（写入期按单条语句绑定执行），不能再分句后整体过滤，
+    // 否则后面的参数全部错位。存储语句切出的不是恰好一条时 fail-closed。
+    return statements.map((statement, index) => {
+      const pieces = splitSqlStatements_ACU(stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(statement || '')).trim());
+      if (pieces.length !== 1) {
+        throw new Error(`参数化 SQL 回放：第 ${index + 1} 条存储语句切分后为 ${pieces.length} 条，参数无法对齐，已拒绝回放。`);
+      }
+      return normalizeSqlStatementForReplay_ACU(pieces[0]);
+    });
+  }
   return statements
-    .flatMap(statement => splitSqlStatementsForReplay_ACU(stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(statement || '')).trim()))
-    .map(statement => normalizeStatementValues(normalizeSqlStructure(statement)))
+    .flatMap(statement => splitSqlStatements_ACU(stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(statement || '')).trim()))
+    .map(normalizeSqlStatementForReplay_ACU)
     .filter(Boolean);
 }
 
@@ -1783,7 +1766,9 @@ async function applySqlBatchOperationV2_ACU(
   options: { legacyDuplicateRowIds?: boolean; metrics?: TableReplayMetricsV2_ACU } = {},
   context?: ReplayAliasContext_ACU | null,
 ): Promise<void> {
-  const statements = normalizeSqlStatementsForReplay_ACU(operation.statements || []);
+  const statements = normalizeSqlStatementsForReplay_ACU(operation.statements || [], {
+    alignedParams: Array.isArray(operation.params),
+  });
   if (statements.length === 0) return;
   if (options.metrics) options.metrics.sqlOperationCount += statements.length;
   await ensureSqlReplayRuntime_ACU(runtime, state, options);

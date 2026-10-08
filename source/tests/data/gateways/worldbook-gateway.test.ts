@@ -4,15 +4,10 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockTavernHelper, mockSillyTavern, mockLogWarn, mockIsExtensionMode } = vi.hoisted(() => ({
+const { mockTavernHelper, mockSillyTavern, mockLogWarn } = vi.hoisted(() => ({
   mockTavernHelper: {} as any,
   mockSillyTavern: {} as any,
   mockLogWarn: vi.fn(),
-  mockIsExtensionMode: vi.fn(() => true),
-}));
-
-vi.mock('../../../src/shared/runtime-env', () => ({
-  isExtensionMode: () => mockIsExtensionMode(),
 }));
 
 vi.mock('../../../src/shared/host-api', () => ({
@@ -50,7 +45,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   Object.keys(mockTavernHelper).forEach(k => delete mockTavernHelper[k]);
   Object.keys(mockSillyTavern).forEach(k => delete mockSillyTavern[k]);
-  mockIsExtensionMode.mockReturnValue(true);
 });
 
 describe('isWorldbookApiAvailable_ACU', () => {
@@ -400,23 +394,10 @@ describe('激活世界书宿主模块通道（TT 裸环境）', () => {
   });
 
   it('非酒馆宿主下真实动态 import 失败时降级为 null 并允许重试', async () => {
-    mockIsExtensionMode.mockReturnValue(true);
     resetHostWorldInfoModuleCache_ACU();
     await expect(loadHostWorldInfoModule_ACU()).resolves.toBeNull();
     // 失败不缓存：再次调用会重新尝试（仍失败，但不会把 null 永久钉死）
     await expect(loadHostWorldInfoModule_ACU()).resolves.toBeNull();
-    resetHostWorldInfoModuleCache_ACU();
-  });
-
-  it('油猴（iframe）模式下不尝试动态 import 宿主模块，直接返回 null', async () => {
-    mockIsExtensionMode.mockReturnValue(false);
-    resetHostWorldInfoModuleCache_ACU();
-    mockLogWarn.mockClear();
-
-    await expect(loadHostWorldInfoModule_ACU()).resolves.toBeNull();
-
-    // 未发起 import ⇒ 不会在 iframe realm 里造出第二个 world-info 实例
-    expect(mockLogWarn).not.toHaveBeenCalledWith(expect.stringContaining('动态 import 宿主 world-info 模块失败'), expect.anything());
     resetHostWorldInfoModuleCache_ACU();
   });
 

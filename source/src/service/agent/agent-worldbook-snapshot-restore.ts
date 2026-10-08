@@ -6,17 +6,12 @@ import {
   setLorebookEntries_ACU
 } from '../../data/gateways/worldbook-gateway';
 import {
-  hashUserInput_ACU,
   logWarn_ACU
 } from '../../shared/utils';
 import {
   buildAgentWorldbookSnapshotSelectionSignature_ACU
 } from '../../shared/agent-worldbook-snapshot';
-import {
-  createAgentTakeoverMetaPattern_ACU,
-  createSkillMetaPattern_ACU,
-  stripAgentTakeoverMetaBlockLoose_ACU,
-} from '../../shared/agent-worldbook-comment';
+import { decideAgentWorldbookEntryRestore_ACU, isAgentWorldbookEntryRestored_ACU, selectRestorableSnapshotEntries_ACU, type AgentWorldbookRestorePatch_ACU } from './agent-worldbook-restore-core';
 
 export interface AgentWorldbookSnapshotRestoreResult_ACU {
   restored: number;
@@ -97,24 +92,6 @@ export function buildAgentWorldbookSelectionSignature_ACU(bookNames: string[]): 
   return buildAgentWorldbookSnapshotSelectionSignature_ACU(bookNames);
 }
 
-function hasValidUid_ACU(value: unknown): value is string | number {
-  return value !== null && value !== undefined && String(value).trim() !== '';
-}
-
-function stripTakeoverMeta_ACU(comment: unknown): string {
-  return stripAgentTakeoverMetaBlockLoose_ACU(comment);
-}
-
-function comparableComment_ACU(comment: unknown): string {
-  return stripTakeoverMeta_ACU(comment).replace(createSkillMetaPattern_ACU(), '\n').replace(/\n{3,}/g, '\n\n').trim();
-}
-
-function isCommentHashMatched_ACU(snapshotHash: string | undefined, currentComment: unknown): boolean {
-  if (!snapshotHash) return true;
-  const stripped = stripTakeoverMeta_ACU(currentComment);
-  return hashUserInput_ACU(comparableComment_ACU(currentComment)) === snapshotHash
-    || hashUserInput_ACU(stripped) === snapshotHash;
-}
 
 export async function restoreAgentWorldbookSnapshotEntries_ACU(
   snapshot: AgentWorldbookControlSnapshot_ACU,
@@ -139,52 +116,30 @@ export async function restoreAgentWorldbookSnapshotEntries_ACU(
   const restoredPatchesByBook: Record<string, Record<string, any>[]> = {};
   for (const [rawBookName, rawSnapshotEntries] of Object.entries(snapshot.books || {})) {
     const bookName = String(rawBookName || '').trim();
-    const snapshotEntries = Array.isArray(rawSnapshotEntries) ? rawSnapshotEntries : [];
+    // 逐条目决策与「已恢复」判定走共用核心（R4-07），与接管停用同口径：pending 条目不碰；
+    // 注释被改过的条目跳过且保留接管块（不再先剥后靠整体回滚补救）。缺指纹照常恢复、宽松剥离残留接管块是 scope 路径的既定口径。
+    const snapshotEntries = selectRestorableSnapshotEntries_ACU(rawSnapshotEntries);
     if (!bookName || snapshotEntries.length === 0) continue;
     try {
       const entries = await getLorebookEntries_ACU(bookName);
       const currentByUid = new Map((entries || []).map(entry => [String(entry?.uid), entry]));
-      const patches: Record<string, any>[] = [];
+      const patches: AgentWorldbookRestorePatch_ACU[] = [];
       const rollbackPatches: Record<string, any>[] = [];
-      let restoredInBook = 0;
       for (const snapshotEntry of snapshotEntries) {
-        if (!hasValidUid_ACU(snapshotEntry?.uid)) {
-          skipped += 1;
-          continue;
-        }
-        const current = currentByUid.get(String(snapshotEntry.uid));
+        const decision = decideAgentWorldbookEntryRestore_ACU(snapshotEntry, currentByUid.get(String(snapshotEntry?.uid)), { missingCommentHash: 'restore', metaStripMode: 'loose' });
         // 条目已被宿主删除：无可恢复对象，不算 skipped（否则 scope 变更永远被拒）。
-        if (!current) continue;
-        if (!isCommentHashMatched_ACU(snapshotEntry.commentHash, current.comment)) {
-          const strippedComment = stripTakeoverMeta_ACU(current.comment);
-          if (strippedComment !== String(current.comment || '')) {
-            patches.push({ uid: snapshotEntry.uid, comment: strippedComment });
-            rollbackPatches.push({ uid: snapshotEntry.uid, comment: current.comment });
-          }
+        if (decision.kind === 'missing') continue;
+        if (decision.kind !== 'restore') {
           skipped += 1;
           continue;
         }
-        const patch = {
-          uid: snapshotEntry.uid,
-          comment: stripTakeoverMeta_ACU(current.comment),
-          enabled: snapshotEntry.previousEnabled !== false,
-          keys: Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [],
-          type: snapshotEntry.previousType,
-        };
-        patches.push(patch);
-        rollbackPatches.push({
-          uid: snapshotEntry.uid,
-          comment: current.comment,
-          enabled: current.enabled,
-          keys: current.keys,
-          type: current.type,
-        });
-        restoredInBook += 1;
+        patches.push(decision.patch);
+        rollbackPatches.push(decision.preImage);
       }
       if (patches.length > 0) {
         // 宿主批量写在 reject 前仍可能已应用部分 patch，因此先保留完整 pre-image。
         rollbackPatchesByBook[bookName] = rollbackPatches;
-        restoredPatchesByBook[bookName] = patches;
+        restoredPatchesByBook[bookName] = patches as Record<string, any>[];
         let writeFailed = false;
         try {
           await setLorebookEntries_ACU(bookName, patches);
@@ -193,24 +148,25 @@ export async function restoreAgentWorldbookSnapshotEntries_ACU(
           logWarn_ACU(`[Agent世界书] 恢复世界书条目写入失败：${bookName}`, error);
         }
         try {
-          const confirmed = await readConfirmedPatches_ACU(bookName, patches);
-          const confirmedUidSet = new Set(confirmed.map(patch => String(patch.uid)));
-          rollbackPatchesByBook[bookName] = rollbackPatches.filter(patch => confirmedUidSet.has(String(patch.uid)));
-          restoredPatchesByBook[bookName] = patches.filter(patch => confirmedUidSet.has(String(patch.uid)));
+          const afterByUid = new Map((await getLorebookEntries_ACU(bookName) || []).map(entry => [String(entry?.uid), entry]));
+          const confirmedUidSet = new Set(patches
+            .filter(restorePatch => isAgentWorldbookEntryRestored_ACU(afterByUid.get(String(restorePatch.uid)), restorePatch))
+            .map(restorePatch => String(restorePatch.uid)));
+          rollbackPatchesByBook[bookName] = rollbackPatches.filter(rollbackPatch => confirmedUidSet.has(String(rollbackPatch.uid)));
+          restoredPatchesByBook[bookName] = patches.filter(restorePatch => confirmedUidSet.has(String(restorePatch.uid))) as Record<string, any>[];
           if (rollbackPatchesByBook[bookName].length === 0) delete rollbackPatchesByBook[bookName];
           if (restoredPatchesByBook[bookName].length === 0) delete restoredPatchesByBook[bookName];
-          if (writeFailed || confirmed.length !== patches.length) {
-            restoredInBook = 0;
+          if (writeFailed || confirmedUidSet.size !== patches.length) {
             failed += snapshotEntries.length;
+          } else {
+            restored += patches.length;
           }
         } catch (error) {
           // 无法读回时不能假定零副作用；保留完整 pre-image 交由上层补偿。
-          restoredInBook = 0;
           failed += snapshotEntries.length;
           logWarn_ACU(`[Agent世界书] 恢复世界书条目后确认失败：${bookName}`, error);
         }
       }
-      restored += restoredInBook;
     } catch (error) {
       logWarn_ACU(`[Agent世界书] 恢复世界书条目失败：${bookName}`, error);
       failed += snapshotEntries.length;

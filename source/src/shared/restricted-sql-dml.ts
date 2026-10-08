@@ -1,3 +1,5 @@
+import { splitSqlStatements_ACU } from './sql-statement-splitter';
+
 export type RestrictedSqlValue_ACU = string | number | null;
 
 export interface RestrictedSqlInsert_ACU {
@@ -123,24 +125,8 @@ function matchRestrictedUpdate_ACU(statement: string): { table: string; set: str
 }
 
 function splitStatements_ACU(sql: string): string[] {
-  const statements: string[] = [];
-  let start = 0;
-  let quoted = false;
-  for (let index = 0; index < sql.length; index += 1) {
-    const char = sql[index];
-    if (char === "'") {
-      if (quoted && sql[index + 1] === "'") { index += 1; continue; }
-      quoted = !quoted;
-    } else if (char === ';' && !quoted) {
-      const statement = sql.slice(start, index).trim();
-      if (statement) statements.push(statement);
-      start = index + 1;
-    }
-  }
-  const tail = sql.slice(start).trim();
-  if (tail) statements.push(tail);
-  if (quoted) throw new Error('SQL 字符串字面量未闭合');
-  return statements;
+  // 与写入期/回放期共用唯一分句实现（R1-05）；受限 DML 要求字符串必须闭合。
+  return splitSqlStatements_ACU(sql, { strictQuotes: true });
 }
 
 export function parseRestrictedSqlDml_ACU(sql: string): RestrictedSqlStatement_ACU[] {

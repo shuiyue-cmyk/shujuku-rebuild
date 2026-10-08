@@ -13,7 +13,6 @@ const m = vi.hoisted(() => {
   const fakeHostWin: any = {};
   return {
     hostWin: fakeHostWin,
-    isExtensionMode: true,
     fetchAvailableModels: vi.fn(async () => ({ success: true, models: ['gpt-test'] })),
     showToast: vi.fn(),
     settings: {
@@ -35,7 +34,6 @@ const m = vi.hoisted(() => {
 m.modelSelect.empty.mockReturnValue(m.modelSelect);
 
 vi.mock('../../../src/shared/runtime-env', () => ({
-  isExtensionMode: () => m.isExtensionMode,
   getHostWindow: () => m.hostWin,
 }));
 vi.mock('../../../src/service/ai/ai-service', () => ({

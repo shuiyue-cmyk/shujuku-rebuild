@@ -346,5 +346,16 @@ describe('SqliteEngine', () => {
       expect(result.values).toEqual([[1, '张三']]);
       engine2.dispose();
     });
+
+    // R1-07：坏数据恢复失败时旧库不能先被丢掉。
+    it('R1-07：二进制数据损坏时 loadFromBinary 抛错且原库保持可用', async () => {
+      engine.run('CREATE TABLE keep_me (id INTEGER);');
+      engine.run('INSERT INTO keep_me VALUES (7);');
+
+      await expect(engine.loadFromBinary(new TextEncoder().encode('这不是 SQLite 数据库文件'.repeat(20)))).rejects.toThrow();
+
+      expect(engine.isReady).toBe(true);
+      expect(engine.query('SELECT id FROM keep_me;').values).toEqual([[7]]);
+    });
   });
 });
