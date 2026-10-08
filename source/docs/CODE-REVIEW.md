@@ -24,8 +24,8 @@
 | 6 | service/template + template-assistant + worldbook | 13.3k | 子代理完成 → `docs/review/block6-template-worldbook.md`；已修 |
 | 7 | shared/ | 9.8k | 子代理完成 → `docs/review/block7-shared.md`；全部已修（R7-11 locale 一项按风险不修） |
 | 8 | service/ai、plot、optimization、flight-mode、其余小模块 | 5k | 子代理完成 → `docs/review/block8-small-services.md`；全部已修 |
-| 9 | presentation（旧 bootstrap/triggers/api-groups） | 5.4k | 未开始 |
-| 10 | presentation-v2 逻辑层（stores/composables）+ presentation-v3 | 28k | 未开始 |
+| 9 | presentation（旧 bootstrap/triggers/api-groups） | 12k | 子代理完成 → `docs/review/block9-presentation-legacy.md`；无 P0；P1×3（R9-01~03）、P2×7（R9-04~10）、P3×8（R9-11~18）全部待修（用户指示额度紧张时只修 P0） |
+| 10 | presentation-v2 逻辑层（stores/composables）+ presentation-v3 | 35k | 子代理完成：10A composables → `docs/review/block10a-v2-composables.md`（无 P0；P1×2 R10A-01~02、P2×11、P3×10）；10B stores 等 + v3 → `docs/review/block10b-v2-stores-v3.md`（无 P0/P1；P2×7、P3×13）；全部待修 |
 
 ## 块 1：data/
 
@@ -182,7 +182,7 @@
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
 
-待修：无（块 1–8 全部收口；不修项均已注明理由）。块 9、10 未复审。
+待修：块 1–8 已全部收口（不修项均已注明理由）。块 9、10 已复审、无 P0，按用户指示（额度紧张，只修 P0）全部登记待修：块 9 P1×3/P2×7/P3×8，块 10A P1×2/P2×11/P3×10，块 10B P2×7/P3×13。
 R4-02 遗留：模型放弃补齐时，草稿（partial）不会阻止水位推进——只在提升路径堵住了「写齐却看不见」，「没写齐就收工」仍按旧口径。
 
 测试稳定性：重型页面套件首个用例冷导入整张 V2 模块图单跑 11–15s，贴着原全局 15s 上限，本机并行全量必超时（发布基线同样失败）；全局 testTimeout 调为 60s。
