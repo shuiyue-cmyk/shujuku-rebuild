@@ -33,6 +33,7 @@ import {
   orchestrateAfterCommandsStrategy1_ACU,
   orchestrateAfterCommandsStrategy2_ACU,
 } from '../../../src/service/plot/plot-orchestrator';
+import { isPlotMessageProcessed_ACU, markPlotMessageProcessed_ACU } from '../../../src/service/plot/plot-message-markers';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -47,13 +48,18 @@ describe('prepareStrategy1Context_ACU', () => {
     const result = prepareStrategy1Context_ACU(msg);
     expect(result).not.toBeNull();
     expect(result!.messageToProcess).toBe('你好');
-    expect(msg._plot_processed).toBe(true);
+    expect(isPlotMessageProcessed_ACU(msg)).toBe(true);
+    // R8-12：标记只登记在运行时，不写到消息对象上（不随聊天文件落盘）。
+    expect(msg).not.toHaveProperty('_plot_processed');
+    expect(msg).not.toHaveProperty('_qrf_plot_pending_hash');
   });
   it('非用户消息返回 null', () => {
     expect(prepareStrategy1Context_ACU({ is_user: false, mes: '你好' })).toBeNull();
   });
   it('已处理消息返回 null', () => {
-    expect(prepareStrategy1Context_ACU({ is_user: true, mes: '你好', _plot_processed: true })).toBeNull();
+    const processed = { is_user: true, mes: '你好' };
+    markPlotMessageProcessed_ACU(processed);
+    expect(prepareStrategy1Context_ACU(processed)).toBeNull();
   });
   it('空消息返回 null', () => {
     expect(prepareStrategy1Context_ACU({ is_user: true, mes: '' })).toBeNull();

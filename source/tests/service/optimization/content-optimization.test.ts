@@ -350,6 +350,52 @@ describe('performContentOptimization_ACU', () => {
     expect(text).not.toContain('优化项数量：1-10个');
   });
 
+  it('R8-05：正文里的 $5/$C/$1/$& 与模板标签原样送出，只有可信模板里的占位符和标签被处理', async () => {
+    const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
+    const helpers = await import('../../../src/service/runtime/helpers-remaining');
+    vi.mocked(helpers.getWorldbookContentForPlot_ACU).mockResolvedValueOnce('WORLDBOOK-DUMP');
+    vi.mocked(helpers.parseIfBlockRecursive_ACU).mockImplementation((s: string) => s.replace(/<if>[\s\S]*?<\/if>/g, ''));
+    vi.mocked(callAIWithPreset_ACU).mockResolvedValue(JSON.stringify({ optimizations: [], summary: '无' }));
+    mockSettings.contentOptimizationSettings = {
+      maxOptimizations: 10, loopCount: 1, retryCount: 1,
+      promptGroup: [{ role: 'user', content: '世界书：$1<if>模板条件</if>\n正文：$CONTENT' }],
+    };
+    const userText = "他花了$5买了酒，是个$C级冒险者，单价$1。$& $' <if>正文条件</if>";
+
+    const { performContentOptimization_ACU } = await import('../../../src/service/optimization/content-optimization');
+    await performContentOptimization_ACU(userText, { currentLoop: 1 });
+    const sent = String((vi.mocked(callAIWithPreset_ACU).mock.calls[0][0] as any[])[0].content);
+    expect(sent).toBe(`世界书：WORLDBOOK-DUMP\n正文：${userText}`);
+    vi.mocked(helpers.parseIfBlockRecursive_ACU).mockImplementation((s: string) => s);
+  });
+
+  it('R8-11：取消后不再发出排队中的重试，在途请求收到 abort 信号', async () => {
+    const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
+    mockSettings.contentOptimizationSettings = { maxOptimizations: 10, loopCount: 1, retryCount: 3, promptGroup: [{ role: 'user', content: '$CONTENT' }] };
+    const mod = await import('../../../src/service/optimization/content-optimization');
+    let seenSignal: AbortSignal | undefined;
+    vi.mocked(callAIWithPreset_ACU).mockImplementation(async (_m: any, _p: any, _t: any, signal: any) => {
+      seenSignal = signal;
+      mod.cancelContentOptimization_ACU('测试取消');
+      throw new Error('网络错误');
+    });
+
+    await expect(mod.performContentOptimization_ACU('原始内容', { currentLoop: 1 })).rejects.toThrow('用户终止正文优化');
+    expect(callAIWithPreset_ACU).toHaveBeenCalledTimes(1);
+    expect(seenSignal?.aborted).toBe(true);
+  });
+
+  it('R8-11：之前的取消不影响之后新发起的优化', async () => {
+    const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
+    mockSettings.contentOptimizationSettings = { maxOptimizations: 10, loopCount: 1, retryCount: 1, promptGroup: [{ role: 'user', content: '$CONTENT' }] };
+    const mod = await import('../../../src/service/optimization/content-optimization');
+    mod.cancelContentOptimization_ACU('旧取消');
+    vi.mocked(callAIWithPreset_ACU).mockResolvedValue('');
+    const result = await mod.performContentOptimization_ACU('原始内容', { currentLoop: 1 });
+    expect(result.success).toBe(false);
+    expect(callAIWithPreset_ACU).toHaveBeenCalledTimes(1);
+  });
+
   it('API 返回空响应时所有重试失败', async () => {
     const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
     vi.mocked(callAIWithPreset_ACU).mockResolvedValue('');

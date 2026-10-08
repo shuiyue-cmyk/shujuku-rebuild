@@ -49,6 +49,7 @@ import {
   setPlotPresetBindingForChat_ACU,
   syncCurrentEditablePlotPresetState_ACU
 } from '../../plot/plot-logic';
+import { clearPlotPendingHash_ACU, getPlotPendingHash_ACU } from '../../plot/plot-message-markers';
 
   /**
    * 加载上次使用的预设到全局设置，并清除当前角色卡上冲突的陈旧设置。
@@ -165,7 +166,7 @@ import {
   //
   // 注意：历史检索锚点不使用 roundId。本轮 roundId 在任务全部完成后才生成，
   // 而历史读取发生在任务开始前，此时无 roundId 可用。锚点的职责是定位
-  // “当前用户层”，策略1 下由 _qrf_plot_pending_hash 提供，策略2 / hook 下
+  // “当前用户层”，策略1 下由运行时待处理哈希标记（plot-message-markers）提供，策略2 / hook 下
   // 当前层尚未入 chat，因此无需锚点。
 
   function findPlotHistoryAnchorIndex_ACU(chat: any[], options: any = {}) {
@@ -177,7 +178,7 @@ import {
     for (let i = chat.length - 1; i >= 0; i--) {
       const message = chat[i];
       if (!message?.is_user) continue;
-      if (beforeUserInputHash && message._qrf_plot_pending_hash === beforeUserInputHash) {
+      if (beforeUserInputHash && getPlotPendingHash_ACU(message) === beforeUserInputHash) {
         return i;
       }
       const messageText = String(message.mes || '');
@@ -455,7 +456,7 @@ import {
         // 因此这里可以安全地拒绝覆盖任何已有 plot 的楼层：宁可不写，也不错层。
         for (let i = chat.length - 1; i >= 0; i--) {
           const msg = chat[i];
-          if (msg?.is_user && !msg._qrf_plot_round_id && !msg.qrf_plot && msg._qrf_plot_pending_hash === userInputHash) {
+          if (msg?.is_user && !msg._qrf_plot_round_id && !msg.qrf_plot && getPlotPendingHash_ACU(msg) === userInputHash) {
             msg._qrf_plot_round_id = roundId;
             logDebug_ACU(`[剧情推进] [Plot] ✓ 通过策略1待处理标记认领目标用户消息（索引 ${i}，roundId: ${roundId}）`);
             return { msg, index: i };
@@ -480,7 +481,7 @@ import {
         // 旧对象格式：保留标记身份优先与文本哈希回退。
         for (let i = chat.length - 1; i >= 0; i--) {
           const msg = chat[i];
-          if (msg && msg.is_user && msg._qrf_plot_pending_hash === userInputHash) {
+          if (msg && msg.is_user && getPlotPendingHash_ACU(msg) === userInputHash) {
             logDebug_ACU(`[剧情推进] [Plot] ✓ 通过消息对象上的哈希标记找到目标用户消息（索引 ${i}，哈希: ${userInputHash}）`);
             return { msg, index: i };
           }
@@ -544,9 +545,7 @@ import {
       }
 
       // P5-T5.1: 标记在宿主保存成功后才删除（身份已消费）
-      if (target._qrf_plot_pending_hash) {
-        delete target._qrf_plot_pending_hash;
-      }
+      clearPlotPendingHash_ACU(target);
 
       // T1.2: 仅当全局 pending 仍是本轮同一对象时才清空
       if (tempPlotToSave_ACU === roundRef) {

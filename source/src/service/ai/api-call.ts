@@ -407,7 +407,7 @@ export function buildCustomApiRequestBody_ACU(
     // 只接受小写 role。此前 messages 被原样透传，导致后端报
     // `unknown variant SYSTEM`，改表助手 AI 调用失败。
     //
-    // 本项目既有约定（merge-logic.ts / content-optimization.ts）
+    // 本项目既有约定（content-optimization.ts 等）
     // 均在发送前对 role 做 toLowerCase；此处是自定义 chat-completions 的统一出口，
     // 对已是小写的输入（merge / plot / 存量路径）为无操作，不破坏既有行为。
     // tavern / 主 API（generateRaw）路径不经过本函数，不受影响。
@@ -854,7 +854,8 @@ export async function callAIWithResolvedPreset_ACU(
       try {
         if (!response.ok) {
             const errTxt = sanitizeUpstreamErrorBodyForDisplay_ACU(await response.text());
-            throw new Error(`API 请求失败: ${response.status} ${errTxt}`);
+            // 带 status 抛出（R8-08）：重试方据此区分 401/403/404 这类必然失败的配置错误。
+            throw new AgentApiHttpError_ACU(response.status, `API 请求失败: ${response.status} ${errTxt}`);
         }
         assertNotAborted_ACU(signal);
         // 响应头已到：转入空闲计时，流式每收到一块数据续期一次。

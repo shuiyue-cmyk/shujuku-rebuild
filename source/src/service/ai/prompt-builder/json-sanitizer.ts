@@ -7,10 +7,27 @@ import {
   logDebug_ACU
 } from '../../../shared/utils';
 
-/** 将全角/中文引号统一为标准双引号 */
+/**
+ * 把被当作 JSON 定界符的全角/中文引号（＂「」『』）统一为标准双引号（R8-10）。
+ * 只改标准双引号字符串之外的部分：字符串里的「」『』是中文对白括号，属于单元格内容，原样保留。
+ * 弯引号 “” 在中文里几乎都是对白内容而不是定界符，不做转换。
+ */
 export function normalizeQuotesLayer_ACU(jsonStr: string) {
     if (typeof jsonStr !== 'string' || !jsonStr) return jsonStr;
-    return jsonStr.replace(/[""「」『』＂]/g, '"');
+    let result = '';
+    let inString = false;
+    for (let index = 0; index < jsonStr.length; index += 1) {
+        const char = jsonStr[index];
+        if (inString) {
+            result += char;
+            if (char === '\\' && index + 1 < jsonStr.length) { result += jsonStr[index + 1]; index += 1; continue; }
+            if (char === '"') inString = false;
+            continue;
+        }
+        if (char === '"') { inString = true; result += char; continue; }
+        result += /[＂「」『』]/.test(char) ? '"' : char;
+    }
+    return result;
 }
 
 export function getNextNonWhitespaceMeta_ACU(text: string, startIndex: number) {

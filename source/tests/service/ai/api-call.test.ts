@@ -1144,6 +1144,17 @@ describe('callAIWithResolvedPreset_ACU 基础路径', () => {
     await expect(callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved)).rejects.toThrow('API 请求失败: 500 backend down');
   });
 
+  it('R8-08：非 2xx 错误携带 status，401 判为不可重试、503 可重试', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 401, text: async () => 'bad key' });
+    const unauthorized: any = await callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved).catch(error => error);
+    expect(unauthorized.status).toBe(401);
+    expect(isRetryableAiRequestError_ACU(unauthorized)).toBe(false);
+    mockFetch.mockResolvedValue({ ok: false, status: 503, text: async () => 'busy' });
+    const busy: any = await callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved).catch(error => error);
+    expect(busy.status).toBe(503);
+    expect(isRetryableAiRequestError_ACU(busy)).toBe(true);
+  });
+
   it('响应解析出空白内容时返回 null 而非空串', async () => {
     mockFetch.mockResolvedValue({ ok: true });
     mockHandleApiResponse.mockResolvedValue('   ');

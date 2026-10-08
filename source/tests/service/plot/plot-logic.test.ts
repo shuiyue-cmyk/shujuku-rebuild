@@ -23,7 +23,7 @@ const { mockSettings } = vi.hoisted(() => {
 vi.mock('../../../src/shared/defaults-json.js', () => ({
   DEFAULT_PLOT_SETTINGS_ACU: {
     contextExtractRules: [],
-    contextExcludeRules: [],
+    contextExcludeRules: [{ start: '<disclaimer>', end: '</disclaimer>' }],
     contextExtractTags: '',
     contextExcludeTags: '',
     loopSettings: { maxRetries: 3, quickReplyContent: [] },
@@ -468,6 +468,17 @@ describe('getLastOptimizedMessageIndex_ACU', () => {
   it('无聊天记录返回 -1', () => {
     expect(getLastOptimizedMessageIndex_ACU()).toBe(-1);
   });
+
+  it('R8-09：缓存记录的 messageId 已不在聊天里时不按楼号回退到别的楼层', async () => {
+    const chatService = await import('../../../src/data/gateways/chat-gateway');
+    const cache = await import('../../../src/service/optimization/content-optimization');
+    vi.mocked(chatService.getChatArray_ACU).mockReturnValueOnce([
+      { is_user: false, mes: '楼0', message_id: 'a' },
+      { is_user: false, mes: '别的楼', message_id: 'c' },
+    ] as any);
+    vi.mocked(cache.getLastOptimizationBase_ACU).mockReturnValueOnce({ messageIndex: 1, messageId: 'b-deleted' } as any);
+    expect(getLastOptimizedMessageIndex_ACU()).toBe(-1);
+  });
 });
 
 // ═══ ensureTagRulesCompat_ACU ═══
@@ -490,6 +501,14 @@ describe('ensureTagRulesCompat_ACU', () => {
     expect(Array.isArray(settings.tableContextExcludeRules)).toBe(true);
     expect(Array.isArray(settings.plotSettings.contextExtractRules)).toBe(true);
     expect(Array.isArray(settings.plotSettings.contextExcludeRules)).toBe(true);
+  });
+  it('R8-06：用户清空的排除规则（空数组）保持为空；字段缺失才补默认规则', () => {
+    const cleared: any = { plotSettings: { contextExcludeRules: [], contextExcludeTags: '' } };
+    ensureTagRulesCompat_ACU(cleared);
+    expect(cleared.plotSettings.contextExcludeRules).toEqual([]);
+    const missing: any = { plotSettings: { contextExcludeTags: '' } };
+    ensureTagRulesCompat_ACU(missing);
+    expect(missing.plotSettings.contextExcludeRules).toEqual([{ start: '<disclaimer>', end: '</disclaimer>' }]);
   });
   it('null 输入不报错', () => {
     expect(() => ensureTagRulesCompat_ACU(null as any)).not.toThrow();

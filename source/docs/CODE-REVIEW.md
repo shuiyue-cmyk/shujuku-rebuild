@@ -23,7 +23,7 @@
 | 5 | service/vector + data/storage 向量部分 | 12.4k+ | 子代理完成 → `docs/review/block5-vector.md`；已修（R5-04 按产品决定不修，R5-12 rowId 部分未改） |
 | 6 | service/template + template-assistant + worldbook | 13.3k | 子代理完成 → `docs/review/block6-template-worldbook.md`；已修 |
 | 7 | shared/ | 9.8k | 子代理完成 → `docs/review/block7-shared.md`；全部已修（R7-11 locale 一项按风险不修） |
-| 8 | service/ai、plot、optimization、flight-mode、其余小模块 | 5k | 子代理完成 → `docs/review/block8-small-services.md`；P1 已修，P2/P3 待修 |
+| 8 | service/ai、plot、optimization、flight-mode、其余小模块 | 5k | 子代理完成 → `docs/review/block8-small-services.md`；全部已修 |
 | 9 | presentation（旧 bootstrap/triggers/api-groups） | 5.4k | 未开始 |
 | 10 | presentation-v2 逻辑层（stores/composables）+ presentation-v3 | 28k | 未开始 |
 
@@ -150,6 +150,18 @@
 | R7-11 小项 | P3 | 已修：正整数归一化、删转义解析死代码、注释错位、导入暂存等事务完成且打开失败可重试。不修：世界书书名排序的 locale 依赖——签名已写进接管条目，改排序会让现有接管一次性失配，风险大于跨设备收益 | utils.test、idb-import-temp.test |
 | R8-01 飞行模式补偿切聊后打到新聊天（硬删） | P1 | 已修：入口锚定聊天（数组/首楼/文件标识/隔离键），补偿前不一致直接放弃并报可操作错误；协调提交新增 expectedChatContext，首楼不符 fail-closed | flight-mode-transition-chat-switch.test |
 | R8-02 内部 AI 120s 墙钟超时掐断长生成 | P1 | 已修：流式改为空闲超时（等响应头、相邻数据块之间各 120s，逐块读取续期）；非流式按输出上限 20 tok/s 估算放宽，不低于 120s | api-call.test「R8-02」×2、prompt-api-call.test「R8-02」 |
+| R8-03 已停用的自动合并纪要仍在每次填表后白烧请求 | P2 | 已修：删除自动/手动填表后的自动合并触发链与整个合并模块；导入设置时 autoMergeEnabled 恒为关 | settings-service.test、update-orchestrator.test、update-scheduler.test「R8-03」 |
+| R8-04 DSL 解析前全文归一化改写单元格 | P2 | 已修：归一化只作用于 JSON 字符串之外；字符串内的全角冒号/\n/'+' 原样交给 JSON.parse；跨行字符串拼接保留换行 | table-edit-parser.test「R8-04」×3 |
+| R8-05 正文优化把正文里的 $5/$C/$& 当占位符替换 | P2 | 已修：正文与占位符值先换成 nonce token，模板解释器跑完再还原（与填表同一套守卫，已抽到共享模块）；正文里的模板标签也不再被执行 | content-optimization.test「R8-05」 |
+| R8-06 清空剧情推进排除规则后被恢复默认 | P2 | 已修：只在字段缺失时补默认规则，空数组按用户选择保留 | plot-logic.test「R8-06」 |
+| R8-07 流式解析只认两种协议的结束信号 | P2 | 已修：finish_reason、Responses 的 response.completed、Gemini 的 finishReason 均视为结束，并解析 Responses/Gemini 的文本增量；无任何结束信号仍按截断处理。未在真机抓流确认 TT 对这几种协议是否透传 | prompt-api-call.test「R8-07」×4 |
+| R8-08 非 2xx 不带 status，续写对 401/403/404 照样重试 | P3 | 已修：抛带 status 的 AgentApiHttpError；续写重试对带状态码的错误按 408/429/5xx 才重试 | api-call.test、internal-ai-call.test「R8-08」 |
+| R8-09 重新优化按楼号回退到别的楼层 | P3 | 已修：有 messageId 却找不到时不按楼号回退 | plot-logic.test「R8-09」 |
+| R8-10 引号归一化缺弯引号、改写「」『』 | P3 | 已修：只在标准双引号字符串之外把 ＂「」『』 当定界符转换；字符串内的对白括号原样保留；弯引号按既有约定不转换 | json-sanitizer.test「R8-10」 |
+| R8-11 正文优化取消后排队的重试仍发出 | P3 | 已修：每轮登记 AbortController，取消即中断在途请求；按取消代次在每次请求/退避前后复核（旧取消不误伤新一轮） | content-optimization.test「R8-11」×2 |
+| R8-12 剧情推进标记随聊天文件落盘 | P3 | 已修：改为按消息对象登记在 WeakMap，写入时清掉旧版残留字段 | plot-orchestrator.test、plot-history-preset.test |
+| R8-13 填表占位符吃掉 $10/$100 | P3 | 已修：占位符加右边界（后跟数字/字母不算），已核默认提示词无依赖；正文优化同口径 | prompt-api-call.test「R8-13」 |
+| R8-14 死代码 | P3 | 已修：删除 getOptimizationApiConfig_ACU 与合并模块 | — |
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
 R2B-08/09（迁移、混合提交、batch 写入的整聊天克隆替换）与上面同一模式但无 await 窗口，未改，留作 P3。

@@ -47,7 +47,6 @@ import './service/ai/api-call';
 import './service/ai/prompt-builder';
 import './service/worldbook/pipeline';
 import './service/worldbook/injection-engine';
-import './service/summary/merge-logic';
 import './service/runtime/state-manager';
 import './service/runtime/helpers-remaining';
 import './service/template/chat-scope';

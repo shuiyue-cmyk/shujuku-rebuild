@@ -11,7 +11,6 @@ import { clearManualRefillSheetDataInRange_ACU, cleanupCheckpointVectorIndexMani
 import type { ManualRefillRangeRollbackHandle_ACU } from '../chat/chat-service';
 import { coreApisAreReady_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
 import { resolveManualUpdateBatchSize_ACU, resolveManualUpdateContextDepth_ACU } from './manual-update-settings';
-import { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } from '../summary/merge-logic';
 import { ensureStableRowIdsForSheetContent_ACU, filterSheetKeysByTemplateScope_ACU, getChatSheetGuideDataForIsolationKey_ACU, getCurrentChatTemplateScopeState_ACU, getEffectiveSeedRowsForSheet_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, resolveTemplateScope_ACU, sanitizeTemplateSnapshotForChat_ACU, shouldUseInitialSeedRows_ACU } from '../template/chat-scope';
 import type { TemplateScope_ACU } from '../template/chat-scope';
 import { loadAllChatMessages_ACU, updateReadableLorebookEntry_ACU } from '../worldbook/pipeline';
@@ -400,8 +399,6 @@ export interface ManualUpdateResult {
     success: boolean;
     error?: string;
     /** 是否触发了自动合并 */
-    autoMergeTriggered?: boolean;
-    autoMergeSuccess?: boolean;
     checkpointWarning?: string;
     outcome?: 'complete' | 'no_work' | 'stopped' | 'sync_pending' | 'blocked' | 'integrity_failed' | 'progress_metadata_failed';
     committedBucketCount?: number;
@@ -5914,33 +5911,6 @@ export async function orchestrateManualUpdate_ACU(
             logError_ACU('[Manual Update] 边界 checkpoint 建立异常详情:', error);
         }
 
-        // 手动更新完成后检测自动合并总结
-        let autoMergeTriggered = false;
-        let autoMergeSuccess = false;
-        try {
-            const trigger = checkAutoMergeTrigger_ACU();
-            if (trigger.shouldTrigger) {
-                autoMergeTriggered = true;
-                const prepared = prepareAutoMergeBatches_ACU({
-                    startIndex: 0, endIndex: trigger.mergeCount, targetCount: 1,
-                    batchSize: 5, promptTemplate: '', isAutoMode: true,
-                });
-                let acc: any[] = [];
-                for (let i = 0; i < prepared.batches.length; i++) {
-                    const batchResult = await executeAutoMergeBatch_ACU(prepared, prepared.batches[i], acc);
-                    acc = batchResult.accumulatedSummary;
-                }
-                const mergeResult = await finalizeAutoMerge_ACU(prepared, acc);
-                if (mergeResult?.success !== true) {
-                    logWarn_ACU('[自动合并] 提交失败或返回无效结果，自动合并未成功。', mergeResult?.error);
-                } else {
-                    autoMergeSuccess = true;
-                }
-            }
-        } catch (e) {
-            logWarn_ACU('自动合并总结检测失败:', e);
-        }
-
         // 收尾：本次做过破坏性清理却一条数据批次都没写进去（例如范围内没有可填分组、分组全被模板范围挡掉）。
         // 与失败路径同源处理——回滚清理，避免「旧数据已删、什么都没写」还报成功的净损失。
         const zeroCommitRollback = await rollbackRefillCleanupOnZeroCommit();
@@ -5962,7 +5932,7 @@ export async function orchestrateManualUpdate_ACU(
             }
         }
         return {
-            success: true, autoMergeTriggered, autoMergeSuccess, checkpointWarning, committedBucketCount, committedDataBucketCount,
+            success: true, checkpointWarning, committedBucketCount, committedDataBucketCount,
             ...(zeroCommitRollback.rolledBackCleanup ? { rolledBackCleanup: true } : {}),
         };
     } catch (error: any) {

@@ -143,13 +143,6 @@ vi.mock('../../../src/service/chat/chat-service', () => ({
   shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU: mockShouldRotateBoundaryCheckpoint,
 }));
 
-vi.mock('../../../src/service/summary/merge-logic', () => ({
-  checkAutoMergeTrigger_ACU: vi.fn(() => ({ shouldTrigger: false })),
-  prepareAutoMergeBatches_ACU: vi.fn(),
-  executeAutoMergeBatch_ACU: vi.fn(),
-  finalizeAutoMerge_ACU: vi.fn(),
-}));
-
 vi.mock('../../../src/service/worldbook/injection-engine-state', () => ({
   purgeSheetKeysFromChatHistoryHard_ACU: (...args: any[]) => mockPurgeSheetKeysFromChatHistoryHard(...args),
 }));
@@ -4067,44 +4060,17 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(result.error).toContain('尝试后仍失败');
   });
 
-  it('自动合并触发成功时返回 autoMergeTriggered', async () => {
+  it('R8-03：手动填表完成后不再触发自动合并（触发链已移除，只发填表请求）', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
     vi.mocked(getChatArray_ACU).mockReturnValue([
       { is_user: true },
       { is_user: false, mes: 'AI回复' },
     ]);
-
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
-    const { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } = await import('../../../src/service/summary/merge-logic');
-    vi.mocked(checkAutoMergeTrigger_ACU).mockReturnValue({ shouldTrigger: true, mergeCount: 5 });
-    vi.mocked(prepareAutoMergeBatches_ACU).mockReturnValue({ batches: [{ startIndex: 0, endIndex: 5 }] } as any);
-    vi.mocked(executeAutoMergeBatch_ACU).mockResolvedValue({ accumulatedSummary: ['合并结果'] } as any);
-    vi.mocked(finalizeAutoMerge_ACU).mockResolvedValue({ success: true, mergedRows: 1 } as any);
-
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
+    const result: any = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
     expect(result.success).toBe(true);
-    expect(result.autoMergeTriggered).toBe(true);
-    expect(result.autoMergeSuccess).toBe(true);
-  });
-
-  it('自动合并 commit 失败时不把 autoMergeSuccess 报成 true', async () => {
-    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
-    vi.mocked(getChatArray_ACU).mockReturnValue([
-      { is_user: true },
-      { is_user: false, mes: 'AI回复' },
-    ]);
-    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
-
-    const { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } = await import('../../../src/service/summary/merge-logic');
-    vi.mocked(checkAutoMergeTrigger_ACU).mockReturnValue({ shouldTrigger: true, mergeCount: 5 });
-    vi.mocked(prepareAutoMergeBatches_ACU).mockReturnValue({ batches: [{ startIndex: 0, endIndex: 5 }] } as any);
-    vi.mocked(executeAutoMergeBatch_ACU).mockResolvedValue({ accumulatedSummary: ['合并结果'] } as any);
-    vi.mocked(finalizeAutoMerge_ACU).mockResolvedValue({ success: false, mergedRows: 0 } as any);
-
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
-    expect(result.autoMergeTriggered).toBe(true);
-    expect(result.autoMergeSuccess).toBe(false);
+    expect('autoMergeTriggered' in result).toBe(false);
   });
 
   it('finally 块中清理 manualExtraHint 和 isAutoUpdating', async () => {

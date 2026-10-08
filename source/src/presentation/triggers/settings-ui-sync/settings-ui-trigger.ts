@@ -386,10 +386,6 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
             ? `并发分组更新有 ${result.failedGroups} 组失败：${firstError}`
             : `并发分组更新有 ${result.failedGroups} 组失败，请查看日志。`);
     }
-    if (result.autoMergeTriggered && result.autoMergeSuccess) {
-        showToastr_ACU('success', '自动合并纪要完成！');
-        try { (topLevelWindow_ACU as any).AutoCardUpdaterAPI._notifyTableUpdate(); } catch (_) {}
-    }
     if (typeof updateCardUpdateStatusDisplay_ACU === 'function') updateCardUpdateStatusDisplay_ACU();
     } finally {
       performanceSpan.end({

@@ -13,14 +13,42 @@ import { isSqliteMode } from '../../table/storage-mode';
 import { stripJsonCommentsPreservingStrings_ACU } from '../../../shared/json-helpers';
 import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../../shared/stable-row-id-allocator';
 
+  /**
+   * 只对 JSON 双引号字符串之外的结构文本做容错（R8-04）：字符串内的全角冒号、`\n` 转义、`'+'`
+   * 都是单元格内容，必须原样交给 JSON.parse（`\n` 由它解码成真换行）。
+   */
+  function mapOutsideJsonStrings_ACU(text: string, mapOutside: (segment: string) => string): string {
+    let result = '';
+    let segmentStart = 0;
+    let inString = false;
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (char === '\\') { index += 1; continue; }
+        if (char === '"') {
+          result += text.slice(segmentStart, index + 1);
+          segmentStart = index + 1;
+          inString = false;
+        }
+        continue;
+      }
+      if (char === '"' && text[index - 1] !== '\\') {
+        result += mapOutside(text.slice(segmentStart, index));
+        segmentStart = index;
+        inString = true;
+      }
+    }
+    const tail = text.slice(segmentStart);
+    return result + (inString ? tail : mapOutside(tail));
+  }
+
   function normalizeAiResponseForTableEditParsing_ACU(text: string) {
     if (typeof text !== 'string') return '';
     let cleaned = text.trim();
-    cleaned = cleaned.replace(/'\s*\+\s*'/g, '');
+    cleaned = mapOutsideJsonStrings_ACU(cleaned, segment => segment.replace(/'\s*\+\s*'/g, ''));
     if (cleaned.startsWith("'") && cleaned.endsWith("'")) cleaned = cleaned.slice(1, -1);
-    cleaned = cleaned.replace(/\\n/g, '\n');
     cleaned = cleaned.replace(/\\\\"/g, '\\"');
-    cleaned = cleaned.replace(/：/g, ':');
+    cleaned = mapOutsideJsonStrings_ACU(cleaned, segment => segment.replace(/\\n/g, '\n').replace(/：/g, ':'));
     return cleaned;
   }
 
@@ -135,6 +163,8 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
     const commandLines = [];
     let commandReconstructor = '';
     let isInJsonBlock = false;
+    // 上一行停在 JSON 字符串内部：这次换行是单元格内容，拼接时写成 \n 转义而不是空格（R8-04）。
+    let endsInsideJsonString = false;
 
     originalLines.forEach(line => {
         const trimmedLine = line.trim();
@@ -150,7 +180,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
             }
             commandReconstructor = lineContent;
         } else {
-            commandReconstructor += ' ' + lineContent;
+            commandReconstructor += (endsInsideJsonString ? '\\n' : ' ') + lineContent;
         }
 
         if (commandReconstructor) {
@@ -171,6 +201,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
             } else {
                 isInJsonBlock = false;
             }
+            endsInsideJsonString = isInJsonBlock && inDouble;
         }
     });
 

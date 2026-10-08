@@ -1405,11 +1405,11 @@ export function applyCombinedSettingsImport_ACU(combinedData: any): string[] {
         settings_ACU.mergeEndIndex = combinedData.mergeEndIndex || null;
         modifiedFields.push('mergeTargetCount', 'mergeBatchSize', 'mergeStartIndex', 'mergeEndIndex');
 
-        // 自动合并设置
-        settings_ACU.autoMergeEnabled = combinedData.autoMergeEnabled || false;
+        // 自动合并设置：自动合并功能已停用并移除触发链（R8-03），开关恒为关；阈值类字段照常导入以便往返导出。
+        settings_ACU.autoMergeEnabled = false;
         settings_ACU.autoMergeThreshold = combinedData.autoMergeThreshold || 20;
         settings_ACU.autoMergeReserve = combinedData.autoMergeReserve || 0;
-        modifiedFields.push('autoMergeEnabled', 'autoMergeThreshold', 'autoMergeReserve');
+        modifiedFields.push('autoMergeThreshold', 'autoMergeReserve');
 
         // 删除楼层范围设置
         settings_ACU.deleteStartFloor = combinedData.deleteStartFloor || null;

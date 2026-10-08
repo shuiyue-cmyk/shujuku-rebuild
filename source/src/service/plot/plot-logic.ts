@@ -85,6 +85,10 @@ export function ensureTagRulesCompat_ACU(targetSettings: Record<string, any>) {
     const plot = targetSettings.plotSettings;
     if (!plot || typeof plot !== 'object') return;
 
+    // 只在字段缺失时补默认规则（R8-06）：空数组是用户主动删光规则的选择，必须保留，
+    // 否则每次加载设置都会把默认排除规则悄悄补回来，用户无法让剧情推进读到完整上下文。
+    const extractRulesMissing = !Array.isArray(plot.contextExtractRules);
+    const excludeRulesMissing = !Array.isArray(plot.contextExcludeRules);
     plot.contextExtractRules = normalizeExtractRules_ACU(
       plot.contextExtractRules,
       plot.contextExtractTags || '',
@@ -94,14 +98,14 @@ export function ensureTagRulesCompat_ACU(targetSettings: Record<string, any>) {
       plot.contextExcludeTags || '',
     );
 
-    if ((!Array.isArray(plot.contextExtractRules) || plot.contextExtractRules.length === 0)
+    if (extractRulesMissing && plot.contextExtractRules.length === 0
       && (plot.contextExtractTags || '').trim() === '') {
       plot.contextExtractRules = normalizeExtractRules_ACU(
         DEFAULT_PLOT_SETTINGS_ACU.contextExtractRules,
         DEFAULT_PLOT_SETTINGS_ACU.contextExtractTags || '',
       );
     }
-    if ((!Array.isArray(plot.contextExcludeRules) || plot.contextExcludeRules.length === 0)
+    if (excludeRulesMissing && plot.contextExcludeRules.length === 0
       && (plot.contextExcludeTags || '').trim() === '') {
       plot.contextExcludeRules = normalizeExcludeRules_ACU(
         DEFAULT_PLOT_SETTINGS_ACU.contextExcludeRules,
@@ -912,11 +916,14 @@ export function getLastOptimizedMessageIndex_ACU() {
     const cachedBase = getLastOptimizationBase_ACU();
 
     if (cachedBase?.messageId != null) {
-    const runtimeIndex = chat.findIndex((msg: any) => isAiFloor_ACU(msg) && msg.message_id === cachedBase.messageId);
+      const runtimeIndex = chat.findIndex((msg: any) => isAiFloor_ACU(msg) && msg.message_id === cachedBase.messageId);
       if (runtimeIndex >= 0) return runtimeIndex;
     }
 
-    if (Number.isInteger(cachedBase?.messageIndex) && cachedBase.messageIndex >= 0 && isAiFloor_ACU(chat[cachedBase.messageIndex])) {
+    // 有 messageId 却找不到（楼层已删）时不按楼号回退（R8-09，与 getOriginalContent_ACU 同口径）：
+    // 楼号此时指向的是另一条楼，「重新优化」会作用在用户没选的那一楼上。下面的标记扫描按楼层自身的原文标记认定，不受影响。
+    if (cachedBase?.messageId == null
+      && Number.isInteger(cachedBase?.messageIndex) && cachedBase.messageIndex >= 0 && isAiFloor_ACU(chat[cachedBase.messageIndex])) {
       return cachedBase.messageIndex;
     }
 

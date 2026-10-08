@@ -14,6 +14,7 @@ import {
   logError_ACU,
   hashUserInput_ACU
 } from '../../shared/utils';
+import { clearPlotMessageProcessed_ACU, clearPlotPendingHash_ACU, isPlotMessageProcessed_ACU, markPlotMessageProcessed_ACU, setPlotPendingHash_ACU } from './plot-message-markers';
 
 // ============================================================
 // 类型定义
@@ -46,7 +47,7 @@ export function prepareStrategy1Context_ACU(lastMessage: any): {
     messageToProcess: string;
     originalInputHash: string;
 } | null {
-    if (!lastMessage || !lastMessage.is_user || lastMessage._plot_processed) {
+    if (!lastMessage || !lastMessage.is_user || isPlotMessageProcessed_ACU(lastMessage)) {
         return null;
     }
 
@@ -55,10 +56,10 @@ export function prepareStrategy1Context_ACU(lastMessage: any): {
         return null;
     }
 
-    lastMessage._plot_processed = true;
+    markPlotMessageProcessed_ACU(lastMessage);
     const originalInputHash = hashUserInput_ACU(messageToProcess);
-    lastMessage._qrf_plot_pending_hash = originalInputHash;
-    logDebug_ACU('[剧情推进] [Plot] 在消息对象上保存原始输入哈希:', originalInputHash);
+    setPlotPendingHash_ACU(lastMessage, originalInputHash);
+    logDebug_ACU('[剧情推进] [Plot] 为消息登记原始输入哈希（运行时标记，不落盘）:', originalInputHash);
 
     return { messageToProcess, originalInputHash };
 }
@@ -178,7 +179,8 @@ export async function orchestrateAfterCommandsStrategy1_ACU(
         return { action: 'no_match' };
     } catch (error) {
         logError_ACU('[剧情推进] Error processing last chat message:', error);
-        delete lastMessage._plot_processed;
+        clearPlotMessageProcessed_ACU(lastMessage);
+        clearPlotPendingHash_ACU(lastMessage);
         return { action: 'no_match' };
     } finally {
         _set_isProcessing_Plot_ACU(false);

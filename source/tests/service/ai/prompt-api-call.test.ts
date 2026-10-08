@@ -266,6 +266,16 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
     expect(content).not.toContain('$U');
   });
 
+  it('R8-13：占位符后紧跟数字/字母时不当占位符（$100、$Cx 原样保留），后跟中文照常替换', async () => {
+    mockSettings.charCardPrompt = [{ role: 'USER', content: '价格$100 代号$Cx 消息:$1。角色:$C级' }];
+    await callCustomOpenAI_ACU({ messagesText: '消息数据' });
+    const content = JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content;
+    expect(content).toContain('价格$100');
+    expect(content).toContain('代号$Cx');
+    expect(content).toContain('消息:消息数据。');
+    expect(content).toContain('角色:角色描述级');
+  });
+
   it('填表原生工具开关开 + 非流式：请求挂载 table_sql 工具并合成工具调用结果', async () => {
     mockSettings.tableFillNativeToolsEnabled = true;
     mockSettings.streamingEnabled = false;
@@ -828,6 +838,43 @@ describe('handleApiResponse_ACU 响应解析', () => {
     expect(result).toBe('你好');
     expect(onProgress).toHaveBeenCalledTimes(2);
     expect(text).not.toHaveBeenCalled();
+  });
+
+  it('R8-07：不发 [DONE] 但有 finish_reason 的 OpenAI 兼容流按完整处理', async () => {
+    const result = await handleApiResponse_ACU({
+      text: async () => ['data: {"choices":[{"delta":{"content":"甲"}}]}', 'data: {"choices":[{"delta":{"content":"乙"},"finish_reason":"stop"}]}', ''].join('\n'),
+    }, true);
+    expect(result).toBe('甲乙');
+  });
+
+  it('R8-07：Responses 流（output_text.delta + response.completed）可解析', async () => {
+    const result = await handleApiResponse_ACU({
+      text: async () => [
+        'data: {"type":"response.output_text.delta","delta":"你"}',
+        'data: {"type":"response.output_text.delta","delta":"好"}',
+        'data: {"type":"response.completed","response":{}}',
+        '',
+      ].join('\n'),
+    }, true);
+    expect(result).toBe('你好');
+  });
+
+  it('R8-07：Gemini 流（candidates.parts.text + finishReason）可解析', async () => {
+    const result = await handleApiResponse_ACU({
+      text: async () => [
+        'data: {"candidates":[{"content":{"parts":[{"text":"一"}]}}]}',
+        'data: {"candidates":[{"content":{"parts":[{"text":"二"}]},"finishReason":"STOP"}]}',
+        '',
+      ].join('\n'),
+    }, true);
+    expect(result).toBe('一二');
+  });
+
+  it('R8-07：既无 [DONE] 也无任何结束信号的流仍按截断处理', async () => {
+    const result = await handleApiResponse_ACU({
+      text: async () => 'data: {"choices":[{"delta":{"content":"半截"}}]}\n',
+    }, true);
+    expect(result).toBeNull();
   });
 
   it('流式模式：响应体读取 AbortError 必须原样重抛', async () => {

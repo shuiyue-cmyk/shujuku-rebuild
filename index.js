@@ -84152,23 +84152,6 @@ function resetPresetRateLimiter_ACU() {
     windowsByPreset.clear();
 }
 
-/**
- * service/ai/prompt-builder/prompt-api-call.ts
- * AI API 调用 — prompt 组装 + API 调用 + 流式/非流式响应处理
- * 从 prompt-builder.ts 拆出（L195-L501 + L1519-L1604）
- */
-/**
- * The request reached a provider successfully, but its body contained no
- * usable model output. This is retryable without treating configuration,
- * authentication, or transport failures as model-output failures.
- */
-class RetryableAiResponseError_ACU extends Error {
-    constructor(message = 'API响应格式不正确或内容为空。') {
-        super(message);
-        this.code = 'empty_or_invalid_api_response';
-        this.name = 'RetryableAiResponseError';
-    }
-}
 function createPromptTemplateNonce_ACU() {
     try {
         const randomUUID = globalThis?.crypto?.randomUUID;
@@ -84182,11 +84165,13 @@ function createPromptTemplateNonce_ACU() {
     return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
 }
 /**
- * 把不可信 payload 变成对 EJS/random/SQL/ORM/if 均惰性的 nonce token。
+ * 把不可信 payload（聊天正文、世界书、表格投影等）变成对 EJS/random/SQL/ORM/if 均惰性的 nonce token。
+ * 用法：可信模板里的占位符先 protect 成 token → 跑完全部模板解释器 → 最后一次性 restore。
  * 所有候选 token 都对本轮可信模板与全部不可信源做包含检查；即使随机源重复或
  * payload 猜中候选，也会继续换一个 token，避免恢复时覆盖/串值。
+ * @param tokenLabel token 里的用途标签（只含 A-Z0-9_），便于日志里辨认来源。
  */
-function createUntrustedTemplateGuard_ACU(reservedValues) {
+function createUntrustedTemplateGuard_ACU(reservedValues, tokenLabel = 'UNTRUSTED') {
     const occupiedTexts = reservedValues.map(value => value === null || value === undefined ? '' : String(value));
     const tokenValues = new Map();
     const valueTokens = new Map();
@@ -84194,7 +84179,7 @@ function createUntrustedTemplateGuard_ACU(reservedValues) {
     const buildToken = () => {
         for (let attempt = 0; attempt < 1024; attempt += 1) {
             const nonce = createPromptTemplateNonce_ACU() || 'fallback';
-            const token = `__ACU_TABLE_FILL_UNTRUSTED_${nonce}_${tokenIndex++}__`;
+            const token = `__ACU_${tokenLabel}_${nonce}_${tokenIndex++}__`;
             if (tokenValues.has(token))
                 continue;
             if (occupiedTexts.some(text => text.includes(token)))
@@ -84202,7 +84187,7 @@ function createUntrustedTemplateGuard_ACU(reservedValues) {
             occupiedTexts.push(token);
             return token;
         }
-        throw new Error('table_fill_untrusted_placeholder_nonce_collision');
+        throw new Error(`${tokenLabel.toLowerCase()}_placeholder_nonce_collision`);
     };
     return {
         protect(value) {
@@ -84224,6 +84209,24 @@ function createUntrustedTemplateGuard_ACU(reservedValues) {
             return restored;
         },
     };
+}
+
+/**
+ * service/ai/prompt-builder/prompt-api-call.ts
+ * AI API 调用 — prompt 组装 + API 调用 + 流式/非流式响应处理
+ * 从 prompt-builder.ts 拆出（L195-L501 + L1519-L1604）
+ */
+/**
+ * The request reached a provider successfully, but its body contained no
+ * usable model output. This is retryable without treating configuration,
+ * authentication, or transport failures as model-output failures.
+ */
+class RetryableAiResponseError_ACU extends Error {
+    constructor(message = 'API响应格式不正确或内容为空。') {
+        super(message);
+        this.code = 'empty_or_invalid_api_response';
+        this.name = 'RetryableAiResponseError';
+    }
 }
 function normalizeRoleForApi_ACU(role) {
     const ru = String(role || '').toUpperCase();
@@ -84352,12 +84355,13 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
         ...promptSegments.map(segment => segment?.content ?? ''),
         ...Object.values(untrustedPlaceholderValues),
         ...resolvedTableTokensBySegment.flat().map(token => token.value),
-    ]);
+    ], 'TABLE_FILL_UNTRUSTED');
     try {
         for (let segmentIndex = 0; segmentIndex < promptSegments.length; segmentIndex += 1) {
             const segment = promptSegments[segmentIndex];
             let finalContent = String(segment?.content ?? '');
-            finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)/g, (match) => (untrustedGuard.protect(untrustedPlaceholderValues[match])));
+            // 右边界（R8-13）：可信提示词里的「$100」「$Cx」不是占位符；后跟中文/标点照常替换。
+            finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)(?![0-9A-Za-z_])/g, (match) => (untrustedGuard.protect(untrustedPlaceholderValues[match])));
             for (const token of resolvedTableTokensBySegment[segmentIndex] || []) {
                 finalContent = finalContent.split(token.raw).join(untrustedGuard.protect(token.value));
             }
@@ -84576,6 +84580,28 @@ async function parseStreamResponse_ACU(response, onUsage, onProgress) {
                 else if (data?.type === 'message_stop') {
                     sawDone = true;
                 }
+                // 其它协议的结束与增量（R8-07）：不认这些信号时，正常结束的流会被判截断、返回 null 后整段重试。
+                // - OpenAI 兼容：部分代理只给 finish_reason 不发 [DONE]；
+                // - Responses：response.output_text.delta 增量，response.completed 结束；
+                // - Gemini：candidates[0].content.parts[].text 增量，finishReason 结束（没有 [DONE]）。
+                if (data?.choices?.[0]?.finish_reason)
+                    sawDone = true;
+                if (data?.type === 'response.output_text.delta' && typeof data?.delta === 'string') {
+                    result += data.delta;
+                }
+                else if (data?.type === 'response.completed') {
+                    sawDone = true;
+                }
+                const geminiCandidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
+                if (geminiCandidate && typeof geminiCandidate === 'object') {
+                    const parts = Array.isArray(geminiCandidate?.content?.parts) ? geminiCandidate.content.parts : [];
+                    for (const part of parts) {
+                        if (typeof part?.text === 'string' && part.thought !== true)
+                            result += part.text;
+                    }
+                    if (geminiCandidate.finishReason)
+                        sawDone = true;
+                }
             }
             catch {
                 // 忽略无法解析的 data 行（注释/空行）
@@ -84629,11 +84655,37 @@ async function handleApiResponse_ACU(response, requestWantsStream, onUsage, opti
  * AI 响应 JSON 清洗管线 + 松散对象解析
  * 从 prompt-builder.ts 的 parseAndApplyTableEdits_ACU 内部提取的纯函数集合
  */
-/** 将全角/中文引号统一为标准双引号 */
+/**
+ * 把被当作 JSON 定界符的全角/中文引号（＂「」『』）统一为标准双引号（R8-10）。
+ * 只改标准双引号字符串之外的部分：字符串里的「」『』是中文对白括号，属于单元格内容，原样保留。
+ * 弯引号 “” 在中文里几乎都是对白内容而不是定界符，不做转换。
+ */
 function normalizeQuotesLayer_ACU(jsonStr) {
     if (typeof jsonStr !== 'string' || !jsonStr)
         return jsonStr;
-    return jsonStr.replace(/[""「」『』＂]/g, '"');
+    let result = '';
+    let inString = false;
+    for (let index = 0; index < jsonStr.length; index += 1) {
+        const char = jsonStr[index];
+        if (inString) {
+            result += char;
+            if (char === '\\' && index + 1 < jsonStr.length) {
+                result += jsonStr[index + 1];
+                index += 1;
+                continue;
+            }
+            if (char === '"')
+                inString = false;
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+            result += char;
+            continue;
+        }
+        result += /[＂「」『』]/.test(char) ? '"' : char;
+    }
+    return result;
 }
 function getNextNonWhitespaceMeta_ACU(text, startIndex) {
     for (let i = startIndex; i < text.length; i++) {
@@ -85092,16 +85144,46 @@ function coerceLooseRowObject_ACU(jsonStr) {
  * 从 prompt-builder.ts 拆出（L502-L1519）
  * JSON 清洗管线已提取到 json-sanitizer.ts
  */
+/**
+ * 只对 JSON 双引号字符串之外的结构文本做容错（R8-04）：字符串内的全角冒号、`\n` 转义、`'+'`
+ * 都是单元格内容，必须原样交给 JSON.parse（`\n` 由它解码成真换行）。
+ */
+function mapOutsideJsonStrings_ACU(text, mapOutside) {
+    let result = '';
+    let segmentStart = 0;
+    let inString = false;
+    for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+        if (inString) {
+            if (char === '\\') {
+                index += 1;
+                continue;
+            }
+            if (char === '"') {
+                result += text.slice(segmentStart, index + 1);
+                segmentStart = index + 1;
+                inString = false;
+            }
+            continue;
+        }
+        if (char === '"' && text[index - 1] !== '\\') {
+            result += mapOutside(text.slice(segmentStart, index));
+            segmentStart = index;
+            inString = true;
+        }
+    }
+    const tail = text.slice(segmentStart);
+    return result + (inString ? tail : mapOutside(tail));
+}
 function normalizeAiResponseForTableEditParsing_ACU(text) {
     if (typeof text !== 'string')
         return '';
     let cleaned = text.trim();
-    cleaned = cleaned.replace(/'\s*\+\s*'/g, '');
+    cleaned = mapOutsideJsonStrings_ACU(cleaned, segment => segment.replace(/'\s*\+\s*'/g, ''));
     if (cleaned.startsWith("'") && cleaned.endsWith("'"))
         cleaned = cleaned.slice(1, -1);
-    cleaned = cleaned.replace(/\\n/g, '\n');
     cleaned = cleaned.replace(/\\\\"/g, '\\"');
-    cleaned = cleaned.replace(/：/g, ':');
+    cleaned = mapOutsideJsonStrings_ACU(cleaned, segment => segment.replace(/\\n/g, '\n').replace(/：/g, ':'));
     return cleaned;
 }
 function extractTableEditInner_ACU(text, options = {}) {
@@ -85216,6 +85298,8 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
     const commandLines = [];
     let commandReconstructor = '';
     let isInJsonBlock = false;
+    // 上一行停在 JSON 字符串内部：这次换行是单元格内容，拼接时写成 \n 转义而不是空格（R8-04）。
+    let endsInsideJsonString = false;
     originalLines.forEach(line => {
         const trimmedLine = line.trim();
         if (trimmedLine === '')
@@ -85232,7 +85316,7 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
             commandReconstructor = lineContent;
         }
         else {
-            commandReconstructor += ' ' + lineContent;
+            commandReconstructor += (endsInsideJsonString ? '\\n' : ' ') + lineContent;
         }
         if (commandReconstructor) {
             let openBraces = 0, closeBraces = 0, inSingle = false, inDouble = false, escaped = false;
@@ -85275,6 +85359,7 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
             else {
                 isInJsonBlock = false;
             }
+            endsInsideJsonString = isInJsonBlock && inDouble;
         }
     });
     if (commandReconstructor) {
@@ -86748,7 +86833,7 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         // 只接受小写 role。此前 messages 被原样透传，导致后端报
         // `unknown variant SYSTEM`，改表助手 AI 调用失败。
         //
-        // 本项目既有约定（merge-logic.ts / content-optimization.ts）
+        // 本项目既有约定（content-optimization.ts 等）
         // 均在发送前对 role 做 toLowerCase；此处是自定义 chat-completions 的统一出口，
         // 对已是小写的输入（merge / plot / 存量路径）为无操作，不破坏既有行为。
         // tavern / 主 API（generateRaw）路径不经过本函数，不受影响。
@@ -87161,7 +87246,8 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
         try {
             if (!response.ok) {
                 const errTxt = sanitizeUpstreamErrorBodyForDisplay_ACU(await response.text());
-                throw new Error(`API 请求失败: ${response.status} ${errTxt}`);
+                // 带 status 抛出（R8-08）：重试方据此区分 401/403/404 这类必然失败的配置错误。
+                throw new AgentApiHttpError_ACU(response.status, `API 请求失败: ${response.status} ${errTxt}`);
             }
             assertNotAborted_ACU(signal);
             // 响应头已到：转入空闲计时，流式每收到一块数据续期一次。
@@ -87627,19 +87713,24 @@ async function performContentOptimization_ACU(content, options = {}) {
         : DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU;
     // 替换占位符并转换role为小写（某些API如豆包只接受小写role）
     const messages = JSON.parse(JSON.stringify(promptGroup));
+    // 不可信内容（正文与 $1/$5/$6/$7/$8/$U/$C 的值）先换成 nonce token，模板解释器跑完再一次性还原（R8-05）：
+    // 原先先插入正文再逐个替换占位符，正文里的「$5」「$C级」被换成纪要/角色描述，`$&` `$'` 被展开，
+    // 正文里的 <if>/随机数/{[sql…]} 标签还会被当成模板执行。占位符只在可信模板本身里扫描、单遍替换。
+    const untrustedValues = { $CONTENT: String(content ?? '') };
+    for (const [key, value] of Object.entries(placeholders)) {
+        if (value && typeof value === 'string')
+            untrustedValues[key] = value;
+    }
+    const untrustedGuard = createUntrustedTemplateGuard_ACU([
+        ...messages.map((item) => (typeof item?.content === 'string' ? item.content : '')),
+        ...Object.values(untrustedValues),
+    ], 'CONTENT_OPTIMIZATION_UNTRUSTED');
     messages.forEach((item) => {
         if (item.content && typeof item.content === 'string') {
-            // 替换 $CONTENT 占位符
-            item.content = item.content.replace(/\$CONTENT/g, content);
             // 最大替换项数同步设置：默认提示词写死 1-10，这里按配置改写数量行（存量预设同样生效）
             item.content = item.content.replace(/优化项数量：1-10个/g, `优化项数量：1-${maxLength}个`);
-            // 替换剧情推进占位符
-            for (const [key, value] of Object.entries(placeholders)) {
-                if (value && typeof value === 'string') {
-                    const regex = new RegExp(`\\${key}`, 'g');
-                    item.content = item.content.replace(regex, value);
-                }
-            }
+            // $CONTENT 与剧情推进占位符：一次全局正则 + 替换函数，值以 token 进入模板
+            item.content = item.content.replace(/\$(?:CONTENT|1|5|6|7|8|U|C)(?![0-9A-Za-z_])/g, (match) => (Object.prototype.hasOwnProperty.call(untrustedValues, match) ? untrustedGuard.protect(untrustedValues[match]) : match));
             // [新增] 条件模板支持：随机数、计算变量、条件判断
             // 1. 解析随机数标签
             item.content = parseRandomTags_ACU(item.content);
@@ -87669,6 +87760,7 @@ async function performContentOptimization_ACU(content, options = {}) {
                 plotContent: latestPlotContentForConditional
             };
             item.content = parseIfBlockRecursive_ACU(item.content, contextForIf, 0);
+            item.content = untrustedGuard.restore(item.content);
         }
         // 转换role为小写
         if (item.role && typeof item.role === 'string') {
@@ -87678,124 +87770,124 @@ async function performContentOptimization_ACU(content, options = {}) {
     // 3. 调用AI API（带自动重试）
     const apiPreset = config.apiPreset || '';
     logDebug_ACU(`[正文优化] 使用API预设: ${apiPreset || '当前配置'}`);
-    let lastError = null;
-    let responseContent = null;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            logDebug_ACU(`[正文优化] 调用AI API... (尝试 ${attempt}/${maxRetries})`);
-            responseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, undefined, { needsJsonFormat: true, sessionNamespace: 'content-replace' });
-            if (responseContent) {
-                // API调用成功，跳出重试循环
-                break;
-            }
-            // 空响应视为失败
-            lastError = new Error('AI API 返回空响应');
-            logDebug_ACU(`[正文优化] API返回空响应，尝试 ${attempt}/${maxRetries}`);
-        }
-        catch (error) {
-            lastError = error;
-            logError_ACU(`[正文优化] API调用失败 (尝试 ${attempt}/${maxRetries}):`, error);
-            if (attempt < maxRetries) {
-                // 等待一段时间后重试（指数退避：1秒、2秒、4秒...）
-                const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
-                logDebug_ACU(`[正文优化] 等待 ${delayMs}ms 后重试...`);
-                await new Promise(resolve => setTimeout(resolve, delayMs));
-            }
-        }
-    }
-    // 检查是否所有重试都失败
-    if (!responseContent) {
-        logError_ACU(`[正文优化] 所有重试均失败 (${maxRetries}次)`);
-        return {
-            success: false,
-            error: lastError ? lastError.message : 'API调用失败，已达到最大重试次数',
-            retryExhausted: true
-        };
-    }
-    let parseRetryResponseContent = responseContent;
-    let parseLastError = null;
-    for (let parseAttempt = 1; parseAttempt <= maxRetries; parseAttempt++) {
-        try {
-            // 4. 解析优化结果
-            const parsed = parseOptimizationResponse_ACU(parseRetryResponseContent, maxLength);
-            if (!parsed.success) {
-                throw new Error(parsed.error || '解析失败');
-            }
-            // 5. 应用优化到正文
-            // [写回保护] 正文替换页「标签排除规则」：建议原文命中排除段的整条丢弃，既不写回也不计入替换数
-            const exclusion = filterOptimizationsByExcludeRules_ACU(content, parsed.optimizations, {
-                excludeRules: config.excludeRules,
-                excludeTags: config.excludeTags
-            });
-            if (exclusion.dropped.length > 0) {
-                logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 有 ${exclusion.dropped.length} 个优化项命中标签排除规则，已按写回保护丢弃（不写回、不计入替换数）`);
-            }
-            const applied = applyOptimizationsWithStats_ACU(content, exclusion.kept);
-            if (exclusion.kept.length > 0 && applied.appliedCount === 0) {
-                logWarn_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 没有可应用的优化项，放弃本轮写回`);
-                return {
-                    success: false,
-                    noOp: true,
-                    error: 'AI 返回的优化建议均未匹配到正文',
-                    failedCount: applied.failedCount,
-                };
-            }
-            logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 完成，共 ${exclusion.kept.length} 个优化项` +
-                (exclusion.dropped.length > 0 ? `（另有 ${exclusion.dropped.length} 个被排除规则丢弃）` : ''));
-            return {
-                success: true,
-                optimizations: exclusion.kept,
-                summary: parsed.summary,
-                optimizedContent: applied.content,
-                appliedCount: applied.appliedCount,
-                failedCount: applied.failedCount
-            };
-        }
-        catch (error) {
-            parseLastError = error;
-            logError_ACU(`[正文优化] 解析/应用失败 (尝试 ${parseAttempt}/${maxRetries}):`, error);
-            if (parseAttempt >= maxRetries) {
-                break;
-            }
-            const delayMs = Math.min(1000 * Math.pow(2, parseAttempt - 1), 10000);
-            logDebug_ACU(`[正文优化] 等待 ${delayMs}ms 后重新请求优化结果...`);
-            await new Promise(resolve => setTimeout(resolve, delayMs));
+    // 取消（R8-11）：本轮登记一个 AbortController，取消时中断在途请求；每次请求与退避前后复核取消代次，
+    // 已排队的重试不再发出。代次而非全局布尔：旧取消残留的标志不能误伤之后新发起的优化。
+    const cancelGeneration = contentOptimizationCancelGeneration_ACU;
+    const abortController = new AbortController();
+    activeContentOptimizationAbortControllers_ACU.add(abortController);
+    const assertRunNotCancelled = () => {
+        if (contentOptimizationCancelGeneration_ACU !== cancelGeneration)
+            throw new Error('用户终止正文优化');
+    };
+    try {
+        let lastError = null;
+        let responseContent = null;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            assertRunNotCancelled();
             try {
-                logDebug_ACU(`[正文优化] 重新调用AI API以获取更干净的优化结果... (尝试 ${parseAttempt + 1}/${maxRetries})`);
-                parseRetryResponseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, undefined, { needsJsonFormat: true, sessionNamespace: 'content-replace' });
-                if (!parseRetryResponseContent) {
-                    throw new Error('重试请求未返回有效内容');
-                }
-            }
-            catch (retryError) {
-                parseLastError = retryError;
-                logError_ACU(`[正文优化] 解析失败后的重新请求失败 (尝试 ${parseAttempt + 1}/${maxRetries}):`, retryError);
-                if (parseAttempt >= maxRetries - 1) {
+                logDebug_ACU(`[正文优化] 调用AI API... (尝试 ${attempt}/${maxRetries})`);
+                responseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, abortController.signal, { needsJsonFormat: true, sessionNamespace: 'content-replace' });
+                if (responseContent) {
+                    // API调用成功，跳出重试循环
                     break;
                 }
+                // 空响应视为失败
+                lastError = new Error('AI API 返回空响应');
+                logDebug_ACU(`[正文优化] API返回空响应，尝试 ${attempt}/${maxRetries}`);
+            }
+            catch (error) {
+                assertRunNotCancelled();
+                lastError = error;
+                logError_ACU(`[正文优化] API调用失败 (尝试 ${attempt}/${maxRetries}):`, error);
+                if (attempt < maxRetries) {
+                    // 等待一段时间后重试（指数退避：1秒、2秒、4秒...）
+                    const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+                    logDebug_ACU(`[正文优化] 等待 ${delayMs}ms 后重试...`);
+                    await new Promise(resolve => setTimeout(resolve, delayMs));
+                }
             }
         }
-    }
-    return { success: false, error: parseLastError?.message || '解析失败' };
-}
-/**
- * 获取正文优化使用的API配置（酒馆主 API 已剥离，恒为自定义模式）
- */
-async function getOptimizationApiConfig_ACU(presetName) {
-    if (presetName && settings_ACU.apiPresets) {
-        const preset = settings_ACU.apiPresets.find((p) => p.name === presetName);
-        if (preset) {
+        assertRunNotCancelled();
+        // 检查是否所有重试都失败
+        if (!responseContent) {
+            logError_ACU(`[正文优化] 所有重试均失败 (${maxRetries}次)`);
             return {
-                apiMode: 'custom',
-                apiConfig: preset.apiConfig
+                success: false,
+                error: lastError ? lastError.message : 'API调用失败，已达到最大重试次数',
+                retryExhausted: true
             };
         }
+        let parseRetryResponseContent = responseContent;
+        let parseLastError = null;
+        for (let parseAttempt = 1; parseAttempt <= maxRetries; parseAttempt++) {
+            try {
+                // 4. 解析优化结果
+                const parsed = parseOptimizationResponse_ACU(parseRetryResponseContent, maxLength);
+                if (!parsed.success) {
+                    throw new Error(parsed.error || '解析失败');
+                }
+                // 5. 应用优化到正文
+                // [写回保护] 正文替换页「标签排除规则」：建议原文命中排除段的整条丢弃，既不写回也不计入替换数
+                const exclusion = filterOptimizationsByExcludeRules_ACU(content, parsed.optimizations, {
+                    excludeRules: config.excludeRules,
+                    excludeTags: config.excludeTags
+                });
+                if (exclusion.dropped.length > 0) {
+                    logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 有 ${exclusion.dropped.length} 个优化项命中标签排除规则，已按写回保护丢弃（不写回、不计入替换数）`);
+                }
+                const applied = applyOptimizationsWithStats_ACU(content, exclusion.kept);
+                if (exclusion.kept.length > 0 && applied.appliedCount === 0) {
+                    logWarn_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 没有可应用的优化项，放弃本轮写回`);
+                    return {
+                        success: false,
+                        noOp: true,
+                        error: 'AI 返回的优化建议均未匹配到正文',
+                        failedCount: applied.failedCount,
+                    };
+                }
+                logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 完成，共 ${exclusion.kept.length} 个优化项` +
+                    (exclusion.dropped.length > 0 ? `（另有 ${exclusion.dropped.length} 个被排除规则丢弃）` : ''));
+                return {
+                    success: true,
+                    optimizations: exclusion.kept,
+                    summary: parsed.summary,
+                    optimizedContent: applied.content,
+                    appliedCount: applied.appliedCount,
+                    failedCount: applied.failedCount
+                };
+            }
+            catch (error) {
+                parseLastError = error;
+                logError_ACU(`[正文优化] 解析/应用失败 (尝试 ${parseAttempt}/${maxRetries}):`, error);
+                if (parseAttempt >= maxRetries) {
+                    break;
+                }
+                const delayMs = Math.min(1000 * Math.pow(2, parseAttempt - 1), 10000);
+                logDebug_ACU(`[正文优化] 等待 ${delayMs}ms 后重新请求优化结果...`);
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+                assertRunNotCancelled();
+                try {
+                    logDebug_ACU(`[正文优化] 重新调用AI API以获取更干净的优化结果... (尝试 ${parseAttempt + 1}/${maxRetries})`);
+                    parseRetryResponseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, abortController.signal, { needsJsonFormat: true, sessionNamespace: 'content-replace' });
+                    if (!parseRetryResponseContent) {
+                        throw new Error('重试请求未返回有效内容');
+                    }
+                }
+                catch (retryError) {
+                    assertRunNotCancelled();
+                    parseLastError = retryError;
+                    logError_ACU(`[正文优化] 解析失败后的重新请求失败 (尝试 ${parseAttempt + 1}/${maxRetries}):`, retryError);
+                    if (parseAttempt >= maxRetries - 1) {
+                        break;
+                    }
+                }
+            }
+        }
+        return { success: false, error: parseLastError?.message || '解析失败' };
     }
-    // 使用当前默认配置
-    return {
-        apiMode: 'custom',
-        apiConfig: settings_ACU.apiConfig,
-    };
+    finally {
+        activeContentOptimizationAbortControllers_ACU.delete(abortController);
+    }
 }
 /**
  * 解析AI返回的优化响应
@@ -88046,6 +88138,9 @@ function parseOptimizationResponse_ACU(responseContent, maxOptimizations = 10) {
     }
 }
 let contentOptimizationAbortRequested_ACU = false;
+/** 每次取消递增；运行中的优化据此判断自己是否已被取消（R8-11）。 */
+let contentOptimizationCancelGeneration_ACU = 0;
+const activeContentOptimizationAbortControllers_ACU = new Set();
 let optimizationProgressToast_ACU = null;
 let lastOptimizedMessageMeta_ACU = null;
 function setLastOptimizationBase_ACU(payload = {}) {
@@ -88145,6 +88240,13 @@ function recordAutoContentOptimizationProcessed_ACU(payload = {}) {
  */
 function cancelContentOptimization_ACU(reason = '正文优化已由用户终止。') {
     contentOptimizationAbortRequested_ACU = true;
+    contentOptimizationCancelGeneration_ACU += 1;
+    for (const controller of activeContentOptimizationAbortControllers_ACU) {
+        try {
+            controller.abort();
+        }
+        catch { /* 中断失败不影响取消标志 */ }
+    }
     return { cancelled: true, reason };
 }
 /**
@@ -88197,13 +88299,17 @@ function ensureTagRulesCompat_ACU(targetSettings) {
     const plot = targetSettings.plotSettings;
     if (!plot || typeof plot !== 'object')
         return;
+    // 只在字段缺失时补默认规则（R8-06）：空数组是用户主动删光规则的选择，必须保留，
+    // 否则每次加载设置都会把默认排除规则悄悄补回来，用户无法让剧情推进读到完整上下文。
+    const extractRulesMissing = !Array.isArray(plot.contextExtractRules);
+    const excludeRulesMissing = !Array.isArray(plot.contextExcludeRules);
     plot.contextExtractRules = normalizeExtractRules_ACU(plot.contextExtractRules, plot.contextExtractTags || '');
     plot.contextExcludeRules = normalizeExcludeRules_ACU(plot.contextExcludeRules, plot.contextExcludeTags || '');
-    if ((!Array.isArray(plot.contextExtractRules) || plot.contextExtractRules.length === 0)
+    if (extractRulesMissing && plot.contextExtractRules.length === 0
         && (plot.contextExtractTags || '').trim() === '') {
         plot.contextExtractRules = normalizeExtractRules_ACU(DEFAULT_PLOT_SETTINGS_ACU.contextExtractRules, DEFAULT_PLOT_SETTINGS_ACU.contextExtractTags || '');
     }
-    if ((!Array.isArray(plot.contextExcludeRules) || plot.contextExcludeRules.length === 0)
+    if (excludeRulesMissing && plot.contextExcludeRules.length === 0
         && (plot.contextExcludeTags || '').trim() === '') {
         plot.contextExcludeRules = normalizeExcludeRules_ACU(DEFAULT_PLOT_SETTINGS_ACU.contextExcludeRules, DEFAULT_PLOT_SETTINGS_ACU.contextExcludeTags || '');
     }
@@ -88980,7 +89086,10 @@ function getLastOptimizedMessageIndex_ACU() {
         if (runtimeIndex >= 0)
             return runtimeIndex;
     }
-    if (Number.isInteger(cachedBase?.messageIndex) && cachedBase.messageIndex >= 0 && isAiFloor_ACU(chat[cachedBase.messageIndex])) {
+    // 有 messageId 却找不到（楼层已删）时不按楼号回退（R8-09，与 getOriginalContent_ACU 同口径）：
+    // 楼号此时指向的是另一条楼，「重新优化」会作用在用户没选的那一楼上。下面的标记扫描按楼层自身的原文标记认定，不受影响。
+    if (cachedBase?.messageId == null
+        && Number.isInteger(cachedBase?.messageIndex) && cachedBase.messageIndex >= 0 && isAiFloor_ACU(chat[cachedBase.messageIndex])) {
         return cachedBase.messageIndex;
     }
     let latestIndex = -1;
@@ -89006,6 +89115,50 @@ function getLastOptimizedMessageIndex_ACU() {
         });
     }
     return latestIndex;
+}
+
+/**
+ * 剧情推进挂在聊天消息上的运行时标记（R8-12）。
+ * 原先直接写成消息对象上的 `_plot_processed` / `_qrf_plot_pending_hash` 字段，会随聊天文件落盘，
+ * 异常路径还只清掉其中一个。这些标记只在本次生成流程内有意义，改为按消息对象登记在 WeakMap 里，
+ * 重载聊天（消息对象换新）即自然失效。写入时顺手清掉旧版残留在消息上的同名字段。
+ */
+const processedMessages = new WeakSet();
+const pendingHashes = new WeakMap();
+function isMessageObject(message) {
+    return !!message && typeof message === 'object';
+}
+function stripLegacyMarkers(message) {
+    if ('_plot_processed' in message)
+        delete message._plot_processed;
+    if ('_qrf_plot_pending_hash' in message)
+        delete message._qrf_plot_pending_hash;
+}
+function isPlotMessageProcessed_ACU(message) {
+    return isMessageObject(message) && processedMessages.has(message);
+}
+function markPlotMessageProcessed_ACU(message) {
+    if (!isMessageObject(message))
+        return;
+    stripLegacyMarkers(message);
+    processedMessages.add(message);
+}
+function clearPlotMessageProcessed_ACU(message) {
+    if (isMessageObject(message))
+        processedMessages.delete(message);
+}
+function getPlotPendingHash_ACU(message) {
+    return isMessageObject(message) ? pendingHashes.get(message) : undefined;
+}
+function setPlotPendingHash_ACU(message, hash) {
+    if (!isMessageObject(message))
+        return;
+    stripLegacyMarkers(message);
+    pendingHashes.set(message, hash);
+}
+function clearPlotPendingHash_ACU(message) {
+    if (isMessageObject(message))
+        pendingHashes.delete(message);
 }
 
 /**
@@ -89118,7 +89271,7 @@ async function loadPresetAndCleanCharacterData_ACU() {
 //
 // 注意：历史检索锚点不使用 roundId。本轮 roundId 在任务全部完成后才生成，
 // 而历史读取发生在任务开始前，此时无 roundId 可用。锚点的职责是定位
-// “当前用户层”，策略1 下由 _qrf_plot_pending_hash 提供，策略2 / hook 下
+// “当前用户层”，策略1 下由运行时待处理哈希标记（plot-message-markers）提供，策略2 / hook 下
 // 当前层尚未入 chat，因此无需锚点。
 function findPlotHistoryAnchorIndex_ACU(chat, options = {}) {
     if (!Array.isArray(chat) || chat.length === 0)
@@ -89131,7 +89284,7 @@ function findPlotHistoryAnchorIndex_ACU(chat, options = {}) {
         const message = chat[i];
         if (!message?.is_user)
             continue;
-        if (beforeUserInputHash && message._qrf_plot_pending_hash === beforeUserInputHash) {
+        if (beforeUserInputHash && getPlotPendingHash_ACU(message) === beforeUserInputHash) {
             return i;
         }
         const messageText = String(message.mes || '');
@@ -89369,7 +89522,7 @@ async function savePlotToLatestMessage_ACU(force = false, options = {}) {
             // 因此这里可以安全地拒绝覆盖任何已有 plot 的楼层：宁可不写，也不错层。
             for (let i = chat.length - 1; i >= 0; i--) {
                 const msg = chat[i];
-                if (msg?.is_user && !msg._qrf_plot_round_id && !msg.qrf_plot && msg._qrf_plot_pending_hash === userInputHash) {
+                if (msg?.is_user && !msg._qrf_plot_round_id && !msg.qrf_plot && getPlotPendingHash_ACU(msg) === userInputHash) {
                     msg._qrf_plot_round_id = roundId;
                     logDebug_ACU(`[剧情推进] [Plot] ✓ 通过策略1待处理标记认领目标用户消息（索引 ${i}，roundId: ${roundId}）`);
                     return { msg, index: i };
@@ -89394,7 +89547,7 @@ async function savePlotToLatestMessage_ACU(force = false, options = {}) {
             // 旧对象格式：保留标记身份优先与文本哈希回退。
             for (let i = chat.length - 1; i >= 0; i--) {
                 const msg = chat[i];
-                if (msg && msg.is_user && msg._qrf_plot_pending_hash === userInputHash) {
+                if (msg && msg.is_user && getPlotPendingHash_ACU(msg) === userInputHash) {
                     logDebug_ACU(`[剧情推进] [Plot] ✓ 通过消息对象上的哈希标记找到目标用户消息（索引 ${i}，哈希: ${userInputHash}）`);
                     return { msg, index: i };
                 }
@@ -89455,9 +89608,7 @@ async function savePlotToLatestMessage_ACU(force = false, options = {}) {
             return { status: 'failed', reason: 'host_save_failed', error };
         }
         // P5-T5.1: 标记在宿主保存成功后才删除（身份已消费）
-        if (target._qrf_plot_pending_hash) {
-            delete target._qrf_plot_pending_hash;
-        }
+        clearPlotPendingHash_ACU(target);
         // T1.2: 仅当全局 pending 仍是本轮同一对象时才清空
         if (tempPlotToSave_ACU === roundRef) {
             _set_tempPlotToSave_ACU(null);
@@ -92424,7 +92575,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261008-06"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261008-07"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92443,7 +92594,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261008-06";
+        const stamp = "20261008-07";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -103902,11 +104053,11 @@ function applyCombinedSettingsImport_ACU(combinedData) {
         settings_ACU.mergeStartIndex = combinedData.mergeStartIndex || 1;
         settings_ACU.mergeEndIndex = combinedData.mergeEndIndex || null;
         modifiedFields.push('mergeTargetCount', 'mergeBatchSize', 'mergeStartIndex', 'mergeEndIndex');
-        // 自动合并设置
-        settings_ACU.autoMergeEnabled = combinedData.autoMergeEnabled || false;
+        // 自动合并设置：自动合并功能已停用并移除触发链（R8-03），开关恒为关；阈值类字段照常导入以便往返导出。
+        settings_ACU.autoMergeEnabled = false;
         settings_ACU.autoMergeThreshold = combinedData.autoMergeThreshold || 20;
         settings_ACU.autoMergeReserve = combinedData.autoMergeReserve || 0;
-        modifiedFields.push('autoMergeEnabled', 'autoMergeThreshold', 'autoMergeReserve');
+        modifiedFields.push('autoMergeThreshold', 'autoMergeReserve');
         // 删除楼层范围设置
         settings_ACU.deleteStartFloor = combinedData.deleteStartFloor || null;
         settings_ACU.deleteEndFloor = combinedData.deleteEndFloor || null;
@@ -103935,825 +104086,6 @@ function applyCombinedSettingsImport_ACU(combinedData) {
     }
     return modifiedFields;
 }
-
-/**
- * service/table/runtime-only-pending-state.ts — 运行时未落盘变更登记。
- *
- * 开放 API 的 CRUD/SQL 写入允许 skipChatSave（skipSave / isImportMode）：只改 live runtime，
- * 不写聊天 V2 帧。V2 是 operation log 语义，后续任何普通写入只追加自己的 operation，
- * 不会像旧版那样把整份运行时快照带回聊天。于是这些行只存在于 runtime：
- * 楼层帧里没有对应数据、表格状态显示未初始、填表基底（聊天回放）看不到它们，
- * AI 把已存在的行重新 INSERT，提交时撞 live SQLite 的 UNIQUE 约束或把行数翻倍。
- *
- * 本模块按 (chatKey, isolationKey) 登记「哪些表有未落盘的运行时变更」以及
- * 已被删除但仍需写回聊天的 tombstone；真正的落盘由 runtime-only-pending-flush
- * 在下一次普通持久化写入 / 填表开始前完成。
- * 这里刻意不依赖任何 service 模块，避免与提交模型形成循环导入。
- */
-const pendingByScope_ACU = new Map();
-let registeredFlusher_ACU = null;
-function normalizeScopePart_ACU(value, fallback) {
-    const normalized = String(value || fallback).trim();
-    return normalized || fallback;
-}
-function buildRuntimeOnlyPendingScopeKey_ACU(scope) {
-    return [
-        normalizeScopePart_ACU(scope.chatKey, 'current-chat'),
-        normalizeScopePart_ACU(scope.isolationKey, 'default'),
-    ].join('::');
-}
-/**
- * 从写集提取受影响的表。任何 kind:'all' 或缺少 sheetKey 的单元都视为「全部表」，
- * 宁可多登记也不能漏掉 runtime-only 变更。
- */
-function extractPendingSheetKeysFromWriteSet_ACU(writeSet) {
-    if (!Array.isArray(writeSet) || writeSet.length === 0)
-        return { all: true, sheetKeys: [] };
-    const sheetKeys = new Set();
-    for (const unit of writeSet) {
-        if (!unit || unit.kind === 'all')
-            return { all: true, sheetKeys: [] };
-        const sheetKey = String(unit.sheetKey || '').trim();
-        if (!sheetKey.startsWith('sheet_'))
-            return { all: true, sheetKeys: [] };
-        sheetKeys.add(sheetKey);
-    }
-    return { all: false, sheetKeys: [...sheetKeys].sort() };
-}
-function markRuntimeOnlyPendingSheets_ACU(scope, pending) {
-    const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
-    const state = pendingByScope_ACU.get(scopeKey) || {
-        all: false,
-        sheetKeys: new Set(),
-        deletedSheetKeys: new Set(),
-    };
-    if (pending.all)
-        state.all = true;
-    for (const sheetKey of pending.sheetKeys) {
-        if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_'))
-            state.sheetKeys.add(sheetKey);
-    }
-    for (const sheetKey of pending.deletedSheetKeys || []) {
-        if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_')) {
-            state.deletedSheetKeys.add(sheetKey);
-            state.sheetKeys.delete(sheetKey);
-        }
-    }
-    pendingByScope_ACU.set(scopeKey, state);
-}
-function readRuntimeOnlyPendingSheets_ACU(scope) {
-    const state = pendingByScope_ACU.get(buildRuntimeOnlyPendingScopeKey_ACU(scope));
-    if (!state || (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0))
-        return null;
-    const deletedSheetKeys = [...state.deletedSheetKeys].sort();
-    return {
-        all: state.all,
-        sheetKeys: [...state.sheetKeys].sort(),
-        ...(deletedSheetKeys.length > 0 ? { deletedSheetKeys } : {}),
-    };
-}
-function hasRuntimeOnlyPendingSheets_ACU(scope) {
-    return readRuntimeOnlyPendingSheets_ACU(scope) !== null;
-}
-/** 不传 scope 时清空全部登记（测试/聊天切换收尾用）。 */
-function clearRuntimeOnlyPendingSheets_ACU(scope) {
-    if (!scope) {
-        pendingByScope_ACU.clear();
-        return;
-    }
-    pendingByScope_ACU.delete(buildRuntimeOnlyPendingScopeKey_ACU(scope));
-}
-/**
- * 按表集合条件化清除登记：只移除给定的 sheetKey（以及可选的 all 标记），保留同 scope
- * 下其他并发登记；清除后若无任何残留登记才删除整个 scope 条目。
- *
- * 供 runtime-only-pending-flush 在提交事务内（持锁中）按「本次实际处理集」清账使用，
- * 替代会吞掉并发写者新登记的全量 clearRuntimeOnlyPendingSheets_ACU（原 API 保持兼容）。
- */
-function clearRuntimeOnlyPendingSheetKeys_ACU(scope, sheetKeys, options) {
-    const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
-    const state = pendingByScope_ACU.get(scopeKey);
-    if (!state)
-        return;
-    for (const sheetKey of sheetKeys) {
-        if (typeof sheetKey === 'string') {
-            state.sheetKeys.delete(sheetKey);
-            state.deletedSheetKeys.delete(sheetKey);
-        }
-    }
-    if (options?.dropAllFlag)
-        state.all = false;
-    if (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0) {
-        pendingByScope_ACU.delete(scopeKey);
-    }
-}
-/**
- * 落盘器由 runtime-only-pending-flush 注册；提交模型通过本入口触发，
- * 避免 table-update-commit ↔ flush 之间的直接循环导入。未注册时静默跳过。
- */
-function registerRuntimeOnlyPendingFlusher_ACU(flusher) {
-    registeredFlusher_ACU = flusher;
-}
-async function runRegisteredRuntimeOnlyPendingFlush_ACU(scope, reason) {
-    if (!registeredFlusher_ACU || !hasRuntimeOnlyPendingSheets_ACU(scope)) {
-        return { flushed: false, sheetKeys: [] };
-    }
-    return registeredFlusher_ACU(reason);
-}
-
-class TableUpdateCommitError_ACU extends Error {
-    constructor(message, category) {
-        super(message);
-        this.category = category;
-        this.name = 'TableUpdateCommitError';
-    }
-}
-function cloneTableData_ACU(data) {
-    return JSON.parse(JSON.stringify(data));
-}
-/**
- * 原则：回放宽容、写入严格。persist 拒绝写入时按"谁的错"分类，决定调用方能否重试：
- * - 写时严格探针拒绝（本次增量叠加到目标楼层历史上不能严格回放，典型是 AI 重复插行
- *   撞 UNIQUE）→ 'model'：是这份 AI 结果的问题，历史没被写坏，chunk 级重试会把错误反馈
- *   给模型重新生成。
- * - 兼容只读门闸拒绝（聊天历史本身只能宽容回放）→ 'precondition'：重试 AI 修不好历史，
- *   必须在数据管理中显式恢复；不重试，避免浪费 AI 调用。
- * - 其余 → 'infrastructure'。
- */
-function classifyPersistRejection_ACU(error) {
-    if (isAppendedOperationsWriteRejection_ACU(error))
-        return 'model';
-    if (isCompatReadonlyWriteRejection_ACU(error))
-        return 'precondition';
-    return 'infrastructure';
-}
-function normalizeSqlBindParams_ACU(params) {
-    return Array.isArray(params) && params.length > 0 ? [params.map(value => value ?? null)] : undefined;
-}
-/**
- * Final persistence boundary: reject malformed row identities without repairing
- * data. Identity allocation belongs to the row creation path; repairing here
- * would hide the origin of a corrupt row and could change persisted semantics.
- */
-function assertPersistableRowIdentities_ACU(data, reason, targetSheetKeys) {
-    const scopedKeys = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0 ? new Set(targetSheetKeys) : null;
-    for (const [sheetKey, sheet] of Object.entries(data)) {
-        if (!sheetKey.startsWith('sheet_'))
-            continue;
-        if (scopedKeys && !scopedKeys.has(sheetKey))
-            continue;
-        const content = sheet?.content;
-        if (!Array.isArray(content) || content.length === 0)
-            continue;
-        const headers = content[0];
-        if (!Array.isArray(headers) || String(headers[0] ?? '') !== 'row_id') {
-            throw new Error(`[TableUpdateCommit] ${reason}: sheetKey=${sheetKey} 缺少 row_id 首列表头。`);
-        }
-        const rowIds = new Set();
-        for (let rowIndex = 1; rowIndex < content.length; rowIndex += 1) {
-            const row = content[rowIndex];
-            if (!Array.isArray(row)) {
-                throw new Error(`[TableUpdateCommit] ${reason}: sheetKey=${sheetKey}, rowIndex=${rowIndex} 不是数组行。`);
-            }
-            const rowId = String(row[0] ?? '').trim();
-            if (!rowId) {
-                throw new Error(`[TableUpdateCommit] ${reason}: sheetKey=${sheetKey}, rowIndex=${rowIndex} 的 row_id 为空。`);
-            }
-            if (rowIds.has(rowId)) {
-                throw new Error(`[TableUpdateCommit] ${reason}: sheetKey=${sheetKey}, rowIndex=${rowIndex} 的 row_id 重复：${rowId}。`);
-            }
-            rowIds.add(rowId);
-        }
-    }
-}
-/**
- * 填表期间会拒绝的外部变更来源：开放 API 的 CRUD/SQL 与可视化编辑器/SQL 控制台。
- * 填表自身（auto_fill/manual_fill/group_fill）、导入（import）与模板提交不受影响。
- * 拒绝而非排队：排队的写入基于陈旧快照，醒来后仍会与填表结果冲突。
- */
-const EXTERNAL_MUTATION_SOURCES_ACU = new Set([
-    'manual_crud',
-    'raw_sql_mutation',
-    'raw_sql_batch',
-]);
-function resolvePendingScope_ACU(options) {
-    return {
-        chatKey: String(options.chatKey ?? currentChatFileIdentifier_ACU ?? ''),
-        isolationKey: String(options.isolationKey ?? getCurrentIsolationKey_ACU() ?? ''),
-    };
-}
-/**
- * skipChatSave 的外部写入只改了 live runtime：登记受影响的表，等下一次普通持久化写入
- * 或填表开始前统一物化进聊天，否则这些行永远不会进入楼层帧与填表基底。
- */
-function markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, tableData, preApplyData) {
-    if (!EXTERNAL_MUTATION_SOURCES_ACU.has(options.source))
-        return;
-    const candidate = extractPendingSheetKeysFromWriteSet_ACU(revisionWriteSet ?? options.writeSet);
-    const postSheetKeys = Object.keys(tableData || {}).filter(key => key.startsWith('sheet_'));
-    const preSheetKeys = Object.keys(preApplyData || {}).filter(key => key.startsWith('sheet_'));
-    const postSheetKeySet = new Set(postSheetKeys);
-    const deletedSheetKeys = (candidate.all ? preSheetKeys : candidate.sheetKeys)
-        .filter(sheetKey => !postSheetKeySet.has(sheetKey));
-    const pending = candidate.all
-        ? { all: false, sheetKeys: postSheetKeys }
-        : candidate;
-    if (!pending.all && pending.sheetKeys.length === 0 && deletedSheetKeys.length === 0)
-        return;
-    markRuntimeOnlyPendingSheets_ACU(resolvePendingScope_ACU(options), {
-        ...pending,
-        deletedSheetKeys,
-    });
-}
-/**
- * 普通持久化提交前先把已登记的 runtime-only 变更写回聊天；失败只记 warn，
- * 不阻断本次提交（登记保留，下一次机会再试）。
- */
-async function flushRuntimeOnlyPendingBeforeCommit_ACU(options) {
-    if (options.skipChatSave || options.skipRuntimeOnlyPendingFlush)
-        return;
-    try {
-        await runRegisteredRuntimeOnlyPendingFlush_ACU(resolvePendingScope_ACU(options), options.reason);
-    }
-    catch (error) {
-        logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 运行时未落盘变更写回聊天失败，继续本次提交。`, error);
-    }
-}
-/**
- * 提交失败后的运行时收敛（R2A-04）：整体重载会从聊天重放，把只存在于运行时、尚未写回聊天的
- * 脚本写入（runtime-only 登记）一起冲掉。有这类登记时改为用本次提交前的快照恢复运行时——
- * 这份快照恰好是「撤销本次提交、保留未落盘写入」的状态。恢复不了（无快照、换了聊天、重建失败）
- * 才退回整体重载。
- */
-async function restoreRuntimeKeepingPendingWrites_ACU(options, preApplySnapshot) {
-    if (!preApplySnapshot)
-        return false;
-    const scope = resolvePendingScope_ACU(options);
-    if (!hasRuntimeOnlyPendingSheets_ACU(scope))
-        return false;
-    if (String(currentChatFileIdentifier_ACU ?? '') !== scope.chatKey || String(getCurrentIsolationKey_ACU() ?? '') !== scope.isolationKey) {
-        return false;
-    }
-    try {
-        if (getCurrentStorageMode() === 'sqlite') {
-            const envelope = createCanonicalSnapshotEnvelope_ACU({
-                data: preApplySnapshot,
-                chatIdentity: scope.chatKey,
-                isolationKey: scope.isolationKey,
-                storageMode: 'sqlite',
-                lifecycleEpoch: getRuntimeLifecycleEpoch_ACU(),
-                source: 'failed_commit_rollback',
-            });
-            if (!envelope)
-                return false;
-            const hydrated = await hydrateStorageProviderFromSnapshot_ACU(envelope);
-            if (!hydrated.ok)
-                return false;
-        }
-        _set_currentJsonTableData_ACU(cloneTableData_ACU(preApplySnapshot));
-        logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 提交失败，已把运行时恢复到提交前（保留尚未写回聊天的脚本写入）。`);
-        return true;
-    }
-    catch (error) {
-        logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 按提交前快照恢复运行时失败，改为整体重载。`, error);
-        return false;
-    }
-}
-function assertNoActiveFillForExternalMutation_ACU(options) {
-    if (!EXTERNAL_MUTATION_SOURCES_ACU.has(options.source))
-        return;
-    if (!isAutoUpdatingCard_ACU)
-        return;
-    throw new TableUpdateCommitError_ACU(`[TableUpdateCommit] ${options.reason}: AI 填表正在进行中，已拒绝外部表格写入（source=${options.source}），请等待填表完成后重试。`, 'precondition');
-}
-function assertExpectedCommitScope_ACU(options, phase) {
-    if (options.chatKey === undefined && options.isolationKey === undefined)
-        return;
-    const currentChatKey = String(currentChatFileIdentifier_ACU || 'current-chat');
-    const expectedChatKey = String(options.chatKey ?? currentChatKey);
-    const currentIsolationKey = String(getCurrentIsolationKey_ACU() || '');
-    const expectedIsolationKey = String(options.isolationKey ?? currentIsolationKey);
-    if (currentChatKey !== expectedChatKey || currentIsolationKey !== expectedIsolationKey) {
-        throw new TableUpdateCommitError_ACU(`[TableUpdateCommit] ${options.reason}: ${phase} 检测到聊天或隔离标识已切换，已拒绝提交。请在当前聊天重新执行填表。`, 'precondition');
-    }
-}
-async function runTableUpdateCommit_ACU(options, apply) {
-    let requiresRuntimeReload = false;
-    let preApplySnapshotForRollback = null;
-    try {
-        assertNoActiveFillForExternalMutation_ACU(options);
-        assertExpectedCommitScope_ACU(options, '提交前');
-        const commitMode = options.commitMode ?? 'persist_v2';
-        if (commitMode === 'stage_only') {
-            // stage-only：不进入聊天写入路径。跳过 bridge gate 与 legacy 迁移——迁移可能写聊天帧，
-            // 且 staging 运行期间不应推进持久化拓扑。scope 复检已在函数入口执行。
-            return await runTableWriteTransaction_ACU({
-                source: options.source,
-                reason: options.reason,
-                chatKey: options.chatKey,
-                isolationKey: options.isolationKey ?? getCurrentIsolationKey_ACU(),
-                writeSet: options.writeSet,
-                baseRevision: options.baseRevision,
-                workingDataMode: options.workingDataMode,
-                initialData: options.initialData !== undefined ? options.initialData : currentJsonTableData_ACU,
-            }, async (transactionContext, workingData) => {
-                let commitRevisionWriteSet = options.revisionWriteSet;
-                return transactionContext.runCommit(async () => {
-                    assertExpectedCommitScope_ACU(options, 'stage 应用前');
-                    const applied = await apply({ transactionContext, workingData });
-                    if (!applied.success || !applied.tableData) {
-                        throw new TableUpdateCommitError_ACU(applied.error || `${options.reason}: stage apply failed`, applied.errorCategory || 'infrastructure');
-                    }
-                    commitRevisionWriteSet = applied.persist?.revisionWriteSet ?? options.revisionWriteSet;
-                    _set_currentJsonTableData_ACU(cloneTableData_ACU(applied.tableData));
-                    return {
-                        success: true,
-                        value: applied.value,
-                        tableData: applied.tableData,
-                        mutationResult: applied.mutationResult,
-                        saved: false,
-                        messageIndex: undefined,
-                    };
-                }, () => commitRevisionWriteSet);
-            });
-        }
-        // 普通表写入前统一恢复门：残留 provisional bridge 先自动 finalize/rollback。
-        // catch-up 自身携带 runId 时跳过——该 bridge 正是本次 run 建立的，不能提前汇合。
-        if (!options.manualCatchUpRunId) {
-            const bridgeGate = await ensureNoActiveProvisionalBridgeForCurrentScope_ACU({
-                chatKey: options.chatKey,
-                isolationKey: options.isolationKey ?? getCurrentIsolationKey_ACU(),
-            });
-            if (!bridgeGate.ok) {
-                return {
-                    success: false,
-                    error: bridgeGate.error,
-                    errorCategory: 'precondition',
-                };
-            }
-        }
-        const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU(options.reason);
-        if (!migration.success) {
-            return {
-                success: false,
-                error: migration.error || '旧存储迁移失败，已阻止本次写入。',
-                errorCategory: 'infrastructure',
-            };
-        }
-        if (migration.migrated) {
-            await reloadStorageProvider();
-        }
-        assertExpectedCommitScope_ACU(options, '迁移后');
-        await flushRuntimeOnlyPendingBeforeCommit_ACU(options);
-        assertExpectedCommitScope_ACU(options, '未落盘变更写回后');
-        return await runTableWriteTransaction_ACU({
-            source: options.source,
-            reason: options.reason,
-            chatKey: options.chatKey,
-            isolationKey: options.isolationKey ?? getCurrentIsolationKey_ACU(),
-            writeSet: options.writeSet,
-            baseRevision: options.baseRevision,
-            workingDataMode: options.workingDataMode,
-            initialData: options.initialData !== undefined ? options.initialData : currentJsonTableData_ACU,
-        }, async (transactionContext, workingData) => {
-            let commitRevisionWriteSet = options.revisionWriteSet;
-            return transactionContext.runCommit(async () => {
-                let rollbackBeforePersist;
-                try {
-                    assertExpectedCommitScope_ACU(options, '应用前');
-                    const preApplyData = workingData
-                        ? cloneTableData_ACU(workingData)
-                        : options.initialData
-                            ? cloneTableData_ACU(options.initialData)
-                            : null;
-                    preApplySnapshotForRollback = preApplyData;
-                    const reloadOnFailure = options.applyMutatesRuntime !== false && !options.skipChatSave;
-                    const applied = await apply({ transactionContext, workingData });
-                    if (!applied.success || !applied.tableData) {
-                        if (applied.runtimeMutated && reloadOnFailure)
-                            requiresRuntimeReload = true;
-                        throw new TableUpdateCommitError_ACU(applied.error || `${options.reason}: update apply failed`, applied.errorCategory || 'infrastructure');
-                    }
-                    // 运行时已变更、尚未落盘：此后任何失败（含抛异常）都要重载收敛。
-                    if (reloadOnFailure)
-                        requiresRuntimeReload = true;
-                    let saved = true;
-                    let messageIndex;
-                    const persistOptions = applied.persist || {};
-                    const revisionWriteSet = persistOptions.revisionWriteSet ?? options.revisionWriteSet;
-                    const targetSheetKeys = persistOptions.targetSheetKeys !== undefined ? persistOptions.targetSheetKeys : options.targetSheetKeys;
-                    const operations = persistOptions.operations ?? options.operations;
-                    commitRevisionWriteSet = revisionWriteSet;
-                    const staged = persistOptions.beforePersist
-                        ? await persistOptions.beforePersist(applied.tableData)
-                        : undefined;
-                    if (staged && typeof staged.rollback === 'function') {
-                        rollbackBeforePersist = staged.rollback;
-                    }
-                    if (!options.skipChatSave) {
-                        assertExpectedCommitScope_ACU(options, '持久化前');
-                        assertPersistableRowIdentities_ACU(applied.tableData, options.reason, targetSheetKeys);
-                        const saveResult = await persistTablesToChatMessage_ACU({
-                            targetMessageIndex: persistOptions.targetMessageIndex ?? options.targetMessageIndex,
-                            targetSheetKeys,
-                            updateGroupKeys: persistOptions.updateGroupKeys !== undefined ? persistOptions.updateGroupKeys : (options.updateGroupKeys ?? null),
-                            trackingSheetKeys: persistOptions.trackingSheetKeys !== undefined ? persistOptions.trackingSheetKeys : (options.trackingSheetKeys ?? []),
-                            tableData: applied.tableData,
-                            trackAsUpdate: persistOptions.trackAsUpdate ?? options.trackAsUpdate ?? false,
-                            source: options.source,
-                            operations,
-                            revisionWriteSet,
-                            forceCheckpoint: persistOptions.forceCheckpoint,
-                            checkpointReason: persistOptions.checkpointReason,
-                            manualRefillProgress: persistOptions.manualRefillProgress ?? options.manualRefillProgress,
-                            replaceExistingIncremental: persistOptions.replaceExistingIncremental ?? options.replaceExistingIncremental,
-                            strictSave: persistOptions.strictSave ?? options.strictSave,
-                            manualCatchUpRunId: options.manualCatchUpRunId,
-                            performanceRunId: options.performanceRunId,
-                            performanceParentSpanId: options.performanceParentSpanId,
-                            assumeCommitLock: true,
-                            transactionContext,
-                        });
-                        saved = saveResult.saved;
-                        messageIndex = saveResult.messageIndex;
-                        if (!saveResult.saved) {
-                            logWarn_ACU(`[TableUpdateCommit] persist failed after runtime update${reloadOnFailure ? '; reload after releasing transaction locks' : ''}: ${saveResult.error || 'unknown error'}`);
-                            throw new TableUpdateCommitError_ACU(saveResult.error || `${options.reason}: persist failed`, classifyPersistRejection_ACU(saveResult.error));
-                        }
-                    }
-                    else {
-                        markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, applied.tableData, preApplyData);
-                    }
-                    requiresRuntimeReload = false;
-                    _set_currentJsonTableData_ACU(cloneTableData_ACU(applied.tableData));
-                    return {
-                        success: true,
-                        value: applied.value,
-                        tableData: applied.tableData,
-                        mutationResult: applied.mutationResult,
-                        saved,
-                        messageIndex,
-                    };
-                }
-                catch (error) {
-                    if (rollbackBeforePersist)
-                        await rollbackBeforePersist();
-                    throw error;
-                }
-            }, () => commitRevisionWriteSet);
-        });
-    }
-    catch (error) {
-        if (requiresRuntimeReload && !(await restoreRuntimeKeepingPendingWrites_ACU(options, preApplySnapshotForRollback))) {
-            try {
-                await reloadStorageProvider();
-            }
-            catch (reloadError) {
-                logError_ACU(`[TableUpdateCommit] ${options.reason} failed to reload runtime after persistence failure:`, reloadError);
-            }
-        }
-        const message = error?.message || String(error);
-        const errorCategory = error instanceof TableUpdateCommitError_ACU
-            ? error.category
-            : 'infrastructure';
-        // 级别统一：仅 infrastructure 记 error；precondition/model 为预期内的拒绝/模型问题，
-        // 记 warn 并附统一可操作指引（等填表完成 / 切回当前聊天重做），避免刷 ERROR 噪音。
-        if (errorCategory === 'infrastructure') {
-            logError_ACU(`[TableUpdateCommit] ${options.reason} failed:`, error);
-        }
-        else {
-            logWarn_ACU(`[TableUpdateCommit] ${options.reason} 已跳过（${errorCategory}）：${message} 统一指引：外部写入请等待 AI 填表完成后重试；范围校验失败请切回当前聊天重新执行填表。`, error);
-        }
-        return {
-            success: false,
-            error: message,
-            errorCategory,
-        };
-    }
-}
-async function runSqliteRuntimeMutationCommit_ACU(options) {
-    return runTableUpdateCommit_ACU(options, async ({ workingData }) => {
-        const provider = await ensureStorageProviderReady_ACU();
-        const runtimeData = (workingData || currentJsonTableData_ACU);
-        const runtimeSql = runtimeData
-            ? rebindSqlMutationIdentifiers_ACU([options.sql], runtimeData)[0]
-            : options.sql;
-        const mutationResult = provider.executeMutation(runtimeSql, options.params);
-        if (mutationResult.errors?.length) {
-            return { success: false, error: mutationResult.errors.join(', '), mutationResult };
-        }
-        // executeMutation 内部已把本次写入同步到 canonical 视图并把同一份对象带回；
-        // 中间无 mutation，直接复用，省掉紧接着那次全库二次导出。视图未同步成功才回落导出。
-        const tableData = mutationResult.syncedView ?? provider.getCurrentData();
-        if (!tableData) {
-            return { success: false, error: 'SQLite runtime data export failed', mutationResult };
-        }
-        const validationError = options.validate?.({ mutationResult, tableData: tableData });
-        if (validationError) {
-            return { success: false, error: validationError, mutationResult, tableData: tableData };
-        }
-        const runtimeOperations = options.operations ? undefined : buildSqlSheetBatchOperations_ACU([runtimeSql], tableData, {
-            params: normalizeSqlBindParams_ACU(options.params),
-            fallbackTargetSheetKeys: options.targetSheetKeys || undefined,
-            allowSingleTargetFallback: true,
-            keepLegacyForUnclassified: true,
-            reason: 'manual_crud',
-        }).operations;
-        return {
-            success: true,
-            value: options.mapValue({ mutationResult, tableData: tableData }),
-            tableData: tableData,
-            mutationResult,
-            ...(runtimeOperations ? { persist: { operations: runtimeOperations } } : {}),
-        };
-    });
-}
-
-// merge-logic.ts
-// ═══ 自动合并纪要：触发检查 ═══
-function isAutoMergedSummaryRow_ACU(summaryKey, row) {
-    if (!Array.isArray(row))
-        return false;
-    const rowId = String(row[0] ?? '').trim();
-    const storedOrder = settings_ACU.autoMergedOrder?.[getAutoMergedOrderScopeKey_ACU(summaryKey)];
-    return (Array.isArray(storedOrder) && storedOrder.some((id) => String(id) === rowId))
-        || row[row.length - 1] === 'auto_merged';
-}
-function getAutoMergedOrder_ACU(summaryKey) {
-    const storedOrder = settings_ACU.autoMergedOrder?.[getAutoMergedOrderScopeKey_ACU(summaryKey)];
-    return Array.isArray(storedOrder) ? storedOrder.map((id) => String(id)) : [];
-}
-function checkAutoMergeTrigger_ACU() {
-    if (!settings_ACU.autoMergeEnabled)
-        return { shouldTrigger: false };
-    const summaryKey = Object.keys(currentJsonTableData_ACU).find(k => currentJsonTableData_ACU[k].name === '纪要表' ||
-        currentJsonTableData_ACU[k].name === '总结表');
-    if (!summaryKey)
-        return { shouldTrigger: false };
-    const summaryCount = (currentJsonTableData_ACU[summaryKey].content || [])
-        .slice(1)
-        .filter((row) => !isAutoMergedSummaryRow_ACU(summaryKey, row))
-        .length;
-    const threshold = settings_ACU.autoMergeThreshold || 20;
-    const reserve = settings_ACU.autoMergeReserve || 0;
-    const triggerThreshold = threshold + reserve;
-    if (summaryCount < triggerThreshold)
-        return { shouldTrigger: false };
-    const mergeCount = summaryCount - reserve;
-    if (mergeCount <= 0)
-        return { shouldTrigger: false };
-    return { shouldTrigger: true, mergeCount, summaryCount, reserve };
-}
-function prepareAutoMergeBatches_ACU(options) {
-    const { startIndex, endIndex, targetCount, batchSize, promptTemplate, isAutoMode } = options;
-    const summaryKey = Object.keys(currentJsonTableData_ACU).find(k => currentJsonTableData_ACU[k].name === '纪要表' ||
-        currentJsonTableData_ACU[k].name === '总结表');
-    if (!summaryKey)
-        throw new Error('未找到纪要表');
-    let allSummaryRows = (currentJsonTableData_ACU[summaryKey].content || [])
-        .slice(1)
-        .filter((row) => !isAutoMergedSummaryRow_ACU(summaryKey, row));
-    allSummaryRows = allSummaryRows.slice(startIndex, endIndex);
-    const batches = [];
-    for (let i = 0; i < allSummaryRows.length; i += batchSize) {
-        batches.push({
-            batchIndex: batches.length,
-            batchRows: allSummaryRows.slice(i, i + batchSize),
-            globalStartOffset: (startIndex + 1) + i,
-        });
-    }
-    return { summaryKey, batches, targetCount, promptTemplate, isAutoMode, startIndex, endIndex };
-}
-// ═══ 自动合并纪要：执行单个批次 ═══
-async function executeAutoMergeBatch_ACU(prepared, batch, accumulatedSummary) {
-    const { summaryKey, targetCount, promptTemplate, isAutoMode } = prepared;
-    const { batchRows, globalStartOffset, batchIndex } = batch;
-    const summaryTableObj = currentJsonTableData_ACU[summaryKey];
-    const usedSummaryRowIds = new Set([
-        ...(Array.isArray(summaryTableObj?.content) ? summaryTableObj.content.slice(1) : []),
-        ...accumulatedSummary,
-    ].filter(Array.isArray).map((row) => String(row[0] ?? '').trim()).filter(Boolean));
-    let nextSummaryRowId = (() => {
-        const numericIds = [...usedSummaryRowIds]
-            .filter(rowId => /^\d+$/.test(rowId))
-            .map(rowId => Number(rowId))
-            .filter(Number.isSafeInteger);
-        return numericIds.length > 0 ? Math.max(...numericIds) + 1 : 1;
-    })();
-    const allocateSummaryRowId = () => {
-        while (usedSummaryRowIds.has(String(nextSummaryRowId)))
-            nextSummaryRowId += 1;
-        const rowId = String(nextSummaryRowId);
-        usedSummaryRowIds.add(rowId);
-        nextSummaryRowId += 1;
-        return rowId;
-    };
-    const formatRows = (rows, globalStartIndex) => rows.map((r, idx) => `[${globalStartIndex + idx}] ${r.slice(1).join(', ')}`).join('\n');
-    const textA = batchRows.length > 0 ? formatRows(batchRows, globalStartOffset) : "(本批次无新增纪要数据)";
-    let textBase = "";
-    const formatTableStructure = (tableName, currentRows, originalTableObj) => {
-        let str = `[0:${tableName}]\n`;
-        const headers = originalTableObj.content[0] ? originalTableObj.content[0].slice(1).map((h, i) => `[${i}:${h}]`).join(', ') : 'No Headers';
-        str += `  Columns: ${headers}\n`;
-        if (originalTableObj.sourceData) {
-            str += `  - Note: ${originalTableObj.sourceData.note || 'N/A'}\n`;
-        }
-        if (currentRows && currentRows.length > 0) {
-            currentRows.forEach((row, rIdx) => { str += `  [${rIdx}] ${row.join(', ')}\n`; });
-        }
-        else {
-            str += `  (Table Empty - No rows yet)\n`;
-        }
-        return str + "\n";
-    };
-    const getExistingAutoMergedRows = (tableObj, count = 1) => {
-        if (!tableObj || !tableObj.content)
-            return [];
-        const allRows = tableObj.content.slice(1);
-        const autoMergedRows = allRows.filter((row) => isAutoMergedSummaryRow_ACU(summaryKey, row));
-        if (!autoMergedRows.length)
-            return [];
-        const n = Number.isFinite(count) ? Math.max(0, count) : 0;
-        if (n <= 0)
-            return [];
-        const order = getAutoMergedOrder_ACU(summaryKey);
-        const rank = new Map(order.map((rowId, index) => [rowId, index]));
-        return autoMergedRows
-            .slice()
-            .sort((left, right) => (rank.get(String(left?.[0] ?? '')) ?? -1) - (rank.get(String(right?.[0] ?? '')) ?? -1))
-            .slice(-n);
-    };
-    const existingSummaryAutoMerged = summaryTableObj ? getExistingAutoMergedRows(summaryTableObj, 1) : [];
-    const summaryBaseData = [...existingSummaryAutoMerged, ...accumulatedSummary];
-    if (summaryTableObj)
-        textBase += formatTableStructure(summaryTableObj.name, summaryBaseData, summaryTableObj);
-    let currentPrompt = promptTemplate.replace('$TARGET_COUNT', String(targetCount)).replace('$A', textA).replace('$BASE_DATA', textBase);
-    let aiResponseText = "";
-    const maxRetries = 3;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            const messagesToUse = JSON.parse(JSON.stringify(settings_ACU.charCardPrompt || [isSqliteMode() ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU]));
-            const mainPromptSegment = messagesToUse.find((m) => (String(m?.mainSlot || '').toUpperCase() === 'A') || m?.isMain) ||
-                messagesToUse.find((m) => m && m.content && m.content.includes("你接下来需要扮演一个填表用的美杜莎"));
-            if (mainPromptSegment) {
-                mainPromptSegment.content = currentPrompt;
-            }
-            else {
-                messagesToUse.push({ role: 'USER', content: currentPrompt });
-            }
-            const finalMessages = messagesToUse.map((m) => ({ role: m.role.toLowerCase(), content: m.content }));
-            // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 API
-            aiResponseText = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false, sessionNamespace: 'summary' }));
-            if (!aiResponseText)
-                throw new Error('API返回的数据格式不正确');
-            const extractResult = extractTableEditInner_ACU(aiResponseText, { allowNoTableEditTags: true });
-            if (!extractResult || !extractResult.inner) {
-                throw new Error('AI未返回有效的 <tableEdit> 块');
-            }
-            const editsString = extractResult.inner;
-            const newSummaryRows = [];
-            editsString.split('\n').forEach((line) => {
-                const match = line.trim().match(/insertRow\s*\(\s*(\d+)\s*,\s*(\{.*?\}|\[.*?\])\s*\)/);
-                if (match) {
-                    try {
-                        const tableIdx = parseInt(match[1], 10);
-                        let rowData = JSON.parse(match[2].replace(/'/g, '"'));
-                        if (typeof rowData === 'object' && !Array.isArray(rowData)) {
-                            const sortedKeys = Object.keys(rowData).sort((a, b) => parseInt(a) - parseInt(b));
-                            const dataColumns = sortedKeys.map((k) => rowData[k]);
-                            rowData = dataColumns;
-                        }
-                        if (!Array.isArray(rowData))
-                            throw new Error('insertRow 数据必须是对象或数组。');
-                        rowData = [allocateSummaryRowId(), ...rowData];
-                        const header = Array.isArray(summaryTableObj?.content?.[0]) ? summaryTableObj.content[0] : null;
-                        if (header) {
-                            if (rowData.length > header.length)
-                                throw new Error('自动合并结果列数超过纪要表表头。');
-                            while (rowData.length < header.length)
-                                rowData.push('');
-                        }
-                        if (tableIdx === 0 && summaryKey)
-                            newSummaryRows.push(rowData);
-                    }
-                    catch (e) {
-                        logWarn_ACU('解析行失败:', line, e);
-                    }
-                }
-            });
-            if (newSummaryRows.length === 0) {
-                throw new Error('AI返回了内容，但未能解析出任何有效的数据行。');
-            }
-            return { accumulatedSummary: accumulatedSummary.concat(newSummaryRows) };
-        }
-        catch (e) {
-            logWarn_ACU(`自动合并批次 ${batchIndex + 1} 尝试 ${attempt} 失败: ${e.message}`);
-            // 指数退避（与 content-optimization 一致）：5000 * 2^(attempt-1)，上限 30s
-            if (attempt < maxRetries) {
-                const delay = Math.min(5000 * Math.pow(2, attempt - 1), 30000);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        }
-    }
-    throw new Error(`批次 ${batchIndex + 1} 在 ${maxRetries} 次尝试后均失败`);
-}
-// ═══ 自动合并纪要：写回结果 ═══
-async function finalizeAutoMerge_ACU(prepared, accumulatedSummary) {
-    const { summaryKey, endIndex } = prepared;
-    if (!summaryKey || accumulatedSummary.length === 0)
-        return { mergedRows: 0, success: true };
-    const table = currentJsonTableData_ACU[summaryKey];
-    const previousTableContent = table.content;
-    const hadPreviousAutoMergedOrder = Object.prototype.hasOwnProperty.call(settings_ACU, 'autoMergedOrder');
-    const previousAutoMergedOrder = hadPreviousAutoMergedOrder
-        ? JSON.parse(JSON.stringify(settings_ACU.autoMergedOrder))
-        : undefined;
-    const originalContent = table.content.slice(1);
-    let actualEndIndex = 0;
-    let foundCount = 0;
-    for (let i = 0; i < originalContent.length; i++) {
-        const row = originalContent[i];
-        if (!isAutoMergedSummaryRow_ACU(summaryKey, row)) {
-            foundCount++;
-            if (foundCount === endIndex) {
-                actualEndIndex = i + 1;
-                break;
-            }
-        }
-    }
-    const existingAutoMergedRows = originalContent.filter((row) => isAutoMergedSummaryRow_ACU(summaryKey, row));
-    const remainingRows = originalContent.slice(actualEndIndex);
-    const newSummaryContent = [
-        ...existingAutoMergedRows,
-        ...accumulatedSummary,
-        ...remainingRows.filter((row) => !isAutoMergedSummaryRow_ACU(summaryKey, row))
-    ];
-    table.content = [table.content[0], ...newSummaryContent];
-    if (!settings_ACU.autoMergedOrder)
-        settings_ACU.autoMergedOrder = {};
-    const orderScopeKey = getAutoMergedOrderScopeKey_ACU(summaryKey);
-    if (!settings_ACU.autoMergedOrder[orderScopeKey])
-        settings_ACU.autoMergedOrder[orderScopeKey] = [];
-    const orderList = settings_ACU.autoMergedOrder[orderScopeKey];
-    accumulatedSummary.forEach((row) => {
-        if (row && row[0] !== null && row[0] !== undefined && !orderList.includes(row[0])) {
-            orderList.push(row[0]);
-        }
-    });
-    const rollbackLiveState_ACU = () => {
-        table.content = previousTableContent;
-        if (hadPreviousAutoMergedOrder) {
-            settings_ACU.autoMergedOrder = previousAutoMergedOrder;
-        }
-        else {
-            delete settings_ACU.autoMergedOrder;
-        }
-    };
-    const keysToSave = [summaryKey];
-    const writeSet = keysToSave.map(sheetKey => ({ kind: 'sheet', sheetKey }));
-    let commitResult;
-    try {
-        commitResult = await runTableUpdateCommit_ACU({
-            source: 'merge_summary',
-            reason: 'auto_merge_summary',
-            writeSet,
-            revisionWriteSet: writeSet,
-            initialData: currentJsonTableData_ACU,
-            targetMessageIndex: getLastMessageIndex_ACU(),
-            targetSheetKeys: keysToSave,
-            updateGroupKeys: keysToSave,
-            trackingSheetKeys: keysToSave,
-            trackAsUpdate: true,
-            operations: [{ kind: 'sheet_replace', sheetKey: summaryKey, sheet: currentJsonTableData_ACU[summaryKey], reason: 'system' }],
-        }, () => ({
-            success: true,
-            value: null,
-            tableData: currentJsonTableData_ACU,
-            mutationResult: { changes: keysToSave.length, errors: [] },
-        }));
-    }
-    catch (error) {
-        rollbackLiveState_ACU();
-        logWarn_ACU('[自动合并] 提交异常，已回滚运行时合并结果:', error);
-        return { success: false, mergedRows: 0, error: error instanceof Error ? error.message : String(error) };
-    }
-    if (!commitResult || commitResult.success !== true) {
-        rollbackLiveState_ACU();
-        const error = commitResult?.error || '自动合并提交失败';
-        logWarn_ACU(`[自动合并] 提交失败，已回滚运行时合并结果: ${error}`);
-        return { success: false, mergedRows: 0, error };
-    }
-    await updateReadableLorebookEntry_ACU(true);
-    return { success: true, mergedRows: accumulatedSummary.length };
-}
-
-var mergeLogic = /*#__PURE__*/Object.freeze({
-    __proto__: null,
-    checkAutoMergeTrigger_ACU: checkAutoMergeTrigger_ACU,
-    executeAutoMergeBatch_ACU: executeAutoMergeBatch_ACU,
-    finalizeAutoMerge_ACU: finalizeAutoMerge_ACU,
-    prepareAutoMergeBatches_ACU: prepareAutoMergeBatches_ACU
-});
 
 /**
  * service/worldbook/worldbook-service.ts — 世界书操作服务
@@ -105437,6 +104769,539 @@ function scanTargetKeysResidue_ACU(msg, isolationKey, targetSheetKeys, messageIn
         scanSubstringOnlyPaths_ACU(entry, targetKeys, `logEntries[${index}]`, report);
     });
     return report;
+}
+
+/**
+ * service/table/runtime-only-pending-state.ts — 运行时未落盘变更登记。
+ *
+ * 开放 API 的 CRUD/SQL 写入允许 skipChatSave（skipSave / isImportMode）：只改 live runtime，
+ * 不写聊天 V2 帧。V2 是 operation log 语义，后续任何普通写入只追加自己的 operation，
+ * 不会像旧版那样把整份运行时快照带回聊天。于是这些行只存在于 runtime：
+ * 楼层帧里没有对应数据、表格状态显示未初始、填表基底（聊天回放）看不到它们，
+ * AI 把已存在的行重新 INSERT，提交时撞 live SQLite 的 UNIQUE 约束或把行数翻倍。
+ *
+ * 本模块按 (chatKey, isolationKey) 登记「哪些表有未落盘的运行时变更」以及
+ * 已被删除但仍需写回聊天的 tombstone；真正的落盘由 runtime-only-pending-flush
+ * 在下一次普通持久化写入 / 填表开始前完成。
+ * 这里刻意不依赖任何 service 模块，避免与提交模型形成循环导入。
+ */
+const pendingByScope_ACU = new Map();
+let registeredFlusher_ACU = null;
+function normalizeScopePart_ACU(value, fallback) {
+    const normalized = String(value || fallback).trim();
+    return normalized || fallback;
+}
+function buildRuntimeOnlyPendingScopeKey_ACU(scope) {
+    return [
+        normalizeScopePart_ACU(scope.chatKey, 'current-chat'),
+        normalizeScopePart_ACU(scope.isolationKey, 'default'),
+    ].join('::');
+}
+/**
+ * 从写集提取受影响的表。任何 kind:'all' 或缺少 sheetKey 的单元都视为「全部表」，
+ * 宁可多登记也不能漏掉 runtime-only 变更。
+ */
+function extractPendingSheetKeysFromWriteSet_ACU(writeSet) {
+    if (!Array.isArray(writeSet) || writeSet.length === 0)
+        return { all: true, sheetKeys: [] };
+    const sheetKeys = new Set();
+    for (const unit of writeSet) {
+        if (!unit || unit.kind === 'all')
+            return { all: true, sheetKeys: [] };
+        const sheetKey = String(unit.sheetKey || '').trim();
+        if (!sheetKey.startsWith('sheet_'))
+            return { all: true, sheetKeys: [] };
+        sheetKeys.add(sheetKey);
+    }
+    return { all: false, sheetKeys: [...sheetKeys].sort() };
+}
+function markRuntimeOnlyPendingSheets_ACU(scope, pending) {
+    const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
+    const state = pendingByScope_ACU.get(scopeKey) || {
+        all: false,
+        sheetKeys: new Set(),
+        deletedSheetKeys: new Set(),
+    };
+    if (pending.all)
+        state.all = true;
+    for (const sheetKey of pending.sheetKeys) {
+        if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_'))
+            state.sheetKeys.add(sheetKey);
+    }
+    for (const sheetKey of pending.deletedSheetKeys || []) {
+        if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_')) {
+            state.deletedSheetKeys.add(sheetKey);
+            state.sheetKeys.delete(sheetKey);
+        }
+    }
+    pendingByScope_ACU.set(scopeKey, state);
+}
+function readRuntimeOnlyPendingSheets_ACU(scope) {
+    const state = pendingByScope_ACU.get(buildRuntimeOnlyPendingScopeKey_ACU(scope));
+    if (!state || (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0))
+        return null;
+    const deletedSheetKeys = [...state.deletedSheetKeys].sort();
+    return {
+        all: state.all,
+        sheetKeys: [...state.sheetKeys].sort(),
+        ...(deletedSheetKeys.length > 0 ? { deletedSheetKeys } : {}),
+    };
+}
+function hasRuntimeOnlyPendingSheets_ACU(scope) {
+    return readRuntimeOnlyPendingSheets_ACU(scope) !== null;
+}
+/** 不传 scope 时清空全部登记（测试/聊天切换收尾用）。 */
+function clearRuntimeOnlyPendingSheets_ACU(scope) {
+    if (!scope) {
+        pendingByScope_ACU.clear();
+        return;
+    }
+    pendingByScope_ACU.delete(buildRuntimeOnlyPendingScopeKey_ACU(scope));
+}
+/**
+ * 按表集合条件化清除登记：只移除给定的 sheetKey（以及可选的 all 标记），保留同 scope
+ * 下其他并发登记；清除后若无任何残留登记才删除整个 scope 条目。
+ *
+ * 供 runtime-only-pending-flush 在提交事务内（持锁中）按「本次实际处理集」清账使用，
+ * 替代会吞掉并发写者新登记的全量 clearRuntimeOnlyPendingSheets_ACU（原 API 保持兼容）。
+ */
+function clearRuntimeOnlyPendingSheetKeys_ACU(scope, sheetKeys, options) {
+    const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
+    const state = pendingByScope_ACU.get(scopeKey);
+    if (!state)
+        return;
+    for (const sheetKey of sheetKeys) {
+        if (typeof sheetKey === 'string') {
+            state.sheetKeys.delete(sheetKey);
+            state.deletedSheetKeys.delete(sheetKey);
+        }
+    }
+    if (options?.dropAllFlag)
+        state.all = false;
+    if (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0) {
+        pendingByScope_ACU.delete(scopeKey);
+    }
+}
+/**
+ * 落盘器由 runtime-only-pending-flush 注册；提交模型通过本入口触发，
+ * 避免 table-update-commit ↔ flush 之间的直接循环导入。未注册时静默跳过。
+ */
+function registerRuntimeOnlyPendingFlusher_ACU(flusher) {
+    registeredFlusher_ACU = flusher;
+}
+async function runRegisteredRuntimeOnlyPendingFlush_ACU(scope, reason) {
+    if (!registeredFlusher_ACU || !hasRuntimeOnlyPendingSheets_ACU(scope)) {
+        return { flushed: false, sheetKeys: [] };
+    }
+    return registeredFlusher_ACU(reason);
+}
+
+class TableUpdateCommitError_ACU extends Error {
+    constructor(message, category) {
+        super(message);
+        this.category = category;
+        this.name = 'TableUpdateCommitError';
+    }
+}
+function cloneTableData_ACU(data) {
+    return JSON.parse(JSON.stringify(data));
+}
+/**
+ * 原则：回放宽容、写入严格。persist 拒绝写入时按"谁的错"分类，决定调用方能否重试：
+ * - 写时严格探针拒绝（本次增量叠加到目标楼层历史上不能严格回放，典型是 AI 重复插行
+ *   撞 UNIQUE）→ 'model'：是这份 AI 结果的问题，历史没被写坏，chunk 级重试会把错误反馈
+ *   给模型重新生成。
+ * - 兼容只读门闸拒绝（聊天历史本身只能宽容回放）→ 'precondition'：重试 AI 修不好历史，
+ *   必须在数据管理中显式恢复；不重试，避免浪费 AI 调用。
+ * - 其余 → 'infrastructure'。
+ */
+function classifyPersistRejection_ACU(error) {
+    if (isAppendedOperationsWriteRejection_ACU(error))
+        return 'model';
+    if (isCompatReadonlyWriteRejection_ACU(error))
+        return 'precondition';
+    return 'infrastructure';
+}
+function normalizeSqlBindParams_ACU(params) {
+    return Array.isArray(params) && params.length > 0 ? [params.map(value => value ?? null)] : undefined;
+}
+/**
+ * Final persistence boundary: reject malformed row identities without repairing
+ * data. Identity allocation belongs to the row creation path; repairing here
+ * would hide the origin of a corrupt row and could change persisted semantics.
+ */
+function assertPersistableRowIdentities_ACU(data, reason, targetSheetKeys) {
+    const scopedKeys = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0 ? new Set(targetSheetKeys) : null;
+    for (const [sheetKey, sheet] of Object.entries(data)) {
+        if (!sheetKey.startsWith('sheet_'))
+            continue;
+        if (scopedKeys && !scopedKeys.has(sheetKey))
+            continue;
+        const content = sheet?.content;
+        if (!Array.isArray(content) || content.length === 0)
+            continue;
+        const headers = content[0];
+        if (!Array.isArray(headers) || String(headers[0] ?? '') !== 'row_id') {
+            throw new Error(`[TableUpdateCommit] ${reason}: sheetKey=${sheetKey} 缺少 row_id 首列表头。`);
+        }
+        const rowIds = new Set();
+        for (let rowIndex = 1; rowIndex < content.length; rowIndex += 1) {
+            const row = content[rowIndex];
+            if (!Array.isArray(row)) {
+                throw new Error(`[TableUpdateCommit] ${reason}: sheetKey=${sheetKey}, rowIndex=${rowIndex} 不是数组行。`);
+            }
+            const rowId = String(row[0] ?? '').trim();
+            if (!rowId) {
+                throw new Error(`[TableUpdateCommit] ${reason}: sheetKey=${sheetKey}, rowIndex=${rowIndex} 的 row_id 为空。`);
+            }
+            if (rowIds.has(rowId)) {
+                throw new Error(`[TableUpdateCommit] ${reason}: sheetKey=${sheetKey}, rowIndex=${rowIndex} 的 row_id 重复：${rowId}。`);
+            }
+            rowIds.add(rowId);
+        }
+    }
+}
+/**
+ * 填表期间会拒绝的外部变更来源：开放 API 的 CRUD/SQL 与可视化编辑器/SQL 控制台。
+ * 填表自身（auto_fill/manual_fill/group_fill）、导入（import）与模板提交不受影响。
+ * 拒绝而非排队：排队的写入基于陈旧快照，醒来后仍会与填表结果冲突。
+ */
+const EXTERNAL_MUTATION_SOURCES_ACU = new Set([
+    'manual_crud',
+    'raw_sql_mutation',
+    'raw_sql_batch',
+]);
+function resolvePendingScope_ACU(options) {
+    return {
+        chatKey: String(options.chatKey ?? currentChatFileIdentifier_ACU ?? ''),
+        isolationKey: String(options.isolationKey ?? getCurrentIsolationKey_ACU() ?? ''),
+    };
+}
+/**
+ * skipChatSave 的外部写入只改了 live runtime：登记受影响的表，等下一次普通持久化写入
+ * 或填表开始前统一物化进聊天，否则这些行永远不会进入楼层帧与填表基底。
+ */
+function markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, tableData, preApplyData) {
+    if (!EXTERNAL_MUTATION_SOURCES_ACU.has(options.source))
+        return;
+    const candidate = extractPendingSheetKeysFromWriteSet_ACU(revisionWriteSet ?? options.writeSet);
+    const postSheetKeys = Object.keys(tableData || {}).filter(key => key.startsWith('sheet_'));
+    const preSheetKeys = Object.keys(preApplyData || {}).filter(key => key.startsWith('sheet_'));
+    const postSheetKeySet = new Set(postSheetKeys);
+    const deletedSheetKeys = (candidate.all ? preSheetKeys : candidate.sheetKeys)
+        .filter(sheetKey => !postSheetKeySet.has(sheetKey));
+    const pending = candidate.all
+        ? { all: false, sheetKeys: postSheetKeys }
+        : candidate;
+    if (!pending.all && pending.sheetKeys.length === 0 && deletedSheetKeys.length === 0)
+        return;
+    markRuntimeOnlyPendingSheets_ACU(resolvePendingScope_ACU(options), {
+        ...pending,
+        deletedSheetKeys,
+    });
+}
+/**
+ * 普通持久化提交前先把已登记的 runtime-only 变更写回聊天；失败只记 warn，
+ * 不阻断本次提交（登记保留，下一次机会再试）。
+ */
+async function flushRuntimeOnlyPendingBeforeCommit_ACU(options) {
+    if (options.skipChatSave || options.skipRuntimeOnlyPendingFlush)
+        return;
+    try {
+        await runRegisteredRuntimeOnlyPendingFlush_ACU(resolvePendingScope_ACU(options), options.reason);
+    }
+    catch (error) {
+        logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 运行时未落盘变更写回聊天失败，继续本次提交。`, error);
+    }
+}
+/**
+ * 提交失败后的运行时收敛（R2A-04）：整体重载会从聊天重放，把只存在于运行时、尚未写回聊天的
+ * 脚本写入（runtime-only 登记）一起冲掉。有这类登记时改为用本次提交前的快照恢复运行时——
+ * 这份快照恰好是「撤销本次提交、保留未落盘写入」的状态。恢复不了（无快照、换了聊天、重建失败）
+ * 才退回整体重载。
+ */
+async function restoreRuntimeKeepingPendingWrites_ACU(options, preApplySnapshot) {
+    if (!preApplySnapshot)
+        return false;
+    const scope = resolvePendingScope_ACU(options);
+    if (!hasRuntimeOnlyPendingSheets_ACU(scope))
+        return false;
+    if (String(currentChatFileIdentifier_ACU ?? '') !== scope.chatKey || String(getCurrentIsolationKey_ACU() ?? '') !== scope.isolationKey) {
+        return false;
+    }
+    try {
+        if (getCurrentStorageMode() === 'sqlite') {
+            const envelope = createCanonicalSnapshotEnvelope_ACU({
+                data: preApplySnapshot,
+                chatIdentity: scope.chatKey,
+                isolationKey: scope.isolationKey,
+                storageMode: 'sqlite',
+                lifecycleEpoch: getRuntimeLifecycleEpoch_ACU(),
+                source: 'failed_commit_rollback',
+            });
+            if (!envelope)
+                return false;
+            const hydrated = await hydrateStorageProviderFromSnapshot_ACU(envelope);
+            if (!hydrated.ok)
+                return false;
+        }
+        _set_currentJsonTableData_ACU(cloneTableData_ACU(preApplySnapshot));
+        logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 提交失败，已把运行时恢复到提交前（保留尚未写回聊天的脚本写入）。`);
+        return true;
+    }
+    catch (error) {
+        logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 按提交前快照恢复运行时失败，改为整体重载。`, error);
+        return false;
+    }
+}
+function assertNoActiveFillForExternalMutation_ACU(options) {
+    if (!EXTERNAL_MUTATION_SOURCES_ACU.has(options.source))
+        return;
+    if (!isAutoUpdatingCard_ACU)
+        return;
+    throw new TableUpdateCommitError_ACU(`[TableUpdateCommit] ${options.reason}: AI 填表正在进行中，已拒绝外部表格写入（source=${options.source}），请等待填表完成后重试。`, 'precondition');
+}
+function assertExpectedCommitScope_ACU(options, phase) {
+    if (options.chatKey === undefined && options.isolationKey === undefined)
+        return;
+    const currentChatKey = String(currentChatFileIdentifier_ACU || 'current-chat');
+    const expectedChatKey = String(options.chatKey ?? currentChatKey);
+    const currentIsolationKey = String(getCurrentIsolationKey_ACU() || '');
+    const expectedIsolationKey = String(options.isolationKey ?? currentIsolationKey);
+    if (currentChatKey !== expectedChatKey || currentIsolationKey !== expectedIsolationKey) {
+        throw new TableUpdateCommitError_ACU(`[TableUpdateCommit] ${options.reason}: ${phase} 检测到聊天或隔离标识已切换，已拒绝提交。请在当前聊天重新执行填表。`, 'precondition');
+    }
+}
+async function runTableUpdateCommit_ACU(options, apply) {
+    let requiresRuntimeReload = false;
+    let preApplySnapshotForRollback = null;
+    try {
+        assertNoActiveFillForExternalMutation_ACU(options);
+        assertExpectedCommitScope_ACU(options, '提交前');
+        const commitMode = options.commitMode ?? 'persist_v2';
+        if (commitMode === 'stage_only') {
+            // stage-only：不进入聊天写入路径。跳过 bridge gate 与 legacy 迁移——迁移可能写聊天帧，
+            // 且 staging 运行期间不应推进持久化拓扑。scope 复检已在函数入口执行。
+            return await runTableWriteTransaction_ACU({
+                source: options.source,
+                reason: options.reason,
+                chatKey: options.chatKey,
+                isolationKey: options.isolationKey ?? getCurrentIsolationKey_ACU(),
+                writeSet: options.writeSet,
+                baseRevision: options.baseRevision,
+                workingDataMode: options.workingDataMode,
+                initialData: options.initialData !== undefined ? options.initialData : currentJsonTableData_ACU,
+            }, async (transactionContext, workingData) => {
+                let commitRevisionWriteSet = options.revisionWriteSet;
+                return transactionContext.runCommit(async () => {
+                    assertExpectedCommitScope_ACU(options, 'stage 应用前');
+                    const applied = await apply({ transactionContext, workingData });
+                    if (!applied.success || !applied.tableData) {
+                        throw new TableUpdateCommitError_ACU(applied.error || `${options.reason}: stage apply failed`, applied.errorCategory || 'infrastructure');
+                    }
+                    commitRevisionWriteSet = applied.persist?.revisionWriteSet ?? options.revisionWriteSet;
+                    _set_currentJsonTableData_ACU(cloneTableData_ACU(applied.tableData));
+                    return {
+                        success: true,
+                        value: applied.value,
+                        tableData: applied.tableData,
+                        mutationResult: applied.mutationResult,
+                        saved: false,
+                        messageIndex: undefined,
+                    };
+                }, () => commitRevisionWriteSet);
+            });
+        }
+        // 普通表写入前统一恢复门：残留 provisional bridge 先自动 finalize/rollback。
+        // catch-up 自身携带 runId 时跳过——该 bridge 正是本次 run 建立的，不能提前汇合。
+        if (!options.manualCatchUpRunId) {
+            const bridgeGate = await ensureNoActiveProvisionalBridgeForCurrentScope_ACU({
+                chatKey: options.chatKey,
+                isolationKey: options.isolationKey ?? getCurrentIsolationKey_ACU(),
+            });
+            if (!bridgeGate.ok) {
+                return {
+                    success: false,
+                    error: bridgeGate.error,
+                    errorCategory: 'precondition',
+                };
+            }
+        }
+        const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU(options.reason);
+        if (!migration.success) {
+            return {
+                success: false,
+                error: migration.error || '旧存储迁移失败，已阻止本次写入。',
+                errorCategory: 'infrastructure',
+            };
+        }
+        if (migration.migrated) {
+            await reloadStorageProvider();
+        }
+        assertExpectedCommitScope_ACU(options, '迁移后');
+        await flushRuntimeOnlyPendingBeforeCommit_ACU(options);
+        assertExpectedCommitScope_ACU(options, '未落盘变更写回后');
+        return await runTableWriteTransaction_ACU({
+            source: options.source,
+            reason: options.reason,
+            chatKey: options.chatKey,
+            isolationKey: options.isolationKey ?? getCurrentIsolationKey_ACU(),
+            writeSet: options.writeSet,
+            baseRevision: options.baseRevision,
+            workingDataMode: options.workingDataMode,
+            initialData: options.initialData !== undefined ? options.initialData : currentJsonTableData_ACU,
+        }, async (transactionContext, workingData) => {
+            let commitRevisionWriteSet = options.revisionWriteSet;
+            return transactionContext.runCommit(async () => {
+                let rollbackBeforePersist;
+                try {
+                    assertExpectedCommitScope_ACU(options, '应用前');
+                    const preApplyData = workingData
+                        ? cloneTableData_ACU(workingData)
+                        : options.initialData
+                            ? cloneTableData_ACU(options.initialData)
+                            : null;
+                    preApplySnapshotForRollback = preApplyData;
+                    const reloadOnFailure = options.applyMutatesRuntime !== false && !options.skipChatSave;
+                    const applied = await apply({ transactionContext, workingData });
+                    if (!applied.success || !applied.tableData) {
+                        if (applied.runtimeMutated && reloadOnFailure)
+                            requiresRuntimeReload = true;
+                        throw new TableUpdateCommitError_ACU(applied.error || `${options.reason}: update apply failed`, applied.errorCategory || 'infrastructure');
+                    }
+                    // 运行时已变更、尚未落盘：此后任何失败（含抛异常）都要重载收敛。
+                    if (reloadOnFailure)
+                        requiresRuntimeReload = true;
+                    let saved = true;
+                    let messageIndex;
+                    const persistOptions = applied.persist || {};
+                    const revisionWriteSet = persistOptions.revisionWriteSet ?? options.revisionWriteSet;
+                    const targetSheetKeys = persistOptions.targetSheetKeys !== undefined ? persistOptions.targetSheetKeys : options.targetSheetKeys;
+                    const operations = persistOptions.operations ?? options.operations;
+                    commitRevisionWriteSet = revisionWriteSet;
+                    const staged = persistOptions.beforePersist
+                        ? await persistOptions.beforePersist(applied.tableData)
+                        : undefined;
+                    if (staged && typeof staged.rollback === 'function') {
+                        rollbackBeforePersist = staged.rollback;
+                    }
+                    if (!options.skipChatSave) {
+                        assertExpectedCommitScope_ACU(options, '持久化前');
+                        assertPersistableRowIdentities_ACU(applied.tableData, options.reason, targetSheetKeys);
+                        const saveResult = await persistTablesToChatMessage_ACU({
+                            targetMessageIndex: persistOptions.targetMessageIndex ?? options.targetMessageIndex,
+                            targetSheetKeys,
+                            updateGroupKeys: persistOptions.updateGroupKeys !== undefined ? persistOptions.updateGroupKeys : (options.updateGroupKeys ?? null),
+                            trackingSheetKeys: persistOptions.trackingSheetKeys !== undefined ? persistOptions.trackingSheetKeys : (options.trackingSheetKeys ?? []),
+                            tableData: applied.tableData,
+                            trackAsUpdate: persistOptions.trackAsUpdate ?? options.trackAsUpdate ?? false,
+                            source: options.source,
+                            operations,
+                            revisionWriteSet,
+                            forceCheckpoint: persistOptions.forceCheckpoint,
+                            checkpointReason: persistOptions.checkpointReason,
+                            manualRefillProgress: persistOptions.manualRefillProgress ?? options.manualRefillProgress,
+                            replaceExistingIncremental: persistOptions.replaceExistingIncremental ?? options.replaceExistingIncremental,
+                            strictSave: persistOptions.strictSave ?? options.strictSave,
+                            manualCatchUpRunId: options.manualCatchUpRunId,
+                            performanceRunId: options.performanceRunId,
+                            performanceParentSpanId: options.performanceParentSpanId,
+                            assumeCommitLock: true,
+                            transactionContext,
+                        });
+                        saved = saveResult.saved;
+                        messageIndex = saveResult.messageIndex;
+                        if (!saveResult.saved) {
+                            logWarn_ACU(`[TableUpdateCommit] persist failed after runtime update${reloadOnFailure ? '; reload after releasing transaction locks' : ''}: ${saveResult.error || 'unknown error'}`);
+                            throw new TableUpdateCommitError_ACU(saveResult.error || `${options.reason}: persist failed`, classifyPersistRejection_ACU(saveResult.error));
+                        }
+                    }
+                    else {
+                        markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, applied.tableData, preApplyData);
+                    }
+                    requiresRuntimeReload = false;
+                    _set_currentJsonTableData_ACU(cloneTableData_ACU(applied.tableData));
+                    return {
+                        success: true,
+                        value: applied.value,
+                        tableData: applied.tableData,
+                        mutationResult: applied.mutationResult,
+                        saved,
+                        messageIndex,
+                    };
+                }
+                catch (error) {
+                    if (rollbackBeforePersist)
+                        await rollbackBeforePersist();
+                    throw error;
+                }
+            }, () => commitRevisionWriteSet);
+        });
+    }
+    catch (error) {
+        if (requiresRuntimeReload && !(await restoreRuntimeKeepingPendingWrites_ACU(options, preApplySnapshotForRollback))) {
+            try {
+                await reloadStorageProvider();
+            }
+            catch (reloadError) {
+                logError_ACU(`[TableUpdateCommit] ${options.reason} failed to reload runtime after persistence failure:`, reloadError);
+            }
+        }
+        const message = error?.message || String(error);
+        const errorCategory = error instanceof TableUpdateCommitError_ACU
+            ? error.category
+            : 'infrastructure';
+        // 级别统一：仅 infrastructure 记 error；precondition/model 为预期内的拒绝/模型问题，
+        // 记 warn 并附统一可操作指引（等填表完成 / 切回当前聊天重做），避免刷 ERROR 噪音。
+        if (errorCategory === 'infrastructure') {
+            logError_ACU(`[TableUpdateCommit] ${options.reason} failed:`, error);
+        }
+        else {
+            logWarn_ACU(`[TableUpdateCommit] ${options.reason} 已跳过（${errorCategory}）：${message} 统一指引：外部写入请等待 AI 填表完成后重试；范围校验失败请切回当前聊天重新执行填表。`, error);
+        }
+        return {
+            success: false,
+            error: message,
+            errorCategory,
+        };
+    }
+}
+async function runSqliteRuntimeMutationCommit_ACU(options) {
+    return runTableUpdateCommit_ACU(options, async ({ workingData }) => {
+        const provider = await ensureStorageProviderReady_ACU();
+        const runtimeData = (workingData || currentJsonTableData_ACU);
+        const runtimeSql = runtimeData
+            ? rebindSqlMutationIdentifiers_ACU([options.sql], runtimeData)[0]
+            : options.sql;
+        const mutationResult = provider.executeMutation(runtimeSql, options.params);
+        if (mutationResult.errors?.length) {
+            return { success: false, error: mutationResult.errors.join(', '), mutationResult };
+        }
+        // executeMutation 内部已把本次写入同步到 canonical 视图并把同一份对象带回；
+        // 中间无 mutation，直接复用，省掉紧接着那次全库二次导出。视图未同步成功才回落导出。
+        const tableData = mutationResult.syncedView ?? provider.getCurrentData();
+        if (!tableData) {
+            return { success: false, error: 'SQLite runtime data export failed', mutationResult };
+        }
+        const validationError = options.validate?.({ mutationResult, tableData: tableData });
+        if (validationError) {
+            return { success: false, error: validationError, mutationResult, tableData: tableData };
+        }
+        const runtimeOperations = options.operations ? undefined : buildSqlSheetBatchOperations_ACU([runtimeSql], tableData, {
+            params: normalizeSqlBindParams_ACU(options.params),
+            fallbackTargetSheetKeys: options.targetSheetKeys || undefined,
+            allowSingleTargetFallback: true,
+            keepLegacyForUnclassified: true,
+            reason: 'manual_crud',
+        }).operations;
+        return {
+            success: true,
+            value: options.mapValue({ mutationResult, tableData: tableData }),
+            tableData: tableData,
+            mutationResult,
+            ...(runtimeOperations ? { persist: { operations: runtimeOperations } } : {}),
+        };
+    });
 }
 
 /**
@@ -112246,35 +112111,6 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
         await ops.loadAllChatMessages();
         setAutoUpdating(false);
         await ops.refreshData();
-        // 自动合并总结检测
-        let autoMergeTriggered = false;
-        let autoMergeSuccess = false;
-        try {
-            const { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } = await Promise.resolve().then(function () { return mergeLogic; });
-            const trigger = checkAutoMergeTrigger_ACU();
-            if (trigger.shouldTrigger) {
-                autoMergeTriggered = true;
-                const prepared = prepareAutoMergeBatches_ACU({
-                    startIndex: 0, endIndex: trigger.mergeCount, targetCount: 1,
-                    batchSize: 5, promptTemplate: '', isAutoMode: true,
-                });
-                let acc = [];
-                for (let i = 0; i < prepared.batches.length; i++) {
-                    const batchResult = await executeAutoMergeBatch_ACU(prepared, prepared.batches[i], acc);
-                    acc = batchResult.accumulatedSummary;
-                }
-                const mergeResult = await finalizeAutoMerge_ACU(prepared, acc);
-                if (mergeResult?.success !== true) {
-                    logWarn_ACU('[自动合并] 提交失败或返回无效结果，自动合并未成功。', mergeResult?.error);
-                }
-                else {
-                    autoMergeSuccess = true;
-                }
-            }
-        }
-        catch (e) {
-            logWarn_ACU('自动合并总结检测失败:', e);
-        }
         // 清理超出保留层数的旧数据
         try {
             await ops.purgeOldLayerData();
@@ -112288,8 +112124,6 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
             failedGroups: failedGroupKeys.length,
             totalGroups,
             errors: failedGroupErrors,
-            autoMergeTriggered,
-            autoMergeSuccess,
             ...(runnerUnavailableGroupKeys.length > 0
                 ? {
                     diagnosticCode: 'staging_runner_unavailable',
@@ -119682,34 +119516,6 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
             logWarn_ACU(`[Manual Update] 手动填表完成，但边界 checkpoint 建立异常: ${checkpointWarning}`);
             logError_ACU('[Manual Update] 边界 checkpoint 建立异常详情:', error);
         }
-        // 手动更新完成后检测自动合并总结
-        let autoMergeTriggered = false;
-        let autoMergeSuccess = false;
-        try {
-            const trigger = checkAutoMergeTrigger_ACU();
-            if (trigger.shouldTrigger) {
-                autoMergeTriggered = true;
-                const prepared = prepareAutoMergeBatches_ACU({
-                    startIndex: 0, endIndex: trigger.mergeCount, targetCount: 1,
-                    batchSize: 5, promptTemplate: '', isAutoMode: true,
-                });
-                let acc = [];
-                for (let i = 0; i < prepared.batches.length; i++) {
-                    const batchResult = await executeAutoMergeBatch_ACU(prepared, prepared.batches[i], acc);
-                    acc = batchResult.accumulatedSummary;
-                }
-                const mergeResult = await finalizeAutoMerge_ACU(prepared, acc);
-                if (mergeResult?.success !== true) {
-                    logWarn_ACU('[自动合并] 提交失败或返回无效结果，自动合并未成功。', mergeResult?.error);
-                }
-                else {
-                    autoMergeSuccess = true;
-                }
-            }
-        }
-        catch (e) {
-            logWarn_ACU('自动合并总结检测失败:', e);
-        }
         // 收尾：本次做过破坏性清理却一条数据批次都没写进去（例如范围内没有可填分组、分组全被模板范围挡掉）。
         // 与失败路径同源处理——回滚清理，避免「旧数据已删、什么都没写」还报成功的净损失。
         const zeroCommitRollback = await rollbackRefillCleanupOnZeroCommit();
@@ -119732,7 +119538,7 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
             }
         }
         return {
-            success: true, autoMergeTriggered, autoMergeSuccess, checkpointWarning, committedBucketCount, committedDataBucketCount,
+            success: true, checkpointWarning, committedBucketCount, committedDataBucketCount,
             ...(zeroCommitRollback.rolledBackCleanup ? { rolledBackCleanup: true } : {}),
         };
     }
@@ -119997,13 +119803,6 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
             showToastr_ACU('warning', firstError
                 ? `并发分组更新有 ${result.failedGroups} 组失败：${firstError}`
                 : `并发分组更新有 ${result.failedGroups} 组失败，请查看日志。`);
-        }
-        if (result.autoMergeTriggered && result.autoMergeSuccess) {
-            showToastr_ACU('success', '自动合并纪要完成！');
-            try {
-                topLevelWindow_ACU.AutoCardUpdaterAPI._notifyTableUpdate();
-            }
-            catch (_) { }
         }
         if (typeof updateCardUpdateStatusDisplay_ACU === 'function')
             updateCardUpdateStatusDisplay_ACU();
@@ -121892,10 +121691,6 @@ async function handleManualUpdate_ACU() {
             showToastr_ACU(result.checkpointWarning ? 'warning' : 'success', result.checkpointWarning ? `手动更新完成，但 AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}` : '手动更新完成！');
             updateStatusDisplay();
             notifyTableUpdate();
-            if (result.autoMergeTriggered && result.autoMergeSuccess) {
-                showToastr_ACU('success', '自动合并纪要完成！');
-                notifyTableUpdate();
-            }
         }
         else if (result.error) {
             // 区分 warning 和 error 类型
@@ -130091,17 +129886,17 @@ async function notifyAcuTauriVersionIfOutdated_ACU() {
  * 纯业务逻辑
  */
 function prepareStrategy1Context_ACU(lastMessage) {
-    if (!lastMessage || !lastMessage.is_user || lastMessage._plot_processed) {
+    if (!lastMessage || !lastMessage.is_user || isPlotMessageProcessed_ACU(lastMessage)) {
         return null;
     }
     const messageToProcess = lastMessage.mes;
     if (!messageToProcess || !messageToProcess.trim()) {
         return null;
     }
-    lastMessage._plot_processed = true;
+    markPlotMessageProcessed_ACU(lastMessage);
     const originalInputHash = hashUserInput_ACU(messageToProcess);
-    lastMessage._qrf_plot_pending_hash = originalInputHash;
-    logDebug_ACU('[剧情推进] [Plot] 在消息对象上保存原始输入哈希:', originalInputHash);
+    setPlotPendingHash_ACU(lastMessage, originalInputHash);
+    logDebug_ACU('[剧情推进] [Plot] 为消息登记原始输入哈希（运行时标记，不落盘）:', originalInputHash);
     return { messageToProcess, originalInputHash };
 }
 // ============================================================
@@ -130163,7 +129958,8 @@ async function orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageInd
     }
     catch (error) {
         logError_ACU('[剧情推进] Error processing last chat message:', error);
-        delete lastMessage._plot_processed;
+        clearPlotMessageProcessed_ACU(lastMessage);
+        clearPlotPendingHash_ACU(lastMessage);
         return { action: 'no_match' };
     }
     finally {
@@ -136397,6 +136193,11 @@ function isRetryableContinuationTransportError_ACU(error) {
     // 自造的类，instanceof 判定安全，保留。
     if (error?.name === 'AbortError')
         return false;
+    // 带 HTTP 状态码的错误按状态判定（R8-08）：401/403/404 这类配置错误重打只会按次数加延时空转，
+    // 408/429/5xx 才是瞬时失败。没有状态码的错误维持原先的宽松重试。
+    const status = Number(error?.status);
+    if (Number.isFinite(status) && status > 0)
+        return status === 408 || status === 429 || (status >= 500 && status <= 599);
     return true;
 }
 /**
@@ -154417,7 +154218,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261008-06";
+        const stamp = "20261008-07";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -172786,9 +172587,6 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
  *   与模板初始化。影响面：seedRows 是辅助字段，可视化器既不展示也不以它为保存来源
  *   （保存时的 seedRows 取自模板/Guide），故最坏结果是运行时 seedRows 偏旧到下一次真重载，
  *   **不会写错用户数据**。若将来可视化器开始展示/保存 seedRows，必须先给这条路径加发布。
- * - `service/summary/merge-logic.ts` 的 `table.content = ...`：跨一次 await 就地赋值，但紧随其后
- *   的 `runTableUpdateCommit_ACU` 会用 clone 发布把内容归一（失败则回滚到原 content），净效果被
- *   发布覆盖，引用键因此仍能收敛。
  *
  * 刻意不做内容哈希：整库序列化与一次全量重载同量级，做了等于把优化换成另一种开销。
  * 漏检方向是保守的：引用键漏检只会少一次重载（读到与上次相同引用的数据），
@@ -205499,9 +205297,7 @@ function useManualUpdate() {
             // 成功+回滚时不能说「完成」：本次一个数据批次都没写进去，只是把删掉的旧数据还回来了。
             const successText = result.rolledBackCleanup
                 ? '手动填表未写入任何数据，已回滚清理。'
-                : `${result.autoMergeTriggered
-                    ? `手动填表完成;自动合并总结${result.autoMergeSuccess ? '已完成' : '未完成'}。`
-                    : '手动填表完成。'}`;
+                : '手动填表完成。';
             finishToast(result.success ? (result.checkpointWarning || result.rolledBackCleanup ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'), result.success
                 ? `${successText}${result.rolledBackCleanup ? '' : rollbackNote}${result.checkpointWarning
                     ? ` 但 AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}`

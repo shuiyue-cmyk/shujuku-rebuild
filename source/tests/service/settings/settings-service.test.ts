@@ -586,15 +586,14 @@ describe('applyCombinedSettingsImport_ACU', () => {
     expect(mockSettings.charCardPrompt).toEqual([{ role: 'USER', content: '新提示词' }]);
   });
 
-  it('导入合并设置字段', () => {
+  it('导入合并设置字段；R8-03：自动合并已停用，导入 autoMergeEnabled: true 也不会打开', () => {
     const fields = applyCombinedSettingsImport_ACU({
       autoMergeEnabled: true,
       autoMergeThreshold: 30,
       mergeBatchSize: 10,
     });
-    expect(fields).toContain('autoMergeEnabled');
     expect(fields).toContain('autoMergeThreshold');
-    expect(mockSettings.autoMergeEnabled).toBe(true);
+    expect(mockSettings.autoMergeEnabled).toBe(false);
     expect(mockSettings.autoMergeThreshold).toBe(30);
     expect(mockSettings.mergeBatchSize).toBe(10);
   });

@@ -670,3 +670,45 @@ describe('parseAndApplyTableEditsToData_ACU', () => {
     expect(data.sheet_0.seedRows).toEqual([['', '铁剑'], [null, '药水'], ['fixed', '护符']]);
   });
 });
+
+describe('R8-04：DSL 解析前的归一化不改写 JSON 字符串内的内容', () => {
+  const makeData = () => ({
+    sheet_0: {
+      uid: 'sheet_0',
+      name: '角色表',
+      content: [['row_id', 'desc', 'mark']],
+      updateConfig: {},
+    },
+  });
+
+  it('全角冒号、\n 转义与 \'+\' 在单元格里原样保留（\n 解码为真换行）', () => {
+    const data = makeData();
+    parseAndApplyTableEditsToData_ACU(
+      `<tableEdit>insertRow(0, {"0":"身份：剑士\n第二行", "1":"'+'"})</tableEdit>`,
+      data,
+      'standard',
+    );
+    expect(data.sheet_0.content[1][1]).toBe('身份：剑士\n第二行');
+    expect(data.sheet_0.content[1][2]).toBe("'+'");
+  });
+
+  it('JSON 字符串跨多行书写时保留换行而不是拼成空格', () => {
+    const data = makeData();
+    parseAndApplyTableEditsToData_ACU(
+      '<tableEdit>\ninsertRow(0, {"0":"第一行\n第二行", "1":"x"})\n</tableEdit>',
+      data,
+      'standard',
+    );
+    expect(data.sheet_0.content[1][1]).toBe('第一行\n第二行');
+  });
+
+  it('字符串外的全角冒号与整段转义换行仍做容错', () => {
+    const data = makeData();
+    parseAndApplyTableEditsToData_ACU(
+      '<tableEdit>insertRow(0, {"0"："甲", "1":"乙"})\ninsertRow(0, {"0":"丙", "1":"丁"})</tableEdit>',
+      data,
+      'standard',
+    );
+    expect(data.sheet_0.content.slice(1).map(row => row.slice(1))).toEqual([['甲', '乙'], ['丙', '丁']]);
+  });
+});

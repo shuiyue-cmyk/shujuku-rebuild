@@ -188,6 +188,16 @@ describe('isRetryableContinuationTransportError_ACU', () => {
     expect(isRetryableContinuationTransportError_ACU(Object.assign(Object.create(null), { name: 'AbortError' }))).toBe(false);
   });
 
+  it('R8-08：带 HTTP 状态码的错误按状态判定：401/403/404 不重试，408/429/5xx 重试', () => {
+    const http = (status: number) => Object.assign(new Error(`API 请求失败: ${status}`), { status });
+    expect(isRetryableContinuationTransportError_ACU(http(401))).toBe(false);
+    expect(isRetryableContinuationTransportError_ACU(http(403))).toBe(false);
+    expect(isRetryableContinuationTransportError_ACU(http(404))).toBe(false);
+    expect(isRetryableContinuationTransportError_ACU(http(408))).toBe(true);
+    expect(isRetryableContinuationTransportError_ACU(http(429))).toBe(true);
+    expect(isRetryableContinuationTransportError_ACU(http(502))).toBe(true);
+  });
+
   it('传输层错误可重试；续写自身的校验错误不可重试', () => {
     expect(isRetryableContinuationTransportError_ACU(new Error('502 Bad Gateway'))).toBe(true);
     expect(isRetryableContinuationTransportError_ACU(new TypeError('Failed to fetch'))).toBe(true);

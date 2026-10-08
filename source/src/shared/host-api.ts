@@ -69,12 +69,8 @@ export interface ChatMessageACUExtensions {
     TavernDB_ACU_ModifiedKeys?: string[];
     /** ACU 更新组 key 列表 */
     TavernDB_ACU_UpdateGroupKeys?: string[];
-    /** 剧情处理标记 */
-    _plot_processed?: boolean;
     /** QRF 来自规划标记 */
     _qrf_from_planning?: boolean;
-    /** QRF 剧情待处理哈希 */
-    _qrf_plot_pending_hash?: string;
     /** QRF 剧情推进轮次身份；用于精确定位与失败重试。 */
     _qrf_plot_round_id?: string;
     /** QRF 剧情推进任务级结果映射（key=taskId, value=该任务的推进内容） */

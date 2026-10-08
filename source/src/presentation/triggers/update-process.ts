@@ -435,10 +435,6 @@ export async function handleManualUpdate_ACU() {
             updateStatusDisplay();
             notifyTableUpdate();
 
-            if (result.autoMergeTriggered && result.autoMergeSuccess) {
-                showToastr_ACU('success', '自动合并纪要完成！');
-                notifyTableUpdate();
-            }
         } else if (result.error) {
             // 区分 warning 和 error 类型
             const warningMessages = ['正在进行中', '聊天记录为空', '尚未检测到', '未选择', '未找到可用'];

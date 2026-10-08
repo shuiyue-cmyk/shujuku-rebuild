@@ -59,6 +59,7 @@ import {
   replaceDbSqlVariables
 } from '../runtime/template-vars/sql-query-var';
 import { isAiFloor_ACU } from '../../shared/ai-floor';
+import { createUntrustedTemplateGuard_ACU } from '../../shared/untrusted-template-guard';
 /**
  * service/optimization/content-optimization.ts — 正文优化服务逻辑
  * 从 src/core/02_storage_and_profile.js:630~1325 迁移而来。
@@ -186,19 +187,25 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
       
      // 替换占位符并转换role为小写（某些API如豆包只接受小写role）
      const messages = JSON.parse(JSON.stringify(promptGroup));
+     // 不可信内容（正文与 $1/$5/$6/$7/$8/$U/$C 的值）先换成 nonce token，模板解释器跑完再一次性还原（R8-05）：
+     // 原先先插入正文再逐个替换占位符，正文里的「$5」「$C级」被换成纪要/角色描述，`$&` `$'` 被展开，
+     // 正文里的 <if>/随机数/{[sql…]} 标签还会被当成模板执行。占位符只在可信模板本身里扫描、单遍替换。
+     const untrustedValues: Record<string, string> = { $CONTENT: String(content ?? '') };
+     for (const [key, value] of Object.entries(placeholders)) {
+       if (value && typeof value === 'string') untrustedValues[key] = value;
+     }
+     const untrustedGuard = createUntrustedTemplateGuard_ACU([
+       ...messages.map((item: any) => (typeof item?.content === 'string' ? item.content : '')),
+       ...Object.values(untrustedValues),
+     ], 'CONTENT_OPTIMIZATION_UNTRUSTED');
      messages.forEach((item: any) => {
        if (item.content && typeof item.content === 'string') {
-         // 替换 $CONTENT 占位符
-         item.content = item.content.replace(/\$CONTENT/g, content);
           // 最大替换项数同步设置：默认提示词写死 1-10，这里按配置改写数量行（存量预设同样生效）
           item.content = item.content.replace(/优化项数量：1-10个/g, `优化项数量：1-${maxLength}个`);
-         // 替换剧情推进占位符
-         for (const [key, value] of Object.entries(placeholders)) {
-           if (value && typeof value === 'string') {
-             const regex = new RegExp(`\\${key}`, 'g');
-             item.content = item.content.replace(regex, value);
-           }
-         }
+         // $CONTENT 与剧情推进占位符：一次全局正则 + 替换函数，值以 token 进入模板
+         item.content = item.content.replace(/\$(?:CONTENT|1|5|6|7|8|U|C)(?![0-9A-Za-z_])/g, (match: string) => (
+           Object.prototype.hasOwnProperty.call(untrustedValues, match) ? untrustedGuard.protect(untrustedValues[match]) : match
+         ));
          
          // [新增] 条件模板支持：随机数、计算变量、条件判断
          // 1. 解析随机数标签
@@ -232,6 +239,7 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
            plotContent: latestPlotContentForConditional
          };
          item.content = parseIfBlockRecursive_ACU(item.content, contextForIf, 0);
+         item.content = untrustedGuard.restore(item.content);
        }
        // 转换role为小写
        if (item.role && typeof item.role === 'string') {
@@ -242,14 +250,24 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
      // 3. 调用AI API（带自动重试）
      const apiPreset = config.apiPreset || '';
      logDebug_ACU(`[正文优化] 使用API预设: ${apiPreset || '当前配置'}`);
-     
+     // 取消（R8-11）：本轮登记一个 AbortController，取消时中断在途请求；每次请求与退避前后复核取消代次，
+     // 已排队的重试不再发出。代次而非全局布尔：旧取消残留的标志不能误伤之后新发起的优化。
+     const cancelGeneration = contentOptimizationCancelGeneration_ACU;
+     const abortController = new AbortController();
+     activeContentOptimizationAbortControllers_ACU.add(abortController);
+     const assertRunNotCancelled = () => {
+       if (contentOptimizationCancelGeneration_ACU !== cancelGeneration) throw new Error('用户终止正文优化');
+     };
+     try {
+
      let lastError = null;
      let responseContent = null;
-     
+
      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+       assertRunNotCancelled();
        try {
         logDebug_ACU(`[正文优化] 调用AI API... (尝试 ${attempt}/${maxRetries})`);
-        responseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, undefined, { needsJsonFormat: true, sessionNamespace: 'content-replace' });
+        responseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, abortController.signal, { needsJsonFormat: true, sessionNamespace: 'content-replace' });
          
          if (responseContent) {
            // API调用成功，跳出重试循环
@@ -260,9 +278,10 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
          lastError = new Error('AI API 返回空响应');
          logDebug_ACU(`[正文优化] API返回空响应，尝试 ${attempt}/${maxRetries}`);
        } catch (error) {
+         assertRunNotCancelled();
          lastError = error;
          logError_ACU(`[正文优化] API调用失败 (尝试 ${attempt}/${maxRetries}):`, error);
-         
+
          if (attempt < maxRetries) {
            // 等待一段时间后重试（指数退避：1秒、2秒、4秒...）
            const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
@@ -271,6 +290,7 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
          }
        }
      }
+     assertRunNotCancelled();
      
      // 检查是否所有重试都失败
      if (!responseContent) {
@@ -337,14 +357,16 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
          const delayMs = Math.min(1000 * Math.pow(2, parseAttempt - 1), 10000);
          logDebug_ACU(`[正文优化] 等待 ${delayMs}ms 后重新请求优化结果...`);
          await new Promise(resolve => setTimeout(resolve, delayMs));
-         
+         assertRunNotCancelled();
+
          try {
            logDebug_ACU(`[正文优化] 重新调用AI API以获取更干净的优化结果... (尝试 ${parseAttempt + 1}/${maxRetries})`);
-           parseRetryResponseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, undefined, { needsJsonFormat: true, sessionNamespace: 'content-replace' });
+           parseRetryResponseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, abortController.signal, { needsJsonFormat: true, sessionNamespace: 'content-replace' });
            if (!parseRetryResponseContent) {
              throw new Error('重试请求未返回有效内容');
            }
          } catch (retryError) {
+           assertRunNotCancelled();
            parseLastError = retryError;
            logError_ACU(`[正文优化] 解析失败后的重新请求失败 (尝试 ${parseAttempt + 1}/${maxRetries}):`, retryError);
            if (parseAttempt >= maxRetries - 1) {
@@ -355,29 +377,11 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
      }
      
      return { success: false, error: parseLastError?.message || '解析失败' };
+     } finally {
+       activeContentOptimizationAbortControllers_ACU.delete(abortController);
+     }
    }
-  
-  /**
-   * 获取正文优化使用的API配置（酒馆主 API 已剥离，恒为自定义模式）
-   */
-  async function getOptimizationApiConfig_ACU(presetName: string) {
-    if (presetName && settings_ACU.apiPresets) {
-      const preset = settings_ACU.apiPresets.find((p: any) => p.name === presetName);
-      if (preset) {
-        return {
-          apiMode: 'custom' as const,
-          apiConfig: preset.apiConfig
-        };
-      }
-    }
-    
-    // 使用当前默认配置
-    return {
-      apiMode: 'custom' as const,
-      apiConfig: settings_ACU.apiConfig,
-    };
-  }
-  
+
   /**
    * 解析AI返回的优化响应
    * @param {string} responseContent - AI返回的内容
@@ -663,6 +667,9 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
   
  
   export let contentOptimizationAbortRequested_ACU = false;
+  /** 每次取消递增；运行中的优化据此判断自己是否已被取消（R8-11）。 */
+  let contentOptimizationCancelGeneration_ACU = 0;
+  const activeContentOptimizationAbortControllers_ACU = new Set<AbortController>();
   export let optimizationProgressToast_ACU: any = null;
   let lastOptimizedMessageMeta_ACU: any = null;
 
@@ -772,6 +779,10 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
    */
   export function cancelContentOptimization_ACU(reason = '正文优化已由用户终止。'): { cancelled: boolean; reason: string } {
     contentOptimizationAbortRequested_ACU = true;
+    contentOptimizationCancelGeneration_ACU += 1;
+    for (const controller of activeContentOptimizationAbortControllers_ACU) {
+      try { controller.abort(); } catch { /* 中断失败不影响取消标志 */ }
+    }
     return { cancelled: true, reason };
   }
 

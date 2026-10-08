@@ -197,6 +197,10 @@ export function isRetryableContinuationTransportError_ACU(error: unknown): boole
   // （同文件 isAbortError），本库 api-call.ts 亦同口径。ContinuationValidationError 是本 realm
   // 自造的类，instanceof 判定安全，保留。
   if ((error as { name?: unknown } | null | undefined)?.name === 'AbortError') return false;
+  // 带 HTTP 状态码的错误按状态判定（R8-08）：401/403/404 这类配置错误重打只会按次数加延时空转，
+  // 408/429/5xx 才是瞬时失败。没有状态码的错误维持原先的宽松重试。
+  const status = Number((error as { status?: unknown } | null | undefined)?.status);
+  if (Number.isFinite(status) && status > 0) return status === 408 || status === 429 || (status >= 500 && status <= 599);
   return true;
 }
 

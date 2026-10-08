@@ -264,8 +264,6 @@ export interface AutoUpdateResult {
     diagnosticCode?: 'staging_runner_unavailable';
     /** 稳定结构化诊断字段：标记因缺少 staging runner 而失败的组 key；不含聊天内容。 */
     diagnostic?: { stagingGroupKeys: string[]; requiresBoundaryStaging: boolean; aiStarted: false };
-    autoMergeTriggered?: boolean;
-    autoMergeSuccess?: boolean;
 }
 
 /**
@@ -440,34 +438,6 @@ export async function executeAutoUpdatePlan_ACU(
     setAutoUpdating(false);
     await ops.refreshData();
 
-    // 自动合并总结检测
-    let autoMergeTriggered = false;
-    let autoMergeSuccess = false;
-    try {
-        const { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } = await import('../summary/merge-logic');
-        const trigger = checkAutoMergeTrigger_ACU();
-        if (trigger.shouldTrigger) {
-            autoMergeTriggered = true;
-            const prepared = prepareAutoMergeBatches_ACU({
-                startIndex: 0, endIndex: trigger.mergeCount, targetCount: 1,
-                batchSize: 5, promptTemplate: '', isAutoMode: true,
-            });
-            let acc: any[] = [];
-            for (let i = 0; i < prepared.batches.length; i++) {
-                const batchResult = await executeAutoMergeBatch_ACU(prepared, prepared.batches[i], acc);
-                acc = batchResult.accumulatedSummary;
-            }
-            const mergeResult = await finalizeAutoMerge_ACU(prepared, acc);
-            if (mergeResult?.success !== true) {
-                logWarn_ACU('[自动合并] 提交失败或返回无效结果，自动合并未成功。', mergeResult?.error);
-            } else {
-                autoMergeSuccess = true;
-            }
-        }
-    } catch (e) {
-        logWarn_ACU('自动合并总结检测失败:', e);
-    }
-
     // 清理超出保留层数的旧数据
     try {
         await ops.purgeOldLayerData();
@@ -481,8 +451,6 @@ export async function executeAutoUpdatePlan_ACU(
         failedGroups: failedGroupKeys.length,
         totalGroups,
         errors: failedGroupErrors,
-        autoMergeTriggered,
-        autoMergeSuccess,
         ...(runnerUnavailableGroupKeys.length > 0
             ? {
                 diagnosticCode: 'staging_runner_unavailable' as const,

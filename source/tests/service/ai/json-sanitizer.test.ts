@@ -32,8 +32,11 @@ describe('normalizeQuotesLayer_ACU', () => {
   it('全角双引号转标准双引号', () => {
     expect(normalizeQuotesLayer_ACU('\uFF02test\uFF02')).toBe('"test"');
   });
-  it('「」转标准双引号', () => {
+  it('「」在字符串外当定界符时转标准双引号', () => {
     expect(normalizeQuotesLayer_ACU('「test」')).toBe('"test"');
+  });
+  it('R8-10：标准双引号字符串里的「」『』是对白括号，原样保留', () => {
+    expect(normalizeQuotesLayer_ACU('{"0":"他说「你好」『二』", 「k」:1}')).toBe('{"0":"他说「你好」『二』", "k":1}');
   });
   it('标准双引号不变', () => {
     expect(normalizeQuotesLayer_ACU('"test"')).toBe('"test"');

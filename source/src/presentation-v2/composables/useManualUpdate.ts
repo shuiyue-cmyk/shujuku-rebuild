@@ -590,9 +590,7 @@ export function useManualUpdate(): ManualUpdateState {
       // 成功+回滚时不能说「完成」：本次一个数据批次都没写进去，只是把删掉的旧数据还回来了。
       const successText = result.rolledBackCleanup
         ? '手动填表未写入任何数据，已回滚清理。'
-        : `${result.autoMergeTriggered
-            ? `手动填表完成;自动合并总结${result.autoMergeSuccess ? '已完成' : '未完成'}。`
-            : '手动填表完成。'}`;
+        : '手动填表完成。';
       finishToast(
         result.success ? (result.checkpointWarning || result.rolledBackCleanup ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'),
         result.success

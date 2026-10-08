@@ -50,6 +50,7 @@ import {
 import {
   isSqliteMode
 } from '../../table/storage-mode';
+import { createUntrustedTemplateGuard_ACU } from '../../../shared/untrusted-template-guard';
 
 /**
  * The request reached a provider successfully, but its body contained no
@@ -64,59 +65,6 @@ export class RetryableAiResponseError_ACU extends Error {
     this.name = 'RetryableAiResponseError';
   }
 }
-
-  function createPromptTemplateNonce_ACU(): string {
-    try {
-      const randomUUID = (globalThis as any)?.crypto?.randomUUID;
-      if (typeof randomUUID === 'function') {
-        const uuid = String(randomUUID.call((globalThis as any).crypto) || '');
-        if (uuid) return uuid.replace(/[^a-zA-Z0-9_-]/g, '');
-      }
-    } catch { /* 老宿主无 crypto 时走带进程内熵的兜底 */ }
-    return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
-  }
-
-  /**
-   * 把不可信 payload 变成对 EJS/random/SQL/ORM/if 均惰性的 nonce token。
-   * 所有候选 token 都对本轮可信模板与全部不可信源做包含检查；即使随机源重复或
-   * payload 猜中候选，也会继续换一个 token，避免恢复时覆盖/串值。
-   */
-  function createUntrustedTemplateGuard_ACU(reservedValues: unknown[]) {
-    const occupiedTexts = reservedValues.map(value => value === null || value === undefined ? '' : String(value));
-    const tokenValues = new Map<string, string>();
-    const valueTokens = new Map<string, string>();
-    let tokenIndex = 0;
-
-    const buildToken = (): string => {
-      for (let attempt = 0; attempt < 1024; attempt += 1) {
-        const nonce = createPromptTemplateNonce_ACU() || 'fallback';
-        const token = `__ACU_TABLE_FILL_UNTRUSTED_${nonce}_${tokenIndex++}__`;
-        if (tokenValues.has(token)) continue;
-        if (occupiedTexts.some(text => text.includes(token))) continue;
-        occupiedTexts.push(token);
-        return token;
-      }
-      throw new Error('table_fill_untrusted_placeholder_nonce_collision');
-    };
-
-    return {
-      protect(value: unknown): string {
-        const text = value === null || value === undefined ? '' : String(value);
-        if (!text) return '';
-        const existing = valueTokens.get(text);
-        if (existing) return existing;
-        const token = buildToken();
-        valueTokens.set(text, token);
-        tokenValues.set(token, text);
-        return token;
-      },
-      restore(value: unknown): string {
-        let restored = value === null || value === undefined ? '' : String(value);
-        for (const [token, payload] of tokenValues) restored = restored.split(token).join(payload);
-        return restored;
-      },
-    };
-  }
 
   function normalizeRoleForApi_ACU(role: any) {
     const ru = String(role || '').toUpperCase();
@@ -247,13 +195,14 @@ export class RetryableAiResponseError_ACU extends Error {
         ...promptSegments.map(segment => segment?.content ?? ''),
         ...Object.values(untrustedPlaceholderValues),
         ...resolvedTableTokensBySegment.flat().map(token => token.value),
-    ]);
+    ], 'TABLE_FILL_UNTRUSTED');
 
     try {
         for (let segmentIndex = 0; segmentIndex < promptSegments.length; segmentIndex += 1) {
             const segment = promptSegments[segmentIndex];
             let finalContent = String(segment?.content ?? '');
-            finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)/g, (match: string) => (
+            // 右边界（R8-13）：可信提示词里的「$100」「$Cx」不是占位符；后跟中文/标点照常替换。
+            finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)(?![0-9A-Za-z_])/g, (match: string) => (
                 untrustedGuard.protect(untrustedPlaceholderValues[match])
             ));
             for (const token of resolvedTableTokensBySegment[segmentIndex] || []) {
@@ -488,6 +437,24 @@ export class RetryableAiResponseError_ACU extends Error {
             result += data.delta.text;
           } else if (data?.type === 'message_stop') {
             sawDone = true;
+          }
+          // 其它协议的结束与增量（R8-07）：不认这些信号时，正常结束的流会被判截断、返回 null 后整段重试。
+          // - OpenAI 兼容：部分代理只给 finish_reason 不发 [DONE]；
+          // - Responses：response.output_text.delta 增量，response.completed 结束；
+          // - Gemini：candidates[0].content.parts[].text 增量，finishReason 结束（没有 [DONE]）。
+          if (data?.choices?.[0]?.finish_reason) sawDone = true;
+          if (data?.type === 'response.output_text.delta' && typeof data?.delta === 'string') {
+            result += data.delta;
+          } else if (data?.type === 'response.completed') {
+            sawDone = true;
+          }
+          const geminiCandidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
+          if (geminiCandidate && typeof geminiCandidate === 'object') {
+            const parts = Array.isArray(geminiCandidate?.content?.parts) ? geminiCandidate.content.parts : [];
+            for (const part of parts) {
+              if (typeof part?.text === 'string' && part.thought !== true) result += part.text;
+            }
+            if (geminiCandidate.finishReason) sawDone = true;
           }
         } catch {
           // 忽略无法解析的 data 行（注释/空行）
