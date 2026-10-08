@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * tests/presentation/triggers/settings-ui-connect-core-apis.test.ts
- * attemptToLoadCoreApis_ACU 装配 + fetchModelsAndConnect_ACU 协议透传 集成测试
+ * attemptToLoadCoreApis_ACU 装配集成测试
  *
  * 核心回归：TT 裸环境（无酒馆助手）下，装配点必须把 TavernHelper_API_ACU 换成
  * buildTavernHelperCompat_ACU 的三级后端产物，让 worldbook-gateway 的世界书链路
@@ -13,41 +13,26 @@ const m = vi.hoisted(() => {
   const fakeHostWin: any = {};
   return {
     hostWin: fakeHostWin,
-    fetchAvailableModels: vi.fn(async () => ({ success: true, models: ['gpt-test'] })),
     showToast: vi.fn(),
     settings: {
       apiConfig: { url: 'https://api.test/v1', apiKey: 'k', model: 'gpt-test', customApiFormat: 'claude_messages' },
       contentOptimizationSettings: {},
     },
-    modelSelect: { empty: vi.fn(), append: vi.fn(), find: vi.fn(() => ({ length: 0 })) },
-    statusDisplay: (() => {
-      const el: any = { text: vi.fn(), css: vi.fn(), html: vi.fn() };
-      el.text.mockReturnValue(el);
-      el.css.mockReturnValue(el);
-      el.html.mockReturnValue(el);
-      return el;
-    })(),
-    urlInput: { val: vi.fn(() => 'https://api.test/v1') },
-    keyInput: { val: vi.fn(() => 'secret-key') },
   };
 });
-m.modelSelect.empty.mockReturnValue(m.modelSelect);
 
 vi.mock('../../../src/shared/runtime-env', () => ({
   getHostWindow: () => m.hostWin,
 }));
-vi.mock('../../../src/service/ai/ai-service', () => ({
-  fetchAvailableModels_ACU: m.fetchAvailableModels,
-}));
 vi.mock('../../../src/presentation/theme/toast', () => ({ showToastr_ACU: m.showToast }));
-vi.mock('../../../src/presentation/state/ui-refs', () => ({
-  $popupInstance_ACU: {},
-  $customApiUrlInput_ACU: m.urlInput,
-  $customApiKeyInput_ACU: m.keyInput,
-  $customApiModelSelect_ACU: m.modelSelect,
-  $apiStatusDisplay_ACU: m.statusDisplay,
-}));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
+  autoFillDebounceTimer_ACU: null,
+  isAutoUpdatingCard_ACU: false,
+  wasStoppedByUser_ACU: false,
+  _set_autoFillDebounceTimer_ACU: vi.fn(),
+  _set_isAutoUpdatingCard_ACU: vi.fn(),
+  _set_wasStoppedByUser_ACU: vi.fn(),
+  _set_manualExtraHint_ACU: vi.fn(),
   NEW_MESSAGE_DEBOUNCE_DELAY_ACU: 500,
   AI_MATERIALIZATION_MAX_RETRIES_ACU: 3,
   AI_MATERIALIZATION_RETRY_DELAY_MS_ACU: 100,
@@ -58,15 +43,6 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   settings_ACU: m.settings,
   _set_coreApisAreReady_ACU: vi.fn(),
   _set_lastTotalAiMessages_ACU: vi.fn(),
-}));
-vi.mock('../../../src/presentation/components/plot-editors', () => ({
-  autoFillDebounceTimer_ACU: null,
-  isAutoUpdatingCard_ACU: false,
-  wasStoppedByUser_ACU: false,
-  _set_autoFillDebounceTimer_ACU: vi.fn(),
-  _set_isAutoUpdatingCard_ACU: vi.fn(),
-  _set_wasStoppedByUser_ACU: vi.fn(),
-  _set_manualExtraHint_ACU: vi.fn(),
 }));
 vi.mock('../../../src/service/worldbook/pipeline', () => ({ loadAllChatMessages_ACU: vi.fn() }));
 vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger', () => ({ triggerAutomaticUpdateIfNeeded_ACU: vi.fn() }));
@@ -91,7 +67,7 @@ import {
   _set_SillyTavern_API_ACU,
   _set_TavernHelper_API_ACU,
 } from '../../../src/shared/host-api';
-import { attemptToLoadCoreApis_ACU, fetchModelsAndConnect_ACU } from '../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect';
+import { attemptToLoadCoreApis_ACU } from '../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect';
 import {
   isWorldbookApiAvailable_ACU,
   listLorebooks_ACU,
@@ -224,20 +200,5 @@ describe('attemptToLoadCoreApis_ACU 装配三级后端', () => {
     expect(context.getWorldInfoNames).toHaveBeenCalledTimes(1);
     await (SillyTavern_API_ACU as any).loadWorldInfo('剧情书');
     expect(context.loadWorldInfo).toHaveBeenCalledWith('剧情书');
-  });
-});
-
-describe('fetchModelsAndConnect_ACU 透传 customApiFormat', () => {
-  it('把 settings_ACU.apiConfig.customApiFormat 作为第三参传给 fetchAvailableModels_ACU', async () => {
-    await fetchModelsAndConnect_ACU();
-
-    expect(m.fetchAvailableModels).toHaveBeenCalledWith('https://api.test/v1', 'secret-key', 'claude_messages', { force: true });
-  });
-
-  it('未配置协议时传空串（保持 service 侧默认分流）', async () => {
-    m.settings.apiConfig = { ...m.settings.apiConfig, customApiFormat: undefined };
-    await fetchModelsAndConnect_ACU();
-
-    expect(m.fetchAvailableModels).toHaveBeenCalledWith('https://api.test/v1', 'secret-key', '', { force: true });
   });
 });

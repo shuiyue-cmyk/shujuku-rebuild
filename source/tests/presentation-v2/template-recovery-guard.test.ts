@@ -13,12 +13,12 @@ async function importGuard() {
   }));
 
   setActivePinia(createPinia());
-  const [{ ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU }, { useDialogStore }] = await Promise.all([
+  const [{ ensureTemplateRecoveryReady_ACU }, { useDialogStore }] = await Promise.all([
     import('../../src/presentation-v2/composables/useTemplateRecoveryGuard'),
     import('../../src/presentation-v2/stores/dialog-store'),
   ]);
   return {
-    ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU,
+    ensureTemplateRecoveryReady_ACU,
     useDialogStore,
     validateCurrentChatTableRecovery_ACU,
   };
@@ -30,9 +30,9 @@ beforeEach(() => {
 
 describe('useTemplateRecoveryGuard', () => {
   it('当前历史恢复验证通过时不弹窗', async () => {
-    const { ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU, useDialogStore, validateCurrentChatTableRecovery_ACU } = await importGuard();
+    const { ensureTemplateRecoveryReady_ACU, useDialogStore, validateCurrentChatTableRecovery_ACU } = await importGuard();
 
-    const result = await ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU({ sheet_1: {} }, 'save-template');
+    const result = await ensureTemplateRecoveryReady_ACU('save-template');
 
     expect(result).toEqual({ success: true, dataWasReset: false });
     expect(useDialogStore().active).toBeNull();
@@ -41,13 +41,13 @@ describe('useTemplateRecoveryGuard', () => {
 
   it('恢复验证失败时显示非破坏性提示并保留数据', async () => {
     const {
-      ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU,
+      ensureTemplateRecoveryReady_ACU,
       useDialogStore,
       validateCurrentChatTableRecovery_ACU,
     } = await importGuard();
     validateCurrentChatTableRecovery_ACU.mockResolvedValueOnce({ success: false, error: 'CHECK constraint failed' });
 
-    const pending = ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU({ sheet_1: {} }, 'save-template');
+    const pending = ensureTemplateRecoveryReady_ACU('save-template');
     await Promise.resolve();
     const dialog = useDialogStore();
 
@@ -62,7 +62,7 @@ describe('useTemplateRecoveryGuard', () => {
 
   it('回放仍依赖临时补锚时显示恢复收敛提示并阻止模板切换', async () => {
     const {
-      ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU,
+      ensureTemplateRecoveryReady_ACU,
       useDialogStore,
       validateCurrentChatTableRecovery_ACU,
     } = await importGuard();
@@ -73,7 +73,7 @@ describe('useTemplateRecoveryGuard', () => {
       error: '当前 V2 历史仍依赖临时 Sheet 补锚：sheet_global。请先在数据管理中完成恢复收敛。',
     });
 
-    const pending = ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU({ sheet_global: {} }, 'switch-template');
+    const pending = ensureTemplateRecoveryReady_ACU('switch-template');
     await Promise.resolve();
     const dialog = useDialogStore();
 

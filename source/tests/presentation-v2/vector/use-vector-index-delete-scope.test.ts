@@ -56,3 +56,20 @@ describe('useVectorIndexConfig.deleteCurrentIndex（R10A-04）', () => {
     expect(deleteIndex).toHaveBeenCalledOnce();
   });
 });
+
+// R10A-12：关键词提示词是全局设置；保存向量 API 或切聊天触发的 refresh 不得重置未保存的编辑。
+describe('useVectorIndexConfig.refresh（R10A-12）', () => {
+  it('提示词有未保存修改时 refresh 不重置编辑缓冲与 dirty', async () => {
+    const { useVectorIndexConfig } = await import('../../../src/presentation-v2/composables/useVectorIndexConfig');
+    const vector = useVectorIndexConfig();
+    vector.refresh();
+    vector.addPromptSegment('bottom');
+    const edited = vector.promptSegments.value.length;
+    expect(vector.promptDirty.value).toBe(true);
+
+    vector.refresh();
+
+    expect(vector.promptDirty.value).toBe(true);
+    expect(vector.promptSegments.value.length).toBe(edited);
+  });
+});

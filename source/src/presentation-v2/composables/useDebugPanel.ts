@@ -27,11 +27,11 @@ import {
   subscribe,
   type LogEntry,
 } from '../../shared/log-buffer';
-import { getAcuHostDocument } from '../bootstrap/host-document';
 import { useToastStore } from '../stores/toast-store';
 import { getAcuHostKind, readCachedAcuTauriVersion_ACU } from '../../shared/host-bridge';
 import { readAcuBuildStamp_ACU, readAcuBuildVersion_ACU } from '../../shared/build-info';
 import { settings_ACU, currentJsonTableData_ACU, currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
+import { downloadJsonToHost_ACU } from '../bootstrap/host-download';
 
 function getBuildStamp(): string {
   return readAcuBuildStamp_ACU();
@@ -111,20 +111,6 @@ function buildDebugTables_ACU(): Record<string, { rows: number; headers: string[
     tables[key] = { rows, headers, ...(sampleRows.length ? { sampleRows } : {}) };
   }
   return tables;
-}
-
-function downloadJson(filename: string, data: unknown): void {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const doc = getAcuHostDocument();
-  const a = doc.createElement('a');
-  a.href = url;
-  a.download = filename;
-  doc.body.appendChild(a);
-  a.click();
-  doc.body.removeChild(a);
-  // 延迟 revoke：WebView2/部分内核在 click 后立即 revoke 会取消下载
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /**
@@ -275,7 +261,7 @@ export function useDebugPanel() {
       const logs = getAllLogs();
       if (logs.length > 0) {
         const payload = buildDebugExportPayload_ACU(logs);
-        downloadJson(debugExportFilename_ACU(), payload);
+        downloadJsonToHost_ACU(debugExportFilename_ACU(), payload);
         // 清空只能在 downloadJson 成功返回之后：下载没成就把缓冲区留着，
         // 否则「自动导出失败」会变成「日志也没了」，用户连手动导出的机会都被洗掉。
         clearLogs('debugPanel.stopDebug.autoExport');
@@ -313,7 +299,7 @@ export function useDebugPanel() {
     }
     // 手动导出不清空：用户可以边复现边反复导出，只有停止 Debug 的自动导出才做收尾清空。
     const payload = buildDebugExportPayload_ACU(getAllLogs());
-    downloadJson(debugExportFilename_ACU(), payload);
+    downloadJsonToHost_ACU(debugExportFilename_ACU(), payload);
     toast.success(`已生成 ${payload.logCount} 条日志的导出文件并交给浏览器下载（请在下载列表确认）。`);
   }
 

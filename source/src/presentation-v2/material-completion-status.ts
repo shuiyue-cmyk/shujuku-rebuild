@@ -37,19 +37,6 @@ function displayState_ACU(
   return 'legacy_unknown';
 }
 
-/**
- * 读取诊断只有在没有任何可采用快照时才表示加载失败。
- * 找到较早合法快照时，诊断仅解释被跳过的损坏候选，不能覆盖已成功读取的资料状态。
- */
-export function resolveMaterialLoadError_ACU(input: {
-  snapshotPresent: boolean;
-  diagnostics?: readonly string[];
-}): string | null {
-  if (input.snapshotPresent) return null;
-  const diagnostics = (input.diagnostics ?? []).map(item => item.trim()).filter(Boolean);
-  return diagnostics.length ? diagnostics.join('；') : null;
-}
-
 export function buildMaterialCompletionCards_ACU(input: {
   overallState?: MaterialCompletionState_ACU;
   expectedModules?: readonly string[];

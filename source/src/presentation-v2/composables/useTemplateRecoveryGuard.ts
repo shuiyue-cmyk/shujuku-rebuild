@@ -14,11 +14,14 @@ function buildTemplateRecoveryConfirmMessage_ACU(action: TemplateRecoveryGuardAc
   return `无法确认当前聊天历史可以安全恢复；已保留当前标识本地数据，${actionText}已取消。请先在数据管理中诊断并完成恢复收敛，或备份/导出聊天后排查恢复错误。${detail}`;
 }
 
-export async function ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU(
-  guideData: Record<string, any> | null,
+/**
+ * 模板保存/切换前确认当前聊天历史可以安全恢复；失败时只提示，不删除任何数据
+ * （R10A-23：旧名 ensureTemplateRecoveryOrDeleteCurrentIsolationData 与已不删数据的行为不符，
+ * 调用方为它构建的 guide 数据也从未被使用）。
+ */
+export async function ensureTemplateRecoveryReady_ACU(
   action: TemplateRecoveryGuardAction_ACU,
 ): Promise<TemplateRecoveryGuardResult_ACU> {
-  void guideData;
   const validation = await validateCurrentChatTableRecovery_ACU();
   if (validation.success) return { success: true, dataWasReset: false };
 

@@ -59,7 +59,7 @@
             empty-text="暂无正文替换预设"
             placeholder="自定义提示词"
             :show-default-action="false"
-            @update:model-value="store.selectPreset($event)"
+            @update:model-value="onSelectPreset($event)"
           />
           <UbIconButton
             icon="fa-solid fa-pen"
@@ -280,7 +280,24 @@ async function onRenamePreset(name: string): Promise<void> {
   if (next) store.renamePreset(name, next);
 }
 
-function onEditPreset(name: string): void {
+/** R10B-13：从未存为预设的自定义提示词切走前确认，它切走后无法找回。 */
+async function confirmLeaveCustomPrompt(nextName: string): Promise<boolean> {
+  if (!store.hasUnsavedCustomPrompt || nextName === store.selectedPresetName) return true;
+  return dialogStore.confirm({
+    title: '切换正文替换提示词',
+    message: '当前是未存为预设的自定义提示词，切换后会被覆盖且无法找回。如需保留，请先取消并「另存为预设」。确定切换吗？',
+    confirmLabel: '切换',
+    confirmVariant: 'danger',
+  });
+}
+
+async function onSelectPreset(name: string): Promise<void> {
+  if (!(await confirmLeaveCustomPrompt(name))) return;
+  store.selectPreset(name);
+}
+
+async function onEditPreset(name: string): Promise<void> {
+  if (!(await confirmLeaveCustomPrompt(name))) return;
   store.selectPreset(name);
   editingPresetName.value = name;
   presetSheetOpen.value = false;
@@ -293,6 +310,8 @@ function openPromptSheetForCurrent(): void {
 }
 
 function closePromptSheet(): void {
+  // 面板只在无改动或用户确认放弃后才 emit close：丢掉草稿，避免之后被别的保存顺带写入（R10B-03）
+  store.discardPromptDraft();
   promptSheetOpen.value = false;
   editingPresetName.value = '';
 }

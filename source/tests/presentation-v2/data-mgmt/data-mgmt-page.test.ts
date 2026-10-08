@@ -391,6 +391,37 @@ describe('DataMgmtPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('R10A-20：备份与恢复里有历史恢复诊断入口，点击后跑只读诊断并展示恢复分节', async () => {
+    const { mount, prepareV2Recovery, scanV2IsolationDiagnostics } = await mountDataMgmtPage();
+
+    const row = document.querySelector('#dm-checkpoint [data-ub-row="历史恢复诊断"]');
+    expect(row).not.toBeNull();
+    row!.querySelector<HTMLButtonElement>('button')!.click();
+    await vi.waitFor(() => expect(prepareV2Recovery).toHaveBeenCalledOnce());
+    expect(scanV2IsolationDiagnostics).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(document.getElementById('dm-recovery')).not.toBeNull());
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('R10B-08：一项数据操作在途时，其它危险按钮一律禁用', async () => {
+    const { mount, deleteLocalDataWithScope } = await mountDataMgmtPage();
+    deleteLocalDataWithScope.mockImplementationOnce(() => new Promise(() => {}));
+
+    Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(item => item.textContent?.includes('删除所有本地数据'))!.click();
+    await clickDialogButton('删除所有本地数据');
+    await clickDialogButton('确认硬清空');
+    await vi.waitFor(() => expect(deleteLocalDataWithScope).toHaveBeenCalled());
+    await new Promise(r => setTimeout(r, 0));
+
+    const resetButton = Array.from(document.querySelectorAll<HTMLButtonElement>('#dm-cleanup button'))
+      .find(item => item.textContent?.includes('恢复默认配置'))!;
+    expect(resetButton.disabled).toBe(true);
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('删除与清理分节分为自动清理与手动删除，含保留层数与恢复默认配置', async () => {
     const { mount } = await mountDataMgmtPage();
 
@@ -785,6 +816,9 @@ describe('DataMgmtPage', () => {
     expect(buildCheckpoint).toHaveBeenCalledTimes(1);
     expect(capturedDownloads).toEqual(['TavernDB_checkpoint_alpha_beta_gamma_20260712-211841.json']);
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    // R10A-13：revoke 延迟执行，避免 WebView2 取消下载
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:acu-test');
 
     vi.useRealTimers();

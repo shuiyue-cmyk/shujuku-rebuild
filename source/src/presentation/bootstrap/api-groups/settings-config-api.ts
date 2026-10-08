@@ -223,9 +223,16 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
                 const availableKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
                 const validKeys = sheetKeys.filter(key => availableKeys.includes(key));
 
+                // R9-16：保存失败时回滚内存并如实返回 false
+                const previous = { tables: settings_ACU.manualSelectedTables, has: settings_ACU.hasManualSelection };
                 settings_ACU.manualSelectedTables = validKeys;
                 settings_ACU.hasManualSelection = true;
-                saveSettingsAndNotify_ACU();
+                if (saveSettingsAndNotify_ACU()?.saved !== true) {
+                    settings_ACU.manualSelectedTables = previous.tables;
+                    settings_ACU.hasManualSelection = previous.has;
+                    logError_ACU('setManualSelectedTables failed: settings save failed');
+                    return false;
+                }
 
                 logDebug_ACU('Manual selected tables updated:', validKeys);
                 return true;
@@ -237,9 +244,15 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
 
         clearManualSelectedTables: function() {
             try {
+                const previous = { tables: settings_ACU.manualSelectedTables, has: settings_ACU.hasManualSelection };
                 settings_ACU.manualSelectedTables = [];
                 settings_ACU.hasManualSelection = false;
-                saveSettingsAndNotify_ACU();
+                if (saveSettingsAndNotify_ACU()?.saved !== true) {
+                    settings_ACU.manualSelectedTables = previous.tables;
+                    settings_ACU.hasManualSelection = previous.has;
+                    logError_ACU('clearManualSelectedTables failed: settings save failed');
+                    return false;
+                }
                 logDebug_ACU('Manual selected tables cleared');
                 return true;
             } catch (e) {

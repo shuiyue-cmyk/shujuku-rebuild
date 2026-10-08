@@ -26,6 +26,7 @@ const m = vi.hoisted(() => {
 });
 
 vi.mock('../../../src/service/runtime/state-manager', () => ({
+  autoFillDebounceTimer_ACU: null,
   NEW_MESSAGE_DEBOUNCE_DELAY_ACU: 500,
   AI_MATERIALIZATION_MAX_RETRIES_ACU: 3,
   AI_MATERIALIZATION_RETRY_DELAY_MS_ACU: 100,
@@ -46,7 +47,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   _set_isProcessing_Plot_ACU: vi.fn(),
   _set_isAutoUpdatingCard_ACU: vi.fn(),
   _set_wasStoppedByUser_ACU: vi.fn(),
-  _set_autoFillDebounceTimer_ACU: vi.fn(),
+  _set_autoFillDebounceTimer_ACU: m.setAutoFillTimer,
   _set_manualExtraHint_ACU: vi.fn(),
   generationGate_ACU: { lastGeneration: null },
 }));
@@ -89,16 +90,6 @@ vi.mock('../../../src/service/runtime/helpers-remaining', () => ({
   maybeLiftWorldbookSuppression_ACU: m.maybeLiftWorldbookSuppression,
 }));
 
-vi.mock('../../../src/presentation/components/plot-editors', () => ({
-  autoFillDebounceTimer_ACU: null,
-  _set_autoFillDebounceTimer_ACU: m.setAutoFillTimer,
-  isAutoUpdatingCard_ACU: false,
-  wasStoppedByUser_ACU: false,
-  _set_wasStoppedByUser_ACU: vi.fn(),
-  manualExtraHint_ACU: '',
-  getCharCardPromptFromUI_ACU: vi.fn(),
-  renderPromptSegments_ACU: vi.fn(),
-}));
 
 const user = { is_user: true, mes: '用户消息' };
 const ai = { is_user: false, mes: '本轮 AI 回复', name: '角色A' };

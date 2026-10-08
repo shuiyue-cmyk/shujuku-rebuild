@@ -14,6 +14,7 @@ import { currentChatFileIdentifier_ACU, settings_ACU } from '../../service/runti
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { saveSettings_ACU } from '../../service/settings/settings-service';
 import { useToastStore } from './toast-store';
+import { downloadJsonToHost_ACU } from '../bootstrap/host-download';
 
 export type ContentReplaceMessageKind = 'info' | 'success' | 'warning' | 'error';
 export type ContentReplaceBusyAction = '' | 'test' | 'reoptimize' | 'import-presets' | 'export-preset';
@@ -67,7 +68,6 @@ interface ContentReplaceState {
   promptDirty: boolean;
   promptPresets: ContentReplacePreset[];
   activePresetHint: string;
-  presetNameDraft: string;
   testInput: string;
   testOutput: string;
   lastOptimizedMessageIndex: number;
@@ -238,21 +238,18 @@ function uniquePresetName(existing: ContentReplacePreset[], baseName: string): s
   return candidate;
 }
 
-function persist(): void {
-  saveSettings_ACU();
-}
-
-function downloadJson(filename: string, data: unknown): void {
-  const jsonString = JSON.stringify(data, null, 2);
-  const blob = new Blob([jsonString], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+/**
+ * R10B-12：落盘并核对结果。失败时把正文替换设置原地还原为改动前快照并提示，返回 false，
+ * 调用方据此不报「已保存」。
+ */
+function persist(snapshot: Record<string, any>): boolean {
+  const result = saveSettings_ACU();
+  if (!result || result.saved !== false) return true;
+  const cfg = ensureSettingsShape();
+  for (const key of Object.keys(cfg)) delete cfg[key];
+  Object.assign(cfg, snapshot);
+  useToastStore().error(`正文替换设置保存失败，已撤销本次修改：${result.error || result.warning || '未知错误'}`, { muteable: false });
+  return false;
 }
 
 async function readFileText(file: File): Promise<string> {
@@ -305,7 +302,6 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
     promptDirty: false,
     promptPresets: [],
     activePresetHint: '',
-    presetNameDraft: '',
     testInput: '',
     testOutput: '',
     lastOptimizedMessageIndex: -1,
@@ -327,6 +323,10 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         isDefault: fingerprint === DEFAULT_PROMPT_FINGERPRINT_ACU,
         presetName: findMatchingPresetNameByFingerprint_ACU(state.promptPresets, state.activePresetHint, fingerprint),
       };
+    },
+    /** R10B-13：当前提示词既不是默认也不对应任何已存预设——切走就永久丢失。 */
+    hasUnsavedCustomPrompt(): boolean {
+      return !this.promptIdentity.isDefault && !this.promptIdentity.presetName;
     },
     hasSelectedPreset(): boolean {
       return !!this.promptIdentity.presetName;
@@ -382,8 +382,30 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         this.activePresetHint = '';
       }
     },
-    saveToSettings(): void {
+    /**
+     * R10B-03：开关/数字/标签只写基础字段。提示词草稿只在显式保存提示词或切换预设时落盘，
+     * 否则编辑器里已放弃（或尚未保存）的半成品会被任意一次开关修改顺带写进设置。
+     */
+    saveBasicSettings(): boolean {
       const cfg = ensureSettingsShape();
+      const snapshot = clone(cfg);
+      this.writeBasicFields(cfg);
+      const saved = persist(snapshot);
+      const draft = this.promptDirty ? clone(this.promptGroup) : null;
+      this.refreshFromSettings();
+      if (draft) {
+        this.promptGroup = draft;
+        this.promptDirty = true;
+      }
+      return saved;
+    },
+    /** 编辑器确认放弃修改：从设置重新载入提示词组并清脏标记。 */
+    discardPromptDraft(): void {
+      const cfg = ensureSettingsShape();
+      this.promptGroup = clone(cfg.promptGroup || []);
+      this.promptDirty = false;
+    },
+    writeBasicFields(cfg: Record<string, any>): void {
       cfg.enabled = this.enabled;
       cfg.apiPreset = this.apiPreset;
       cfg.seamlessMode = this.seamlessMode;
@@ -399,18 +421,30 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       cfg.excludeTags = this.excludeTags;
       cfg.extractRules = normalizeExtractRules_ACU(this.extractRules, this.extractTags);
       cfg.excludeRules = normalizeExcludeRules_ACU(this.excludeRules, this.excludeTags);
+    },
+    saveToSettings(): boolean {
+      const cfg = ensureSettingsShape();
+      const snapshot = clone(cfg);
+      const attemptedPromptGroup = clone(this.promptGroup);
+      this.writeBasicFields(cfg);
       cfg.promptGroup = normalizePromptGroup(this.promptGroup);
       cfg.promptPresets = normalizePresets(this.promptPresets);
-      persist();
+      const saved = persist(snapshot);
       this.refreshFromSettings();
+      // 保存失败：设置已还原，但用户要保存的提示词留在编辑器里作为未保存草稿，便于重试
+      if (!saved && JSON.stringify(attemptedPromptGroup) !== JSON.stringify(this.promptGroup)) {
+        this.promptGroup = attemptedPromptGroup;
+        this.promptDirty = true;
+      }
+      return saved;
     },
     setBoolean(key: 'enabled' | 'seamlessMode' | 'autoApply' | 'showDiff' | 'parallelMode' | 'ignoreMvuUpdate', value: boolean): void {
       this[key] = !!value;
-      this.saveToSettings();
+      this.saveBasicSettings();
     },
-    setString(key: 'apiPreset' | 'extractTags' | 'excludeTags' | 'presetNameDraft' | 'testInput', value: string): void {
+    setString(key: 'apiPreset' | 'extractTags' | 'excludeTags' | 'testInput', value: string): void {
       this[key] = String(value ?? '');
-      if (key !== 'presetNameDraft' && key !== 'testInput') this.saveToSettings();
+      if (key !== 'testInput') this.saveBasicSettings();
     },
     setNumber(key: 'minLength' | 'maxOptimizations' | 'loopCount' | 'retryCount', value: number | string): void {
       const bounds = {
@@ -421,21 +455,23 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       } as const;
       const [fallback, min, max] = bounds[key];
       this[key] = normalizeInteger(value, fallback, min, max);
-      this.saveToSettings();
+      this.saveBasicSettings();
     },
     setExtractRules(value: ContentReplaceRulePair[]): void {
       this.extractRules = coerceRulePairs(value);
       const cfg = ensureSettingsShape();
+      const snapshot = clone(cfg);
       cfg.extractRules = normalizeExtractRules_ACU(this.extractRules, this.extractTags);
       cfg.extractTags = this.extractTags;
-      persist();
+      if (!persist(snapshot)) this.extractRules = clone(cfg.extractRules || []);
     },
     setExcludeRules(value: ContentReplaceRulePair[]): void {
       this.excludeRules = coerceRulePairs(value);
       const cfg = ensureSettingsShape();
+      const snapshot = clone(cfg);
       cfg.excludeRules = normalizeExcludeRules_ACU(this.excludeRules, this.excludeTags);
       cfg.excludeTags = this.excludeTags;
-      persist();
+      if (!persist(snapshot)) this.excludeRules = clone(cfg.excludeRules || []);
     },
     addPromptSegment(position: 'top' | 'bottom'): void {
       const segment: ContentReplacePromptSegment = { role: 'USER', content: '', deletable: true };
@@ -460,7 +496,7 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       setMessage(this, 'warning', '已载入默认正文替换提示词组，保存后生效。');
     },
     savePromptGroup(): void {
-      this.saveToSettings();
+      if (!this.saveToSettings()) return;
       clearMessageAndToast(this, 'success', '正文替换提示词已保存。');
     },
     savePromptGroupToPreset(name: string): void {
@@ -479,8 +515,7 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         promptGroup: normalizePromptGroup(this.promptGroup),
       };
       this.activePresetHint = normalized;
-      this.presetNameDraft = normalized;
-      this.saveToSettings();
+      if (!this.saveToSettings()) return;
       clearMessageAndToast(this, 'success', `预设"${normalized}"已更新。`);
     },
     selectPreset(name: string): void {
@@ -488,7 +523,6 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       if (normalized === CUSTOM_CONTENT_REPLACE_PRESET_VALUE) return;
       if (!normalized) {
         this.activePresetHint = '';
-        this.presetNameDraft = '';
         this.promptGroup = defaultPromptGroup();
         this.saveToSettings();
         this.message = null;
@@ -497,43 +531,18 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       const preset = this.promptPresets.find(p => p.name === normalized);
       if (!preset) return;
       this.activePresetHint = preset.name;
-      this.presetNameDraft = preset.name;
       this.promptGroup = clone(preset.promptGroup);
       this.saveToSettings();
       this.message = null;
-    },
-    savePreset(): void {
-      const selected = this.hasSelectedPreset ? this.selectedPresetName : '';
-      const name = String(this.presetNameDraft || selected || '').trim();
-      if (!name) {
-        setMessage(this, 'warning', '请先填写预设名称。');
-        return;
-      }
-      if (name === DEFAULT_CONTENT_REPLACE_PRESET_NAME || name === CUSTOM_CONTENT_REPLACE_PRESET_VALUE) {
-        setMessage(this, 'warning', '「默认预设」是内置预设，请换一个名称保存。');
-        return;
-      }
-      const nextPreset = { name, promptGroup: normalizePromptGroup(this.promptGroup) };
-      const existingIndex = this.promptPresets.findIndex(p => p.name === name);
-      if (existingIndex >= 0) this.promptPresets[existingIndex] = nextPreset;
-      else this.promptPresets.push(nextPreset);
-      this.activePresetHint = name;
-      this.presetNameDraft = name;
-      this.saveToSettings();
-      clearMessageAndToast(this, 'success', `预设"${name}"已保存。`);
     },
     createPresetFromDefault(): void {
       const name = uniquePresetName(this.promptPresets, '新正文替换预设');
       const nextPreset = { name, promptGroup: defaultPromptGroup() };
       this.promptPresets.push(nextPreset);
       this.activePresetHint = name;
-      this.presetNameDraft = name;
       this.promptGroup = clone(nextPreset.promptGroup);
       this.saveToSettings();
       this.message = null;
-    },
-    deletePreset(): void {
-      this.deletePresetByName(this.selectedPresetName);
     },
     deletePresetByName(name: string): void {
       if (!name) return;
@@ -542,7 +551,6 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         this.activePresetHint = '';
         this.promptGroup = defaultPromptGroup();
       }
-      if (this.presetNameDraft === name) this.presetNameDraft = '';
       this.saveToSettings();
       this.message = null;
     },
@@ -568,12 +576,8 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         name: target,
       };
       if (this.activePresetHint === source) this.activePresetHint = target;
-      if (this.presetNameDraft === source) this.presetNameDraft = target;
       this.saveToSettings();
       this.message = null;
-    },
-    exportSelectedPreset(): void {
-      this.exportPresetByName(this.selectedPresetName);
     },
     exportPresetByName(name: string): void {
       const preset = this.promptPresets.find(p => p.name === name);
@@ -581,16 +585,19 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         setMessage(this, 'warning', '请先选择要导出的预设。');
         return;
       }
+      if (this.busyAction) return;
       this.busyAction = 'export-preset';
       try {
         const safeName = preset.name.replace(/[^a-z0-9_\-\u4e00-\u9fa5]/gi, '_');
-        downloadJson(`optimization_preset_${safeName}.json`, [preset]);
+        downloadJsonToHost_ACU(`optimization_preset_${safeName}.json`, [preset]);
         clearMessageAndToast(this, 'success', '正文替换预设 JSON 已导出。');
       } finally {
         this.busyAction = '';
       }
     },
     async importPresets(file: File): Promise<void> {
+      // R10B-13：只有一个忙碌槽，在途时拒绝其它耗时操作，避免先结束者提前解锁按钮
+      if (this.busyAction) return;
       this.busyAction = 'import-presets';
       try {
         const text = await readFileText(file);
@@ -609,9 +616,8 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
           }
         }
         this.activePresetHint = imported[0].name;
-        this.presetNameDraft = imported[0].name;
         this.promptGroup = clone(imported[0].promptGroup);
-        this.saveToSettings();
+        if (!this.saveToSettings()) return;
         clearMessageAndToast(this, 'success', `已导入 ${added} 个正文替换预设，覆盖 ${replaced} 个同名预设。`, { muteable: false });
       } catch (e: any) {
         logError_ACU('[ACU-V2] import content replace presets failed', e);
@@ -626,6 +632,7 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         setMessage(this, 'warning', '请输入至少 10 个字符的测试文本。');
         return;
       }
+      if (this.busyAction) return;
       this.busyAction = 'test';
       this.testOutput = '正在调用 AI 进行正文替换测试...';
       try {
@@ -661,6 +668,7 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         setMessage(this, 'warning', '当前还没有已被正文替换过的 AI 回复。');
         return;
       }
+      if (this.busyAction) return;
       this.busyAction = 'reoptimize';
       try {
         const originalContent = getOriginalContent_ACU(messageIndex);

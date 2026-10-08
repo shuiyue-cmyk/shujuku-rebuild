@@ -57,8 +57,6 @@ vi.mock('../../../src/presentation-v2/stores/toast-store', () => ({
 // presentation 侧依赖：只留 UI 通知与状态面板两个旁路。
 vi.mock('../../../src/shared/env', () => ({ topLevelWindow_ACU: { AutoCardUpdaterAPI: { _notifyTableUpdate: vi.fn() } } }));
 vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logWarn_ACU: vi.fn(), logError_ACU: vi.fn() }));
-vi.mock('../../../src/presentation/components/update-status-display', () => ({ updateCardUpdateStatusDisplay_ACU: vi.fn() }));
-vi.mock('../../../src/presentation/components/template-preset-ui', () => ({ loadTemplatePresetSelect_ACU: vi.fn() }));
 // 外部刷新桥经 mount 拿 pinia：本文件不挂真实 app，直接交出测试用的 pinia。
 vi.mock('../../../src/presentation-v2/bootstrap/mount', () => ({
   getAcuV2PiniaForBridge: () => mocks.pinia,

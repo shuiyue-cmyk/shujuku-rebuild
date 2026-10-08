@@ -1,8 +1,7 @@
 /**
  * presentation-v2/bootstrap — 新 UI 启动入口
  *
- * 由 src/index.ts / src/entry-extension.ts / src/entry-extension-plus-assistantembedded.ts
- * 在旧 UI 启动之后调用。
+ * 由 src/entry-extension.ts 在扩展初始化后调用。
  *
  * 注册"打开新 UI"菜单按钮；点击时惰性挂载 Vue 应用。
  */

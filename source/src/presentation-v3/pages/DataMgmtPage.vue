@@ -12,6 +12,17 @@
         </template>
         <UbFileButton size="sm" variant="danger" icon="fa-solid fa-download" accept=".json,application/json" :disabled="busy" @file="onImportTableCheckpoint">导入</UbFileButton>
       </UbRow>
+      <UbRow label="历史恢复诊断" hint="填表或模板操作提示「请在数据管理中检查并恢复历史」时使用：只读检查当前聊天的表格历史，发现可修复的问题会在下方给出恢复选项。">
+        <UbButton
+          size="sm"
+          icon="fa-solid fa-stethoscope"
+          :disabled="busy"
+          :busy="flow.busyAction.value === 'prepare-v2-recovery' || flow.busyAction.value === 'scan-v2-isolation-diagnostics'"
+          @click="onDiagnoseV2Recovery"
+        >
+          诊断
+        </UbButton>
+      </UbRow>
     </UbSection>
 
     <UbSection v-if="flow.mixedStorageDecision.value" id="dm-mixed" title="混合存储决议" icon="fa-solid fa-code-merge" padded>
@@ -24,10 +35,10 @@
         可先导出两份独立快照；提交动作只引用当前决议，不会从页面接收或覆盖表格数据。
       </p>
       <div class="ub-dm__buttons">
-        <UbButton :disabled="runtimeDiagnostic.busy.value" :busy="flow.busyAction.value === 'export-mixed-storage-snapshots'" @click="flow.exportMixedStorageSnapshots">导出 legacy/V2 快照</UbButton>
+        <UbButton :disabled="busy" :busy="flow.busyAction.value === 'export-mixed-storage-snapshots'" @click="flow.exportMixedStorageSnapshots">导出 legacy/V2 快照</UbButton>
         <UbButton
           v-if="flow.mixedStorageDecision.value.allowedActions.includes('keep_v2')"
-          :disabled="runtimeDiagnostic.busy.value"
+          :disabled="busy"
           :busy="flow.busyAction.value === 'commit-mixed-storage-keep_v2'"
           @click="onCommitMixedStorageDecision('keep_v2')"
         >
@@ -35,7 +46,7 @@
         </UbButton>
         <UbButton
           v-if="flow.mixedStorageDecision.value.allowedActions.includes('commit_merge_candidate')"
-          :disabled="runtimeDiagnostic.busy.value"
+          :disabled="busy"
           :busy="flow.busyAction.value === 'commit-mixed-storage-commit_merge_candidate'"
           @click="onCommitMixedStorageDecision('commit_merge_candidate')"
         >
@@ -51,7 +62,7 @@
         <UbButton
           v-if="RECOVERABLE_CHECKPOINT_STATUSES.includes(flow.v2RecoverySummary.value.status)"
           variant="danger"
-          :disabled="runtimeDiagnostic.busy.value"
+          :disabled="busy"
           :busy="flow.busyAction.value === 'commit-v2-recovery'"
           @click="onCommitV2Recovery(false)"
         >
@@ -60,7 +71,7 @@
         <UbButton
           v-if="flow.v2RecoverySummary.value.status === 'recoverable_orphan_data_replace'"
           variant="danger"
-          :disabled="runtimeDiagnostic.busy.value"
+          :disabled="busy"
           :busy="flow.busyAction.value === 'commit-v2-recovery'"
           @click="onCommitV2Recovery(true)"
         >
@@ -87,7 +98,7 @@
           type="number"
           :min="0"
           :step="1"
-          :disabled="runtimeDiagnostic.busy.value"
+          :disabled="busy"
           :model-value="flow.retainRecentLayers.value"
           aria-label="保留数据层数"
           @change="flow.setRetainRecentLayers($event)"
@@ -110,11 +121,11 @@
             :key="option.sheetKey"
             :model-value="flow.deleteSheetKeys.value.includes(option.sheetKey)"
             :label="option.name"
-            :disabled="runtimeDiagnostic.busy.value"
+            :disabled="busy"
             :data-sheet-key="option.sheetKey"
             @update:model-value="flow.toggleDeleteSheetKey(option.sheetKey, $event)"
           />
-          <UbButton v-if="flow.hasDeleteSheetSelection.value" size="sm" variant="ghost" :disabled="runtimeDiagnostic.busy.value" @click="flow.clearDeleteSheetSelection">清除选择</UbButton>
+          <UbButton v-if="flow.hasDeleteSheetSelection.value" size="sm" variant="ghost" :disabled="busy" @click="flow.clearDeleteSheetSelection">清除选择</UbButton>
         </div>
       </UbRow>
       <div class="ub-dm__danger">
@@ -127,7 +138,7 @@
           <UbButton
             variant="danger"
             icon="fa-solid fa-trash-can"
-            :disabled="runtimeDiagnostic.busy.value"
+            :disabled="busy"
             :busy="flow.busyAction.value === 'purge-all-local' || flow.busyAction.value === 'delete-all-local'"
             @click="onDeleteLocalData"
           >
@@ -135,7 +146,7 @@
           </UbButton>
           <UbButton
             icon="fa-solid fa-rotate-left"
-            :disabled="runtimeDiagnostic.busy.value"
+            :disabled="busy"
             :busy="flow.busyAction.value === 'reset-defaults'"
             @click="onResetAllDefaults"
           >
@@ -155,7 +166,6 @@ import {
   type ResetDefaultsCleanupKey,
   type ResetDefaultsCleanupOptions,
 } from '../../presentation-v2/composables/useDataManagement';
-import { useSqliteRuntimeDiagnostic } from '../../presentation-v2/composables/useSqliteRuntimeDiagnostic';
 import { dataMgmtCopy as copy } from '../../presentation-v2/copy/data-mgmt-copy';
 import { useDialogStore } from '../../presentation-v2/stores/dialog-store';
 import { useToastStore } from '../../presentation-v2/stores/toast-store';
@@ -188,9 +198,8 @@ const RESET_DEFAULTS_OPTIONS: Array<{ value: ResetDefaultsCleanupKey; label: str
 const dialogStore = useDialogStore();
 const toast = useToastStore();
 const flow = useDataManagement();
-const runtimeDiagnostic = useSqliteRuntimeDiagnostic();
-
-const busy = computed(() => !!flow.busyAction.value || runtimeDiagnostic.busy.value);
+/** R10B-08：任一数据操作在途时其它危险操作一律禁用；确认框关闭后再查同一条件。 */
+const busy = computed(() => !!flow.busyAction.value);
 
 const sections = computed(() => [
   { id: 'dm-checkpoint', label: '备份与恢复' },
@@ -200,9 +209,16 @@ const sections = computed(() => [
   { id: 'dm-cleanup', label: '删除与清理' },
 ]);
 
-/** 每次危险操作在确认框关闭后再查一次运行时忙碌，避免确认期间状态已变。 */
+/** 每次危险操作在确认框关闭后再查一次是否有其它操作在途，避免确认期间状态已变。 */
 function runtimeBusy(): boolean {
-  return runtimeDiagnostic.busy.value;
+  return busy.value;
+}
+
+/** R10A-20：只读诊断当前聊天的 V2 历史；有可恢复问题时下方出现恢复分节。 */
+async function onDiagnoseV2Recovery(): Promise<void> {
+  if (runtimeBusy()) return;
+  await flow.scanV2IsolationDiagnostics();
+  await flow.prepareV2Recovery();
 }
 
 async function onImportTableCheckpoint(file: File): Promise<void> {
@@ -388,7 +404,6 @@ async function onResetAllDefaults(): Promise<void> {
 
 function refreshAll(): void {
   flow.refresh();
-  runtimeDiagnostic.refresh();
 }
 
 onMounted(refreshAll);

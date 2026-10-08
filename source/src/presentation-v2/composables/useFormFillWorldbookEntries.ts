@@ -30,6 +30,7 @@ import {
   WorldbookEntryDisplayGroup_ACU,
   WorldbookEntryDisplayItem_ACU,
 } from './worldbook-entry-display';
+import { createWorldbookEntryScopePredicate_ACU, type WorldbookEntryScope_ACU } from './worldbook-entry-scope';
 
 export type FormFillWorldbookEntryItem = WorldbookEntryDisplayItem_ACU;
 
@@ -50,7 +51,11 @@ export function useFormFillWorldbookEntries() {
   const status = ref<FormFillEntryLoadStatus>('idle');
   const error = ref('');
 
+  /** R10B-17：只有最后一次加载能写结果，较慢的旧请求晚到时直接丢弃。 */
+  let loadSeq = 0;
+
   async function loadEntries(bookNames: string[]): Promise<void> {
+    const seq = ++loadSeq;
     const unique = [...new Set(bookNames.filter(Boolean))];
     if (unique.length === 0) {
       groups.value = [];
@@ -64,7 +69,9 @@ export function useFormFillWorldbookEntries() {
     try {
       const enabledEntries = ensureEnabledEntries();
       const snapshot = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
-      const entriesMap = await getLorebookEntriesByNames_ACU(unique) as Record<string, any[]>;
+      const failedBooks = new Set<string>();
+      const entriesMap = await getLorebookEntriesByNames_ACU(unique, { failedBooks }) as Record<string, any[]>;
+      if (seq !== loadSeq) return;
       const snapshotEntryIndexByBook = buildWorldbookSnapshotEntryIndexByBook_ACU(snapshot);
       let settingsChanged = false;
       const result: FormFillWorldbookEntryGroup[] = [];
@@ -74,7 +81,12 @@ export function useFormFillWorldbookEntries() {
         const visibleBookEntries = bookEntries.filter((entry: any) => isWorldbookEntryVisibleForPageUI_ACU(bookName, entry, snapshotEntryIndexByBook));
         const visibleUidSet = new Set(visibleBookEntries.map((entry: any) => String(entry?.uid)));
 
-        if (typeof enabledEntries[bookName] === 'undefined') {
+        // R10A-06：读取失败（服务层同样返回空数组）或读到空书时不动勾选——无法区分「条目已删」与「暂时读不到」，
+        // 清理会把用户的勾选永久抹掉。
+        const readUnreliable = failedBooks.has(bookName) || bookEntries.length === 0;
+        if (readUnreliable) {
+          // 保持原样
+        } else if (typeof enabledEntries[bookName] === 'undefined') {
           // 默认全不选：首次加载不勾选任何条目
           enabledEntries[bookName] = [];
           settingsChanged = true;
@@ -137,6 +149,7 @@ export function useFormFillWorldbookEntries() {
       groups.value = result;
       status.value = 'success';
     } catch (e: any) {
+      if (seq !== loadSeq) return;
       logError_ACU('[ACU-V2] useFormFillWorldbookEntries loadEntries failed', e);
       error.value = e?.message ?? '加载条目失败';
       status.value = 'error';
@@ -168,38 +181,39 @@ export function useFormFillWorldbookEntries() {
     });
   }
 
-  function selectAll(): void {
-    const enabledEntries = ensureEnabledEntries();
-    for (const group of groups.value) {
-      const extraUids = group.entries
-        .filter((e: any) => !e.disabled && !(e as any)._isDefaultActive && (!e.blockedByDefault || e.checked))
-        .map(e => e.uid);
-      enabledEntries[group.bookName] = extraUids;
-    }
-    saveSettings_ACU();
-
+  /** 批量改勾选：只动 scope 内条目（R10B-05），再按展示状态回写涉及的书。 */
+  function applyBulkSelection(scope: WorldbookEntryScope_ACU, nextChecked: (e: any) => boolean): void {
+    const inScope = createWorldbookEntryScopePredicate_ACU(scope);
+    const touchedBooks = new Set<string>();
     groups.value = groups.value.map(g => ({
       ...g,
       entries: g.entries.map((e: any) => {
-        if ((e as any)._isDefaultActive) return { ...e, checked: true };
-        if (e.disabled) return { ...e, checked: false };
-        if (e.blockedByDefault) return e;
-        return { ...e, checked: true };
+        if (!inScope(g.bookName, e.uid)) return e;
+        touchedBooks.add(g.bookName);
+        return { ...e, checked: nextChecked(e) };
       }),
     }));
-  }
-
-  function deselectAll(): void {
     const enabledEntries = ensureEnabledEntries();
     for (const group of groups.value) {
-      enabledEntries[group.bookName] = [];
+      if (!touchedBooks.has(group.bookName)) continue;
+      enabledEntries[group.bookName] = group.entries
+        .filter((e: any) => e.checked && !e.disabled && !e._isDefaultActive)
+        .map(e => e.uid);
     }
     saveSettings_ACU();
+  }
 
-    groups.value = groups.value.map(g => ({
-      ...g,
-      entries: g.entries.map((e: any) => ({ ...e, checked: !!(e as any)._isDefaultActive })),
-    }));
+  function selectAll(scope?: WorldbookEntryScope_ACU): void {
+    applyBulkSelection(scope, (e: any) => {
+      if (e._isDefaultActive) return true;
+      if (e.disabled) return false;
+      if (e.blockedByDefault) return !!e.checked;
+      return true;
+    });
+  }
+
+  function deselectAll(scope?: WorldbookEntryScope_ACU): void {
+    applyBulkSelection(scope, (e: any) => !!e._isDefaultActive);
   }
 
   function toggleGroupExpanded(bookName: string): void {

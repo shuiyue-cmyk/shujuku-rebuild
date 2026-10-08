@@ -59,6 +59,17 @@ beforeEach(() => {
 });
 
 describe('useContinuationMaterials chat binding', () => {
+  it('R10A-09：保存时带上载入时该模块的修订号，交服务层核对', async () => {
+    const d = await setup();
+    const materials = d.useContinuationMaterials();
+    materials.reload();
+    materials.updateDraft('hooks', JSON.stringify([{ id: 'a-hook', summary: '改' }]));
+
+    await materials.save('hooks');
+
+    expect(d.replace).toHaveBeenCalledWith(expect.anything(), expect.anything(), { expectedRevisions: { hooks: 1 } });
+  });
+
   it('资料保存期间切换聊天时，迟到的 A 结果不回写 B 页面', async () => {
     const d = await setup();
     const materials = d.useContinuationMaterials();

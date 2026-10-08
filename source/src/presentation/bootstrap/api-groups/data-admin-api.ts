@@ -4,7 +4,6 @@
  */
 
 import { logError_ACU } from '../../../shared/utils';
-import { getUiSurface_ACU } from '../../../shared/ui-surface-registry';
 import { exportCurrentJsonData_ACU, exportTableTemplate_ACU, importTableTemplate_ACU, migrateLegacySummaryVectorIndex_ACU, overrideLatestLayerWithTemplate_ACU, resetAllToDefaults_ACU, resetTableTemplate_ACU } from '../../triggers/data-admin-ui';
 import { importCombinedSettings_ACU } from '../../triggers/data-admin-ui';
 import { exportCombinedSettings_ACU, handleManualMergeSummary_ACU } from '../../triggers/update-trigger';
@@ -60,19 +59,7 @@ export function createDataAdminApi(_ctx: ApiGroupContext): Record<string, Functi
         // 例外：underlying（migrateLegacySummaryVectorIndex_ACU）返回 {success,...} 诊断对象而非布尔
         // （API_DOCUMENTATION.md 未收录该方法），保持数据对象原样返回，不做布尔归一。
         migrateLegacyVectorIndex: async function() { try { return await migrateLegacySummaryVectorIndex_ACU(); } catch (e) { logError_ACU('migrateLegacyVectorIndex failed:', e); return recordDataAdminFailure_ACU('migrateLegacyVectorIndex', e); } },
-        openVisualizer: async function() {
-            const surface = getUiSurface_ACU();
-            if (!surface) {
-                logError_ACU('openVisualizer failed: V2 UI surface is not registered.');
-                return false;
-            }
-            try {
-                return await surface.openVisualizer();
-            } catch (error) {
-                logError_ACU('openVisualizer failed:', error);
-                return false;
-            }
-        },
+        // openVisualizer 由 settings-config 分组统一提供（R9-16：曾在此重复定义，启动时打重名告警）
 
         // 导入TXT链路（外部导入功能已剥离，保留占位注释说明 API 已移除）
         scanSeedPollution: async function() { try { return scanSeedPollution_ACU(); } catch (e) { logError_ACU('scanSeedPollution failed:', e); return dataAdminApiError_ACU(e, 'seed 污染只读诊断失败。'); } },

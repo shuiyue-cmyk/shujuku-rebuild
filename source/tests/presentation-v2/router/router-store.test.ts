@@ -121,23 +121,6 @@ describe('router-store · 高手模式可见性', () => {
     expect(r.visiblePages.map(p => p.id)).toContain('advanced-tools');
     expect(r.visiblePages.map(p => p.id)).not.toContain('sql-console');
     expect(r.visiblePages.map(p => p.id)).not.toContain('log-viewer');
-    r.setSqliteMode(true);
-    expect(r.visiblePages.map(p => p.id)).toContain('advanced-tools');
-    r.setSqliteMode(false);
-    expect(r.visiblePages.map(p => p.id)).toContain('advanced-tools');
-  });
-
-  it('初始化时从当前 settings 读取 SQLite 模式，但不再影响高级工具可见性', async () => {
-    persistAdvancedMode();
-    const m = await freshImport();
-    const state = await import('../../../src/service/runtime/state-manager');
-    state._set_settings_ACU({ ...state.settings_ACU, storageMode: 'sqlite' });
-    m.pinia.setActivePinia(m.pinia.createPinia());
-
-    const r = m.router.useRouterStore();
-
-    expect(r.isSqliteMode).toBe(true);
-    expect(r.visiblePages.map(p => p.id)).toContain('advanced-tools');
   });
 
   it('正文替换 featureGate 打开后出现在可见列表', async () => {
@@ -149,6 +132,23 @@ describe('router-store · 高手模式可见性', () => {
     r.setFeatureGate(m.registry.FEATURE_GATE_CONTENT_REPLACE, true);
     expect(r.visiblePages.map(p => p.id)).toContain('content-replace');
     expect(state.settings_ACU.contentOptimizationSettings?.enabled).toBe(true);
+  });
+
+  it('R10B-20：syncFeatureGatesFromSettings 按设置权威源刷新功能页入口，当前页被隐藏时收回', async () => {
+    persistAdvancedMode('plot');
+    const m = await freshImport();
+    const state = await import('../../../src/service/runtime/state-manager');
+    state._set_settings_ACU({ ...state.settings_ACU, plotSettings: { ...(state.settings_ACU.plotSettings || {}), enabled: true } });
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    const r = m.router.useRouterStore();
+    expect(r.activePageId).toBe('plot');
+
+    // 别的途径（导入设置 / 恢复默认 / 外部 API）把剧情推进关了
+    state.settings_ACU.plotSettings.enabled = false;
+    r.syncFeatureGatesFromSettings();
+
+    expect(r.visiblePages.map(p => p.id)).not.toContain('plot');
+    expect(r.activePageId).not.toBe('plot');
   });
 
   it('初始化时正文替换开关未开，仍隐藏正文替换页', async () => {
@@ -358,18 +358,6 @@ describe('router-store · 切页 + 持久化', () => {
     expect(r.activePageId).toBe('advanced-tools');
     r.setActivePage('sql-console');
     expect(r.activePageId).toBe('advanced-tools'); // 旧 id 兼容迁移
-  });
-
-  it('切换 SQLite 模式不会让高级工具页变成不可见', async () => {
-    persistAdvancedMode();
-    const m = await freshImport();
-    m.pinia.setActivePinia(m.pinia.createPinia());
-    const r = m.router.useRouterStore();
-    r.setSqliteMode(true);
-    r.setActivePage('advanced-tools');
-    expect(r.activePageId).toBe('advanced-tools');
-    r.setSqliteMode(false);
-    expect(r.activePageId).toBe('advanced-tools');
   });
 
 });

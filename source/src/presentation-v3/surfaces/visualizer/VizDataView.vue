@@ -144,6 +144,7 @@ import { getSheetColumnProjection_ACU } from '../../../shared/ddl-utils';
 import { useVisualizerConfigEditing } from '../../../presentation-v2/composables/visualizer/useVisualizerConfigEditing';
 import { useDialogStore } from '../../../presentation-v2/stores/dialog-store';
 import { useVisualizerStore } from '../../../presentation-v2/stores/visualizer-store';
+import { useToastStore } from '../../../presentation-v2/stores/toast-store';
 import UbBadge from '../../ui/UbBadge.vue';
 import UbIconButton from '../../ui/UbIconButton.vue';
 import UbInput from '../../ui/UbInput.vue';
@@ -152,6 +153,7 @@ import { isShortDataField, pageWindow, pairFieldRows } from './data-layout';
 const visualizer = useVisualizerStore();
 const config = useVisualizerConfigEditing();
 const dialogStore = useDialogStore();
+const toastStore = useToastStore();
 
 const rootRef = ref<HTMLElement | null>(null);
 const page = ref(1);
@@ -363,7 +365,21 @@ function addRow(): void {
   });
 }
 
+/** R10B-14：点删除时记下目标行本身，确认后按它重新定位；草稿在确认期间被重载就找不回，宁可放弃。 */
+function locateRow(sheetKey: string | null, rowId: string, rowRef: unknown): number {
+  if (sheetKey !== visualizer.currentSheetKey) return -1;
+  const content = visualizer.currentSheet?.content;
+  if (!Array.isArray(content)) return -1;
+  const index = rowId
+    ? content.findIndex((row: any, i: number) => i > 0 && Array.isArray(row) && String(row[0] ?? '').trim() === rowId)
+    : content.indexOf(rowRef as any);
+  return index > 0 ? index - 1 : -1;
+}
+
 async function deleteRow(rowIndex: number): Promise<void> {
+  const sheetKey = visualizer.currentSheetKey;
+  const rowRef = visualizer.currentSheet?.content?.[rowIndex + 1];
+  const rowId = Array.isArray(rowRef) ? String(rowRef[0] ?? '').trim() : '';
   const confirmed = await dialogStore.confirm({
     title: '删除数据行',
     message: `确定要删除第 ${rowIndex + 1} 行吗？这只改动编辑器草稿，保存之前都还能放弃。`,
@@ -371,7 +387,12 @@ async function deleteRow(rowIndex: number): Promise<void> {
     confirmVariant: 'danger',
   });
   if (!confirmed) return;
-  visualizer.deleteRow(rowIndex);
+  const target = locateRow(sheetKey, rowId, rowRef);
+  if (target < 0) {
+    toastStore.warning('确认期间表格已刷新，找不到原来那一行，已取消删除；请重新选择。', { muteable: false });
+    return;
+  }
+  visualizer.deleteRow(target);
   refreshSpecialIndexDraft();
   clearEditing();
 }

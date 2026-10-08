@@ -1,8 +1,7 @@
 /**
  * service/plot/plot-logic.ts — 剧情推进纯逻辑函数
  *
- * 从 presentation/components/optimization-ui.ts 真正搬入的纯数据/逻辑函数。
- * 不操作 DOM，不引用 $popupInstance_ACU / jQuery_API_ACU 等 UI 对象。
+ * 纯数据/逻辑函数，不操作 DOM。
  */
 
 import {

@@ -82,4 +82,14 @@ describe('custom confirm', () => {
     expect(overlay.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
     expect(dialog.getAttribute('data-tt-mobile-surface')).toBe('free-window');
   });
+
+  it('R9-13：新确认框顶掉旧确认框时，旧的 await 以「取消」结束而不是永久挂起', async () => {
+    const first = showCustomConfirm_ACU('第一个', '甲');
+    const second = showCustomConfirm_ACU('第二个', '乙');
+
+    await expect(first).resolves.toBe(false);
+    topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm-ok')!.click();
+    await expect(second).resolves.toBe(true);
+  });
 });
+

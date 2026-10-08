@@ -2,7 +2,7 @@
  * page-registry — 一级页静态注册表（plan §4.1 + §D24）
  *
  * 注册项一旦合并到表里就不可变；需要新增页直接追加。可见性依赖运行时状态
- * 的页通过 requiresSqlite / featureGate / visibleWhen 表达，由 router store
+ * 的页通过 featureGate / visibleWhen 表达，由 router store
  * 在请求 visiblePages 时计算。
  */
 import type { AcuV2Page } from './page-types';

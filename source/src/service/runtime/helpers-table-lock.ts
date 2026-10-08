@@ -178,6 +178,15 @@ export interface TableLockIdentities_ACU {
       return migrated;
   }
 
+  /**
+   * 当前聊天 + 隔离键下是否存有任何锁（不解析身份，只做廉价判空）。
+   * 外部 SQL 写入据此决定要不要为锁定比对导出写前快照（R9-04）；宁可多报：有桶就算有锁。
+   */
+  export function hasAnyTableLocksInCurrentScope_ACU(): boolean {
+      const scoped = settings_ACU?.tableUpdateLocks?.[getTableLockScopeKey_ACU()];
+      return !!scoped && typeof scoped === 'object' && Object.keys(scoped).length > 0;
+  }
+
   /** 身份锁查询：SQL 差异回滚、CRUD 查锁与提示词注入的统一入口。 */
   export function getTableLockIdentitiesForSheet_ACU(sheetKey: string, content?: any[][] | null): TableLockIdentities_ACU {
       const bucket = readIdentityBucket_ACU(sheetKey, content);

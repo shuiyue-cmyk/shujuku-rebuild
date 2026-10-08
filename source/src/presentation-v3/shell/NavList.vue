@@ -28,6 +28,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { canLeaveCurrentPage } from '../../presentation-v2/composables/useUiCloseGuard';
 import { useRouterStore } from '../../presentation-v2/stores/router-store';
 import { useUiModeStore } from '../../presentation-v2/stores/ui-mode-store';
 import { ubPageEntry } from '../router/page-catalog';
@@ -47,7 +48,8 @@ function blurbOf(id: string): string {
   return ubPageEntry(id)?.blurb ?? '';
 }
 
-function go(id: string): void {
+async function go(id: string): Promise<void> {
+  if (id !== router.activePageId && !(await canLeaveCurrentPage())) return;
   router.setActivePage(id);
   emit('navigate', id);
 }

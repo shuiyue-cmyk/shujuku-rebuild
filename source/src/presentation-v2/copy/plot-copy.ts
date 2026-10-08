@@ -80,6 +80,7 @@ export const plotCopy = {
       success: (updated: number, skipped: number) => `Skill 化完成：更新 ${updated} 条，跳过 ${skipped} 条。`,
       partial: (updated: number, skipped: number, failed: number) => `Skill 化部分完成：更新 ${updated} 条，跳过 ${skipped} 条，失败 ${failed} 条。`,
       noSelection: "请先勾选要 Skill 化的世界书条目。",
+      selectedConfirmMessage: (count: number) => `将调用配置的 Agent Skill API，为已勾选的 ${count} 条世界书条目生成描述与触发时机。已有 Skill 元数据的条目会自动跳过，无论这些数据来自 AI 生成还是用户手动编辑。`,
       noCandidates: "当前范围没有可 Skill 化的世界书条目。",
       error: "一键 Skill 化失败",
     },

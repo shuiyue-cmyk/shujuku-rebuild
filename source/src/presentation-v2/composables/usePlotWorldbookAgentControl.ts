@@ -520,16 +520,28 @@ export function usePlotWorldbookAgentControl() {
     }
   }
 
+  let skillifyConfirmPending = false;
+
   async function skillifyAll(): Promise<boolean> {
     return runSkillifyWithOptions_ACU();
   }
 
   async function runSkillifyWithOptions_ACU(optionsPatch: { selectedEntries?: AgentSkillifySelectedEntry_ACU[] } = {}): Promise<boolean> {
-    // 入口防重入：busy 置位在 refresh+confirm 之后，若已在飞直接拒绝，避免并发 skillify。
-    if (busy.value) return false;
-    await refresh();
-    const confirmed = await dialog.confirm(plotCopy.agentControl.skillify.confirm);
+    // R10A-17：busy 要到 refresh + 确认之后才置位，确认阶段用独立标志挡住连点；确认后再查一次 busy。
+    if (busy.value || skillifyConfirmPending) return false;
+    skillifyConfirmPending = true;
+    let confirmed = false;
+    try {
+      await refresh();
+      const confirmCopy = plotCopy.agentControl.skillify.confirm;
+      confirmed = await dialog.confirm(optionsPatch.selectedEntries
+        ? { ...confirmCopy, message: plotCopy.agentControl.skillify.selectedConfirmMessage(optionsPatch.selectedEntries.length) }
+        : confirmCopy);
+    } finally {
+      skillifyConfirmPending = false;
+    }
     if (!confirmed) return false;
+    if (busy.value) return false;
     busy.value = 'skillify';
     // skillify 批次此前无人可中止（signal 恒 undefined）：面板卸载即作废本批——游标已持久化，重新发起可续跑。
     const skillifyAbort = new AbortController();

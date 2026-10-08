@@ -37,7 +37,8 @@ function notifyTableUpdateCallbacksOnce_ACU(ctx: ApiGroupContext, meta: TableUpd
     if (callbackCount === 0) return;
 
     // 修复：确保回调函数永远不会收到 null，而是收到一个空对象，增加稳健性。
-    const dataToSend = currentJsonTableData_ACU || {};
+    // R9-17：每轮通知克隆一次交给回调，第三方原地修改不得改写运行时 canonical 视图。
+    const dataToSend = currentJsonTableData_ACU ? JSON.parse(JSON.stringify(currentJsonTableData_ACU)) : {};
     callbacksSnapshot.forEach((callback, callbackIndex) => {
         try {
             // 将最新的数据与元信息作为参数传给回调；旧回调只声明一个参数时第二参数被自然忽略。

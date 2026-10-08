@@ -404,6 +404,9 @@ describe('useContinuationRuntime', () => {
 
     expect(await continuation.saveActiveOutline(outline)).toBe(true);
     expect(harness.replaceActiveOutline).toHaveBeenCalledWith({ outline });
+    // R10B-07：带上编辑底稿的 revision，由编排器校验
+    expect(await continuation.saveActiveOutline(outline, { stageId: 'stage-1', revision: 2 })).toBe(true);
+    expect(harness.replaceActiveOutline).toHaveBeenLastCalledWith({ outline, expectedStageId: 'stage-1', expectedRevision: 2 });
 
     expect(await continuation.clearData()).toBe(true);
     expect(harness.clearContinuationData).toHaveBeenCalledOnce();

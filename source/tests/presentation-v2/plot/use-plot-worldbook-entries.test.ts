@@ -273,6 +273,36 @@ describe('usePlotWorldbookEntries', () => {
   });
 
 
+  // R10A-06：读取失败（服务层同样返回空数组）不能被当成「条目已不存在」清空勾选，也不能写入空的首次默认。
+  it('R10A-06：某本书读取失败时保留已有勾选，不落盘', async () => {
+    settings = createSettings();
+    settings.plotSettings.plotWorldbookConfig.enabledEntries = { X: [1, 2] };
+    mockGetEntries.mockImplementation(async (_names: string[], options: any) => {
+      options?.failedBooks?.add('X');
+      return { X: [] };
+    });
+
+    const c = await getComposable(settings);
+    await c.loadEntries(['X']);
+
+    expect(settings.plotSettings.plotWorldbookConfig.enabledEntries.X).toEqual([1, 2]);
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it('R10A-06：首次加载读取失败不写入空默认，恢复后仍按首次默认全选', async () => {
+    mockGetEntries.mockImplementationOnce(async (_names: string[], options: any) => {
+      options?.failedBooks?.add('X');
+      return { X: [] };
+    });
+    const c = await getComposable();
+    await c.loadEntries(['X']);
+    expect(settings.plotSettings.plotWorldbookConfig.enabledEntries.X).toBeUndefined();
+
+    mockGetEntries.mockResolvedValueOnce({ X: [makeEntry(1, '好条目'), makeEntry(2, '也好')] });
+    await c.loadEntries(['X']);
+    expect(settings.plotSettings.plotWorldbookConfig.enabledEntries.X).toEqual([1, 2]);
+  });
+
   it('首次加载默认启用所有可见条目', async () => {
     mockGetEntries.mockResolvedValue({
       'X': [makeEntry(1, '好条目'), makeEntry(2, '也好')],
@@ -338,6 +368,41 @@ describe('usePlotWorldbookEntries', () => {
     expect(settings.plotSettings.plotWorldbookConfig.enabledEntries['W']).toEqual([1, 3]);
     expect(c.groups.value[0].entries.find(e => e.uid === 2)?.checked).toBe(false);
     expect(mockSaveSettings).toHaveBeenCalled();
+  });
+
+  it('R10B-05：有筛选范围时全选/全不选只作用于范围内条目', async () => {
+    mockGetEntries.mockResolvedValue({
+      'V': [makeEntry(1, 'a'), makeEntry(2, 'b'), makeEntry(3, 'c')],
+      'U': [makeEntry(7, 'u')],
+    });
+
+    const c = await getComposable();
+    settings.plotSettings.plotWorldbookConfig.enabledEntries = { V: [1, 2], U: [7] };
+    await c.loadEntries(['V', 'U']);
+
+    c.deselectAll([{ bookName: 'V', uid: 2 }]);
+    expect(settings.plotSettings.plotWorldbookConfig.enabledEntries['V']).toEqual([1]);
+    expect(settings.plotSettings.plotWorldbookConfig.enabledEntries['U']).toEqual([7]);
+
+    c.selectAll([{ bookName: 'V', uid: 3 }]);
+    expect(settings.plotSettings.plotWorldbookConfig.enabledEntries['V']).toEqual([1, 3]);
+    expect(c.groups.value[0].entries.map(e => e.checked)).toEqual([true, false, true]);
+  });
+
+  it('R10B-17：较慢的旧加载晚到时不覆盖新列表', async () => {
+    let releaseOld!: (value: unknown) => void;
+    mockGetEntries
+      .mockImplementationOnce(() => new Promise(resolve => { releaseOld = resolve; }))
+      .mockResolvedValueOnce({ 'New': [makeEntry(2, 'new')] });
+
+    const c = await getComposable();
+    const oldLoad = c.loadEntries(['Old']);
+    await c.loadEntries(['New']);
+    releaseOld({ 'Old': [makeEntry(1, 'old')] });
+    await oldLoad;
+
+    expect(c.groups.value.map(g => g.bookName)).toEqual(['New']);
+    expect(c.status.value).toBe('success');
   });
 
   it('deselectAll 清空所有条目', async () => {

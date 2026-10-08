@@ -24,8 +24,8 @@
 | 6 | service/template + template-assistant + worldbook | 13.3k | 子代理完成 → `docs/review/block6-template-worldbook.md`；已修 |
 | 7 | shared/ | 9.8k | 子代理完成 → `docs/review/block7-shared.md`；全部已修（R7-11 locale 一项按风险不修） |
 | 8 | service/ai、plot、optimization、flight-mode、其余小模块 | 5k | 子代理完成 → `docs/review/block8-small-services.md`；全部已修 |
-| 9 | presentation（旧 bootstrap/triggers/api-groups） | 12k | 子代理完成 → `docs/review/block9-presentation-legacy.md`；无 P0；P1×3（R9-01~03）、P2×7（R9-04~10）、P3×8（R9-11~18）；P1 已全部修复，R9-08/09 已修，其余待修 |
-| 10 | presentation-v2 逻辑层（stores/composables）+ presentation-v3 | 35k | 子代理完成：10A composables → `docs/review/block10a-v2-composables.md`（无 P0；P1×2 R10A-01~02、P2×11、P3×10）；10B stores 等 + v3 → `docs/review/block10b-v2-stores-v3.md`（无 P0/P1；P2×7、P3×13）；P1 已全部修复，R10A-03/04 已修，其余待修 |
+| 9 | presentation（旧 bootstrap/triggers/api-groups） | 12k | 子代理完成 → `docs/review/block9-presentation-legacy.md`；无 P0；P1×3（R9-01~03）、P2×7（R9-04~10）、P3×8（R9-11~18）；全部已修（R9-15 为注释更正） |
+| 10 | presentation-v2 逻辑层（stores/composables）+ presentation-v3 | 35k | 子代理完成：10A composables → `docs/review/block10a-v2-composables.md`（无 P0；P1×2 R10A-01~02、P2×11、P3×10）；10B stores 等 + v3 → `docs/review/block10b-v2-stores-v3.md`（无 P0/P1；P2×7、P3×13）；全部已修（R10A-22/23 各有少量保留项，理由见修复进度表） |
 
 ## 块 1：data/
 
@@ -188,10 +188,61 @@
 | R9-03 删楼与滑动同窗口时跳过删楼恢复 | P1 | 已修：「本轮含删楼」改为粘性标志，执行时读取并清零；执行中到达的删楼留给补跑轮；切聊天清掉旧聊天的标志 | chat-mutation-scheduler.test「R9-03」×3 |
 | R9-08 手动确认多轮：后续轮次结束时丢掉已确认结果 | P2 | 已修：末轮无需优化、请求失败（及不可达的末轮跳过）时写回此前已确认的内容，填表只触发一次。注：末轮对话框本就没有「跳过」按钮，可达的丢失路径是前两种 | optimization-ui-write-target.test「R9-08」×2 |
 | R9-09 重新优化对话框 summary 未转义 | P2 | 已修：两处对话框的 summary 都转义 | optimization-ui-write-target.test「R9-09」 |
+| R9-04 原生 SQL API 绕过锁与隐藏列守卫 | P2 | 已修：原生 SQL 写入口与 CRUD 提交路径统一过锁定比对，改到锁定行即整批拒绝并回滚 | sql-external-write-lock-guard.test「R9-04」 |
+| R9-05 CRUD 可改写 row_id | P2 | 已修：updateCell 写列 0/row_id、updateRow 带 row_id 一律拒绝 | table-crud-api.test「R9-05」 |
+| R9-06 数据对象里的选项字段被当选项又当列名 | P2 | 已修：数据对象里的 isImportMode/silent/skipNotify 不再进 SQL，照常写入 | table-crud-api.test「R9-06」 |
+| R9-07 旧公开 API 合并导入/导出失效 | P2 | 已修：导出读设置里的提示词；导入改为「写设置 → 应用模板」原子流程，模板失败整体回滚设置，与 V2 共用一份实现 | combined-settings-legacy.test「R9-07」 |
+| R9-10 启动链中途切聊天 | P2 | 已修：启动链在加载消息与 merged refresh 之后复核聊天身份，切聊天即停在原地，不再以新聊天身份 hydrate 旧数据 | init.test「R9-10」 |
+| R9-11 旧 jQuery 弹窗层整体失效 | P3 | 已修：删除 ui-refs、settings-ui-api、plot-editors、template-preset-ui、update-status-display、optimization-ui-rules 六个文件及各处空转函数（模型探活、状态卡片、按钮状态、手动选表、旧删除入口、优化摘要 toast）；运行态改从 state-manager 直接导入；手动额外提示改为每次清空 | update-process.test「R9-11」 |
+| R9-12 SQLite 恒定后的死分支 | P3 | 已修：删除 CRUD 四个方法的非 SQLite 分支、自动填表分组进度框与终止按钮路径；合并导出不再写合并总结/自动合并字段（导入仍兼容旧文件） | combined-settings-legacy.test「R9-12」 |
+| R9-13 新确认框顶掉旧框时旧 Promise 永不 settle | P3 | 已修：被顶掉的确认框按取消 settle | custom-confirm.test「R9-13」 |
+| R9-14 锁 API 与 CRUD API 行口径不一致 | P3 | 已修：锁 API 头部写明 0 基数据行/sheetKey 口径，新增按 row_id 锁行的入口 | table-lock-api.test「R9-14」 |
+| R9-15 中止注释与实际不符 | P3 | 已修：改正注释（只有切聊天中止在飞调用） | — |
+| R9-16 openVisualizer 重复定义、保存结果被忽略 | P3 | 已修：删除重复定义；手动选表的两个入口与剧情预设导入检查保存结果，失败回滚并如实返回 | data-admin-api.test、settings-config-api.test、plot-preset-api.test「R9-16」 |
+| R9-17 导出与回调交出运行时原对象 | P3 | 已修：对外交出 JSON 深拷贝 | core-data-api-export-copy.test「R9-17」 |
+| R9-18 合并跟发切聊天后在新聊天补跑 | P3 | 已修：登记跟发时记下聊天与隔离域，补跑前比对，不一致即作废 | settings-ui-trigger.test「R9-18」 |
+| R10A-05 改表助手结构+数据混合草稿无法保存 | P2 | 已修：应用前拦下「加列并填值」类混合草稿并提示分两步；纯结构/纯数据照常；列重排按列名比对不记伪更新 | use-visualizer-assistant.test「R10A-05」 |
+| R10A-06 世界书读取失败时清空勾选 | P2 | 已修：读取失败或空书时不动勾选、不落盘；首次加载失败不写空默认 | use-form-fill-worldbook-entries.test、use-plot-worldbook-entries.test「R10A-06」 |
+| R10A-07 Agent 世界书批量编辑整本覆盖 | P2 | 已修：只写回改动条目的改动字段（宿主按 uid 合并），不再整本覆盖；单本失败如实汇报 | use-agent-worldbook-entries.test「R10A-07」 |
+| R10A-08 向量 API 配置先改后校验 | P2 | 已修：在副本上校验，通过才写入；保存失败回滚并如实报错 | vector-api-config.test「R10A-08」 |
+| R10A-09 续写资料陈旧草稿覆盖 Agent 写入 | P2 | 已修：保存带载入时的模块修订号，服务层修订已推进即拒绝 | use-continuation-materials.test、agent-module-store.test「R10A-09」 |
+| R10A-10 剧情预设新建/改名不查重 | P2 | 已修：重名一律拒绝 | plot-preset-store.test「R10A-10」 |
+| R10A-11 SQL 控制台重复执行、提交后误报拒绝 | P2 | 已修：执行入口统一重入闸；提交后切聊天如实提示「已提交」 | use-sql-console-reentry.test「R10A-11」 |
+| R10A-12 refresh 冲掉未保存的提示词编辑 | P2 | 已修：有未保存编辑时 refresh 不覆盖草稿 | use-form-fill-settings-native-tools.test、use-vector-index-delete-scope.test「R10A-12」 |
+| R10A-13 下载立即 revoke 且挂当前 document | P2 | 已修：新版界面统一用 host-download（挂 host document、延迟 revoke），删除五份重复实现 | host-download-conventions.test「R10A-13」 |
+| R10A-14 改表名立即迁移表级 API 预设覆盖 | P3 | 已修：改名只改草稿，保存成功时才按改名映射迁移覆盖；重名不覆盖他表设置 | table-api-preset-rename.test、use-visualizer-config-editing.test「R10A-14」 |
+| R10A-15 改列名不同步额外索引列 | P3 | 已修：改列名同步 extraIndexColumns/Modes | use-visualizer-config-editing.test「R10A-15」 |
+| R10A-16 改表助手旧会话改写新会话状态 | P3 | 已修：每次运行带 runId，旧会话的结果与收尾一律丢弃 | use-visualizer-assistant.test「R10A-16」 |
+| R10A-17 Skill 化连点并发 | P3 | 已修：确认期间即占忙碌位，确认后复查 | use-plot-worldbook-agent-control.test「R10A-17」 |
+| R10A-18 硬清空收尾未 await | P3 | 已修：await 收尾，刷新异常捕获并提示，忙碌态等刷新结束才解除 | use-data-management.test「R10A-18」 |
+| R10A-19 手动填表终止连带中止剧情推进 | P3 | 已修：剧情推进的请求单独登记，填表终止时保留；确认框取消不再清空额外要求 | state-manager.test、useManualUpdate.test「R10A-19」 |
+| R10A-20 恢复诊断无入口 | P3 | 已修：数据管理页补上「历史恢复诊断」入口 | data-mgmt-page.test「R10A-20」 |
+| R10A-21 注入目标切换吞错 | P3 | 已修：旧书清理失败给出警告；注入失败捕获并提示；选择器读取失败显示错误态 | use-form-fill-injection-target.test「R10A-21」 |
+| R10A-22 死代码 | P3 | 已修：删除数据管理隐藏入口函数与对应状态、模板预设三个无调用方的全局操作与未用 import、向量配置空函数、可视化器保存的死分支；合并导出不再写自动合并字段。保留：模板预设的「与库不同」两个状态（同一计算也供标签后缀，且有测试覆盖） | combined-settings-legacy.test「R10A-22」 |
+| R10A-23 重复实现与误导命名 | P3 | 已修：剧情任务 id 同毫秒不再相撞、删任务清理他任务的依赖引用；预设管理加重入闸；恢复守卫改名 ensureTemplateRecoveryReady 并去掉白做的 guide 数据构建；条件模板恒开启改在加载设置时归一，总览刷新不再写设置。三份破坏性确认此前已合并（R10A-04）；下载重复见 R10A-13。保留：填表/剧情两套世界书条目 composable（默认勾选与默认已发送语义不同，共用部分已抽到 worldbook-entry-scope）、两套模板预设 composable（分别服务聊天模板区与预设管理，删除语义分叉的死函数已删） | use-plot-task-editing.test、table-preset-management.test、settings-service.test、dashboard-page.test「R10A-23」 |
+| R10B-01 续写设置自动保存在途时新输入被冲掉 | P2 | 已修：记下在途提交的草稿，保存回声不重建草稿，草稿已变则保留并再排一次保存 | continuation-page.test「R10B-01」 |
+| R10B-02 锁草稿删行/删列后不平移 | P2 | 已修：删行/删列时同步平移锁草稿下标 | visualizer-store.test、use-visualizer-config-editing.test「R10B-02」 |
+| R10B-03 放弃的提示词草稿被后续保存写入 | P2 | 已修：确认关闭即丢弃草稿；基础设置保存只写基础字段 | content-replace-store.test「R10B-03」 |
+| R10B-04 剧情预设重名覆盖、导入覆盖当前预设 | P2 | 已修：重名拒绝；导入前列出会被覆盖的预设并确认，覆盖了当前预设时重新应用 | plot-preset-store.test「R10B-04」 |
+| R10B-05 全选无视筛选 | P2 | 已修：全选/全不选/Skill 全选只作用于当前筛选结果；Skill 化确认文案写明条目数 | worldbook-entries.test 等「R10B-05」 |
+| R10B-06 切页/切模式/开编辑器绕过关闭守卫 | P2 | 已修：三处入口先过页内未保存守卫；外部 API 打开编辑器同样受守卫 | shell.test、table-preset-management.test、open-visualizer-surface.test「R10B-06」 |
+| R10B-07 大纲编辑器无基线覆盖 Agent 新大纲 | P2 | 已修：编辑器记下载入基线，Agent 产出新版后提示过期并拒绝保存；服务层按阶段与修订号核对 | continuation-page.test、continuation-orchestrator.test「R10B-07」 |
+| R10B-08 数据管理页诊断忙碌态恒为 false | P3 | 已修：删除空转的运行时诊断与 1Hz 轮询，危险按钮统一用真实忙碌态 | data-mgmt-page.test「R10B-08」 |
+| R10B-10 飞行模式开关无在途锁 | P3 | 已修（随 R10A-04） | dashboard-page.test |
+| R10B-11 输入法回车提前提交 | P3 | 已修：组字期间的回车不提交 | ub-dialog-host-ime.test「R10B-11」 |
+| R10B-12 store 忽略保存失败 | P3 | 已修：保存失败原地回滚并返回失败，不再弹「已保存」 | content-replace-store.test、plot-preset-store.test「R10B-12」 |
+| R10B-13 正文替换单忙碌槽、切预设丢自定义提示词 | P3 | 已修：在途时拒绝其它耗时操作；从未存为预设的自定义提示词切走前确认 | content-replace-page.test「R10B-13」 |
+| R10B-14 数据视图删行跨确认框按下标 | P3 | 已修：按 row_id 定位，确认后重新查找 | open-visualizer-surface.test「R10B-14」 |
+| R10B-15 保存中编辑控件不禁用、关闭复位保存态 | P3 | 已修：保存中禁用编辑区，保存在途时不允许关闭 | open-visualizer-surface.test「R10B-15」 |
+| R10B-16 主题 token 过滤可被转义绕过 | P3 | 已修：拒绝反斜杠转义、各类资源函数（含厂商前缀）与协议 URL | theme-store.test「R10B-16」 |
+| R10B-17 剧情页条目刷新无序号守卫 | P3 | 已修：加载序号守卫，旧请求结果丢弃 | use-plot-worldbook-entries.test「R10B-17」 |
+| R10B-18 下载工具重复实现 | P3 | 已修：并入 host-download，约定测试禁止新版界面另写下载 | host-download-conventions.test「R10B-18」 |
+| R10B-19 死代码与过时注释 | P3 | 已修：删除侧栏 SQLite 可见性开关、退役续写 store、正文替换按草稿名操作的三个动作、剧情预设两个无调用动作、可视化器/宿主环境/资料状态/外壳 store 的未用函数与计数、数据管理文案未用分节；改正菜单按钮、启动入口、样式注入、持久化、正文替换开关、预设导入的过时注释。复核：shared-copy 仍被四个文案文件引用，保留 | — |
+| R10B-20 功能页开关只在仪表盘刷新时同步 | P3 | 已修：切聊天、重新打开界面、导入合并设置、恢复默认后按设置整体同步入口，入口被隐藏时收回当前页 | router-store.test「R10B-20」 |
 
 修 R1-01 时全量发现运行时 content 单元格可能是真数值（非字符串），escapeValue 已兼容。
 
-待修：块 1–8 已全部收口（不修项均已注明理由）。块 9、10 的 P1 已全部修复；剩余待修：块 9 R9-04~07、R9-10 与 P3×8，块 10A R10A-05~13 与 P3×10，块 10B P2×7/P3×13（R10B-09 已随 R10A-01 修复）。
+待修：无。块 1–10 全部收口（不修/保留项均已注明理由）。
 R4-02 遗留：模型放弃补齐时，草稿（partial）不会阻止水位推进——只在提升路径堵住了「写齐却看不见」，「没写齐就收工」仍按旧口径。
 
 测试稳定性：重型页面套件首个用例冷导入整张 V2 模块图单跑 11–15s，贴着原全局 15s 上限，本机并行全量必超时（发布基线同样失败）；全局 testTimeout 调为 60s。

@@ -13,11 +13,7 @@
 import {
   followGlobalTemplateForCurrentChat_ACU,
 } from '../../service/template/template-preset-service';
-import {
-  buildChatSheetGuideDataFromTemplateObj_ACU,
-  getGlobalTemplateSnapshotForCurrentProfile_ACU,
-} from '../../service/template/chat-scope';
-import { ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU } from './useTemplateRecoveryGuard';
+import { ensureTemplateRecoveryReady_ACU } from './useTemplateRecoveryGuard';
 import type { useDialogStore } from '../stores/dialog-store';
 import type { useToastStore } from '../stores/toast-store';
 import { applyTemplateWithDestructiveConfirm_ACU } from './template-destructive-confirm';
@@ -38,11 +34,7 @@ export async function runFollowGlobalTemplateFlow_ACU({
   toast: ToastStore;
   signal?: AbortSignal;
 }): Promise<boolean> {
-  const globalSnapshot = getGlobalTemplateSnapshotForCurrentProfile_ACU();
-  const guideData = globalSnapshot?.templateObj
-    ? buildChatSheetGuideDataFromTemplateObj_ACU(globalSnapshot.templateObj, { stripSeedRows: false })
-    : null;
-  const recoveryGuard = await ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU(guideData, 'switch-template');
+  const recoveryGuard = await ensureTemplateRecoveryReady_ACU('switch-template');
   if (!recoveryGuard.success) return false;
 
   let userCancelled = false;

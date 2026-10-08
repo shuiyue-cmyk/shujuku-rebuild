@@ -1057,3 +1057,40 @@ describe('发送意图钩子的 IME 过滤', () => {
     expect(m.markSendIntent, 'shift+Enter 是换行，既有行为不得回退').toHaveBeenCalledTimes(1);
   });
 });
+
+// R9-10：启动链与 CHAT_CHANGED 链一样，在每个 await 之后复核聊天身份；
+// 启动链运行期间切了聊天就停下，交给随后补跑的 CHAT_CHANGED 链，不把旧聊天的表发布成新聊天的 runtime。
+describe('R9-10 启动链中途切聊天', () => {
+  it('merged refresh 期间切到另一个聊天时停在原地，不再捕获保管库或自检', async () => {
+    const { runStartupChatInit_ACU } = await import('../../../src/presentation/bootstrap/init');
+    m.resetScript.mockImplementation(async (chatId: string) => { m.currentChatKey = chatId; });
+    m.refresh.mockImplementation(async () => { m.currentChatKey = 'chat-b'; return { mergedData: { sheet_a: {} }, degraded: false }; });
+
+    await runStartupChatInit_ACU('chat-a');
+
+    expect(m.refresh).toHaveBeenCalledOnce();
+    expect(m.captureVault).not.toHaveBeenCalled();
+    expect(m.dormantAudit).not.toHaveBeenCalled();
+  });
+
+  it('加载聊天消息期间切聊天时不再做 merged refresh', async () => {
+    const { runStartupChatInit_ACU } = await import('../../../src/presentation/bootstrap/init');
+    m.resetScript.mockImplementation(async (chatId: string) => { m.currentChatKey = chatId; });
+    m.loadMessages.mockImplementation(async () => { m.currentChatKey = 'chat-b'; });
+
+    await runStartupChatInit_ACU('chat-a');
+
+    expect(m.refresh).not.toHaveBeenCalled();
+  });
+
+  it('聊天未切换时照常走完（捕获保管库）', async () => {
+    const { runStartupChatInit_ACU } = await import('../../../src/presentation/bootstrap/init');
+    m.resetScript.mockImplementation(async (chatId: string) => { m.currentChatKey = chatId; });
+    m.loadMessages.mockImplementation(async () => undefined);
+    m.refresh.mockImplementation(async () => ({ mergedData: { sheet_a: {} }, degraded: false }));
+
+    await runStartupChatInit_ACU('chat-a');
+
+    expect(m.captureVault).toHaveBeenCalledOnce();
+  });
+});

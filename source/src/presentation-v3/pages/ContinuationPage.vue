@@ -303,8 +303,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { getAcuHostDocument } from '../../presentation-v2/bootstrap/host-document';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { downloadJsonToHost_ACU } from '../../presentation-v2/bootstrap/host-download';
 import { useApiPresetSelectOptions } from '../../presentation-v2/composables/useApiPresetSelectOptions';
 import { useChatMutationTick, watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
 import {
@@ -333,7 +333,7 @@ import UbSection from '../ui/UbSection.vue';
 import UbSelect from '../ui/UbSelect.vue';
 import UbSwitch from '../ui/UbSwitch.vue';
 import UbTextarea from '../ui/UbTextarea.vue';
-import { downloadJsonFile_UB, readFileText_UB } from '../ui/file-helpers';
+import { readFileText_UB } from '../ui/file-helpers';
 
 const STAGE_SIZE_OPTIONS = [
   { value: 'short', label: '短（3–5）' },
@@ -657,8 +657,8 @@ async function repairMaterials(modules: readonly AgentWritableModule_ACU[]): Pro
 }
 
 /** 手动改写的大纲保存成功后刷新资料面板，读到新的 revision。 */
-async function saveOutline(outline: StageOutline_ACU): Promise<void> {
-  if (await runtime.saveActiveOutline(outline)) materialsPanel.value?.reload();
+async function saveOutline(outline: StageOutline_ACU, base: { stageId: string; revision: number } | null): Promise<void> {
+  if (await runtime.saveActiveOutline(outline, base)) materialsPanel.value?.reload();
 }
 
 async function clearData(): Promise<void> {
@@ -793,6 +793,11 @@ function normalizeSettingsDraft(): ContinuationSettings_ACU {
 
 /** 最近一次从权威状态装载/保存成功的草稿快照：跳过无变化的自动保存，切断"保存→刷新→重建草稿"循环。 */
 let lastPersistedSettingsJson = '';
+/**
+ * R10B-01：本页自动保存在途时提交的草稿 JSON。保存成功后 runtime.settings 会被刷新成持久化结果；
+ * 若期间用户又改了草稿，这次刷新只是自己保存的回声，不得用它重建草稿冲掉新输入。
+ */
+let inFlightSubmittedDraftJson: string | null = null;
 let settingsSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** 设置修改后自动保存（防抖 800ms）。 */
@@ -828,7 +833,15 @@ async function saveSettingsNow(): Promise<void> {
     settingsError.value = error instanceof Error ? error.message : '续写设置无效';
     return;
   }
-  const outcome = await runtime.saveSettings(candidate);
+  inFlightSubmittedDraftJson = JSON.stringify(settingsDraft.value);
+  let outcome: Awaited<ReturnType<typeof runtime.saveSettings>>;
+  try {
+    outcome = await runtime.saveSettings(candidate);
+    // 等保存引起的 runtime.settings 刷新 watch 先跑完，再撤掉在途标记
+    await nextTick();
+  } finally {
+    inFlightSubmittedDraftJson = null;
+  }
   if (saveChatIdentity !== currentDraftChatIdentity()) {
     settingsDraft.value = null;
     settingsError.value = '聊天已切换，设置草稿未写入当前聊天。';
@@ -838,6 +851,8 @@ async function saveSettingsNow(): Promise<void> {
   if (outcome === 'saved') {
     settingsError.value = '';
     settingsNotice.value = '';
+    // 保存在途期间的新修改：草稿已被保留，补排一次保存
+    if (settingsDraft.value && JSON.stringify(settingsDraft.value) !== lastPersistedSettingsJson) scheduleSettingsSave();
   } else if (outcome === 'busy') {
     settingsNotice.value = '设置已修改：Agent 正在运行，将在本轮空档自动保存并于下一轮生效。';
     scheduleSettingsSave();
@@ -895,7 +910,7 @@ function exportPrompts(): void {
   promptIoError.value = '';
   try {
     const source = cloneSettings(settingsDraft.value);
-    downloadJsonFile_UB(getAcuHostDocument(), 'acu-continuation-prompts.json', {
+    downloadJsonToHost_ACU('acu-continuation-prompts.json', {
       version: 1,
       outlinePrompt: source.outlinePrompt,
       agentPrompts: source.agentPrompts,
@@ -974,6 +989,14 @@ watch([runtimeSettingsIdentity, runtime.settings], ([sourceIdentity, settings]) 
   // 只有持久化内容真的变了才重建草稿，否则运行期间的刷新会冲掉未保存的改动
   const persistedJson = settings ? JSON.stringify(cloneSettings(settings)) : '';
   if (persistedJson === lastPersistedSettingsJson && settingsDraft.value) return;
+  if (
+    inFlightSubmittedDraftJson !== null
+    && settingsDraft.value
+    && JSON.stringify(settingsDraft.value) !== inFlightSubmittedDraftJson
+  ) {
+    lastPersistedSettingsJson = persistedJson;
+    return;
+  }
   settingsDraft.value = settings ? cloneSettings(settings) : null;
   lastPersistedSettingsJson = persistedJson;
 }, { immediate: true });

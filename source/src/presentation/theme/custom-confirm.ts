@@ -12,6 +12,7 @@
  */
 import { SCRIPT_ID_PREFIX_ACU } from '../../shared/constants';
 import { topLevelWindow_ACU } from '../../shared/env';
+import { escapeHtml_ACU } from '../../shared/html-helpers';
 
 /** 确认框选项 */
 export interface CustomConfirmOptions {
@@ -27,6 +28,9 @@ export interface CustomConfirmOptions {
 function getTargetDoc(): Document {
   return (topLevelWindow_ACU || window).document;
 }
+
+/** 当前确认框的 resolve：被新弹框顶掉时以「取消」结束，避免旧的 await 永久挂起（R9-13）。 */
+let pendingConfirmResolve_ACU: ((result: boolean) => void) | null = null;
 
 /**
  * 弹出自定义确认框，返回 Promise<boolean>。
@@ -52,7 +56,10 @@ export function showCustomConfirm_ACU(
   const viewportWidth = Number(targetWindow?.innerWidth || window.innerWidth || 0);
   const isNarrowScreen = viewportWidth > 0 && viewportWidth <= 899;
 
-  // 移除可能残留的旧确认框（防止重复）
+  // 移除可能残留的旧确认框（防止重复）；旧弹框的 await 按取消结束
+  const supersededResolve = pendingConfirmResolve_ACU;
+  pendingConfirmResolve_ACU = null;
+  supersededResolve?.(false);
   removeExistingConfirm();
 
   const confirmId = `${SCRIPT_ID_PREFIX_ACU}-custom-confirm`;
@@ -174,9 +181,17 @@ export function showCustomConfirm_ACU(
   }
 
   return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const settle = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (pendingConfirmResolve_ACU === settle) pendingConfirmResolve_ACU = null;
+      resolve(result);
+    };
+    pendingConfirmResolve_ACU = settle;
     const cleanup = (result: boolean) => {
       removeExistingConfirm();
-      resolve(result);
+      settle(result);
     };
 
     $ok?.addEventListener('click', () => cleanup(true));
@@ -193,12 +208,4 @@ function removeExistingConfirm(): void {
   const targetDoc = getTargetDoc();
   const existing = targetDoc.getElementById(`${confirmId}-overlay`);
   if (existing) existing.remove();
-}
-
-/** 简易 HTML 转义（使用主窗口 document 创建元素） */
-function escapeHtml_ACU(text: string): string {
-  const targetDoc = getTargetDoc();
-  const div = targetDoc.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
 }

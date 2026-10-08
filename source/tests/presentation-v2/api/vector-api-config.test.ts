@@ -5,11 +5,23 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-async function importComposable(config: any) {
+async function importComposable(config: any, saveResult: any = { saved: true, storageType: "memory" }) {
   vi.resetModules();
-  const saveSettings = vi.fn(() => ({ saved: true, storageType: "memory" }));
+  const saveSettings = vi.fn(() => saveResult);
   vi.doMock("../../../src/service/vector/vector-memory-config", () => ({
     getCurrentVectorMemoryConfig_ACU: () => config,
+    // 与真实实现同语义：先写活配置再保存，保存失败按快照回滚。
+    updateGlobalVectorMemoryConfigFields_ACU: (patch: any) => {
+      const snapshot = JSON.parse(JSON.stringify(config));
+      Object.assign(config, patch);
+      const result = saveSettings();
+      if (!result.saved) {
+        Object.keys(config).forEach(key => delete config[key]);
+        Object.assign(config, snapshot);
+        return { ok: false, message: result.error || "保存失败，已回滚。" };
+      }
+      return { ok: true };
+    },
     validateSummaryVectorIndexConfig_ACU: (input: any) => {
       const errors: string[] = [];
       if (!input.embeddingEndpoint) errors.push("缺少 embeddingEndpoint");
@@ -51,6 +63,29 @@ describe("useVectorApiConfig", () => {
     expect(vector.errors.value.join(" ")).not.toContain("embeddingEndpoint");
     expect(vector.errors.value.join(" ")).not.toContain("embeddingModel");
     expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  // R10A-08：校验失败时活配置不能已被改写（否则下一次任何保存都会把非法配置落盘）。
+  it("R10A-08：校验失败时不改动当前生效的配置", async () => {
+    const config: any = { embeddingEndpoint: "https://embed.test", embeddingModel: "embed-model" };
+    const { vector, saveSettings } = await importComposable(config);
+    vector.form.embeddingEndpoint = "";
+
+    expect(vector.save()).toBe(false);
+
+    expect(config.embeddingEndpoint).toBe("https://embed.test");
+    expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("R10A-08：存储保存失败时如实报失败并回滚", async () => {
+    const config: any = { embeddingEndpoint: "https://embed.test", embeddingModel: "embed-model" };
+    const { vector } = await importComposable(config, { saved: false, error: "磁盘已满" });
+    vector.form.embeddingModel = "new-model";
+
+    expect(vector.save()).toBe(false);
+
+    expect(config.embeddingModel).toBe("embed-model");
+    expect(vector.errors.value.join(" ")).toContain("磁盘已满");
   });
 
   it("Rerank endpoint/model 不成对时阻止保存", async () => {

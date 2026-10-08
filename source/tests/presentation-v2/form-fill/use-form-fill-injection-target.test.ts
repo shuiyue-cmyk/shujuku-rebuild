@@ -143,4 +143,47 @@ describe('useFormFillInjectionTarget', () => {
     expect(mockUpdateReadableLorebookEntry).not.toHaveBeenCalled();
     expect(mockToast.info).not.toHaveBeenCalled();
   });
+
+  it('R10A-21：旧目标清理失败时照常切换，但不报「成功切换」，而是提示旧条目可能残留', async () => {
+    mockDeleteAllGeneratedEntries.mockRejectedValueOnce(new Error('写入失败'));
+    const c = await getComposable({ target: 'Book-A' });
+
+    await flushTargetSwitch(c.onSelectorChange('Book-B'));
+
+    expect(worldbookConfig.injectionTarget).toBe('Book-B');
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(mockToast.warning).toHaveBeenCalledWith(expect.stringContaining('Book-A'), expect.anything());
+  });
+
+  it('R10A-21：向新目标注入失败时给出失败提示，不抛出未处理异常', async () => {
+    mockUpdateReadableLorebookEntry.mockRejectedValueOnce(new Error('注入失败'));
+    const c = await getComposable({ target: 'Book-A' });
+
+    await expect(flushTargetSwitch(c.onSelectorChange('Book-B'))).resolves.toBeUndefined();
+
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(mockToast.error).toHaveBeenCalled();
+    expect(c.switching.value).toBe(false);
+  });
 });
+
+describe('useWorldbookSelector（R10A-21）', () => {
+  it('世界书列表读取失败时显示错误状态，而不是「没有世界书」', async () => {
+    vi.resetModules();
+    vi.doMock('../../../src/service/worldbook/pipeline', () => ({
+      getWorldbookNames_ACU: vi.fn(async () => { throw new Error('宿主接口不可用'); }),
+    }));
+    vi.doMock('../../../src/service/worldbook/worldbook-service', () => ({
+      getCurrentCharPrimaryLorebook_ACU: vi.fn(async () => null),
+    }));
+    vi.doMock('../../../src/shared/utils', () => ({ logError_ACU: vi.fn(), logDebug_ACU: vi.fn(), logWarn_ACU: vi.fn() }));
+    const { useWorldbookSelector } = await import('../../../src/presentation-v2/composables/useWorldbookSelector');
+    const selector = useWorldbookSelector();
+
+    await selector.refresh();
+
+    expect(selector.status.value).toBe('error');
+    expect(selector.error.value).toContain('宿主接口不可用');
+  });
+});
+

@@ -70,6 +70,8 @@ export function useFormFillInjectionTarget() {
     switching.value = true;
     try {
       const oldLorebookName = await resolveLorebookName(oldTargetSetting);
+      // R10A-21：旧书清理失败不阻断切换，但必须如实告知旧条目可能残留
+      let cleanupFailedBook = '';
       if (oldLorebookName) {
         toast.info(`正在从旧目标 [${oldLorebookName}] 中清除条目...`, { muteable: false });
         try {
@@ -77,6 +79,7 @@ export function useFormFillInjectionTarget() {
           await waitForCleanupSettle();
         } catch (e) {
           logError_ACU(`Failed to clean up old target ${oldLorebookName}:`, e);
+          cleanupFailedBook = oldLorebookName;
         }
       } else {
         logWarn_ACU('Old lorebook name could not be determined, skipping cleanup.');
@@ -91,8 +94,20 @@ export function useFormFillInjectionTarget() {
 
       if (currentJsonTableData_ACU) {
         toast.info('正在向新目标注入条目...', { muteable: false });
-        await updateReadableLorebookEntry_ACU(true);
-        toast.success('数据注入目标已成功切换！', { muteable: false });
+        try {
+          await updateReadableLorebookEntry_ACU(true);
+        } catch (e: any) {
+          logError_ACU('Failed to inject entries into new target:', e);
+          toast.error(`数据注入目标已更新，但向新目标写入条目失败：${e?.message || '未知错误'}。下次填表时会重新写入。`, { muteable: false });
+          return;
+        }
+        if (cleanupFailedBook) {
+          toast.warning(`数据注入目标已切换，但旧目标 [${cleanupFailedBook}] 的表格条目清理失败；若该世界书仍启用，提示词里可能出现两份表格数据，请手动清理。`, { muteable: false, durationMs: 8000 });
+        } else {
+          toast.success('数据注入目标已成功切换！', { muteable: false });
+        }
+      } else if (cleanupFailedBook) {
+        toast.warning(`数据注入目标已更新，但旧目标 [${cleanupFailedBook}] 的表格条目清理失败，请手动清理。`, { muteable: false, durationMs: 8000 });
       } else {
         toast.warning('数据注入目标已更新，但当前无数据可注入。', { muteable: false });
       }

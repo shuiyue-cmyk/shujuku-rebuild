@@ -25,8 +25,8 @@
         :loading="entries.status.value === 'loading'"
         :empty-text="entryEmptyText"
         @update:filter="entryFilter = $event"
-        @select-all="entries.selectAll()"
-        @deselect-all="entries.deselectAll()"
+        @select-all="entries.selectAll($event)"
+        @deselect-all="entries.deselectAll($event)"
         @toggle="(bookName, uid, checked) => entries.toggleEntry(bookName, uid, checked)"
         @toggle-group="entries.toggleGroupExpanded($event)"
       />

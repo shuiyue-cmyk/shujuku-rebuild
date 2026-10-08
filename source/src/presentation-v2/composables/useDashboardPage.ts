@@ -221,18 +221,6 @@ function hasActiveChatContext(chatFileIdentifier: string): boolean {
   return !!normalized && normalized !== "unknown_chat_init";
 }
 
-function ensurePromptTemplateEnabled(): void {
-  if (
-    !settings_ACU.promptTemplateSettings ||
-    typeof settings_ACU.promptTemplateSettings !== "object"
-  ) {
-    settings_ACU.promptTemplateSettings = {};
-  }
-  if (settings_ACU.promptTemplateSettings.enabled === true) return;
-  settings_ACU.promptTemplateSettings.enabled = true;
-  saveSettings_ACU();
-}
-
 function makeHealthItem(input: {
   key: string;
   title: string;
@@ -1041,7 +1029,6 @@ export function useDashboardPage(): DashboardPageState {
 
   async function refresh(): Promise<void> {
     refreshDevOptions();
-    ensurePromptTemplateEnabled();
     syncContentReplaceAvailability();
     const next = safeReadSnapshot();
     chatFileIdentifier.value = next.chatFileIdentifier;

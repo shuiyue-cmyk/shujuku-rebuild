@@ -119,6 +119,25 @@ describe('openVisualizerSurface_ACU', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('R10B-06：面板已打开且当前页有未保存修改时，外部打开编辑器先过页面守卫，拒绝则不打开', async () => {
+    persistAdvancedMode('dashboard');
+    const mount = await import('../../../src/presentation-v2/bootstrap/mount');
+    await mount.openAcuV2App();
+    await Promise.resolve();
+    const { registerUiCloseGuard } = await import('../../../src/presentation-v2/composables/useUiCloseGuard');
+    const unregister = registerUiCloseGuard(() => false);
+
+    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
+    const result = await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
+    await Promise.resolve();
+    unregister();
+
+    expect(result).toBe(false);
+    expect(document.querySelector('[data-ub-viz]')).toBeNull();
+    expect(document.querySelector('.ub-top__title')?.textContent).toContain('仪表盘');
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('安装独立 v2 全局接口：未打开时忽略；打开后按数据源 revision 决定是否重载', async () => {
     persistAdvancedMode();
     const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
@@ -267,6 +286,48 @@ describe('openVisualizerSurface_ACU', () => {
     buttonByText(layer, '删除这一行')!.click();
     await tick();
     expect(visualizer.currentSheet.content).toEqual([[null, '姓名'], [null, 'B']]);
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('R10B-14：确认删除期间数据被外部重载时，不删掉重载后同一下标的另一行', async () => {
+    const { mount, visualizer, surface } = await openWith({
+      sheet_a: { name: '角色状态', content: [[null, '姓名'], ['r1', 'A'], ['r2', 'B']] },
+    });
+    surface.querySelector<HTMLButtonElement>('button[title="删除这一行"]')!.click();
+    await tick();
+
+    // 确认框打开期间，后台填表提交触发外部重载：第一行换成了新数据
+    visualizer.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: { uid: 'sheet_a', orderNo: 0, name: '角色状态', content: [[null, '姓名'], ['r9', '新来的'], ['r1', 'A'], ['r2', 'B']] },
+    }, ['sheet_a']);
+    visualizer.selectSheet('sheet_a');
+    await tick();
+
+    const layer = document.querySelector<HTMLElement>('.ub-dialog-layer')!;
+    buttonByText(layer, '删除这一行')!.click();
+    await tick();
+    expect(visualizer.currentSheet.content.map((row: any[]) => row[0])).toEqual([null, 'r9', 'r2']);
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('R10B-15：保存进行中编辑控件禁用，关闭编辑器被拦下且不复位保存状态', async () => {
+    const { mount, visualizer, surface } = await openWith({
+      sheet_a: { name: '角色状态', content: [[null, '姓名'], ['r1', 'A']] },
+    });
+    visualizer.setDirty(true);
+    visualizer.setSaving(true);
+    await tick();
+
+    const deleteButton = surface.querySelector<HTMLButtonElement>('button[title="删除这一行"]')!;
+    expect(deleteButton.matches(':disabled')).toBe(true);
+
+    document.querySelector<HTMLButtonElement>('[data-ub-viz-close]')!.click();
+    await tick();
+    expect(document.querySelector('.ub-dialog-layer')).toBeNull();
+    expect(visualizer.isActive).toBe(true);
+    expect(visualizer.isSaving).toBe(true);
+    visualizer.setSaving(false);
     mount.__resetAcuV2MountForTests();
   });
 

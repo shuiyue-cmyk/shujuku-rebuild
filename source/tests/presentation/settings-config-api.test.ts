@@ -74,6 +74,23 @@ describe('createSettingsConfigApi Agent config source', () => {
     expect(openVisualizer).toHaveBeenCalledTimes(1);
   });
 
+  it('R9-16：手动选表的设置保存失败时返回 false 并回滚内存中的选择', () => {
+    const api = createSettingsConfigApi({} as any);
+    (settings_ACU as any).manualSelectedTables = ['old'];
+    (settings_ACU as any).hasManualSelection = true;
+    mockSaveSettings.mockReturnValue({ saved: false, storageType: 'memory', error: '写入失败' });
+
+    expect(api.setManualSelectedTables(['sheetA'])).toBe(false);
+    expect((settings_ACU as any).manualSelectedTables).toEqual(['old']);
+    expect(api.clearManualSelectedTables()).toBe(false);
+    expect((settings_ACU as any).manualSelectedTables).toEqual(['old']);
+    expect((settings_ACU as any).hasManualSelection).toBe(true);
+
+    mockSaveSettings.mockReturnValue({ saved: true, storageType: 'tavern' });
+    expect(api.setManualSelectedTables(['sheetA'])).toBe(true);
+    expect((settings_ACU as any).manualSelectedTables).toEqual(['sheetA']);
+  });
+
   it('V2 surface 未注册时公开 UI API 返回 false', async () => {
     const api = createSettingsConfigApi({} as any);
 

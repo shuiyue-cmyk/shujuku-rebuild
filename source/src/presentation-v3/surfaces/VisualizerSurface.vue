@@ -62,7 +62,8 @@
       </div>
 
       <main class="ub-viz__scroll" data-ub-viz-scroll>
-        <div class="ub-viz__page">
+        <!-- R10B-15：保存进行中整页编辑控件禁用，避免输入被 store 拒绝后静默丢失 -->
+        <fieldset class="ub-viz__page" :disabled="visualizer.isSaving">
           <p v-if="visualizer.isLoading" class="ub-viz__state">
             <i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>
             正在载入当前聊天的表格数据…
@@ -93,7 +94,7 @@
             <VizAssistantView v-else />
           </template>
           <p v-else class="ub-viz__state">还没有表格。打开「数据库管理」新增一张。</p>
-        </div>
+        </fieldset>
       </main>
 
       <footer class="ub-viz__footer" data-ub-viz-footer aria-label="保存">
@@ -143,6 +144,7 @@ import { useVisualizerConfigEditing } from '../../presentation-v2/composables/vi
 import { useVisualizerData } from '../../presentation-v2/composables/visualizer/useVisualizerData';
 import { useVisualizerSave } from '../../presentation-v2/composables/visualizer/useVisualizerSave';
 import { useDialogStore } from '../../presentation-v2/stores/dialog-store';
+import { useToastStore } from '../../presentation-v2/stores/toast-store';
 import { useVisualizerStore } from '../../presentation-v2/stores/visualizer-store';
 import UbBadge from '../ui/UbBadge.vue';
 import UbButton from '../ui/UbButton.vue';
@@ -160,6 +162,7 @@ const emit = defineEmits<{ (e: 'close'): void }>();
 
 const visualizer = useVisualizerStore();
 const dialogStore = useDialogStore();
+const toastStore = useToastStore();
 const data = useVisualizerData();
 const config = useVisualizerConfigEditing();
 const navOpen = ref(false);
@@ -300,6 +303,11 @@ async function requestDeleteColumn(index: number): Promise<void> {
 }
 
 useUiCloseGuard(async () => {
+  // R10B-15：保存在途时不允许关闭（「丢弃」会复位保存状态，在途保存的收尾随后作用到已关闭的编辑器）
+  if (visualizer.isActive && visualizer.isSaving) {
+    toastStore.warning('正在保存，请等保存完成后再关闭数据库编辑器。', { muteable: false });
+    return false;
+  }
   if (!visualizer.isActive || !visualizer.dirty) return true;
   const action = await dialogStore.choose({
     title: '关闭数据库编辑器',
@@ -471,6 +479,8 @@ watchChatChanged_ACU(() => {
 }
 
 .ub-viz__page {
+  border: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   min-height: 100%;

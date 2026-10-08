@@ -25,6 +25,14 @@ export async function canCloseUi(): Promise<boolean> {
   return true;
 }
 
+/**
+ * R10B-06：切页、切基础/高手模式、打开可视化编辑器同样会卸载当前页，
+ * 页内未保存的草稿与关闭 UI 时面临同样的丢失，因此共用同一组守卫。
+ */
+export function canLeaveCurrentPage(): Promise<boolean> {
+  return canCloseUi();
+}
+
 export function __resetUiCloseGuardsForTests(): void {
   guards.clear();
 }

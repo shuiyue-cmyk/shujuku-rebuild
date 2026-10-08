@@ -52,6 +52,34 @@ describe('usePlotTaskEditing', () => {
     expect(e.tasks.value).toHaveLength(1);
   });
 
+  it('R10A-23：同一毫秒连续新增任务不会撞 id', async () => {
+    const { usePlotTaskEditing } = await setup();
+    vi.spyOn(Date, 'now').mockReturnValue(1700000000000);
+    const e = usePlotTaskEditing();
+    e.loadFromRaw([], '');
+    e.addTask();
+    e.addTask();
+    const ids = e.tasks.value.map(t => t.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('R10A-23：删除任务时清理其它任务对它的依赖/阻塞引用', async () => {
+    const { usePlotTaskEditing } = await setup();
+    const e = usePlotTaskEditing();
+    e.loadFromRaw([
+      { id: 'a', name: 'A', agentControl: { dependsOnTaskIds: ['b'], blocksTaskIds: ['b', 'c'] } },
+      { id: 'b', name: 'B' },
+      { id: 'c', name: 'C', agentControl: { dependsOnTaskIds: ['b', 'a'] } },
+    ], '');
+    e.selectTask('b');
+    e.deleteCurrentTask();
+    const a = e.tasks.value.find(t => t.id === 'a')!;
+    const c = e.tasks.value.find(t => t.id === 'c')!;
+    expect(a.agentControl.dependsOnTaskIds).toEqual([]);
+    expect(a.agentControl.blocksTaskIds).toEqual(['c']);
+    expect(c.agentControl.dependsOnTaskIds).toEqual(['a']);
+  });
+
   it('moveCurrent 上下移动当前任务的位置', async () => {
     const { usePlotTaskEditing } = await setup();
     const e = usePlotTaskEditing();

@@ -102,10 +102,10 @@
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { acuRequestAnimationFrame } from '../presentation-v2/bootstrap/host-env';
-import { useChatChangedListener } from '../presentation-v2/composables/useChatChangedListener';
+import { useChatChangedListener, watchChatChanged_ACU } from '../presentation-v2/composables/useChatChangedListener';
 import { useDevOptions } from '../presentation-v2/composables/useDevOptions';
 import { useTemplateRuntimeChangeListener } from '../presentation-v2/composables/useTemplateRuntimeChangeListener';
-import { canCloseUi } from '../presentation-v2/composables/useUiCloseGuard';
+import { canCloseUi, canLeaveCurrentPage } from '../presentation-v2/composables/useUiCloseGuard';
 import { useRootShellStore } from '../presentation-v2/stores/root-shell-store';
 import { useRouterStore } from '../presentation-v2/stores/router-store';
 import { useThemeStore } from '../presentation-v2/stores/theme-store';
@@ -143,7 +143,9 @@ function openAppearanceFromLauncher(): void {
   appearanceOpen.value = true;
 }
 
-function toggleMode(): void {
+async function toggleMode(): Promise<void> {
+  // 基础/高手模式的可见页互斥，切模式必然换页：先过守卫
+  if (!(await canLeaveCurrentPage())) return;
   uiMode.toggleMode();
   router.ensureActiveVisible();
   launcherOpen.value = false;
@@ -181,10 +183,12 @@ function resetScrollSettled(): void {
 }
 
 useChatChangedListener();
+// R10B-20：功能页入口随设置变化：切聊天、重新打开界面时按设置权威源同步一次
+watchChatChanged_ACU(() => router.syncFeatureGatesFromSettings());
+watch(() => rootShell.openRefreshTick, () => router.syncFeatureGatesFromSettings());
 useTemplateRuntimeChangeListener();
 
 onMounted(() => {
-  rootShell.markMounted();
   router.ensureActiveVisible();
 });
 

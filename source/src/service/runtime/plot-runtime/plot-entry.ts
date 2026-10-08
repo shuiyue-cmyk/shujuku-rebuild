@@ -90,7 +90,7 @@ function isTaskAbortedError_ACU(error: unknown): boolean {
 
       plotAbortController_ACU = new AbortController();
       _set_abortController_ACU(plotAbortController_ACU);
-      trackAbortController_ACU(plotAbortController_ACU);
+      trackAbortController_ACU(plotAbortController_ACU, 'plot');
 
       const runtimeResult = await runPlotTasksRuntime_ACU(plotSettings, userMessage, {
         inputForHash,

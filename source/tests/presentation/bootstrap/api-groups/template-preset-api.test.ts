@@ -25,7 +25,6 @@ vi.mock('../../../../src/shared/template-preset-utils', () => ({
   normalizeTemplatePresetSelectionValue_ACU: vi.fn((value: unknown) => String(value || '').trim()),
 }));
 vi.mock('../../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logError_ACU: vi.fn() }));
-vi.mock('../../../../src/presentation/components/template-preset-ui', () => ({ refreshTemplatePresetSelectInUI_ACU: vi.fn() }));
 vi.mock('../../../../src/presentation/components/pipeline-ui-helpers', () => ({
   refreshPresetUIAfterSwitch_ACU: mocks.refreshUi,
 }));

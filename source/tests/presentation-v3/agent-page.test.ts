@@ -56,6 +56,7 @@ vi.mock('../../src/presentation-v2/composables/useAgentWorldbookEntries', async 
       batchEnableDisabledSkillEntries: vi.fn(async () => 0),
       batchConvertBlueToGreenEntries: vi.fn(async () => 0),
       batchCombinedBlueToGreenAndEnable: vi.fn(async () => ({ converted: 0, enabled: 0 })),
+      lastBatchFailedBooks: { value: [] as string[] },
     }),
   };
 });

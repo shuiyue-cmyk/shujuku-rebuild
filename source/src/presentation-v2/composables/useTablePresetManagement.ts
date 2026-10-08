@@ -33,12 +33,12 @@ import {
 import { settings_ACU } from '../../service/runtime/state-manager';
 import { useDialogStore } from '../stores/dialog-store';
 import { useToastStore } from '../stores/toast-store';
-import { safeJsonParse_ACU } from '../../shared/json-helpers';
 import { openVisualizerSurface_ACU } from '../surfaces/visualizer/open-visualizer-surface';
-import { ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU } from './useTemplateRecoveryGuard';
-import { buildChatSheetGuideDataFromTemplateObj_ACU } from '../../service/template/chat-scope';
+import { canLeaveCurrentPage } from './useUiCloseGuard';
+import { ensureTemplateRecoveryReady_ACU } from './useTemplateRecoveryGuard';
 import { promptFollowGlobalAfterSetDefault_ACU } from './templateFollowGlobalFlow';
 import { applyTemplateWithDestructiveConfirm_ACU } from './template-destructive-confirm';
+import { downloadJsonToHost_ACU } from '../bootstrap/host-download';
 
 export type TablePresetDrawerView = 'closed' | 'manage';
 
@@ -57,18 +57,6 @@ const RUNTIME_TEMPLATE_LABEL = '当前生效模板（内存）';
 
 function isRuntimeSentinelName(name: string): boolean {
   return String(name || '') === RUNTIME_SENTINEL_NAME;
-}
-
-function downloadJson(jsonData: Record<string, any>, filename: string): void {
-  const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
 function getTemplateApplyError_ACU(result: any, fallback: string): string {
@@ -127,6 +115,8 @@ export function useTablePresetManagement() {
   }
 
   async function run<T>(action: () => Promise<T> | T): Promise<T | null> {
+    // R10A-23：在途时拒绝重入，避免连点并发切两次预设/删两次。
+    if (busy.value) return null;
     busy.value = true;
     message.value = null;
     try {
@@ -174,6 +164,8 @@ export function useTablePresetManagement() {
 
   /** 打开可视化表格编辑器；编辑当前生效的模板。 */
   async function openVisualizer(): Promise<void> {
+    // R10B-06：进入编辑器会卸载当前页，先过页内未保存修改的守卫
+    if (!(await canLeaveCurrentPage())) return;
     await run(async () => {
       const opened = await openVisualizerSurface_ACU({ source: 'v2-shell' });
       if (!opened) throw new Error('可视化编辑器加载失败。');
@@ -192,14 +184,12 @@ export function useTablePresetManagement() {
       toast.warning('默认预设不能直接编辑，请从默认新建后修改。');
       return;
     }
+    // R10B-06：先过页面守卫，再切预设，避免用户取消后预设已被切走
+    if (!(await canLeaveCurrentPage())) return;
     await run(async () => {
       const preset = getTemplatePreset_ACU(normalized);
       if (!preset?.templateStr) throw new Error('找不到目标预设。');
-      const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(
-        typeof preset.templateStr === 'string' ? safeJsonParse_ACU(preset.templateStr, null) : preset.templateStr,
-        { stripSeedRows: false },
-      );
-      const guard = await ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU(guideData, 'switch-template');
+      const guard = await ensureTemplateRecoveryReady_ACU('switch-template');
       if (!guard.success) return;
       const result = await applyPresetWithDestructiveConfirmAndRetry(normalized, {
         source: 'v2_table_drawer_edit',
@@ -311,7 +301,7 @@ export function useTablePresetManagement() {
     }
     const sanitized = sanitizeChatSheetsObject_ACU(resolved.jsonData, { ensureMate: true });
     const safeName = sanitizeFilenameComponent_ACU(resolved.fromPresetName) || 'template';
-    downloadJson(sanitized, isRuntimeItem ? `TavernDB_template_runtime_${safeName}.json` : `TavernDB_template_${safeName}.json`);
+    downloadJsonToHost_ACU(isRuntimeItem ? `TavernDB_template_runtime_${safeName}.json` : `TavernDB_template_${safeName}.json`, sanitized);
     message.value = null;
     toast.success(isRuntimeItem ? '当前生效模板已导出。' : `「${resolved.fromPresetName || '默认预设'}」已导出。`);
   }

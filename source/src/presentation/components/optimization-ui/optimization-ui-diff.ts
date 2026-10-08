@@ -14,15 +14,11 @@ import {
 import {
   jQuery_API_ACU
 } from '../../dom-utils';
-import {
-  toastr_API_ACU
-} from '../../../shared/host-api';
 
 
 
 import {
-  escapeHtml_ACU,
-  renderToastActionButton_ACU
+  escapeHtml_ACU
 } from '../../../shared/html-helpers';
 import {
   logDebug_ACU
@@ -223,35 +219,9 @@ import {
   }
   
   /**
-   * 显示优化结果摘要
-   */
-  export function showOptimizationDiff_ACU(messageIndex: number, result: any) {
-    const message = `正文替换完成，共 ${result.optimizations.length} 处改进`;
-    const reoptButtonHtml = renderToastActionButton_ACU('acu-opt-toast-reoptimize', '🔄 重新优化', 'var(--acu-accent, #7d4940)', '1px', '0.85em');
-    const html = result.summary
-      ? `<div>${message}${reoptButtonHtml}<br><small style="opacity:0.7">${result.summary}</small></div>`
-      : `<div>${message}${reoptButtonHtml}</div>`;
-    const toast = showToastr_ACU('success', html, {
-      timeOut: 10000,
-      extendedTimeOut: 3000,
-      tapToDismiss: false,
-      escapeHtml: false,
-      onShown: function() {
-        jQuery_API_ACU('#acu-opt-toast-reoptimize').off('click.acu_reopt').on('click.acu_reopt', async function(e) {
-          e.preventDefault();
-          e.stopPropagation();
-          jQuery_API_ACU(this).prop('disabled', true).text('优化中...');
-          if (toast && toastr_API_ACU) toastr_API_ACU.clear(toast);
-          await reoptimizeMessage_ACU(messageIndex);
-        });
-      }
-    });
-  }
-  
-  /**
    * 自动链只读结果对话框：内容已由自动流程写回，这里只展示对比（原文/修改方案/优化），
    * 不提供「应用」按钮。用于 showDiff 开启 + 非无感模式的自动替换收尾；
-   * 与 showOptimizationDiff_ACU 的 toast 不同，DOM 对话框不受静默提示框拦截。
+   * DOM 对话框不受静默提示框拦截。
    */
   export function showOptimizationResultDialog_ACU(messageIndex: number, result: any) {
     const optimizations = Array.isArray(result?.optimizations) ? result.optimizations : [];

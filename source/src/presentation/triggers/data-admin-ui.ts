@@ -5,9 +5,6 @@ import {
   sanitizeFilenameComponent_ACU
 } from '../../shared/template-preset-utils';
 import {
-  renderPromptSegments_ACU
-} from '../components/plot-editors';
-import {
   getDefaultTemplateSnapshot_ACU,
   resolveTemplateForExport_ACU
 } from '../../service/template/template-preset-service';
@@ -18,28 +15,15 @@ import {
   ACU_TOAST_CATEGORY_ACU
 } from '../../shared/constants';
 import {
-  isSqliteMode
-} from '../../service/table/storage-mode';
-import {
-  reloadStorageProvider
-} from '../../service/table/table-storage-strategy';
-import {
   getChatArray_ACU,
-  deleteLocalDataWithScope_ACU,
   overrideLatestLayerWithTemplateCore_ACU
 } from '../../service/chat/chat-service';
 
-import {
-  cleanupWorldbookEntriesAfterDataDeletion_ACU
-} from '../../service/worldbook/worldbook-cleanup';
 import {
   currentChatFileIdentifier_ACU,
   currentJsonTableData_ACU,
   settings_ACU
 } from '../../service/runtime/state-manager';
-import {
-  $popupInstance_ACU
-} from '../state/ui-refs';
 import {
   resetAllPromptsToDefault_ACU
 } from '../../service/settings/settings-write-service';
@@ -50,12 +34,8 @@ import {
   refreshMergedDataAndNotifyWithUI_ACU,
   refreshPresetUIAfterSwitch_ACU
 } from '../components/pipeline-ui-helpers';
-import {
-  SCRIPT_ID_PREFIX_ACU
-} from '../../shared/constants';
 
 import {
-  ensureSheetOrderNumbers_ACU,
   logDebug_ACU,
   logError_ACU,
   logWarn_ACU,
@@ -71,19 +51,10 @@ import {
   parseImportedTemplateData_ACU,
   upsertTemplatePreset_ACU
 } from '../../service/template/template-preset-service';
-import {
-  applyCombinedSettingsImport_ACU
-} from '../../service/settings/settings-service';
-import {
-  getTemplatePresetSelectJQ_ACU,
-  refreshTemplatePresetSelectInUI_ACU
-} from '../components/template-preset-ui';
-import {
-  updateCardUpdateStatusDisplay_ACU
-} from '../components/update-status-display';
 import { rebuildCurrentSummaryVectorIndexNow_ACU } from '../../service/vector/summary-vector-index-rebuild-service';
+import { importCombinedSettingsWithRollback_ACU } from '../../service/settings/combined-settings-transfer';
 import { chatHasLegacySummaryVectorFields_ACU } from '../../service/vector/summary-vector-mirror-rebuild';
-import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 /**
  * presentation/triggers/data-admin-ui.ts — 导入/导出/重置 UI
  * 从 features/data/01_data_admin.js 迁移而来
@@ -111,60 +82,18 @@ import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
             }
             
             try {
-                // Validation
-                if (!combinedData.prompt || !combinedData.template) {
-                    throw new Error('JSON文件缺少 "prompt" 或 "template" 键。');
-                }
-                if (!Array.isArray(combinedData.prompt)) {
-                    throw new Error('"prompt" 的值必须是一个数组。');
-                }
-                if (typeof combinedData.template !== 'object' || combinedData.template === null) {
-                    throw new Error('"template" 的值必须是一个对象。');
-                }
-
-                // [重构] 调用 service 层导入配置
-                const modifiedFields = applyCombinedSettingsImport_ACU(combinedData);
-                logDebug_ACU(`Combined settings imported. Modified fields: ${modifiedFields.join(', ')}`);
-
-                // UI 操作：渲染提示词段落
-                renderPromptSegments_ACU(combinedData.prompt);
-                showToastr_ACU('success', '提示词预设已成功导入并保存！');
-
-                // 合并总结 UI 已停用；导入兼容仍保留 merge 字段，但不再尝试同步已移除的合并控件。
-                if (modifiedFields.includes('mergeTargetCount')) {
-                    const $deleteStartFloor = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-delete-start-floor`);
-                    const $deleteEndFloor = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-delete-end-floor`);
-                    if ($deleteStartFloor.length) $deleteStartFloor.val(settings_ACU.deleteStartFloor || 1);
-                    if ($deleteEndFloor.length) $deleteEndFloor.val(settings_ACU.deleteEndFloor || '');
-                }
-                
-                // 2. Apply and save template
-                // [瘦身] 导入时清洗模板并回写（兼容旧模板带冗余字段）
-                const sheetKeys = Object.keys(combinedData.template).filter(k => k.startsWith('sheet_'));
-                ensureSheetOrderNumbers_ACU(combinedData.template, { baseOrderKeys: sheetKeys, forceRebuild: false });
-                const sanitizedTemplate = sanitizeChatSheetsObject_ACU(combinedData.template, { ensureMate: true });
-                const appliedTemplate = await applyTemplateSnapshotToScope_ACU(sanitizedTemplate, {
-                    scope: 'global',
+                // R9-07：设置与模板一起导入，模板失败时整体回滚设置（与 V2 数据管理页共用实现）。
+                // 旧版这里会先报「提示词已导入」，再去同步已停用弹窗的控件而抛错，留下半截导入。
+                await importCombinedSettingsWithRollback_ACU(combinedData, {
                     source: 'import_combined',
                     presetName: normalizeTemplatePresetSelectionValue_ACU(getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false })),
-                    save: true,
-                    persistChatScope: false,
                 });
-                if (!appliedTemplate || (typeof appliedTemplate === 'object' && 'saved' in appliedTemplate && (appliedTemplate as any).saved === false)) {
-                    const reason = appliedTemplate && typeof appliedTemplate === 'object' && 'error' in appliedTemplate && typeof (appliedTemplate as any).error === 'string'
-                        ? (appliedTemplate as any).error
-                        : '';
-                    throw new Error(reason || '合并配置中的表格模板已解析，但应用到全局模板失败。');
-                }
 
-                showToastr_ACU('success', '表格模板已成功导入！模板已更新，但不会影响当前聊天记录的本地数据。');
-
-                // 刷新模板预设下拉 UI，确保预设列表与状态文案同步
                 refreshPresetUIAfterSwitch_ACU();
 
                 // [优化] 不再触发表格数据初始化，仅修改当前插件模板
                 // 只有在新开卡或之前没有用过插件的聊天记录里才会使用新的通用模板作为基底
-                showToastr_ACU('success', '合并配置已成功导入！');
+                showToastr_ACU('success', '合并配置已成功导入！提示词、合并设置和全局模板已更新，不会影响当前聊天记录的本地数据。');
 
             } catch (error) {
                 logError_ACU('导入合并配置失败：结构验证失败。', error);
@@ -175,86 +104,6 @@ import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
     };
     input.click();
   }
-
-  // [新增] 删除聊天记录中的本地数据
-  // 范围感知：mode='all' 且范围覆盖全部 AI 楼层时由服务层编排入口切换为硬清空 purge，
-  // 其余情况走范围删除（deleteLocalDataInChatCore_ACU）。
-  export async function deleteLocalDataInChat_ACU(mode: 'current' | 'all' = 'current', startFloor: any = null, endFloor: any = null) {
-      const chat = getChatArray_ACU();
-      if (!chat || chat.length === 0) {
-          showToastr_ACU('warning', '聊天记录为空，无法执行删除操作。');
-          return;
-      }
-
-      const aiMessageCount = countAiFloors_ACU(chat);
-      const outcome = await deleteLocalDataWithScope_ACU(mode, startFloor, endFloor);
-
-      // aiCount === 0 时不再提前 return：范围覆盖全部（含 0 层）的 all 请求会走 purge，
-      // purge 仍需清理用户首条消息字段与 chat[0] scope/guide 镜像。
-      // 只有走 range 路径且确实没有 AI 楼层时才提示无可删数据。
-      if (outcome.path === 'range' && aiMessageCount === 0) {
-          showToastr_ACU('warning', '聊天记录中没有AI消息，无法执行范围删除。');
-          return;
-      }
-
-      if (outcome.path === 'aborted') {
-          showToastr_ACU('warning', outcome.reason, { timeOut: 10000 });
-          return;
-      }
-
-      if (outcome.path === 'purge') {
-          await applyPurgeResultToUi_ACU(outcome.result);
-          return;
-      }
-
-      const deletedCount = outcome.deletedCount;
-      if (deletedCount > 0) {
-          // 刷新内存和UI：删除楼层数据后，SQLite 运行时必须从当前聊天持久化模板/guide 重建
-          await loadOrCreateJsonTableFromChatHistory_ACU();
-          if (isSqliteMode()) await reloadStorageProvider();
-          await refreshMergedDataAndNotifyWithUI_ACU();
-
-          // [重构] 调用 service 层清理世界书条目
-          await cleanupWorldbookEntriesAfterDataDeletion_ACU();
-
-          if (typeof updateCardUpdateStatusDisplay_ACU === 'function') {
-              updateCardUpdateStatusDisplay_ACU();
-          }
-
-          showToastr_ACU('success', `已成功删除 ${deletedCount} 条消息中的本地数据 (${mode === 'all' ? '所有标识' : '当前标识'})。`);
-      } else {
-          showToastr_ACU('info', '没有发现符合删除条件的数据。');
-      }
-  }
-
-  /**
-   * 硬清空（purge）结果落 UI（legacy 入口共用）。
-   *
-   * 与 range 删除的收尾差异：
-   * purgeCurrentChatDatabaseState_ACU 内部已在严格保存后回落为当前全局模板的
-   * header-only 空结构（S1-1，pristine：不写 frame，首次填表才建根），此处不再
-   * loadOrCreate / reloadStorageProvider，只调 refreshMergedDataAndNotifyWithUI_ACU
-   * 让面板展示回落后的模板空结构；世界书条目清理由 purge 内部完成
-   * （cleanupDatabaseGeneratedWorldbookEntries_ACU），结果进入 result.cleanupWarnings。
-   */
-  export async function applyPurgeResultToUi_ACU(result: { saved: boolean; clearedMessageCount: number; removedMetadata: string[]; cleanupWarnings?: string[]; error?: string }): Promise<void> {
-      if (!result.saved) {
-          showToastr_ACU('error', result.error || '硬清空失败，详情见运行日志。', { timeOut: 10000 });
-          return;
-      }
-      await refreshMergedDataAndNotifyWithUI_ACU();
-      if (typeof updateCardUpdateStatusDisplay_ACU === 'function') {
-          updateCardUpdateStatusDisplay_ACU();
-      }
-      const removed = result.removedMetadata.length ? `，移除元数据：${result.removedMetadata.join('、')}` : '';
-      if (result.cleanupWarnings?.length) {
-          showToastr_ACU('warning', `已硬清空全部本地数据（${result.clearedMessageCount} 条消息）${removed}。警告：${result.cleanupWarnings[0]}`, { timeOut: 10000 });
-      } else {
-          showToastr_ACU('success', `已删除所有本地数据（${result.clearedMessageCount} 条消息）${removed}。`);
-      }
-  }
-
-
 
   // 召回链路只读新版镜像（R5-06）：旧版指针迁移写出的仍是旧字段，召回照样要求重建。
   // 因此「迁移」直接按当前纪要表重建新版镜像，重建会顺带清掉旧版向量字段。
@@ -317,8 +166,8 @@ import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
     const normalizedScope = normalizeTemplateOperationScope_ACU(scope);
     try {
         // [重构] 调用 service 层解析模板数据
-        const selectedPresetName = String(getTemplatePresetSelectJQ_ACU()?.val?.() || '');
-        const resolved = resolveTemplateForExport_ACU(normalizedScope, selectedPresetName);
+        // 旧弹窗的预设下拉已不存在：按 scope 导出当前生效模板。
+        const resolved = resolveTemplateForExport_ACU(normalizedScope, '');
         if (!resolved) {
             throw new Error('无法解析当前模板。');
         }
@@ -385,7 +234,6 @@ import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
               return false;
           }
 
-          refreshTemplatePresetSelectInUI_ACU({ selectName: '', keepValue: false });
           showToastr_ACU('success', '已恢复默认预设及模板！模板已更新，但不会影响当前聊天记录的本地数据。');
           return true;
       } catch (error) {
@@ -519,7 +367,7 @@ import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
                     }
 
                     // 刷新 UI 让新预设立即出现在下拉列表中，但保持当前选中值不变
-                    refreshPresetUIAfterSwitch_ACU({ keepTemplateGlobalValue: true });
+                    refreshPresetUIAfterSwitch_ACU();
 
                     if (savePresetOk) {
                         showToastr_ACU('success', `模板已保存为全局预设：${derivedPresetName}（同名自动覆盖）。你可以在"全局模板预设"下拉中手动切换到它。`, {
@@ -544,7 +392,7 @@ import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
                         throw new Error(applied.error || '模板已解析，但应用到当前聊天失败。');
                     }
 
-                    refreshPresetUIAfterSwitch_ACU({ keepTemplateGlobalValue: true });
+                    refreshPresetUIAfterSwitch_ACU();
                     const warning = 'postCommitWarning' in applied && typeof applied.postCommitWarning === 'string'
                         ? applied.postCommitWarning
                         : '';

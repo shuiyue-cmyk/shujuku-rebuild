@@ -602,6 +602,42 @@ describe('useVisualizerAssistant', () => {
     expect(assistant.isRunning.value).toBe(false);
   });
 
+  it('R10A-16：切表后被作废的旧会话结束时不改写新会话的运行状态与错误信息', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');
+    const { nextTick } = await import('vue');
+    const visualizer = useVisualizerStore();
+    visualizer.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: { uid: 'sheet_a', name: 'A表', orderNo: 0, content: [[null, '姓名'], [null, 'A']] },
+      sheet_b: { uid: 'sheet_b', name: 'B表', orderNo: 1, content: [[null, '姓名'], [null, 'B']] },
+    }, ['sheet_a', 'sheet_b']);
+    visualizer.selectSheet('sheet_a');
+    const { TemplateAssistantSessionStoppedError_ACU } = await import('../../../src/service/template-assistant/service');
+    let rejectFirst!: (error: unknown) => void;
+    mockRunSession
+      .mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject; }))
+      .mockImplementationOnce(() => new Promise(() => {}));
+
+    const assistant = useVisualizerAssistant();
+    assistant.userRequest.value = '第一次';
+    const first = assistant.run();
+    visualizer.selectSheet('sheet_b');
+    await nextTick();
+    expect(assistant.isRunning.value).toBe(false);
+
+    assistant.userRequest.value = '第二次';
+    void assistant.run();
+    expect(assistant.isRunning.value).toBe(true);
+    const messageBefore = visualizer.assistantErrorMessage;
+
+    rejectFirst(new TemplateAssistantSessionStoppedError_ACU('旧会话已停止'));
+    await first;
+
+    expect(assistant.isRunning.value).toBe(true);
+    expect(visualizer.assistantErrorMessage).toBe(messageBefore);
+  });
+
   it('runWithRepairFeedback 会把修改意见拼进 userRequest 重新发起会话', async () => {
     const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
     const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');
@@ -825,6 +861,73 @@ describe('useVisualizerAssistant', () => {
     assistant.setRiskConfirmation(finalTurn.id, 0, true);
     expect(assistant.isTurnAllHighRiskConfirmed(finalTurn)).toBe(true);
     expect(assistant.isTurnAllHighRiskConfirmed(otherTurn as any)).toBe(false);
+  });
+
+  // R10A-05：同一张表既改结构又改行数据时，模板保存只迁移结构、数据保存拒绝混入模板改动，两条路都存不了；
+  // 在应用前拦下并引导分两步。行级对比改为按列名，列重排不再记出一批伪更新。
+  async function applyCandidate(candidate: any) {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');
+    const { hasVisualizerPendingDataOps_ACU } = await import('../../../src/service/visualizer/visualizer-data-ops');
+    const visualizer = useVisualizerStore();
+    visualizer.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: { uid: 'sheet_a', name: 'A表', orderNo: 0, content: [['row_id', '姓名', '年龄'], ['1', '甲', '20'], ['2', '乙', '30']] },
+    }, ['sheet_a']);
+    mockRunSession.mockImplementation(async (input: any) => buildResult(input, {
+      compileResult: { candidateData: { mate: { type: 'chatSheets', version: 1 }, sheet_a: candidate }, orderedSheetKeys: ['sheet_a'] },
+    }));
+    const assistant = useVisualizerAssistant();
+    assistant.userRequest.value = '改表';
+    await assistant.run();
+    const finalTurn = assistant.turns.value.find(turn => turn.type === 'final') as any;
+    return {
+      visualizer,
+      assistant,
+      finalTurn,
+      pending: () => hasVisualizerPendingDataOps_ACU(visualizer),
+    };
+  }
+
+  it('R10A-05：加列并填值的草稿在应用前被拦下，提示分两步', async () => {
+    const { visualizer, assistant, finalTurn } = await applyCandidate({
+      uid: 'sheet_a', name: 'A表', orderNo: 0,
+      content: [['row_id', '姓名', '年龄', '情绪'], ['1', '甲', '20', '开心'], ['2', '乙', '30', '平静']],
+    });
+
+    expect(assistant.getTurnApplyBlockReason(finalTurn)).toContain('分两步');
+    expect(assistant.applyTurnDraft(finalTurn)).toBe(false);
+    expect(visualizer.tempData.sheet_a.content[0]).toEqual(['row_id', '姓名', '年龄']);
+  });
+
+  it('R10A-05：只加空列（纯结构变更）照常应用，不记行级增量', async () => {
+    const { assistant, finalTurn, pending } = await applyCandidate({
+      uid: 'sheet_a', name: 'A表', orderNo: 0,
+      content: [['row_id', '姓名', '年龄', '情绪'], ['1', '甲', '20', ''], ['2', '乙', '30', '']],
+    });
+
+    expect(assistant.applyTurnDraft(finalTurn)).toBe(true);
+    expect(pending()).toBe(false);
+  });
+
+  it('R10A-05：列重排时按列名对比，不记伪更新', async () => {
+    const { assistant, finalTurn, pending } = await applyCandidate({
+      uid: 'sheet_a', name: 'A表', orderNo: 0,
+      content: [['row_id', '年龄', '姓名'], ['1', '20', '甲'], ['2', '30', '乙']],
+    });
+
+    expect(assistant.applyTurnDraft(finalTurn)).toBe(true);
+    expect(pending()).toBe(false);
+  });
+
+  it('R10A-05：只改行数据（结构不变）照常应用并记行级增量', async () => {
+    const { assistant, finalTurn, pending } = await applyCandidate({
+      uid: 'sheet_a', name: 'A表', orderNo: 0,
+      content: [['row_id', '姓名', '年龄'], ['1', '甲', '21'], ['2', '乙', '30']],
+    });
+
+    expect(assistant.applyTurnDraft(finalTurn)).toBe(true);
+    expect(pending()).toBe(true);
   });
 
   it('applyTurnDraft 应用到较早那张 final turn 时写入的是该 turn 自己的 candidateData', async () => {

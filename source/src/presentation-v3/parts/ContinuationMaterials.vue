@@ -70,7 +70,7 @@
             :draft="outlineDraft"
             :dirty="outlineDirty"
             :saving="busy"
-            :error="outlineError"
+            :error="outlineError || (outlineStale ? OUTLINE_STALE_MESSAGE : '')"
             save-label="保存大纲"
             :rows="16"
             hint="改轮次目标时请同步核对 pacing、function、mainlineDelta、timeAdvance 与 timeAnchor；缺少的语义字段保存时按 pacing 补默认并标注「系统补全」。"
@@ -392,10 +392,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
-import {
-  CONTINUATION_MATERIAL_MODULE_LABELS_ACU,
-  useContinuationMaterials,
-} from '../../presentation-v2/composables/useContinuationMaterials';
+import { useContinuationMaterials } from '../../presentation-v2/composables/useContinuationMaterials';
+import { CONTINUATION_MATERIAL_MODULE_LABELS_ACU } from '../../presentation-v2/continuation/material-module-labels';
 import { buildContinuationPendingFixCards_ACU } from '../../presentation-v2/continuation/pending-fix-cards';
 import { buildMaterialCompletionCards_ACU } from '../../presentation-v2/material-completion-status';
 import type { AgentWritableModule_ACU } from '../../service/continuation/agent/agent-model';
@@ -423,7 +421,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (event: 'save-outline', outline: StageOutline_ACU): void;
+  (event: 'save-outline', outline: StageOutline_ACU, base: { stageId: string; revision: number } | null): void;
   (event: 'clear'): void;
   (event: 'repair', modules: AgentWritableModule_ACU[]): void;
 }>();
@@ -451,10 +449,7 @@ const MAINLINE_LABELS: Record<string, string> = { hold: '停驻', micro: '微增
 const TIME_LABELS: Record<string, string> = { continuous: '连续', same_day: '同日稍后', overnight: '隔夜', days: '数日', weeks: '数周', months: '数月', years: '数年' };
 const INFERRED_FIELD_LABELS: Record<string, string> = { function: '功能', mainlineDelta: '主线', timeAdvance: '时间' };
 const FIELD_STATUS_LABELS: Record<string, string> = { complete: '完整', partial: '部分（未提升）', legacy_unknown: '旧快照条目' };
-const MATERIAL_STATUS_LABELS: Record<string, string> = {
-  hooks: '伏笔账本', infoGap: '认知与信息差', constraints: '长期约束', storyArc: '故事总纲',
-  chronology: '故事年代学账本', webRefs: '百科资料库', userRequirements: '用户要求',
-};
+const MATERIAL_STATUS_LABELS: Record<string, string> = CONTINUATION_MATERIAL_MODULE_LABELS_ACU;
 const REPAIRABLE_MODULES: readonly AgentWritableModule_ACU[] = ['hooks', 'infoGap', 'chronology', 'storyArc', 'webRefs'];
 
 const activeTab = ref('outline');
@@ -463,6 +458,14 @@ const clearPending = ref(false);
 const outlineDraft = ref('');
 const outlineError = ref('');
 const outlineDirty = ref(false);
+/** R10B-07：草稿所基于的阶段与 revision；权威大纲换代后草稿即过期，不得再保存。 */
+const outlineBase = ref<{ stageId: string; revision: number } | null>(null);
+const OUTLINE_STALE_MESSAGE = '底稿已过期：编辑期间大纲已被更新，保存会覆盖新大纲。请放弃草稿后基于最新大纲重新编辑。';
+const outlineStale = computed(() => {
+  const base = outlineBase.value;
+  if (!outlineDirty.value || !base) return false;
+  return base.stageId !== (props.activeStage?.stageId ?? '') || base.revision !== props.activeRevision?.revision;
+});
 const selectedRepairModules = ref<AgentWritableModule_ACU[]>([]);
 const expandedHistoryStages = ref(new Set<string>());
 
@@ -621,6 +624,9 @@ function turnState(revision: StageRevision_ACU, nodeIndex: number, turnIndex: nu
 
 function syncOutlineDraft(): void {
   outlineDraft.value = props.activeRevision ? JSON.stringify(props.activeRevision.outline, null, 2) : '';
+  outlineBase.value = props.activeStage && props.activeRevision
+    ? { stageId: props.activeStage.stageId, revision: props.activeRevision.revision }
+    : null;
   outlineError.value = '';
   outlineDirty.value = false;
 }
@@ -642,8 +648,9 @@ function saveOutline(): void {
     outlineError.value = '大纲必须是 JSON 对象';
     return;
   }
+  if (outlineStale.value) return;
   outlineError.value = '';
-  emit('save-outline', parsed as StageOutline_ACU);
+  emit('save-outline', parsed as StageOutline_ACU, outlineBase.value ? { ...outlineBase.value } : null);
 }
 
 function reload(): void {

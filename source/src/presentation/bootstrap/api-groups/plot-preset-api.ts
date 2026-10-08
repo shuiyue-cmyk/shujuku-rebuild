@@ -168,7 +168,8 @@ export function createPlotPresetApi(ctx: ApiGroupContext): Record<string, Functi
                 }
 
                 const presetName = preset.name.trim();
-                const presets = settings_ACU.plotSettings?.promptPresets || [];
+                const previousPresets = settings_ACU.plotSettings?.promptPresets;
+                const presets = [...(previousPresets || [])];
                 const existingIndex = presets.findIndex((p: any) => p.name === presetName);
                 const normalizedPreset = normalizePlotPresetExcludeRules_ACU(preset);
                 normalizedPreset.name = presetName;
@@ -195,7 +196,12 @@ export function createPlotPresetApi(ctx: ApiGroupContext): Record<string, Functi
                 }
 
                 settings_ACU.plotSettings.promptPresets = presets;
-                saveSettingsAndNotify_ACU();
+                // R9-16：保存失败时回滚预设库，不报「已成功导入」
+                const saveResult = saveSettingsAndNotify_ACU();
+                if (saveResult?.saved !== true) {
+                    settings_ACU.plotSettings.promptPresets = previousPresets;
+                    return { success: false, message: `预设导入失败：设置保存失败${saveResult?.error ? `（${saveResult.error}）` : ''}` };
+                }
 
                 let switchedCurrentChat = false;
                 if (switchTo) {

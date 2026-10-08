@@ -27,6 +27,7 @@ import type {
   WorldbookEntryTakeoverState_ACU,
   WorldbookSkillifySelectedEntry_ACU,
 } from './worldbook-entry-display';
+import { createWorldbookEntryScopePredicate_ACU, type WorldbookEntryScope_ACU } from './worldbook-entry-scope';
 
 export type AgentWorldbookEntryTakeoverState = WorldbookEntryTakeoverState_ACU;
 export type AgentWorldbookEntryLoadStatus = 'idle' | 'loading' | 'success' | 'error';
@@ -64,6 +65,8 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
   const error = ref('');
   const selected = ref(new Map<string, AgentWorldbookSkillifySelectedEntry>());
   const batchBusy = ref(false);
+  /** 最近一次批量编辑中写入失败的书（R10A-07：单本失败不能被成功计数掩盖）。 */
+  const lastBatchFailedBooks = ref<string[]>([]);
   /** loadEntries 代际 guard：并发调用时旧响应不覆盖新数据 */
   let loadGeneration = 0;
 
@@ -157,18 +160,27 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     syncSelection();
   }
 
-  function selectAllForSkillify(): void {
-    selected.value = new Map(groups.value.flatMap(group => group.entries
-      .filter(entry => entry.skillifySelectable)
-      .map(entry => [
-        selectionKey_ACU(entry.bookName, entry.uid),
-        { bookName: entry.bookName, uid: entry.uid },
-      ] as const)));
+  function selectAllForSkillify(scope?: WorldbookEntryScope_ACU): void {
+    // R10B-05：有筛选范围时只追加范围内条目，范围外的已选保持不变
+    const inScope = createWorldbookEntryScopePredicate_ACU(scope);
+    const next = scope ? new Map(selected.value) : new Map<string, AgentWorldbookSkillifySelectedEntry>();
+    for (const group of groups.value) {
+      for (const entry of group.entries) {
+        if (!entry.skillifySelectable || !inScope(entry.bookName, entry.uid)) continue;
+        next.set(selectionKey_ACU(entry.bookName, entry.uid), { bookName: entry.bookName, uid: entry.uid });
+      }
+    }
+    selected.value = next;
     syncSelection();
   }
 
-  function deselectAllForSkillify(): void {
-    selected.value = new Map();
+  function deselectAllForSkillify(scope?: WorldbookEntryScope_ACU): void {
+    if (!scope) {
+      selected.value = new Map();
+    } else {
+      const inScope = createWorldbookEntryScopePredicate_ACU(scope);
+      selected.value = new Map([...selected.value].filter(([, item]) => !inScope(item.bookName, item.uid)));
+    }
     syncSelection();
   }
 
@@ -280,26 +292,23 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     if (batchBusy.value) return 0;
     const byBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.agentTakeoverState === 'initial_disabled');
     batchBusy.value = true;
+    lastBatchFailedBooks.value = [];
     let changed = 0;
     try {
       for (const [bookName, uids] of byBook) {
         const uidSet = new Set(uids.map(uid => String(uid)));
         try {
           const all = await getLorebookEntries_ACU(bookName);
-          let touchedInBook = 0;
-          const patched = (Array.isArray(all) ? all : []).map(entry => {
-            if (!uidSet.has(String(entry.uid))) return entry;
-            if (entry.enabled === false) {
-              touchedInBook++;
-              return { ...entry, enabled: true };
-            }
-            return entry;
-          });
-          if (touchedInBook === 0) continue;
-          await setLorebookEntries_ACU(bookName, patched);
-          changed += touchedInBook;
+          // R10A-07：只写回改动条目的改动字段（宿主按 uid 合并）；整本写回会用读时快照覆盖并发修改。
+          const patches = (Array.isArray(all) ? all : [])
+            .filter(entry => uidSet.has(String(entry.uid)) && entry.enabled === false)
+            .map(entry => ({ uid: entry.uid, enabled: true }));
+          if (patches.length === 0) continue;
+          await setLorebookEntries_ACU(bookName, patches);
+          changed += patches.length;
         } catch (cause: any) {
           logError_ACU(`[ACU-V2] 启用 skill 世界书失败（${bookName}）`, cause);
+          lastBatchFailedBooks.value = [...lastBatchFailedBooks.value, bookName];
         }
       }
     } finally {
@@ -317,27 +326,22 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     if (batchBusy.value) return 0;
     const byBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.isConstant === true);
     batchBusy.value = true;
+    lastBatchFailedBooks.value = [];
     let changed = 0;
     try {
       for (const [bookName, uids] of byBook) {
         const uidSet = new Set(uids.map(uid => String(uid)));
         try {
           const all = await getLorebookEntries_ACU(bookName);
-          let touchedInBook = 0;
-          const patched = (Array.isArray(all) ? all : []).map(entry => {
-            if (!uidSet.has(String(entry.uid))) return entry;
-            const currentType = String(entry.type || '').trim().toLowerCase();
-            if (currentType === 'constant') {
-              touchedInBook++;
-              return { ...entry, type: '' };
-            }
-            return entry;
-          });
-          if (touchedInBook === 0) continue;
-          await setLorebookEntries_ACU(bookName, patched);
-          changed += touchedInBook;
+          const patches = (Array.isArray(all) ? all : [])
+            .filter(entry => uidSet.has(String(entry.uid)) && String(entry.type || '').trim().toLowerCase() === 'constant')
+            .map(entry => ({ uid: entry.uid, type: '' }));
+          if (patches.length === 0) continue;
+          await setLorebookEntries_ACU(bookName, patches);
+          changed += patches.length;
         } catch (cause: any) {
           logError_ACU(`[ACU-V2] 蓝灯转绿灯失败（${bookName}）`, cause);
+          lastBatchFailedBooks.value = [...lastBatchFailedBooks.value, bookName];
         }
       }
     } finally {
@@ -356,6 +360,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     const blueByBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.isConstant === true);
     const disabledByBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.agentTakeoverState === 'initial_disabled');
     batchBusy.value = true;
+    lastBatchFailedBooks.value = [];
     const allBooks = new Set<string>([...blueByBook.keys(), ...disabledByBook.keys()]);
     let converted = 0;
     let enabled = 0;
@@ -367,25 +372,28 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
           const all = await getLorebookEntries_ACU(bookName);
           let convertedInBook = 0;
           let enabledInBook = 0;
-          const patched = (Array.isArray(all) ? all : []).map(entry => {
+          const patches: Array<{ uid: any; type?: string; enabled?: boolean }> = [];
+          for (const entry of Array.isArray(all) ? all : []) {
             const uidStr = String(entry.uid);
-            let next = entry;
-            if (blueSet.has(uidStr)) {
-              const currentType = String(entry.type || '').trim().toLowerCase();
-              if (currentType === 'constant') { next = { ...next, type: '' }; convertedInBook++; }
+            const patch: { uid: any; type?: string; enabled?: boolean } = { uid: entry.uid };
+            if (blueSet.has(uidStr) && String(entry.type || '').trim().toLowerCase() === 'constant') {
+              patch.type = '';
+              convertedInBook++;
             }
             if (disabledSet.has(uidStr) && (entry as any).enabled === false) {
-              next = { ...next, enabled: true }; enabledInBook++;
+              patch.enabled = true;
+              enabledInBook++;
             }
-            return next;
-          });
-          if (convertedInBook > 0 || enabledInBook > 0) {
-            await setLorebookEntries_ACU(bookName, patched);
+            if (Object.keys(patch).length > 1) patches.push(patch);
+          }
+          if (patches.length > 0) {
+            await setLorebookEntries_ACU(bookName, patches);
             converted += convertedInBook;
             enabled += enabledInBook;
           }
         } catch (cause: any) {
           logError_ACU(`[ACU-V2] 二合一失败（${bookName}）`, cause);
+          lastBatchFailedBooks.value = [...lastBatchFailedBooks.value, bookName];
         }
       }
       if (converted > 0 || enabled > 0) {
@@ -403,6 +411,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     status,
     error,
     batchBusy,
+    lastBatchFailedBooks,
     loadEntries,
     toggleSkillifyEntry,
     selectAllForSkillify,

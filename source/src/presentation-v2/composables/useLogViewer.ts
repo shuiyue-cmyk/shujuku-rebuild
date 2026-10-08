@@ -18,8 +18,8 @@ import {
   subscribeToClear,
 } from '../../shared/log-buffer';
 import { acuCancelAnimationFrame, acuRequestAnimationFrame } from '../bootstrap/host-env';
-import { getAcuHostDocument } from '../bootstrap/host-document';
 import { useToastStore } from '../stores/toast-store';
+import { downloadJsonToHost_ACU } from '../bootstrap/host-download';
 
 export type LogLevelFilter = LogLevel | 'all';
 
@@ -41,20 +41,6 @@ const levelOptions: { value: LogLevelFilter; label: string }[] = [
   { value: 'warn', label: 'Warn' },
   { value: 'error', label: 'Error' },
 ];
-
-function downloadJson(filename: string, data: unknown): void {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const doc = getAcuHostDocument();
-  const a = doc.createElement('a');
-  a.href = url;
-  a.download = filename;
-  doc.body.appendChild(a);
-  a.click();
-  doc.body.removeChild(a);
-  // 延迟 revoke：WebView2/部分内核在 click 后立即 revoke 会取消下载
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 
 export function useLogViewer() {
   const toast = useToastStore();
@@ -175,7 +161,7 @@ export function useLogViewer() {
       message: entry.message,
     }));
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    downloadJson(`acu-logs-${stamp}.json`, { exportedAt: new Date().toISOString(), clearHistory: getClearHistory_ACU(), logs: exportData });
+    downloadJsonToHost_ACU(`acu-logs-${stamp}.json`, { exportedAt: new Date().toISOString(), clearHistory: getClearHistory_ACU(), logs: exportData });
     message.value = null;
     toast.success(`已按当前筛选导出 ${exportData.length} 条日志（全量缓冲）。`);
   }

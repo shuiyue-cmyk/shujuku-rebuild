@@ -139,6 +139,10 @@ describe('ContentReplacePage', () => {
     expect(document.querySelector('.ub-picker-panel__star')).toBeNull();
     Array.from(document.querySelectorAll<HTMLElement>('.ub-picker-panel__item')).find(item => item.textContent?.includes('默认优化'))!.click();
     await tick();
+    // 当前是自定义提示词：确认切换（R10B-13）
+    const { useDialogStore } = await import('../../src/presentation-v2/stores/dialog-store');
+    useDialogStore().submitActive();
+    await tick();
 
     const edit = document.querySelector<HTMLButtonElement>('button[title="编辑当前提示词"]')!;
     expect(edit.disabled).toBe(false);
@@ -166,9 +170,59 @@ describe('ContentReplacePage', () => {
     await tick();
     Array.from(document.querySelectorAll<HTMLElement>('.ub-picker-panel__item')).find(item => item.textContent?.includes('默认预设'))!.click();
     await tick();
+    // 当前是未存为预设的自定义提示词：切走前确认（R10B-13）
+    const { useDialogStore } = await import('../../src/presentation-v2/stores/dialog-store');
+    useDialogStore().submitActive();
+    await tick();
     expect(document.querySelector('#cr-preset')!.textContent).toContain('当前提示词：默认预设');
     expect(settings.contentOptimizationSettings.promptGroup[0].content).not.toBe('预设 $CONTENT');
     expect(settings.contentOptimizationSettings.promptGroup.some((seg: any) => String(seg.content || '').includes('$CONTENT'))).toBe(true);
+    app.unmount();
+  });
+
+  it('R10B-13：从未存为预设的自定义提示词切到预设前先确认，取消则保留自定义提示词', async () => {
+    const { app, settings } = await mountContentReplacePage();
+    const { useDialogStore } = await import('../../src/presentation-v2/stores/dialog-store');
+    const pickPreset = async (label: string) => {
+      document.querySelector<HTMLButtonElement>('#cr-preset .ub-picker__trigger')!.click();
+      await tick();
+      Array.from(document.querySelectorAll<HTMLElement>('.ub-picker-panel__item')).find(item => item.textContent?.includes(label))!.click();
+      await tick();
+    };
+
+    await pickPreset('默认优化');
+    const dialog = useDialogStore();
+    expect(dialog.active?.kind).toBe('confirm');
+    expect(dialog.active?.message).toContain('另存为预设');
+    dialog.cancelActive();
+    await tick();
+    expect(settings.contentOptimizationSettings.promptGroup[0].content).toBe('优化 $CONTENT');
+
+    await pickPreset('默认优化');
+    dialog.submitActive();
+    await tick();
+    expect(settings.contentOptimizationSettings.promptGroup[0].content).toBe('预设 $CONTENT');
+    app.unmount();
+  });
+
+  it('R10B-13：正文替换测试在途时，重新优化与导入不会并发启动', async () => {
+    const { app, performOptimization } = await mountContentReplacePage();
+    const { useContentReplaceStore } = await import('../../src/presentation-v2/stores/content-replace-store');
+    const store = useContentReplaceStore();
+    let release!: () => void;
+    performOptimization.mockImplementationOnce(() => new Promise(resolve => { release = () => resolve({ success: true, optimizations: [], optimizedContent: '', summary: '' } as any); }));
+    store.enabled = true;
+    store.setString('testInput', '这是一段足够长的测试正文内容。');
+
+    const testing = store.runTest();
+    await tick();
+    await store.reoptimizeLatest();
+    expect(performOptimization).toHaveBeenCalledTimes(1);
+    expect(store.busyAction).toBe('test');
+
+    release();
+    await testing;
+    expect(store.busyAction).toBe('');
     app.unmount();
   });
 

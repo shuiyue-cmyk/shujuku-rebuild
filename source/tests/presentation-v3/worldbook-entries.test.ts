@@ -91,4 +91,30 @@ describe('WorldbookEntries', () => {
     expect(label?.getAttribute('title')).toBe(longLabel);
     expect(label?.textContent).toBe(longLabel);
   });
+
+  it('R10B-05：有搜索词时批量按钮随事件带出筛选结果范围，无搜索词时范围为空（全部）', async () => {
+    const onSelectAll = vi.fn();
+    const onDeselectAll = vi.fn();
+    const onSkillifySelectAll = vi.fn();
+    const onSkillifyDeselectAll = vi.fn();
+    const handlers = { onSelectAll, onDeselectAll, onSkillifySelectAll, onSkillifyDeselectAll };
+    const button = (el: HTMLElement, text: string) => Array.from(el.querySelectorAll('button')).find(b => b.textContent?.trim() === text)!;
+
+    const filtered = mountEntries({ groups: sampleGroups(), filter: '地点', showSkillifyControls: true, ...handlers });
+    button(filtered, '全不选').click();
+    button(filtered, '全选').click();
+    button(filtered, 'Skill 全选').click();
+    button(filtered, 'Skill 全不选').click();
+    await nextTick();
+    const scope = [{ bookName: 'CharBook', uid: 2 }];
+    expect(onDeselectAll).toHaveBeenLastCalledWith(scope);
+    expect(onSelectAll).toHaveBeenLastCalledWith(scope);
+    expect(onSkillifySelectAll).toHaveBeenLastCalledWith(scope);
+    expect(onSkillifyDeselectAll).toHaveBeenLastCalledWith(scope);
+
+    const unfiltered = mountEntries({ groups: sampleGroups(), filter: '', ...handlers });
+    button(unfiltered, '全不选').click();
+    expect(onDeselectAll).toHaveBeenLastCalledWith(null);
+  });
 });
+

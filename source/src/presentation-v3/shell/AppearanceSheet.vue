@@ -63,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import { getAcuHostDocument } from '../../presentation-v2/bootstrap/host-document';
+import { downloadJsonToHost_ACU } from '../../presentation-v2/bootstrap/host-download';
 import { ACU_UI_SCALE_OPTIONS, useAppearanceStore, type AcuUiScale } from '../../presentation-v2/stores/appearance-store';
 import { useDialogStore } from '../../presentation-v2/stores/dialog-store';
 import { useRouterStore } from '../../presentation-v2/stores/router-store';
@@ -78,7 +78,7 @@ import UbRow from '../ui/UbRow.vue';
 import UbSection from '../ui/UbSection.vue';
 import UbSegmented from '../ui/UbSegmented.vue';
 import UbSheet from '../ui/UbSheet.vue';
-import { downloadJsonFile_UB, readFileText_UB, sanitizeFilename_UB } from '../ui/file-helpers';
+import { readFileText_UB, sanitizeFilename_UB } from '../ui/file-helpers';
 
 defineProps<{ isOpen: boolean }>();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -113,8 +113,7 @@ async function importThemeFile(file: File): Promise<void> {
 function exportTheme(id: AcuV2ThemeId): void {
   try {
     const theme = themeStore.themes.find(t => t.id === id);
-    downloadJsonFile_UB(
-      getAcuHostDocument(),
+    downloadJsonToHost_ACU(
       `acu-v2-theme-${sanitizeFilename_UB(theme?.name || 'custom-theme', 'custom-theme')}.json`,
       themeStore.buildThemeFile(id),
     );

@@ -1,7 +1,6 @@
 /**
  * menu-button — 在 host document 的 #extensionsMenu 中挂 UI v2 按钮（D15）
  *
- * 与旧菜单按钮（startup.ts 中的 UnbirthDB 旧UI）共存，互不影响。
  * 依赖 host document 解析（D15.1），因此也只在 host document 上注册按钮。
  *
  * 注入时序（TT dev 实态，见 TT src/scripts/extensions.js）：

@@ -21,6 +21,7 @@ import {
   normalizePositiveInteger_ACU,
 } from "../../shared/utils";
 import { useToastStore } from "../stores/toast-store";
+import { downloadJsonToHost_ACU } from '../bootstrap/host-download';
 
 type MessageKind = "info" | "success" | "warning" | "error";
 
@@ -405,8 +406,11 @@ export function useFormFillSettings(): FormFillSettingsState {
       settings_ACU.tableContextExcludeTags || "",
       "exclude",
     );
-    promptSegments.value = normalizePromptSegments(currentPromptSource());
-    promptDirty.value = false;
+    // R10A-12：提示词是全局设置；切聊天等页面级 refresh 不得把未保存的编辑换回已保存版本
+    // （dirty 被清零后关闭守卫也会失效）。放弃编辑走 resetPrompt / 关闭页面。
+    if (!promptDirty.value) {
+      promptSegments.value = normalizePromptSegments(currentPromptSource());
+    }
   }
 
   function setTableApiPreset(value: string): void {
@@ -659,20 +663,7 @@ export function useFormFillSettings(): FormFillSettingsState {
 
   function exportPrompt(): void {
     try {
-      const text = JSON.stringify(
-        preparePromptForSave(promptSegments.value),
-        null,
-        2,
-      );
-      const blob = new Blob([text], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "acu-form-fill-prompt.json";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadJsonToHost_ACU("acu-form-fill-prompt.json", preparePromptForSave(promptSegments.value));
       message.value = null;
       toast.success("提示词 JSON 已导出");
     } catch (error: any) {

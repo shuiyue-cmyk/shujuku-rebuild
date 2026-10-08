@@ -776,6 +776,14 @@ describe('loadSettings_ACU', () => {
     expect(calledWith.discardUnauthorizedTableEditsEnabled).toBe(true);
   });
 
+  it('R10A-23：条件模板恒开启在加载时归一，旧设置里的 false 不再依赖总览页刷新去改写', () => {
+    mockReadProfileSettings.mockReturnValue({
+      promptTemplateSettings: { enabled: false, maxNestingDepth: 7, debugMode: true },
+    });
+    loadSettings_ACU();
+    expect(mockSettings.promptTemplateSettings).toEqual({ enabled: true, maxNestingDepth: 7, debugMode: true });
+  });
+
   it('补齐缺失的 V2 rollout 开关与 allowlist，且持久化全局配置', () => {
     mockGlobalMeta.vectorMemoryConfigGlobal = {
       defaultsRefreshVersion: 'old-vector-defaults',

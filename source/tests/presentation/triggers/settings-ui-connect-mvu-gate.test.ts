@@ -28,15 +28,12 @@ const m = vi.hoisted(() => ({
   chat: [] as any[],
 }));
 
-vi.mock('../../../src/presentation/components/plot-editors', () => ({
+vi.mock('../../../src/service/runtime/state-manager', () => ({
   autoFillDebounceTimer_ACU: null,
   _set_autoFillDebounceTimer_ACU: vi.fn(),
   isAutoUpdatingCard_ACU: false,
   wasStoppedByUser_ACU: false,
   _set_wasStoppedByUser_ACU: vi.fn(),
-  manualExtraHint_ACU: '',
-}));
-vi.mock('../../../src/service/runtime/state-manager', () => ({
   NEW_MESSAGE_DEBOUNCE_DELAY_ACU: 500,
   AI_MATERIALIZATION_MAX_RETRIES_ACU: 3,
   AI_MATERIALIZATION_RETRY_DELAY_MS_ACU: 100,

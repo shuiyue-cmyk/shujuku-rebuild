@@ -1,7 +1,7 @@
 /**
  * service/plot/plot-state.ts — 剧情推进运行时状态 + 纯逻辑函数
  *
- * 从 presentation/components/plot-editors.ts 搬入。
+ * 原旧弹窗剧情编辑器（已删除）中的非 DOM 状态。
  * 这些状态变量和函数不涉及 DOM 操作。
  */
 

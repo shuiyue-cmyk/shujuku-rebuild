@@ -48,25 +48,10 @@ describe('createDataAdminApi', () => {
     mockCommitV2Recovery.mockResolvedValue({ status: 'committed', planId: 'plan-1' });
   });
 
-  it('通过注册的 V2 surface 打开 visualizer', async () => {
-    const openVisualizer = vi.fn(async () => true);
-    registerUiSurface_ACU({
-      openSettings: vi.fn(async () => true),
-      openVisualizer,
-      refreshVisualizer: vi.fn(async () => undefined),
-    });
+  it('R9-16：openVisualizer 只由设置分组提供，数据管理分组不再重复定义（启动不再打重名告警）', () => {
     const api = createDataAdminApi({} as any);
 
-    expect(typeof api.openVisualizer).toBe('function');
-    await expect(api.openVisualizer()).resolves.toBe(true);
-
-    expect(openVisualizer).toHaveBeenCalledTimes(1);
-  });
-
-  it('V2 surface 尚未注册时拒绝打开 visualizer', async () => {
-    const api = createDataAdminApi({} as any);
-
-    await expect(api.openVisualizer()).resolves.toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(api, 'openVisualizer')).toBe(false);
   });
 
   it('暴露 V2 恢复诊断与严格确认提交入口', async () => {

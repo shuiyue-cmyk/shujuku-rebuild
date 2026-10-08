@@ -279,17 +279,15 @@ export function useVectorIndexConfig() {
     form.keywordGenerationEnabled = config.keywordGenerationEnabled === true;
     form.keywordContextPairCount = config.keywordContextPairCount;
     form.keywordGenerationMaxAttempts = config.keywordGenerationMaxAttempts;
-    promptSegments.value = cloneSegments(config.keywordPromptGroup);
-    promptDirty.value = false;
+    // R10A-12：关键词提示词是全局设置；保存向量 API、切聊天触发的 refresh 不得重置未保存的编辑。
+    if (!promptDirty.value) {
+      promptSegments.value = cloneSegments(config.keywordPromptGroup);
+    }
   }
 
   function refresh(): void {
     readFromConfig();
     runValidation();
-  }
-
-  function pushSavedMessage(text = '设置已保存。'): void {
-    void text;
   }
 
   function runValidation(): boolean {
@@ -310,7 +308,6 @@ export function useVectorIndexConfig() {
       return;
     }
     runValidation();
-    pushSavedMessage();
   }
 
   function setNumberField<
@@ -336,7 +333,6 @@ export function useVectorIndexConfig() {
           return;
         }
         runValidation();
-        pushSavedMessage();
         return;
       }
     }
@@ -354,7 +350,6 @@ export function useVectorIndexConfig() {
           return;
         }
         runValidation();
-        pushSavedMessage();
         return;
       }
     }
@@ -368,7 +363,6 @@ export function useVectorIndexConfig() {
       return;
     }
     runValidation();
-    pushSavedMessage();
   }
 
   function setBooleanField<
@@ -383,7 +377,6 @@ export function useVectorIndexConfig() {
       return;
     }
     runValidation();
-    pushSavedMessage();
   }
 
   function setV2WriteScopeAllowlist(raw: string): void {
@@ -398,7 +391,6 @@ export function useVectorIndexConfig() {
       return;
     }
     runValidation();
-    pushSavedMessage();
   }
 
   function previewRecentFixedInjectCount(raw: number | string): void {
@@ -418,7 +410,6 @@ export function useVectorIndexConfig() {
       return;
     }
     runValidation();
-    pushSavedMessage();
   }
 
   function addPromptSegment(position: 'top' | 'bottom'): void {

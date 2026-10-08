@@ -1123,6 +1123,17 @@ describe('ContinuationOrchestrator_ACU', () => {
     const withoutCursor = { ...saved.outline, nodes: [{ ...saved.outline.nodes[0], turns: saved.outline.nodes[0].turns.filter(turn => turn.id !== 'turn-2') }] };
     await expectCode(() => orchestrator.replaceActiveOutline({ outline: withoutCursor as any }), 'CONTINUATION_AGENT_WRITE_REJECTED');
     expect(store.readPersisted()!.activeTask!.stages[0].activeRevision).toBe(2);
+
+    // R10B-07：草稿基于旧 revision（1）时 fail-closed，不覆盖 Agent/他处产出的新大纲。
+    const stageId = store.readPersisted()!.activeTask!.stages[0].stageId;
+    const staleEdit = { ...saved.outline, title: '基于旧底稿的改动' };
+    await expectCode(
+      () => orchestrator.replaceActiveOutline({ outline: staleEdit as any, expectedStageId: stageId, expectedRevision: 1 }),
+      'CONTINUATION_TASK_STATE_INVALID',
+    );
+    expect(store.readPersisted()!.activeTask!.stages[0].activeRevision).toBe(2);
+    await orchestrator.replaceActiveOutline({ outline: staleEdit as any, expectedStageId: stageId, expectedRevision: 2 });
+    expect(store.readPersisted()!.activeTask!.stages[0].activeRevision).toBe(3);
   });
 
   it('clearContinuationData 丢任务、资料与会话记录，但不碰正文楼层', async () => {

@@ -155,26 +155,26 @@ describe('useContentReplaceStore', () => {
     expect(store.ignoreMvuUpdate).toBe(false);
   });
 
-  it('保存、载入、删除正文替换提示词预设', async () => {
+  it('新建、载入、删除正文替换提示词预设', async () => {
     const { store, settings } = await setupStore();
 
-    store.setString('presetNameDraft', '清爽改写');
-    store.savePreset();
-    expect(settings.contentOptimizationSettings.promptPresets[0].name).toBe('清爽改写');
+    store.createPresetFromDefault();
+    expect(settings.contentOptimizationSettings.promptPresets[0].name).toBe('新正文替换预设');
+    const presetContent = settings.contentOptimizationSettings.promptPresets[0].promptGroup[0].content;
 
     store.updatePromptSegment(0, { content: '另一套提示词' });
-    store.selectPreset('清爽改写');
-    expect(store.promptGroup[0].content).toBe('优化 $CONTENT');
+    store.selectPreset('新正文替换预设');
+    expect(store.promptGroup[0].content).toBe(presetContent);
 
-    store.deletePreset();
+    store.deletePresetByName('新正文替换预设');
     expect(settings.contentOptimizationSettings.promptPresets).toEqual([]);
   });
 
   it('编辑目标正文替换预设时会同步更新预设库，重命名不影响提示词内容', async () => {
     const { store, settings } = await setupStore();
 
-    store.setString('presetNameDraft', '清爽改写');
-    store.savePreset();
+    store.createPresetFromDefault();
+    store.renamePreset('新正文替换预设', '清爽改写');
     store.updatePromptSegment(0, { content: '重写后的模板 $CONTENT' });
     store.savePromptGroupToPreset('清爽改写');
 
@@ -189,8 +189,6 @@ describe('useContentReplaceStore', () => {
   it('默认预设使用内置提示词，且从默认新建会生成可编辑预设', async () => {
     const { store, settings } = await setupStore();
 
-    store.setString('presetNameDraft', '清爽改写');
-    store.savePreset();
     store.updatePromptSegment(0, { content: '另一套提示词 $CONTENT' });
     store.selectPreset('');
 
@@ -206,13 +204,13 @@ describe('useContentReplaceStore', () => {
     expect(settings.contentOptimizationSettings.promptGroup.some((seg: any) => String(seg.content || '').includes('$CONTENT'))).toBe(true);
   });
 
-  it('不能覆盖内置默认预设名称', async () => {
+  it('不能把预设改名为内置默认预设名称', async () => {
     const { store, settings } = await setupStore();
 
-    store.setString('presetNameDraft', '默认预设');
-    store.savePreset();
+    store.createPresetFromDefault();
+    store.renamePreset('新正文替换预设', '默认预设');
 
-    expect(settings.contentOptimizationSettings.promptPresets).toEqual([]);
+    expect(settings.contentOptimizationSettings.promptPresets.map((p: any) => p.name)).toEqual(['新正文替换预设']);
     expect(store.message?.kind).toBe('warning');
   });
 
@@ -265,4 +263,59 @@ describe('useContentReplaceStore', () => {
     expect(store.message).toBeNull();
     expect(toast.items.map(item => item.text)).toContain('已重新优化并替换 1 处内容。');
   });
+
+  it('R10B-03：未保存的提示词草稿不会被其它开关/数字/标签修改顺带写进设置', async () => {
+    const { store, settings } = await setupStore();
+    store.updatePromptSegment(0, { content: '半截草稿，没有占位符' });
+
+    store.setBoolean('showDiff', false);
+    store.setNumber('minLength', 200);
+    store.setString('extractTags', 'content');
+
+    const cfg = settings.contentOptimizationSettings;
+    expect(cfg.promptGroup[0].content).toBe('优化 $CONTENT');
+    expect(cfg.showDiff).toBe(false);
+    expect(cfg.minLength).toBe(200);
+    expect(cfg.extractTags).toBe('content');
+    // 草稿仍在编辑器里，没有被基础字段保存冲掉
+    expect(store.promptGroup[0].content).toBe('半截草稿，没有占位符');
+    expect(store.promptDirty).toBe(true);
+  });
+
+  it('R10B-03：确认放弃后 discardPromptDraft 从设置重新载入提示词并清掉脏标记', async () => {
+    const { store, settings } = await setupStore();
+    store.updatePromptSegment(0, { content: '半截草稿' });
+
+    store.discardPromptDraft();
+
+    expect(store.promptGroup[0].content).toBe('优化 $CONTENT');
+    expect(store.promptDirty).toBe(false);
+    store.setBoolean('showDiff', false);
+    expect(settings.contentOptimizationSettings.promptGroup[0].content).toBe('优化 $CONTENT');
+  });
+
+  it('R10B-12：保存提示词时设置写入失败，不报「已保存」，设置保持原样且草稿保留', async () => {
+    const { store, settings, saveSettings, toast } = await setupStore();
+    store.updatePromptSegment(0, { content: '新提示词 $CONTENT' });
+    saveSettings.mockReturnValueOnce({ saved: false, storageType: 'memory', error: '写入失败' } as any);
+
+    store.savePromptGroup();
+
+    expect(settings.contentOptimizationSettings.promptGroup[0].content).toBe('优化 $CONTENT');
+    expect(store.promptGroup[0].content).toBe('新提示词 $CONTENT');
+    expect(store.promptDirty).toBe(true);
+    expect(toast.items.map(item => item.text)).not.toContain('正文替换提示词已保存。');
+    expect(toast.items.some(item => item.kind === 'error')).toBe(true);
+  });
+
+  it('R10B-12：开关保存失败时回到原值', async () => {
+    const { store, settings, saveSettings } = await setupStore();
+    saveSettings.mockReturnValueOnce({ saved: false, storageType: 'memory', error: '写入失败' } as any);
+
+    store.setBoolean('showDiff', false);
+
+    expect(store.showDiff).toBe(true);
+    expect(settings.contentOptimizationSettings.showDiff).toBe(true);
+  });
 });
+

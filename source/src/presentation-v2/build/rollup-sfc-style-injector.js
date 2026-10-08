@@ -4,7 +4,7 @@
  *
  * 为什么不引第三方 CSS 插件：
  * - 我们不需要独立 .css 产物，新 UI 全部通过 SFC 表达样式
- * - 油猴 IIFE / 酒馆扩展 ESM / plus 包装入口 三种产物都要工作
+ * - 唯一产物是酒馆扩展 ESM（dist/extension/index.js），样式随 JS 一起分发
  * - SFC 样式必须能注入 host document（见 D15.1），第三方 CSS 插件默认
  *   只挂当前 document，得自己再叠一层
  *

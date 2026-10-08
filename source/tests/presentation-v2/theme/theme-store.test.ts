@@ -391,6 +391,30 @@ describe('theme-store', () => {
     }))).toThrow('主题文件缺少 v2 主题所需的颜色模式或 token。');
   });
 
+  it('R10B-16：拒绝能让界面请求外部资源的 token（CSS 转义的 url、image-set、协议地址）', async () => {
+    const m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    const store = m.themeStore.useThemeStore();
+    const base = store.themes.find(t => t.id === 'default-dark')!;
+    const attempt = (bg0: string) => () => store.importCustomThemeFromJsonText(JSON.stringify({
+      kind: 'acu-v2-theme',
+      version: 1,
+      theme: { name: '外链主题', colorScheme: 'dark', tokens: { ...base.tokens, bg0 } },
+    }));
+
+    for (const bad of [
+      String.raw`\75 rl(https://evil.example/x.png)`,
+      'image-set("https://evil.example/x.png" 1x)',
+      '-webkit-image-set("https://evil.example/x.png" 1x)',
+      'linear-gradient(red, blue), src("//evil.example/a")',
+      '"https://evil.example/a"',
+    ]) {
+      expect(attempt(bad), bad).toThrow('主题文件缺少 v2 主题所需的颜色模式或 token。');
+    }
+    // 正常的渐变与带引号的字体名仍可导入
+    expect(attempt('linear-gradient(180deg, #111 0%, rgba(0, 0, 0, 0.8) 100%)')).not.toThrow();
+  });
+
   it('深色使用灰蓝底色与冷薄荷 accent', async () => {
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());

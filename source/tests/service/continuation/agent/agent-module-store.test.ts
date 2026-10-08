@@ -502,6 +502,27 @@ describe('Agent 资料快照落盘修订号复核（用户手动保存防冲）'
     expect(readAgentModuleSnapshot_ACU(chat).hooks[0].id).toBe('用户编辑');
     expect(saveChat).toHaveBeenCalledOnce();
   });
+
+  // R10A-09：用户编辑期间 Agent 往同一模块写入了新条目时，用陈旧草稿整体替换会把它们抹掉。
+  it('R10A-09：带 expectedRevisions 且该模块修订号已推进时拒绝保存，不落盘', async () => {
+    const chat: any[] = [{ mes: 'a' }, { mes: 'b', [AGENT_MODULE_FIELD_ACU]: snapshotAt_ACU(0, { revisions: { hooks: 3, infoGap: 1, constraints: 1, storyArc: 1, chronology: 1, webRefs: 1 }, hooks: [hook_ACU('Agent 新增') as any] }) }];
+    const saveChat = vi.fn().mockResolvedValue(undefined);
+    _set_SillyTavern_API_ACU({ chat, saveChat } as any);
+
+    await expect(replaceAgentModuleSnapshotByUser_ACU({ hooks: [hook_ACU('陈旧草稿') as any] }, chat, { expectedRevisions: { hooks: 2 } }))
+      .rejects.toThrow(/已被更新/);
+    expect(saveChat).not.toHaveBeenCalled();
+    expect(readAgentModuleSnapshot_ACU(chat).hooks[0].id).toBe('Agent 新增');
+  });
+
+  it('R10A-09：expectedRevisions 与当前一致时照常保存', async () => {
+    const chat: any[] = [{ mes: 'a' }, { mes: 'b', [AGENT_MODULE_FIELD_ACU]: snapshotAt_ACU(0, { revisions: { hooks: 3, infoGap: 1, constraints: 1, storyArc: 1, chronology: 1, webRefs: 1 }, hooks: [hook_ACU('既有') as any] }) }];
+    const saveChat = vi.fn().mockResolvedValue(undefined);
+    _set_SillyTavern_API_ACU({ chat, saveChat } as any);
+
+    const saved = await replaceAgentModuleSnapshotByUser_ACU({ hooks: [hook_ACU('用户编辑') as any] }, chat, { expectedRevisions: { hooks: 3 } });
+    expect(saved.hooks[0].id).toBe('用户编辑');
+  });
 });
 
 /**

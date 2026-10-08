@@ -20,12 +20,6 @@ vi.mock('../../src/shared/utils', () => ({ logDebug_ACU: vi.fn() }));
 vi.mock('../../src/service/worldbook/pipeline', () => ({
   refreshMergedDataAndNotify_ACU: h.refreshMerged,
 }));
-vi.mock('../../src/presentation/components/update-status-display', () => ({
-  updateCardUpdateStatusDisplay_ACU: vi.fn(),
-}));
-vi.mock('../../src/presentation/components/template-preset-ui', () => ({
-  loadTemplatePresetSelect_ACU: vi.fn(),
-}));
 
 import { refreshMergedDataAndNotifyWithUI_ACU } from '../../src/presentation/components/pipeline-ui-helpers';
 import { topLevelWindow_ACU } from '../../src/shared/env';
@@ -115,13 +109,6 @@ describe('refreshMergedDataAndNotifyWithUI_ACU UI 可见性裁剪', () => {
     await vi.advanceTimersByTimeAsync(200);
     await vi.advanceTimersByTimeAsync(800);
     await expect(operation).resolves.toMatchObject({ ok: true });
-  });
-
-  it('updateCardUpdateStatusDisplay_ACU 抛错不影响外层函数', async () => {
-    const { updateCardUpdateStatusDisplay_ACU } = await import('../../src/presentation/components/update-status-display');
-    (updateCardUpdateStatusDisplay_ACU as any).mockImplementation(() => { throw new Error('status boom'); });
-    const result = await runWithTimers(refreshMergedDataAndNotifyWithUI_ACU());
-    expect(result).toMatchObject({ ok: true });
   });
 
   it('通知前端后调用 _notifyTableUpdate 一次', async () => {

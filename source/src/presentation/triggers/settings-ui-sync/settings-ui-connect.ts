@@ -4,18 +4,6 @@
 
 
 
-import {
-  autoFillDebounceTimer_ACU,
-  isAutoUpdatingCard_ACU,
-  wasStoppedByUser_ACU,
-  _set_autoFillDebounceTimer_ACU,
-  _set_isAutoUpdatingCard_ACU,
-  _set_manualExtraHint_ACU,
-  _set_wasStoppedByUser_ACU
-} from '../../components/plot-editors';
-import {
-  showToastr_ACU
-} from '../../theme/toast';
 
 import {
   SillyTavern_API_ACU,
@@ -38,29 +26,23 @@ import {
 import {
   getChatArray_ACU
 } from '../../../service/chat/chat-service';
-import {
-  fetchAvailableModels_ACU
-} from '../../../service/ai/ai-service';
 
 import {
   AI_MATERIALIZATION_MAX_RETRIES_ACU,
   AI_MATERIALIZATION_RETRY_DELAY_MS_ACU,
   NEW_MESSAGE_DEBOUNCE_DELAY_ACU,
+  autoFillDebounceTimer_ACU,
+  isAutoUpdatingCard_ACU,
+  wasStoppedByUser_ACU,
+  _set_autoFillDebounceTimer_ACU,
+  _set_wasStoppedByUser_ACU,
   coreApisAreReady_ACU,
   currentChatFileIdentifier_ACU,
   getCurrentIsolationKey_ACU,
   getAutoFillStopEpoch_ACU,
   settings_ACU,
-  _set_coreApisAreReady_ACU,
-  _set_lastTotalAiMessages_ACU
+  _set_coreApisAreReady_ACU
 } from '../../../service/runtime/state-manager';
-import {
-  $popupInstance_ACU,
-  $customApiUrlInput_ACU,
-  $customApiKeyInput_ACU,
-  $customApiModelSelect_ACU,
-  $apiStatusDisplay_ACU
-} from '../../state/ui-refs';
 
 
 import {
@@ -68,9 +50,6 @@ import {
 } from '../../../service/worldbook/pipeline';
 
 
-import {
-  escapeHtml_ACU
-} from '../../../shared/html-helpers';
 
 import {
   logDebug_ACU,
@@ -112,75 +91,6 @@ import {
   let autoFillRunSequence_ACU = 0;
   let latestAutoFillRunId_ACU: string | null = null;
 
-  export async function fetchModelsAndConnect_ACU() {
-    if (
-      !$popupInstance_ACU ||
-      !$customApiUrlInput_ACU ||
-      !$customApiKeyInput_ACU ||
-      !$customApiModelSelect_ACU ||
-      !$apiStatusDisplay_ACU
-    ) {
-      logError_ACU('加载模型列表失败：UI元素未初始化。');
-      showToastr_ACU('error', 'UI未就绪。');
-      return;
-    }
-    const apiUrl = String($customApiUrlInput_ACU.val() || '').trim();
-    const apiKey = String($customApiKeyInput_ACU.val() || '');
-    if (!apiUrl) {
-      showToastr_ACU('warning', '请输入API基础URL。');
-      $apiStatusDisplay_ACU.text('状态:请输入API基础URL').css('color', 'orange');
-      return;
-    }
-    $apiStatusDisplay_ACU.text('状态: 正在检查API端点状态...').css('color', '#61afef');
-    showToastr_ACU('info', '正在检查自定义API端点状态...');
-
-    try {
-        // [重构] 调用 service 层获取模型列表
-        // 契约：fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat?)，第三参默认 ''。
-        // 不传协议时 ai-service 无法按 custom_api_format 分流，模型列表探测与正式调用会走不同通道。
-        const customApiFormat = String(settings_ACU.apiConfig?.customApiFormat || '');
-        const result = await fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat, { force: true }); // 测试连接是显式验证动作：不能被 5min TTL/30s 失败负缓存吞掉重试
-
-        if (!result.success) {
-            throw new Error(result.error || '未知错误');
-        }
-
-        const models = result.models!;
-        const currentSelectedModel = settings_ACU.apiConfig.model || '';
-
-        // UI 操作：填充模型下拉列表
-        $customApiModelSelect_ACU.empty().append('<option value="">-- 请选择模型 --</option>');
-        models.forEach((modelName: string) => {
-            const selected = modelName === currentSelectedModel ? ' selected' : '';
-            $customApiModelSelect_ACU.append(`<option value="${escapeHtml_ACU(modelName)}"${selected}>${escapeHtml_ACU(modelName)}</option>`);
-        });
-
-        // 如果之前保存的模型不在列表中，也添加进去
-        if (currentSelectedModel && $customApiModelSelect_ACU.find(`option[value="${escapeHtml_ACU(currentSelectedModel)}"]`).length === 0) {
-            $customApiModelSelect_ACU.append(`<option value="${escapeHtml_ACU(currentSelectedModel)}" selected>${escapeHtml_ACU(currentSelectedModel)} (已保存)</option>`);
-        }
-        showToastr_ACU('success', `模型列表加载成功！共加载 ${models.length} 个模型。`);
-    } catch (error) {
-      logError_ACU('加载模型列表时出错:', error);
-      showToastr_ACU('error', `加载模型列表失败: ${error.message}`);
-      $apiStatusDisplay_ACU.text(`状态: 加载模型失败 - ${error.message}`).css('color', '#ff6b6b');
-    }
-    updateApiStatusDisplay_ACU();
-  }
-  export function updateApiStatusDisplay_ACU() {
-    if (!$popupInstance_ACU || !$apiStatusDisplay_ACU) return;
-    if (settings_ACU.apiConfig.url && settings_ACU.apiConfig.model)
-      $apiStatusDisplay_ACU.html(
-        `当前URL: <span style="color:lightgreen;word-break:break-all;">${escapeHtml_ACU(
-          settings_ACU.apiConfig.url,
-        )}</span><br>已选模型: <span style="color:lightgreen;">${escapeHtml_ACU(settings_ACU.apiConfig.model)}</span>`,
-      );
-    else if (settings_ACU.apiConfig.url)
-      $apiStatusDisplay_ACU.html(
-        `当前URL: ${escapeHtml_ACU(settings_ACU.apiConfig.url)} - <span style="color:orange;">请加载并选择模型</span>`,
-      );
-    else $apiStatusDisplay_ACU.html(`<span style="color:#ffcc80;">未配置自定义API。数据库更新功能可能不可用。</span>`);
-  }
   export function attemptToLoadCoreApis_ACU() {
     // 插件运行在酒馆主窗口中，宿主窗口即自身
     const hostWin: any = getHostWindow();

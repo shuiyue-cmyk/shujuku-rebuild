@@ -116,42 +116,6 @@ describe('useDataManagement', () => {
     expect(d.toastWarning).toHaveBeenCalledWith(expect.stringContaining('切换'), expect.anything());
   });
 
-  it('隔离切换和历史删除保持当前隔离域状态一致', async () => {
-    const d = await loadFlow();
-    d.flow.refresh();
-    d.flow.isolationCode.value = 'gamma';
-    await d.flow.applyIsolation();
-    expect(d.switchIsolation).toHaveBeenCalledWith('gamma');
-    expect(d.flow.currentIsolationLabel.value).toBe('gamma');
-    await d.flow.removeHistory('beta');
-    expect(d.removeHistory).toHaveBeenCalledWith('beta');
-    await d.flow.removeHistory('gamma');
-    expect(d.switchIsolation).toHaveBeenLastCalledWith('');
-    expect(d.removeHistory).toHaveBeenCalledWith('gamma');
-  });
-
-  it('R7-05：保留名 default（不分大小写）不能作隔离标识，不切换并给出明确提示', async () => {
-    const d = await loadFlow();
-    d.flow.refresh();
-    d.flow.isolationCode.value = ' Default ';
-    await d.flow.applyIsolation();
-    expect(d.switchIsolation).not.toHaveBeenCalled();
-    expect(d.toastError).toHaveBeenCalledWith(expect.stringContaining('保留'));
-  });
-
-  it('隐藏入口对应的业务链路仍可独立执行', async () => {
-    const d = await loadFlow();
-    d.flow.refresh();
-    await d.flow.deleteCurrentIsolationEntries();
-    await d.flow.overrideLatestLayerWithTemplate();
-    await d.flow.deleteLocalData('current');
-    expect(d.deleteGenerated).toHaveBeenCalledOnce();
-    expect(d.applyTemplateScope.mock.invocationCallOrder[0]).toBeLessThan(d.overrideLatest.mock.invocationCallOrder[0]);
-    expect(d.deleteScoped).toHaveBeenCalledWith('current', 1, null, 'range');
-    expect(d.loadOrCreate).toHaveBeenCalled();
-    expect(d.refreshMerged).toHaveBeenCalled();
-    expect(d.cleanupWorldbook).toHaveBeenCalled();
-  });
   it('V2 诊断与恢复只透传服务端冻结的 planId 和确认值', async () => {
     const d = await loadFlow();
     await d.flow.scanV2IsolationDiagnostics();
@@ -163,29 +127,6 @@ describe('useDataManagement', () => {
     await d.flow.commitV2Recovery(true);
     expect(d.prepare).toHaveBeenCalledOnce();
     expect(d.commit).toHaveBeenCalledWith('plan-1', { confirmOrphanDataReplace: true });
-  });
-
-  it('合并导入模板失败时回滚已经保存的 settings', async () => {
-    const d = await loadFlow();
-    d.settings.charCardPrompt = ['原始提示词'];
-    d.settings.mergeTargetCount = 3;
-    d.applyCombinedImport.mockImplementation(() => {
-      d.settings.charCardPrompt = ['导入提示词'];
-      d.settings.mergeTargetCount = 9;
-      return ['charCardPrompt', 'mergeTargetCount'];
-    });
-    d.applyTemplateSnapshot.mockResolvedValue({ saved: false, error: '模拟模板 blocker' });
-    const file = new File([JSON.stringify({
-      prompt: ['导入提示词'],
-      mergeSummaryPrompt: '导入合并提示词',
-      template: { mate: { type: 'chatSheets', version: 1 } },
-    })], 'combined.json', { type: 'application/json' });
-
-    await d.flow.importCombinedSettings(file);
-
-    expect(d.settings.charCardPrompt).toEqual(['原始提示词']);
-    expect(d.settings.mergeTargetCount).toBe(3);
-    expect(d.saveSettings).toHaveBeenCalled();
   });
 
   // R10A-04：恢复默认是多步 await 序列，每一步都现读当前聊天；切了聊天必须停在原地。
@@ -258,6 +199,26 @@ describe('useDataManagement', () => {
     expect(d.deleteGenerated).not.toHaveBeenCalled();
     // 本页 refresh 与成功 toast 保留。
     expect(d.toastSuccess).toHaveBeenCalled();
+  });
+
+  it('R10A-18：硬清空后的刷新失败会被捕获并提示，忙碌态等刷新结束才解除', async () => {
+    const d = await loadFlow();
+    d.deleteScoped.mockResolvedValueOnce({
+      path: 'purge',
+      result: { saved: true, clearedMessageCount: 2, removedMetadata: [] },
+    });
+    let rejectRefresh!: (error: unknown) => void;
+    d.refreshMerged.mockImplementationOnce(() => new Promise((_, reject) => { rejectRefresh = reject; }));
+
+    const pending = d.flow.deleteLocalData('all');
+    await vi.waitFor(() => expect(d.refreshMerged).toHaveBeenCalledOnce());
+    expect(d.flow.busyAction.value).not.toBe('');
+    rejectRefresh(new Error('刷新失败'));
+    await pending;
+
+    expect(d.flow.busyAction.value).toBe('');
+    expect(d.toastError).toHaveBeenCalled();
+    expect(d.toastSuccess).not.toHaveBeenCalled();
   });
 
   it('purge 失败时不走成功路径，不触发任何 reload/持久化/世界书调用', async () => {

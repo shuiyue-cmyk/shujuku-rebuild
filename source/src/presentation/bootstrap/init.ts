@@ -547,7 +547,7 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
   try {
     logDebug_ACU(`ACU CHAT_CHANGED event: ${chatFileName}`);
 
-    // [中止] 楼层变更（删楼/ROLL/切聊天）时中止所有在飞的依赖楼层的 API 调用
+    // [中止] 切聊天时中止所有在飞的依赖楼层的 API 调用
     //（表格填表/生理追踪等），避免用旧上下文的结果写入当前状态。
     abortOnChatMutation_ACU();
 
@@ -598,6 +598,98 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
 // 定时器。一次成功初始化即置位；core APIs 加载失败不置位，保留原有「失败后可重试」语义。
 // 不做全量 off 配对（大重构超范围），卫兵封死 double-fire 主路径。
 let mainInitializeDone_ACU = false;
+
+/**
+ * 启动时已有聊天的初始化链（原 mainInitialize_ACU 内的 initWithChatId 闭包）。
+ * 经 scheduleInitChainRun_ACU 与 CHAT_CHANGED 延迟链共用互斥守卫。
+ */
+export async function runStartupChatInit_ACU(chatId: string): Promise<void> {
+  lastDelayedRebuildRefreshOk_ACU = false; // [M3]
+  logDebug_ACU(`ACU: Initializing with current chat on load: ${chatId}`);
+  await resetScriptStateForNewChat_ACU(chatId, { reason: 'startup_restore' });
+  // R9-10：与 CHAT_CHANGED 链一致，每个 await 之后复核聊天身份；切了聊天就停下，
+  // 交给随后补跑的 CHAT_CHANGED 链，避免把旧聊天的表以新聊天身份 hydrate / 发布。
+  const scheduledChatIdentifier_ACU = String(currentChatFileIdentifier_ACU || '');
+  const abortedMidRun = (stage: string, epoch?: number) => shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier_ACU, epoch, `initWithChatId ${stage}`);
+  await loadPresetAndCleanCharacterData_ACU();
+  if (abortedMidRun('预设加载后')) return;
+  
+  // 再次强制刷新数据和UI，确保初始加载时表格显示正确
+  await loadAllChatMessages_ACU();
+  if (abortedMidRun('loadAllChatMessages 后')) return;
+
+  // [provisional bridge] 启动加载当前聊天后统一恢复门：
+  // 若上次运行崩溃留下 active provisional bridge（原 full 被暂存、临时根在链上），
+  // 在首次读写前自动 finalize（有已提交 bucket）或 rollback（零提交）；
+  // 无法证明安全时记录错误并 fail-closed，避免在残留拓扑上继续写入。
+  const bridgeGate = await ensureNoActiveProvisionalBridgeForCurrentScope_ACU();
+  if (!bridgeGate.ok) {
+    logError_ACU(`[ManualCatchUpBridge] 启动恢复残留 provisional bridge 失败：${(bridgeGate as { ok: false; error: string }).error}`);
+  }
+  if (abortedMidRun('provisional bridge 恢复后')) return;
+  // epoch 在 refresh 前捕获：bridge 恢复可能合法地重建 provider；refresh 之后再有 dispose 即视为切聊。
+  let scheduledLifecycleEpoch_ACU: number | undefined;
+  try {
+      scheduledLifecycleEpoch_ACU = getRuntimeLifecycleEpoch_ACU();
+  } catch {
+      scheduledLifecycleEpoch_ACU = undefined;
+  }
+
+  // 阶段 D：启动补偿同样收敛为“一轮 merged refresh → snapshot hydrate”。
+  // 老卡（有聊天历史）从聊天记录合并数据建表；新卡（无数据）由 refresh
+  // 走 guide/模板基底，hydrate 失败或 degraded 时回退冷 reload。
+  const refreshResult = await refreshMergedDataAndNotifyWithUI_ACU();
+  lastDelayedRebuildRefreshOk_ACU = true; // [M3]
+  if (abortedMidRun('merged refresh 后', scheduledLifecycleEpoch_ACU)) return;
+
+  // S0-4：初始加载完成后捕获 checkpoint 保管库（删楼恢复的影子基线）。
+  try {
+      captureCheckpointVaultForCurrentChat_ACU();
+  } catch (e: any) {
+      logWarn_ACU(`[删楼守卫] initWithChatId 保管库捕获失败: ${e?.message}`);
+  }
+
+  // S3-3：初始加载完成后做休眠完整性自检（只读，发现孤儿即警告）。
+  runDormantIntegrityAuditQuietly_ACU('initWithChatId');
+
+  if (isSqliteMode()) {
+      const envelope = refreshResult
+          && !refreshResult.degraded
+          && refreshResult.mergedData
+          ? createCanonicalSnapshotEnvelope_ACU({
+              data: refreshResult.mergedData,
+              chatIdentity: String(currentChatFileIdentifier_ACU || ''),
+              isolationKey: getCurrentIsolationKey_ACU(),
+              storageMode: 'sqlite',
+              lifecycleEpoch: getRuntimeLifecycleEpoch_ACU(),
+              source: 'merged_refresh',
+          })
+          : null;
+      if (envelope) {
+          logDebug_ACU('[SQLite] initWithChatId: 用 canonical snapshot hydrate 内存数据库...');
+          const hydrated = await hydrateStorageProviderFromSnapshot_ACU(envelope);
+          if (hydrated.ok) {
+              logDebug_ACU('[SQLite] initWithChatId: snapshot hydrate 完成');
+          } else if (hydrated.failureCode === 'stale_load_discarded') {
+              logDebug_ACU('[SQLite] initWithChatId: snapshot 身份漂移，回退冷 reload。');
+              try {
+                  await reloadStorageProvider();
+              } catch (e: any) {
+                  logError_ACU('[SQLite] initWithChatId: 冷 reload 失败:', e);
+              }
+          } else {
+              logError_ACU(`[SQLite] initWithChatId: snapshot hydrate 失败: ${hydrated.failureCode || 'unknown'}${hydrated.error ? `: ${hydrated.error}` : ''}`);
+          }
+      } else {
+          logDebug_ACU('[SQLite] initWithChatId: merged refresh 未产出可用 canonical（degraded/空数据），回退冷 reload。');
+          try {
+              await reloadStorageProvider();
+          } catch (e: any) {
+              logError_ACU('[SQLite] initWithChatId: 数据库初始化失败:', e);
+          }
+      }
+  }
+}
 
 export   function mainInitialize_ACU() {
 
@@ -1086,82 +1178,9 @@ export   function mainInitialize_ACU() {
       // 我们在初始化时主动获取一次当前聊天信息并进行设置。
       // 这确保了无论脚本何时加载，都能正确初始化。
       // [修复] 添加轮询重试机制：如果 chatId 暂时不可用，持续轮询直到可用
-      const initWithChatId = async (chatId: string) => {
-          lastDelayedRebuildRefreshOk_ACU = false; // [M3]
-          logDebug_ACU(`ACU: Initializing with current chat on load: ${chatId}`);
-          await resetScriptStateForNewChat_ACU(chatId, { reason: 'startup_restore' });
-          await loadPresetAndCleanCharacterData_ACU();
-          
-          // 再次强制刷新数据和UI，确保初始加载时表格显示正确
-          await loadAllChatMessages_ACU();
-
-          // [provisional bridge] 启动加载当前聊天后统一恢复门：
-          // 若上次运行崩溃留下 active provisional bridge（原 full 被暂存、临时根在链上），
-          // 在首次读写前自动 finalize（有已提交 bucket）或 rollback（零提交）；
-          // 无法证明安全时记录错误并 fail-closed，避免在残留拓扑上继续写入。
-          const bridgeGate = await ensureNoActiveProvisionalBridgeForCurrentScope_ACU();
-          if (!bridgeGate.ok) {
-            logError_ACU(`[ManualCatchUpBridge] 启动恢复残留 provisional bridge 失败：${(bridgeGate as { ok: false; error: string }).error}`);
-          }
-
-          // 阶段 D：启动补偿同样收敛为“一轮 merged refresh → snapshot hydrate”。
-          // 老卡（有聊天历史）从聊天记录合并数据建表；新卡（无数据）由 refresh
-          // 走 guide/模板基底，hydrate 失败或 degraded 时回退冷 reload。
-          const refreshResult = await refreshMergedDataAndNotifyWithUI_ACU();
-          lastDelayedRebuildRefreshOk_ACU = true; // [M3]
-
-          // S0-4：初始加载完成后捕获 checkpoint 保管库（删楼恢复的影子基线）。
-          try {
-              captureCheckpointVaultForCurrentChat_ACU();
-          } catch (e: any) {
-              logWarn_ACU(`[删楼守卫] initWithChatId 保管库捕获失败: ${e?.message}`);
-          }
-
-          // S3-3：初始加载完成后做休眠完整性自检（只读，发现孤儿即警告）。
-          runDormantIntegrityAuditQuietly_ACU('initWithChatId');
-
-          if (isSqliteMode()) {
-              const envelope = refreshResult
-                  && !refreshResult.degraded
-                  && refreshResult.mergedData
-                  ? createCanonicalSnapshotEnvelope_ACU({
-                      data: refreshResult.mergedData,
-                      chatIdentity: String(currentChatFileIdentifier_ACU || ''),
-                      isolationKey: getCurrentIsolationKey_ACU(),
-                      storageMode: 'sqlite',
-                      lifecycleEpoch: getRuntimeLifecycleEpoch_ACU(),
-                      source: 'merged_refresh',
-                  })
-                  : null;
-              if (envelope) {
-                  logDebug_ACU('[SQLite] initWithChatId: 用 canonical snapshot hydrate 内存数据库...');
-                  const hydrated = await hydrateStorageProviderFromSnapshot_ACU(envelope);
-                  if (hydrated.ok) {
-                      logDebug_ACU('[SQLite] initWithChatId: snapshot hydrate 完成');
-                  } else if (hydrated.failureCode === 'stale_load_discarded') {
-                      logDebug_ACU('[SQLite] initWithChatId: snapshot 身份漂移，回退冷 reload。');
-                      try {
-                          await reloadStorageProvider();
-                      } catch (e: any) {
-                          logError_ACU('[SQLite] initWithChatId: 冷 reload 失败:', e);
-                      }
-                  } else {
-                      logError_ACU(`[SQLite] initWithChatId: snapshot hydrate 失败: ${hydrated.failureCode || 'unknown'}${hydrated.error ? `: ${hydrated.error}` : ''}`);
-                  }
-              } else {
-                  logDebug_ACU('[SQLite] initWithChatId: merged refresh 未产出可用 canonical（degraded/空数据），回退冷 reload。');
-                  try {
-                      await reloadStorageProvider();
-                  } catch (e: any) {
-                      logError_ACU('[SQLite] initWithChatId: 数据库初始化失败:', e);
-                  }
-              }
-          }
-      };
-
       if (SillyTavern_API_ACU && SillyTavern_API_ACU.chatId) {
           // chatId 已可用，延迟初始化。[H2/M4] 与 CHAT_CHANGED 延迟链共用同一互斥守卫入口
-          scheduleInitChainRun_ACU(1000, 'initWithChatId', () => initWithChatId(SillyTavern_API_ACU!.chatId));
+          scheduleInitChainRun_ACU(1000, 'initWithChatId', () => runStartupChatInit_ACU(SillyTavern_API_ACU!.chatId));
       } else {
           // chatId 暂时不可用，启动轮询重试（每200ms检查一次，最多等15秒）
           logWarn_ACU('ACU: chatId not available on initial load. Starting polling...');
@@ -1173,7 +1192,7 @@ export   function mainInitialize_ACU() {
               if (chatId) {
                   clearInterval(pollTimer);
                   logDebug_ACU(`ACU: chatId became available after ${pollCount * 200}ms polling: ${chatId}`);
-                  scheduleInitChainRun_ACU(0, 'chatId-polling', () => initWithChatId(chatId));
+                  scheduleInitChainRun_ACU(0, 'chatId-polling', () => runStartupChatInit_ACU(chatId));
               } else if (pollCount >= maxPolls) {
                   clearInterval(pollTimer);
                   logWarn_ACU(`ACU: chatId still not available after ${maxPolls * 200}ms polling. Waiting for CHAT_CHANGED event.`);

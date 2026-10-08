@@ -20,7 +20,7 @@ async function importComposable() {
   const applyTemplatePresetToCurrent_ACU = vi.fn(async () => ({ saved: true, presetName: selectedChat }));
   const renameTemplatePreset_ACU = vi.fn(() => ({ ok: true }));
   const resolveTemplateForExport_ACU = vi.fn(() => ({ jsonData: { sheet_1: {} }, fromPresetName: selectedChat || '默认预设' }));
-  const ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU = vi.fn(async () => ({ success: true, dataWasReset: false }));
+  const ensureTemplateRecoveryReady_ACU = vi.fn(async () => ({ success: true, dataWasReset: false }));
   const promptFollowGlobalAfterSetDefault_ACU = vi.fn(async () => true);
   const runFollowGlobalTemplateFlow_ACU = vi.fn(async () => true);
 
@@ -36,7 +36,7 @@ async function importComposable() {
     reloadStorageProvider: vi.fn(async () => undefined),
   }));
   vi.doMock('../../../src/presentation-v2/composables/useTemplateRecoveryGuard', () => ({
-    ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU,
+    ensureTemplateRecoveryReady_ACU,
   }));
   vi.doMock('../../../src/presentation-v2/composables/templateFollowGlobalFlow', () => ({
     promptFollowGlobalAfterSetDefault_ACU,
@@ -118,7 +118,7 @@ async function importComposable() {
     applyTemplatePresetToCurrent_ACU,
     renameTemplatePreset_ACU,
     resolveTemplateForExport_ACU,
-    ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU,
+    ensureTemplateRecoveryReady_ACU,
     promptFollowGlobalAfterSetDefault_ACU,
     runFollowGlobalTemplateFlow_ACU,
     setSelectedGlobal: (value: string) => { selectedGlobal = value; },
@@ -325,13 +325,13 @@ describe('useTableTemplatePresets', () => {
   });
 
   it('切换当前聊天模板前使用统一恢复 guard，guard 取消时不切换', async () => {
-    const { useTableTemplatePresets, applyTemplatePresetToCurrent_ACU, ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU } = await importComposable();
+    const { useTableTemplatePresets, applyTemplatePresetToCurrent_ACU, ensureTemplateRecoveryReady_ACU } = await importComposable();
     const presets = useTableTemplatePresets();
-    ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU.mockResolvedValueOnce({ success: false, dataWasReset: false });
+    ensureTemplateRecoveryReady_ACU.mockResolvedValueOnce({ success: false, dataWasReset: false });
 
     await presets.selectChatPreset('chat-A');
 
-    expect(ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU).toHaveBeenCalledWith(expect.any(Object), 'switch-template');
+    expect(ensureTemplateRecoveryReady_ACU).toHaveBeenCalledWith('switch-template');
     expect(applyTemplatePresetToCurrent_ACU).not.toHaveBeenCalled();
   });
 
@@ -645,21 +645,6 @@ describe('useTableTemplatePresets · runtime 视图', () => {
       text: '当前表格状态在读取模板基线时发生变化，请稍后重试。',
     });
     expect(toast.items.at(-1)).toMatchObject({ kind: 'error' });
-  });
-
-  it('重命名全局预设后切换失败时回滚名称', async () => {
-    const { useTableTemplatePresets, dialog, applyTemplatePresetToCurrent_ACU, renameTemplatePreset_ACU } = await importComposable();
-    const presets = useTableTemplatePresets();
-    applyTemplatePresetToCurrent_ACU.mockResolvedValueOnce({ saved: false, error: '模拟切换失败' } as any);
-
-    const pending = presets.renameGlobalPreset();
-    await vi.waitFor(() => expect(dialog.active).toMatchObject({ kind: 'prompt', title: '重命名全局模板预设' }));
-    dialog.inputValue = 'global-renamed';
-    dialog.submitActive();
-    await pending;
-
-    expect(renameTemplatePreset_ACU).toHaveBeenNthCalledWith(1, 'global-A', 'global-renamed');
-    expect(renameTemplatePreset_ACU).toHaveBeenNthCalledWith(2, 'global-renamed', 'global-A');
   });
 
   it('全局切换协调成功但带 postCommitWarning 时显示警告（S1-3）', async () => {

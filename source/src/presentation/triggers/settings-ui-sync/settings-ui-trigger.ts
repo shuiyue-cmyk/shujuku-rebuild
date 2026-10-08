@@ -6,29 +6,8 @@ import {
   AUTO_UPDATE_FLOOR_INCREASE_DELAY_ACU
 } from '../../../shared/defaults';
 import {
-  bindTableFillStopButton_ACU
-} from '../../components/status-display';
-import {
-  updateCardUpdateStatusDisplay_ACU
-} from '../../components/update-status-display';
-import {
-  isAutoUpdatingCard_ACU,
-  wasStoppedByUser_ACU,
-  _set_isAutoUpdatingCard_ACU
-} from '../../components/plot-editors';
-import {
   showToastr_ACU
 } from '../../theme/toast';
-import {
-  ACU_TOAST_CATEGORY_ACU
-} from '../../../shared/constants';
-import {
-  toastr_API_ACU,
-  _set_SillyTavern_API_ACU,
-  _set_TavernHelper_API_ACU,
-  _set_jQuery_API_ACU,
-  _set_toastr_API_ACU
-} from '../../../shared/host-api';
 
 import {
   getChatArray_ACU
@@ -36,21 +15,19 @@ import {
 
 
 import {
-  abortAllActiveRequests_ACU,
   allChatMessages_ACU,
+  isAutoUpdatingCard_ACU,
+  wasStoppedByUser_ACU,
+  _set_isAutoUpdatingCard_ACU,
   coreApisAreReady_ACU,
+  currentChatFileIdentifier_ACU,
   currentJsonTableData_ACU,
   getCurrentIsolationKey_ACU,
   lastTotalAiMessages_ACU,
   settings_ACU,
-  _set_coreApisAreReady_ACU,
   _set_lastTotalAiMessages_ACU,
-  _set_manualExtraHint_ACU,
   _set_wasStoppedByUser_ACU
 } from '../../../service/runtime/state-manager';
-import {
-  $manualExtraHintCheckbox_ACU
-} from '../../state/ui-refs';
 import {
   processUpdates_ACU
 } from '../update-process';
@@ -65,9 +42,6 @@ import {
   getStorageProvider
 } from '../../../service/table/table-storage-strategy';
 
-import {
-  renderStopButton_ACU
-} from '../../../shared/html-helpers';
 import {
   topLevelWindow_ACU
 } from '../../../shared/env';
@@ -92,7 +66,6 @@ import {
 } from '../../../service/table/auto-fill-echo-guard';
 import {
   executeAutoFillStagingGroups_ACU,
-  processGroupedRuntimeChunk_ACU,
   type CardUpdateProgressEvent
 } from '../../../service/table/update-orchestrator';
 import {
@@ -137,17 +110,6 @@ function buildAutoUpdateProgressMessage_ACU(event: CardUpdateProgressEvent): str
     }
 }
 
-function updateAutoUpdateToastMessage_ACU(loadingToast: any, message: string) {
-    if (!loadingToast || !toastr_API_ACU) return;
-    loadingToast.find('.acu-toast-progress-message').text(message);
-}
-
-function clearAutoUpdateToast_ACU(loadingToast: any) {
-    if (loadingToast && toastr_API_ACU) {
-        toastr_API_ACU.clear(loadingToast);
-    }
-}
-
 async function refreshRuntimeDataAndNotifyAfterAutoUpdate_ACU(): Promise<void> {
     const data = getStorageProvider().getCurrentData() || currentJsonTableData_ACU;
     if (data) {
@@ -158,25 +120,20 @@ async function refreshRuntimeDataAndNotifyAfterAutoUpdate_ACU(): Promise<void> {
     } catch (_) {}
 }
 
-function handleAutoGroupedProgressEvent_ACU(event: CardUpdateProgressEvent, loadingToast?: any) {
-    const message = buildAutoUpdateProgressMessage_ACU(event);
-    updateAutoUpdateToastMessage_ACU(loadingToast, message);
-
-    switch (event.phase) {
-        case 'complete':
-            if (typeof updateCardUpdateStatusDisplay_ACU === 'function') updateCardUpdateStatusDisplay_ACU();
-            break;
-        case 'retry':
-            showToastr_ACU('warning', message, { timeOut: 5000 });
-            break;
-        default:
-            break;
-    }
+// 存储模式恒为 SQLite：自动填表不再弹常驻进度框（原非 SQLite 分组路径已删除，R9-12），只提示重试。
+function handleAutoGroupedProgressEvent_ACU(event: CardUpdateProgressEvent) {
+    if (event.phase === 'retry') showToastr_ACU('warning', buildAutoUpdateProgressMessage_ACU(event), { timeOut: 5000 });
 }
 
 let autoUpdateTriggerInFlight_ACU = false;
 let pendingAutoUpdateTrigger_ACU = false;
 let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: string } | undefined;
+/** R9-18：跟发登记时所在的聊天与隔离域；补跑前比对，切了聊天就作废，不在新聊天上无消息烧一轮填表。 */
+let pendingAutoUpdateScopeKey_ACU = '';
+
+function currentAutoUpdateScopeKey_ACU(): string {
+  return `${String(currentChatFileIdentifier_ACU || '')}::${String(getCurrentIsolationKey_ACU() || '')}`;
+}
 
   export async function triggerAutomaticUpdateIfNeeded_ACU(
     performanceContext?: { runId?: string; parentSpanId?: string },
@@ -185,6 +142,7 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
     if (autoUpdateTriggerInFlight_ACU) {
       pendingAutoUpdateTrigger_ACU = true;
       pendingAutoUpdatePerformanceContext_ACU = performanceContext;
+      pendingAutoUpdateScopeKey_ACU = currentAutoUpdateScopeKey_ACU();
       logDebug_ACU('ACU Auto-Trigger: trigger already in flight. Coalescing a follow-up run.');
       logAutoFillSkip_ACU('auto_update_coalesced', {
         inFlight: true,
@@ -275,7 +233,6 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
     // UI：显示开始 toast
     const totalGroups = Object.keys(plan.updateGroups).length;
     const maxConcurrentGroups = Math.max(1, settings_ACU.maxConcurrentGroups || 1);
-    const useGroupedAutoUpdates = !isSqliteMode();
     if (totalGroups > maxConcurrentGroups) {
         showToastr_ACU('info', `检测到 ${plan.tablesToUpdate.length} 个表格需要更新，将分批并发处理 ${totalGroups} 组（每批最多 ${maxConcurrentGroups} 组）。`);
     } else {
@@ -283,92 +240,41 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
     }
 
     const autoGroupedAbortController = new AbortController();
-    let autoProgressToast: any = null;
-    // 静默提示框只静音「完成/公告」类 toast；「自动填表进行中」常驻进度框（含终止按钮）
-    // 在静默开启时也显示——其 MANUAL_TABLE 类别本就在 toast 静默白名单内不会被拦截，
-    // 进度更新与 finally clearAutoUpdateToast 收口生命周期保持原样（填表结束框即消失）。
-    if (useGroupedAutoUpdates) {
-        const stopButtonId = `acu-stop-auto-update-btn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const stopButtonHtml = renderStopButton_ACU(stopButtonId, '终止');
-        const initialMessage = '自动填表正在准备，请稍候...';
-        const toastMessage = `<div><span class="acu-toast-progress-message">${initialMessage}</span>${stopButtonHtml}</div>`;
-        autoProgressToast = showToastr_ACU('info', toastMessage, {
-            timeOut: 0,
-            extendedTimeOut: 0,
-            tapToDismiss: false,
-            acuToastCategory: ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
-            escapeHtml: false,
-            onShown: function () {
-                if (typeof bindTableFillStopButton_ACU === 'function') {
-                    bindTableFillStopButton_ACU(stopButtonId, () => {
-                        _set_wasStoppedByUser_ACU(true);
-                        autoGroupedAbortController.abort();
-                        abortAllActiveRequests_ACU();
-                        _set_isAutoUpdatingCard_ACU(false);
-                        updateAutoUpdateToastMessage_ACU(autoProgressToast, '填表任务已终止，正在停止当前任务与后续批次...');
-                        showToastr_ACU('warning', '填表任务已由用户终止，当前任务与后续批次将立即停止。');
-                    });
-                }
-            }
-        });
-    }
-
     // 调用 service 层执行更新计划，传入纯业务操作委托（不含 UI 操作）
-    let result: Awaited<ReturnType<typeof executeAutoUpdatePlan_ACU>>;
-    try {
-        result = await executeAutoUpdatePlan_ACU(
-            plan,
-            settings_ACU,
-            _set_isAutoUpdatingCard_ACU,
-            {
-                processUpdates: (indices, mode, options) => processUpdates_ACU(indices, mode, options),
-                ...(useGroupedAutoUpdates
-                    ? {
-                        processGroupedUpdates: (groups, mode, options) => {
-                            const upstreamProgress = options?.onProgress;
-                            return processGroupedRuntimeChunk_ACU(groups, mode, {
-                                ...options,
-                                abortController: autoGroupedAbortController,
-                                onProgress: event => {
-                                    upstreamProgress?.(event);
-                                    handleAutoGroupedProgressEvent_ACU(event, autoProgressToast);
-                                },
-                            });
-                        },
-                    }
-                    : {}),
-                // spv8.9：跨 replay 根（requiresBoundaryStaging）的组必须走 staging runner，
-                // 与 SQLite/non-SQLite 的 normal 组选择无关。SQLite 下 normal 组继续走
-                // legacy processUpdates_ACU，但跨根 staging 组必须有可用的 staging runner，
-                // 否则 scheduler 会以 staging_runner_unavailable 稳定失败（不再降级到
-                // processUpdates —— 那会让写目标早于 full checkpoint 的 bucket 在 AI 消耗
-                // token 后才被 persist 层 fail-fast）。
-                processStagingGroupedUpdates: (groups, mode, options) => {
-                    // 跨 full checkpoint 边界组：共享 staging runner（pre 段 stage_only、
-                    // 边界原子汇合、post 段普通持久化）。boundary 元数据来自计划构建层。
-                    const upstreamProgress = options?.onProgress;
-                    return executeAutoFillStagingGroups_ACU(groups, mode, {
-                        ...options,
-                        boundary: {
-                            fullCheckpointIndices: plan.boundary?.fullCheckpointIndices || [],
-                            requiresBoundaryStaging: plan.boundary?.requiresBoundaryStaging || false,
-                        },
-                        abortController: autoGroupedAbortController,
-                        onProgress: event => {
-                            upstreamProgress?.(event);
-                            handleAutoGroupedProgressEvent_ACU(event, autoProgressToast);
-                        },
-                    });
-                },
-                refreshData: () => refreshRuntimeDataAndNotifyAfterAutoUpdate_ACU(),
-                loadAllChatMessages: () => loadAllChatMessages_ACU(),
-                purgeOldLayerData: () => purgeOldLayerData_ACU(),
+    const result = await executeAutoUpdatePlan_ACU(
+        plan,
+        settings_ACU,
+        _set_isAutoUpdatingCard_ACU,
+        {
+            processUpdates: (indices, mode, options) => processUpdates_ACU(indices, mode, options),
+            // spv8.9：跨 replay 根（requiresBoundaryStaging）的组必须走 staging runner。
+            // normal 组走 processUpdates_ACU，但跨根 staging 组必须有可用的 staging runner，
+            // 否则 scheduler 会以 staging_runner_unavailable 稳定失败（不再降级到
+            // processUpdates —— 那会让写目标早于 full checkpoint 的 bucket 在 AI 消耗
+            // token 后才被 persist 层 fail-fast）。
+            processStagingGroupedUpdates: (groups, mode, options) => {
+                // 跨 full checkpoint 边界组：共享 staging runner（pre 段 stage_only、
+                // 边界原子汇合、post 段普通持久化）。boundary 元数据来自计划构建层。
+                const upstreamProgress = options?.onProgress;
+                return executeAutoFillStagingGroups_ACU(groups, mode, {
+                    ...options,
+                    boundary: {
+                        fullCheckpointIndices: plan.boundary?.fullCheckpointIndices || [],
+                        requiresBoundaryStaging: plan.boundary?.requiresBoundaryStaging || false,
+                    },
+                    abortController: autoGroupedAbortController,
+                    onProgress: event => {
+                        upstreamProgress?.(event);
+                        handleAutoGroupedProgressEvent_ACU(event);
+                    },
+                });
             },
-            { runId: performanceContext?.runId || performanceSpan.id, parentSpanId: performanceSpan.id },
-        );
-    } finally {
-        clearAutoUpdateToast_ACU(autoProgressToast);
-    }
+            refreshData: () => refreshRuntimeDataAndNotifyAfterAutoUpdate_ACU(),
+            loadAllChatMessages: () => loadAllChatMessages_ACU(),
+            purgeOldLayerData: () => purgeOldLayerData_ACU(),
+        },
+        { runId: performanceContext?.runId || performanceSpan.id, parentSpanId: performanceSpan.id },
+    );
 
     // [回声防重] 只有「确实有活干且全部分组成功提交、且未被用户终止」才登记该楼已自动填表；
     // 空计划（本轮无表到期）不登记，避免把「还没填过」误标成「已填完」。
@@ -386,7 +292,6 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
             ? `并发分组更新有 ${result.failedGroups} 组失败：${firstError}`
             : `并发分组更新有 ${result.failedGroups} 组失败，请查看日志。`);
     }
-    if (typeof updateCardUpdateStatusDisplay_ACU === 'function') updateCardUpdateStatusDisplay_ACU();
     } finally {
       performanceSpan.end({
         messageCount: getChatArray_ACU()?.length || 0,
@@ -394,9 +299,14 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
         sqlite: isSqliteMode(),
       });
       autoUpdateTriggerInFlight_ACU = false;
-      if (!pendingAutoUpdateTrigger_ACU || wasStoppedByUser_ACU) {
+      if (
+        !pendingAutoUpdateTrigger_ACU
+        || wasStoppedByUser_ACU
+        || pendingAutoUpdateScopeKey_ACU !== currentAutoUpdateScopeKey_ACU()
+      ) {
         pendingAutoUpdateTrigger_ACU = false;
         pendingAutoUpdatePerformanceContext_ACU = undefined;
+        pendingAutoUpdateScopeKey_ACU = '';
         return;
       }
       const followUpContext = pendingAutoUpdatePerformanceContext_ACU;
@@ -404,32 +314,5 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
       pendingAutoUpdatePerformanceContext_ACU = undefined;
       queueMicrotask(() => { void triggerAutomaticUpdateIfNeeded_ACU(followUpContext); });
     }
-  }
-
-  export function collectManualExtraHint_ACU() {
-      _set_manualExtraHint_ACU('');
-      if (!$manualExtraHintCheckbox_ACU || !$manualExtraHintCheckbox_ACU.length) return;
-      if (!$manualExtraHintCheckbox_ACU.is(':checked')) return;
-
-      const userInput = prompt('请输入本次手动填表的额外提示词（可留空）：', '');
-      const trimmed = (userInput || '').trim();
-      if (!trimmed) return;
-
-      _set_manualExtraHint_ACU(`以下为用户的额外填表要求，请严格遵守：${trimmed}`);
-  }
-
-  // [新增] 获取当前选中的手动更新表格列表（无效或为空则回退为全部表）
-  export function getSelectedManualSheetKeys_ACU() {
-      if (!currentJsonTableData_ACU) return [];
-      const availableKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
-      const saved = Array.isArray(settings_ACU.manualSelectedTables) ? settings_ACU.manualSelectedTables : [];
-
-      // 未曾手动选择过：默认全选
-      if (!settings_ACU.hasManualSelection) return availableKeys;
-
-      const validSaved = saved.filter((k: string) => availableKeys.includes(k));
-
-      // 已手动选择过：严格按保存的交集，不再自动补全新表，防止回退全选
-      return validSaved;
   }
 

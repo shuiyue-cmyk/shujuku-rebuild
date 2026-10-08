@@ -13,18 +13,15 @@ import type { AgentModuleFieldSnapshot_ACU, AgentModuleSnapshot_ACU } from '../.
 import { useToastStore } from '../stores/toast-store';
 
 /** 用户可分模块编辑的资料。schemaVersion / settledThroughIndex 等运行时字段不进草稿。 */
-export const CONTINUATION_MATERIAL_MODULES_ACU = ['hooks', 'infoGap', 'constraints', 'storyArc', 'chronology', 'webRefs', 'userRequirements'] as const;
-export type ContinuationMaterialModule_ACU = typeof CONTINUATION_MATERIAL_MODULES_ACU[number];
+import {
+  CONTINUATION_MATERIAL_MODULE_LABELS_ACU,
+  CONTINUATION_MATERIAL_MODULES_ACU,
+  type ContinuationMaterialModule_ACU,
+} from '../continuation/material-module-labels';
 
-export const CONTINUATION_MATERIAL_MODULE_LABELS_ACU: Record<ContinuationMaterialModule_ACU, string> = {
-  hooks: '伏笔账本',
-  infoGap: '认知与信息差',
-  constraints: '长期约束',
-  storyArc: '故事总纲',
-  chronology: '故事年代学账本',
-  webRefs: '百科资料库',
-  userRequirements: '用户要求',
-};
+export { CONTINUATION_MATERIAL_MODULE_LABELS_ACU, CONTINUATION_MATERIAL_MODULES_ACU };
+export type { ContinuationMaterialModule_ACU };
+
 
 interface ModuleDraftState_ACU {
   draft: string;
@@ -137,7 +134,13 @@ export function useContinuationMaterials() {
     state.saving = true;
     try {
       // 只提交本模块：写入侧按 merge 语义保留其余模块的磁盘值，不会覆盖别的模块。
-      const saved = await replaceAgentModuleSnapshotByUser_ACU({ [module]: parsed }, loadedChat);
+      // R10A-09：带上载入时该模块的修订号；编辑期间 Agent 写过同一模块时服务层拒绝，不用陈旧草稿覆盖。
+      const loadedRevision = (snapshot.value?.revisions as Record<string, number> | undefined)?.[module];
+      const saved = await replaceAgentModuleSnapshotByUser_ACU(
+        { [module]: parsed },
+        loadedChat,
+        typeof loadedRevision === 'number' ? { expectedRevisions: { [module]: loadedRevision } } : {},
+      );
       if (String(currentChatFileIdentifier_ACU || '') !== loadedChatIdentity || getChatArray_ACU() !== loadedChat) {
         state.error = '聊天已在保存期间切换，旧资料结果未更新当前页面。';
         return false;

@@ -56,10 +56,7 @@ export function createTemplatePresetApi(ctx: ApiGroupContext): Record<string, Fu
                 });
                 const saved = !!result && (!(typeof result === 'object' && 'saved' in result) || result.saved !== false);
                 if (saved) {
-                    refreshPresetUIAfterSwitch_ACU({
-                        templateGlobalSelectName: normalizedScope === 'global' ? name : null,
-                        keepTemplateGlobalValue: normalizedScope !== 'global',
-                    });
+                    refreshPresetUIAfterSwitch_ACU();
                     const runtimeReady = typeof result === 'object' && 'runtimeReady' in result
                         ? result.runtimeReady !== false
                         : undefined;
@@ -129,7 +126,7 @@ export function createTemplatePresetApi(ctx: ApiGroupContext): Record<string, Fu
                     }
 
                     // 刷新 UI 让新预设立即出现在下拉列表中，但保持当前选中值不变
-                    refreshPresetUIAfterSwitch_ACU({ keepTemplateGlobalValue: true });
+                    refreshPresetUIAfterSwitch_ACU();
 
                     logDebug_ACU(`[API] importTemplateFromData: 模板已保存到全局预设库：${normalizedPresetName}。`);
                     return {
@@ -164,7 +161,7 @@ export function createTemplatePresetApi(ctx: ApiGroupContext): Record<string, Fu
                 }
 
                 logDebug_ACU(`[API] importTemplateFromData: 模板已成功导入到当前聊天。`);
-                refreshPresetUIAfterSwitch_ACU({ keepTemplateGlobalValue: true });
+                refreshPresetUIAfterSwitch_ACU();
                 const postCommitWarning = 'postCommitWarning' in applied && typeof applied.postCommitWarning === 'string'
                     ? applied.postCommitWarning
                     : undefined;

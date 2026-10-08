@@ -812,7 +812,7 @@ describe("DashboardPage", () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it("条件模板功能不再显示开关，并在刷新时保持开启", async () => {
+  it("条件模板功能不再显示开关；刷新是只读路径，不改写设置（R10A-23：恒开启改在加载设置时归一）", async () => {
     const settings = createSettings();
     settings.promptTemplateSettings.enabled = false;
     const { mount, saveSettings } = await mountDashboardPage(settings);
@@ -825,8 +825,8 @@ describe("DashboardPage", () => {
         'button[data-acu-toggle-key="promptTemplateEnabled"]',
       ),
     ).toBeNull();
-    expect(settings.promptTemplateSettings.enabled).toBe(true);
-    expect(saveSettings).toHaveBeenCalled();
+    expect(settings.promptTemplateSettings.enabled).toBe(false);
+    expect(saveSettings).not.toHaveBeenCalled();
 
     mount.__resetAcuV2MountForTests();
   });

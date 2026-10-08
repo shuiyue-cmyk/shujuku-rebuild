@@ -75,8 +75,8 @@
         show-agent-takeover-state
         show-skill-editor
         @update:filter="entryFilter = $event"
-        @skillify-select-all="entries.selectAllForSkillify()"
-        @skillify-deselect-all="entries.deselectAllForSkillify()"
+        @skillify-select-all="entries.selectAllForSkillify($event)"
+        @skillify-deselect-all="entries.deselectAllForSkillify($event)"
         @skillify-selected="onSkillifySelected"
         @toggle-skillify="(bookName, uid, checked) => entries.toggleSkillifyEntry(bookName, uid, checked)"
         @toggle-group="entries.toggleGroupExpanded($event)"
@@ -224,9 +224,18 @@ async function runClearSkillMeta(): Promise<void> {
   if (await agentControl.clearSkillMeta()) await refreshAll();
 }
 
+/** R10A-07：有书写入失败时如实提示（成功部分一并说明），返回 true 表示已提示。 */
+function reportBatchFailedBooks(donePart: string): boolean {
+  const failed = entries.lastBatchFailedBooks.value;
+  if (!failed.length) return false;
+  toast.error(`${donePart ? `${donePart}；` : ''}以下世界书写入失败，未改动：${failed.join('、')}。详情见运行日志。`);
+  return true;
+}
+
 async function onEnableDisabledSkills(): Promise<void> {
   if (!editingEnabled.value) return;
   const changed = await entries.batchEnableDisabledSkillEntries();
+  if (reportBatchFailedBooks(changed > 0 ? `已启用 ${changed} 个条目` : '')) return;
   if (changed === 0) toast.error('没有可启用的关闭状态 Skill 条目。');
   else toast.success(`已启用 ${changed} 个关闭状态的 Skill 世界书条目。`);
 }
@@ -234,6 +243,7 @@ async function onEnableDisabledSkills(): Promise<void> {
 async function onConvertBlueToGreen(): Promise<void> {
   if (!editingEnabled.value) return;
   const changed = await entries.batchConvertBlueToGreenEntries();
+  if (reportBatchFailedBooks(changed > 0 ? `已转换 ${changed} 个条目` : '')) return;
   if (changed === 0) toast.error('没有可转换的蓝灯 Skill 条目。');
   else toast.success(`已将 ${changed} 个蓝灯 Skill 世界书条目转为绿灯。`);
 }
@@ -241,6 +251,7 @@ async function onConvertBlueToGreen(): Promise<void> {
 async function onCombined(): Promise<void> {
   if (!editingEnabled.value) return;
   const { converted, enabled } = await entries.batchCombinedBlueToGreenAndEnable();
+  if (reportBatchFailedBooks(converted > 0 || enabled > 0 ? `${converted} 个蓝灯转绿灯，${enabled} 个绿灯已启用` : '')) return;
   if (converted === 0 && enabled === 0) toast.error('没有可处理的 Skill 条目。');
   else toast.success(`二合一完成：${converted} 个蓝灯转绿灯，${enabled} 个绿灯已启用。`);
 }

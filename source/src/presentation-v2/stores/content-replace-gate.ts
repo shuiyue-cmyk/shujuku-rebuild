@@ -9,7 +9,7 @@ function ensureContentReplaceSettings(): Record<string, any> {
 
 /**
  * 读取用户的启用偏好。未通过 v2 开关登记过偏好时回退到 legacy enabled 值：
- * 旧 UI 的启用复选框（以及隐藏彩蛋时代的解锁启用）只写 enabled 不写偏好字段，
+ * 早期版本（已移除的旧弹窗启用复选框、隐藏彩蛋时代的解锁启用）只写 enabled 不写偏好字段，
  * 功能转正后这些用户的已启用状态必须被尊重，不能被同步逻辑静默复位。
  */
 function readUserEnabledPreference(cfg: Record<string, any>): boolean {

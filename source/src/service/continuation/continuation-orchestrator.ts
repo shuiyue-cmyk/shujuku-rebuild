@@ -32,7 +32,12 @@ export interface SendAgentMessageResult_ACU extends ContinuationOrchestratorResu
   /** 仅 continue_now 时为 true，兼容旧调用方。 */
   shouldContinue: boolean;
 }
-export interface ReplaceActiveOutlineInput_ACU { outline: StageOutline_ACU; }
+export interface ReplaceActiveOutlineInput_ACU {
+  outline: StageOutline_ACU;
+  /** R10B-07：编辑底稿所属阶段与 revision；给出时与当前不一致即拒绝，避免旧底稿覆盖新大纲。 */
+  expectedStageId?: string;
+  expectedRevision?: number;
+}
 export interface ClearContinuationDataResult_ACU { envelope: ContinuationEnvelope_ACU; clearedModules: boolean; clearedConversation: boolean; }
 export interface ContinuationPlanningContext_ACU { envelope: ContinuationEnvelope_ACU; task: ContinuationTask_ACU; stage: ContinuationStage_ACU | null; reason: ContinuationRevisionReason_ACU; replanInstruction: string; }
 export interface CreateContinuationTaskInput_ACU { originInstruction: string; }
@@ -1109,6 +1114,12 @@ export class ContinuationOrchestrator_ACU {
       const current = getActiveRevision_ACU(stage);
       if (stage.status !== 'running' || !current.frozen) {
         fail_ACU('CONTINUATION_TASK_STATE_INVALID', '当前没有可手动编辑的已冻结大纲');
+      }
+      if (
+        (input.expectedStageId !== undefined && input.expectedStageId !== stage.stageId)
+        || (input.expectedRevision !== undefined && input.expectedRevision !== current.revision)
+      ) {
+        fail_ACU('CONTINUATION_TASK_STATE_INVALID', '大纲在你编辑期间已被更新，草稿基于旧版本，未保存；请放弃草稿后基于最新大纲重新编辑');
       }
       await this.commitEditedOutline_ACU(chatIdentity, envelope, task, stage, current, cloneOutline_ACU(input.outline), '用户手动编辑', '已保存手动编辑的大纲（', 'paused');
       return taskResult_ACU(this.requireEnvelope_ACU(this.dependencies.store.readPersisted()));

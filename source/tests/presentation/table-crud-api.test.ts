@@ -837,26 +837,6 @@ describe('createTableCrudApi — SQLite 模式', () => {
       expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
     });
 
-    it('非 SQLite insertRow 使用最大 row_id 加一，并使 operation 身份与 cells 一致', async () => {
-      mockIsSqliteMode = false;
-      mockCurrentJsonTableData.sheet_0.content = [
-        ['row_id', '物品名', '数量'],
-        ['1', '铁剑', '3'],
-        ['3', '盾牌', '1'],
-      ];
-
-      const result = await api.insertRow('背包物品表', { '物品名': '药水', '数量': '0' });
-
-      expect(result).toBe(3);
-      expect(mockCurrentJsonTableData.sheet_0.content[3]).toEqual(['4', '药水', '0']);
-      expect(mockPersistTablesToChatMessage).toHaveBeenCalledWith(expect.objectContaining({
-        source: 'manual_crud',
-        tableData: expect.objectContaining({
-          sheet_0: expect.objectContaining({ content: expect.arrayContaining([['4', '药水', '0']]) }),
-        }),
-      }));
-    });
-
     it('持久化失败时在同一公共提交模型内 reload 运行时', async () => {
       mockPersistTablesToChatMessage.mockResolvedValue({ saved: false, error: 'save failed' });
 
@@ -919,6 +899,46 @@ describe('createTableCrudApi — SQLite 模式', () => {
     it('表不存在返回 false', async () => {
       const result = await api.deleteRow('不存在的表', 1);
       expect(result).toBe(false);
+    });
+  });
+
+  // R9-06：数据对象里的选项字段（isImportMode / silent / skipNotify）读作选项后不得再当列名。
+  describe('R9-06 数据对象里的选项字段', () => {
+    it('insertRow 数据里带 isImportMode 时照常写入，选项字段不进 SQL', async () => {
+      const result = await api.insertRow('背包物品表', { '物品名': '钢剑', isImportMode: true });
+      expect(result).not.toBe(-1);
+      expect(mockExecuteRuntimeMutation).toHaveBeenCalledOnce();
+      expect(String(mockExecuteRuntimeMutation.mock.calls[0][0])).not.toContain('isImportMode');
+    });
+
+    it('updateRow 数据里带 silent / skipNotify 时照常写入，选项字段不进 SQL', async () => {
+      const result = await api.updateRow('背包物品表', 1, { '物品名': '钢剑', silent: true, skipNotify: true });
+      expect(result).toBe(true);
+      const sql = String(mockExecuteRuntimeMutation.mock.calls[0][0]);
+      expect(sql).not.toContain('silent');
+      expect(sql).not.toContain('skipNotify');
+    });
+  });
+
+  // R9-05：row_id 是行身份，锁、向量索引都按它挂靠；CRUD 不得改写。
+  describe('R9-05 不允许改写 row_id', () => {
+    it.each([
+      ['列下标 0', 0],
+      ['列名 row_id', 'row_id'],
+      ['中文别名 行号', '行号'],
+    ])('updateCell 以%s改 row_id 时拒绝', async (_label, col) => {
+      const result = await api.updateCell('背包物品表', 1, col, 99);
+      expect(result).toBe(false);
+      expect(mockExecuteRuntimeMutation).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['row_id', { row_id: 99 }],
+      ['行号', { '行号': 99, '物品名': '钢剑' }],
+    ])('updateRow 数据含 %s 时整笔拒绝', async (_label, data) => {
+      const result = await api.updateRow('背包物品表', 1, data);
+      expect(result).toBe(false);
+      expect(mockExecuteRuntimeMutation).not.toHaveBeenCalled();
     });
   });
 });

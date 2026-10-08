@@ -51,7 +51,6 @@ const h = vi.hoisted(() => {
     logDebug: vi.fn(),
     logError: vi.fn(),
     toast: vi.fn(),
-    showDiff: vi.fn(),
     showResultDialog: vi.fn(),
     showDiffDialogForLoop: vi.fn(),
     triggerAutoUpdate: vi.fn(async () => undefined),
@@ -113,7 +112,6 @@ vi.mock('../../src/presentation/components/optimization-ui/optimization-ui-overl
 }));
 vi.mock('../../src/presentation/components/optimization-ui/optimization-ui-diff', () => ({
   showOptimizationDiffDialogForLoop_ACU: h.showDiffDialogForLoop,
-  showOptimizationDiff_ACU: h.showDiff,
   showOptimizationResultDialog_ACU: h.showResultDialog,
 }));
 
@@ -154,7 +152,6 @@ beforeEach(() => {
   h.setLastBase.mockClear();
   h.logDebug.mockClear();
   h.toast.mockClear();
-  h.showDiff.mockClear();
   h.showResultDialog.mockClear();
   h.showDiffDialogForLoop.mockClear();
   h.triggerAutoUpdate.mockClear();

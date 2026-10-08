@@ -251,4 +251,24 @@ describe('visualizer-store', () => {
       lockDirty: store.lockDirty,
     })).toBe(before);
   });
+
+  it('R10B-02：删行后锁草稿随行平移，被删行的锁一并移除，保存时仍锁原来那条 row_id', () => {
+    const store = useVisualizerStore();
+    store.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: { name: '人物', content: [[null, '名字'], ['r1', '甲'], ['r2', '乙'], ['r3', '丙'], ['r4', '丁']] },
+    }, ['sheet_a'], 'chat-a::');
+    store.selectSheet('sheet_a');
+    store.toggleRowLock('sheet_a', 0);
+    store.toggleRowLock('sheet_a', 2);
+    store.toggleCellLock('sheet_a', 2, 0);
+    store.toggleCellLock('sheet_a', 0, 0);
+
+    store.deleteRow(0);
+
+    const draft = store.getLockDraft('sheet_a');
+    expect(draft.rows).toEqual([1]);
+    expect(draft.cells).toEqual(['1:0']);
+    expect(store.tempData!.sheet_a.content[1 + 1][0]).toBe('r3');
+  });
 });

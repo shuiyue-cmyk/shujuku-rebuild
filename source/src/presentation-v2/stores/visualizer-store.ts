@@ -369,9 +369,6 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
       this.currentSheetKey = key;
       if (this.mode === 'global' || this.mode === 'table-management') this.mode = 'data';
     },
-    selectGlobalConfig(): void {
-      this.mode = 'global';
-    },
     selectTableManagement(): void {
       this.mode = 'table-management';
     },
@@ -433,7 +430,35 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
       const rowId = sheet.content[target + 1]?.[0];
       if (this.currentSheetKey) recordVisualizerRowDelete_ACU(this, this.currentSheetKey, rowId);
       sheet.content.splice(target + 1, 1);
+      this.shiftLockDraftAfterDelete(this.currentSheetKey, 'row', target);
       this.setDirty(true);
+    },
+    /**
+     * R10B-02：锁草稿按数据行/列下标记录，删行（删列）后必须同步平移；
+     * 否则保存时下标被解析到另一条 row_id / 另一列，原本锁住的行失去保护。
+     */
+    shiftLockDraftAfterDelete(sheetKey: string | null | undefined, axis: 'row' | 'col', index: number): void {
+      const key = String(sheetKey || '').trim();
+      const lock = key ? this.tableLockDrafts[key] : undefined;
+      if (!lock) return;
+      const removed = Math.trunc(Number(index));
+      const shift = (value: number): number | null => {
+        if (value === removed) return null;
+        return value > removed ? value - 1 : value;
+      };
+      const shiftList = (values: number[]): number[] => values
+        .map(shift)
+        .filter((value): value is number => value !== null);
+      if (axis === 'row') lock.rows = shiftList(lock.rows);
+      else lock.cols = shiftList(lock.cols);
+      lock.cells = lock.cells.flatMap(cell => {
+        const [rowText, colText] = String(cell).split(':');
+        const row = Number(rowText);
+        const col = Number(colText);
+        const next = shift(axis === 'row' ? row : col);
+        if (next === null) return [];
+        return [axis === 'row' ? `${next}:${col}` : `${row}:${next}`];
+      });
     },
     updateCell(rowIndex: number, columnIndex: number, value: string): void {
       const sheet = this.currentSheet;

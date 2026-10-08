@@ -36,7 +36,6 @@ interface PersistedRouter {
 
 interface RouterState {
   activePageId: string;
-  isSqliteMode: boolean;
   /** D7 / 4.1 中"默认隐藏 / 受控开启"feature gate 的开关表。 */
   featureGates: Record<string, boolean>;
 }
@@ -60,11 +59,7 @@ function readInitialFeatureGates(): Record<string, boolean> {
   };
 }
 
-function readInitialSqliteMode(): boolean {
-  return true;
-}
-
-function readInitialActiveId(featureGates: Record<string, boolean>, isSqliteMode: boolean): string {
+function readInitialActiveId(featureGates: Record<string, boolean>): string {
   const persisted = readSection<PersistedRouter>(SECTION_KEY);
   if (persisted && isKnownPage(persisted.activePageId)) {
     const activePageId = normalizePageId(persisted.activePageId) || persisted.activePageId;
@@ -74,7 +69,6 @@ function readInitialActiveId(featureGates: Record<string, boolean>, isSqliteMode
     const page = ACU_V2_PAGE_REGISTRY.find(p => p.id === activePageId);
     const initialState: RouterState = {
       activePageId,
-      isSqliteMode,
       featureGates,
     };
     if (page && isPageVisible(page, initialState)) return activePageId;
@@ -86,7 +80,6 @@ function isPageVisible(page: AcuV2Page, state: RouterState): boolean {
   const uiMode = useUiModeStore();
   if (uiMode.isBasicMode) return page.id === ACU_V2_BASIC_PAGE_ID;
   if (page.id === ACU_V2_BASIC_PAGE_ID) return false;
-  if (page.requiresSqlite && !state.isSqliteMode) return false;
   if (page.featureGate && !state.featureGates[page.featureGate]) return false;
   if (page.visibleWhen && !page.visibleWhen()) return false;
   return true;
@@ -99,10 +92,8 @@ function defaultVisiblePageId(): string {
 export const useRouterStore = defineStore('acu-v2-router', {
   state: (): RouterState => {
     const featureGates = readInitialFeatureGates();
-    const isSqliteMode = readInitialSqliteMode();
     return {
-      activePageId: readInitialActiveId(featureGates, isSqliteMode),
-      isSqliteMode,
+      activePageId: readInitialActiveId(featureGates),
       featureGates,
     };
   },
@@ -141,10 +132,6 @@ export const useRouterStore = defineStore('acu-v2-router', {
       this.activePageId = normalizedId;
       this.persist();
     },
-    setSqliteMode(on: boolean): void {
-      this.isSqliteMode = on;
-      this.ensureActiveVisible();
-    },
     setFeatureGate(key: string, on: boolean): void {
       const next = key === FEATURE_GATE_CONTENT_REPLACE
         ? setContentReplaceEnabledBySettings(on)
@@ -154,6 +141,14 @@ export const useRouterStore = defineStore('acu-v2-router', {
     },
     syncFeatureGate(key: string, on: boolean): void {
       this.featureGates = { ...this.featureGates, [key]: on };
+      this.ensureActiveVisible();
+    },
+    /**
+     * R10B-20：按设置权威源整体刷新功能页入口。导入设置、恢复默认、切聊天、重新打开界面等
+     * 非仪表盘途径改了开关后调用，入口隐藏时一并收回当前页。
+     */
+    syncFeatureGatesFromSettings(): void {
+      this.featureGates = { ...this.featureGates, ...readInitialFeatureGates() };
       this.ensureActiveVisible();
     },
     /** 当前页变成不可见时回退到默认页。 */

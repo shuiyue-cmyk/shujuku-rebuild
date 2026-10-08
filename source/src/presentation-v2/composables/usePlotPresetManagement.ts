@@ -259,6 +259,11 @@ export function usePlotPresetManagement() {
       error.value = '至少需要一个任务。';
       return false;
     }
+    // R10A-10：新建或改名与另一个已有预设重名时拒绝，不覆盖它。
+    if (name !== String(originalName.value || '').trim() && store.presets.some(preset => preset.name === name)) {
+      error.value = `已有名为「${name}」的预设，请换一个名字。`;
+      return false;
+    }
     error.value = '';
     return true;
   }
@@ -299,7 +304,18 @@ export function usePlotPresetManagement() {
     return store.deletePreset(name);
   }
 
-  function importFromJsonText(text: string): boolean {
+  async function importFromJsonText(text: string): Promise<boolean> {
+    // R10B-04：同名预设会被整份覆盖，先让用户确认
+    const conflicts = store.listImportConflicts(text) || [];
+    if (conflicts.length > 0) {
+      const confirmed = await dialogStore.confirm({
+        title: '覆盖同名预设',
+        message: `导入会覆盖已有的剧情推进预设：${conflicts.map(name => `「${name}」`).join('、')}。被覆盖的预设无法恢复，确定继续吗？`,
+        confirmLabel: '覆盖导入',
+        confirmVariant: 'danger',
+      });
+      if (!confirmed) return false;
+    }
     const result = store.importPresetFromJson(text);
     if (!result) {
       error.value = '导入失败：JSON 无效或缺少 name 字段。';

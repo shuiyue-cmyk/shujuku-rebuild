@@ -607,9 +607,6 @@ describe('ContinuationPage', () => {
     editedOutline.nodes[1].turns[0] = { ...editedOutline.nodes[1].turns[0], function: 'payoff', mainlineDelta: 'step', timeAdvance: 'days', timeAnchor: '第二日清晨' };
     typeInto(outlineTextarea, JSON.stringify(editedOutline));
     await nextTick();
-    activeRevision.value = { ...activeRevision.value, revision: 3, outline: { ...activeRevision.value.outline, title: '外部 revision' } };
-    await nextTick();
-    expect(JSON.parse(outlineTextarea.value).title).toBe('逃离计划 v2');
     buttonByText(el, '保存大纲')!.click();
     await nextTick();
     expect(saveActiveOutline).toHaveBeenCalledOnce();
@@ -617,6 +614,19 @@ describe('ContinuationPage', () => {
     expect(saveActiveOutline.mock.calls[0][0].nodes[1].turns[0]).toMatchObject({
       function: 'payoff', mainlineDelta: 'step', timeAdvance: 'days', timeAnchor: '第二日清晨',
     });
+    // R10B-07：保存时带上编辑底稿的 revision
+    expect(saveActiveOutline.mock.calls[0][1]).toEqual({ stageId: 'stage-1', revision: 2 });
+
+    // R10B-07：编辑期间权威大纲换了 revision：保留草稿但标记底稿过期，拒绝保存
+    typeInto(outlineTextarea, JSON.stringify({ ...editedOutline, title: '逃离计划 v3' }));
+    await nextTick();
+    activeRevision.value = { ...activeRevision.value, revision: 3, outline: { ...activeRevision.value.outline, title: '外部 revision' } };
+    await nextTick();
+    expect(JSON.parse(outlineTextarea.value).title).toBe('逃离计划 v3');
+    expect(el.textContent).toContain('底稿已过期');
+    buttonByText(el, '保存大纲')!.click();
+    await nextTick();
+    expect(saveActiveOutline).toHaveBeenCalledOnce();
 
     // JSON 写坏时就地报错，不派发给领域层。
     typeInto(outlineTextarea, '{不是 JSON');
@@ -951,3 +961,45 @@ describe('ContinuationPage', () => {
       vi.useRealTimers();
     }
   });
+
+describe('ContinuationPage 设置自动保存（R10B-01）', () => {
+  it('自动保存在途期间的新修改不会被保存完成后的草稿重建冲掉，并会再保存一次', async () => {
+    vi.useFakeTimers();
+    try {
+      setSettings();
+      setTask();
+      let release: (() => void) | null = null;
+      saveSettings.mockImplementationOnce(async (candidate: any) => {
+        await new Promise<void>(resolve => { release = resolve; });
+        // runtime.saveSettings 成功后 refresh()：runtime.settings 换成持久化结果
+        settings.value = JSON.parse(JSON.stringify(candidate));
+        return 'saved' as const;
+      });
+      const { app, el } = await mountPage();
+      const selects = () => el.querySelectorAll<HTMLSelectElement>('select');
+      selects()[0].value = 'short';
+      selects()[0].dispatchEvent(new Event('change', { bubbles: true }));
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(900);
+      expect(saveSettings).toHaveBeenCalledTimes(1);
+
+      // 第一次保存还在途：用户继续修改
+      selects()[1].value = 'long';
+      selects()[1].dispatchEvent(new Event('change', { bubbles: true }));
+      await nextTick();
+
+      release!();
+      await vi.advanceTimersByTimeAsync(0);
+      await nextTick();
+      expect(selects()[1].value).toBe('long');
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await nextTick();
+      expect(selects()[1].value).toBe('long');
+      expect(saveSettings.mock.calls.some((call: any[]) => call[0].storyArcVolumePlan === 'long')).toBe(true);
+      app.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

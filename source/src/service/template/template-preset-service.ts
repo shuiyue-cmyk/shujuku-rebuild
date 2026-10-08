@@ -1,8 +1,7 @@
 /**
  * service/template/template-preset-service.ts — 模板预设业务逻辑
  *
- * 从 presentation/components/template-preset-ui.ts 真正搬入的纯数据/逻辑函数。
- * 不操作 DOM，不引用 $popupInstance_ACU / jQuery_API_ACU 等 UI 对象。
+ * 纯数据/逻辑函数，不操作 DOM。
  */
 
 import {

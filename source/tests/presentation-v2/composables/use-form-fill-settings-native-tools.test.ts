@@ -369,3 +369,22 @@ it('锁定文案按开关状态分叉：已开启时说「可关闭」，关闭�
         expect(mainTextOf(customized.promptSegments.value)).toBe('自定义主段：只按正文输出 SQL。');
     });
 });
+
+// R10A-12：填表提示词是全局设置；切聊天触发的页面 refresh 不得把未保存的编辑换回已保存版本。
+describe('R10A-12 refresh 保留未保存的提示词编辑', () => {
+    beforeEach(() => {
+        setActivePinia(createPinia());
+    });
+
+    it('提示词有未保存修改时 refresh 不重置编辑缓冲与 dirty', () => {
+        const settings = useFormFillSettings();
+        settings.refresh();
+        settings.updatePromptSegment(0, { content: '编辑到一半' });
+        expect(settings.promptDirty.value).toBe(true);
+
+        settings.refresh();
+
+        expect(settings.promptDirty.value).toBe(true);
+        expect(settings.promptSegments.value[0].content).toBe('编辑到一半');
+    });
+});

@@ -22,6 +22,7 @@ import {
   recordVisualizerRowInsert_ACU,
 } from '../../../service/visualizer/visualizer-data-ops';
 import { useToastStore } from '../../stores/toast-store';
+import { downloadJsonToHost_ACU } from '../../bootstrap/host-download';
 import {
   useVisualizerStore,
   type VisualizerAssistantTurnState,
@@ -51,6 +52,11 @@ export interface VisualizerAssistantRiskItem {
 }
 
 let guardController = createTemplateAssistantSessionGuard_ACU();
+/**
+ * R10A-16：当前有效会话的编号。切表/重载会作废在飞会话（编号前进），
+ * 被作废的旧会话结束时不得再改写共享状态（运行标志、错误信息、会话记录）。
+ */
+let activeAssistantRunId = 0;
 
 function cloneData<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
@@ -298,6 +304,80 @@ function rowIdOf(row: unknown): string {
   return Array.isArray(row) ? String(row[0] ?? '').trim() : '';
 }
 
+type AssistantCandidateRowOp =
+  | { kind: 'insert'; rowId: string }
+  | { kind: 'delete'; rowId: string }
+  | { kind: 'update'; rowId: string; columnName: string; value: unknown };
+
+function headerNamesOf(sheet: any): string[] {
+  const headers = Array.isArray(sheet?.content?.[0]) ? sheet.content[0] : [];
+  return headers.map((header: unknown) => String(header ?? '').trim());
+}
+
+/**
+ * 草稿与编辑器当前内容的行级差异。R10A-05：按列名对比（原先按位置，列删除/重排后会记出一批错位的伪更新）；
+ * 新增列在旧行里视为空值。
+ */
+function diffAssistantCandidateRows(previousSheet: any, candidateSheet: any): AssistantCandidateRowOp[] {
+  const ops: AssistantCandidateRowOp[] = [];
+  const previousRows = Array.isArray(previousSheet?.content) ? previousSheet.content.slice(1) : [];
+  const candidateRows = Array.isArray(candidateSheet?.content) ? candidateSheet.content.slice(1) : [];
+  const previousById = new Map<string, any[]>();
+  for (const row of previousRows) {
+    const rowId = rowIdOf(row);
+    if (rowId) previousById.set(rowId, row);
+  }
+  const previousColumnIndex = new Map<string, number>();
+  headerNamesOf(previousSheet).forEach((name, index) => {
+    if (index > 0 && name && !previousColumnIndex.has(name)) previousColumnIndex.set(name, index);
+  });
+  const candidateHeaders = headerNamesOf(candidateSheet);
+  const candidateIds = new Set<string>();
+
+  for (const row of candidateRows) {
+    const rowId = rowIdOf(row);
+    if (!rowId) continue;
+    candidateIds.add(rowId);
+    const previousRow = previousById.get(rowId);
+    if (!previousRow) {
+      ops.push({ kind: 'insert', rowId });
+      continue;
+    }
+    for (let columnIndex = 1; columnIndex < candidateHeaders.length; columnIndex += 1) {
+      const columnName = candidateHeaders[columnIndex];
+      if (!columnName) continue;
+      const previousIndex = previousColumnIndex.get(columnName);
+      const nextValue = row[columnIndex] === undefined ? '' : row[columnIndex];
+      const previousValue = previousIndex === undefined || previousRow[previousIndex] === undefined ? '' : previousRow[previousIndex];
+      if (String(nextValue) !== String(previousValue)) {
+        ops.push({ kind: 'update', rowId, columnName, value: nextValue });
+      }
+    }
+  }
+  for (const [rowId] of previousById) {
+    if (!candidateIds.has(rowId)) ops.push({ kind: 'delete', rowId });
+  }
+  return ops;
+}
+
+/**
+ * R10A-05：同一张表既改了列结构又改了行数据的草稿无路可存——模板保存只迁移结构、拒绝带数据增量，
+ * 数据保存拒绝混入模板改动。返回这类表的显示名，供应用前拦截。
+ */
+function findSheetsMixingSchemaAndRowChanges(previousData: Record<string, any>, candidateData: Record<string, any>): string[] {
+  const names: string[] = [];
+  for (const [sheetKey, candidateSheet] of Object.entries(candidateData || {})) {
+    if (!sheetKey.startsWith('sheet_') || !candidateSheet || typeof candidateSheet !== 'object') continue;
+    const previousSheet = previousData?.[sheetKey];
+    if (!previousSheet || typeof previousSheet !== 'object') continue;
+    const headersChanged = JSON.stringify(headerNamesOf(previousSheet)) !== JSON.stringify(headerNamesOf(candidateSheet));
+    if (headersChanged && diffAssistantCandidateRows(previousSheet, candidateSheet).length > 0) {
+      names.push(String(candidateSheet.name || previousSheet.name || sheetKey));
+    }
+  }
+  return names;
+}
+
 function recordAssistantCandidateDataOps(
   visualizer: ReturnType<typeof useVisualizerStore>,
   previousData: Record<string, any>,
@@ -307,39 +387,10 @@ function recordAssistantCandidateDataOps(
     if (!sheetKey.startsWith('sheet_') || !candidateSheet || typeof candidateSheet !== 'object') continue;
     const previousSheet = previousData?.[sheetKey];
     if (!previousSheet || typeof previousSheet !== 'object') continue;
-
-    const previousRows = Array.isArray(previousSheet.content) ? previousSheet.content.slice(1) : [];
-    const candidateRows = Array.isArray(candidateSheet.content) ? candidateSheet.content.slice(1) : [];
-    const previousById = new Map<string, any[]>();
-    for (const row of previousRows) {
-      const rowId = rowIdOf(row);
-      if (rowId) previousById.set(rowId, row);
-    }
-    const candidateIds = new Set<string>();
-    const headers = Array.isArray(candidateSheet.content?.[0]) ? candidateSheet.content[0] : [];
-
-    for (const row of candidateRows) {
-      const rowId = rowIdOf(row);
-      if (!rowId) continue;
-      candidateIds.add(rowId);
-      const previousRow = previousById.get(rowId);
-      if (!previousRow) {
-        recordVisualizerRowInsert_ACU(visualizer, sheetKey, rowId);
-        continue;
-      }
-      for (let columnIndex = 1; columnIndex < headers.length; columnIndex += 1) {
-        const columnName = String(headers[columnIndex] ?? '').trim();
-        if (!columnName) continue;
-        const nextValue = row[columnIndex] === undefined ? '' : row[columnIndex];
-        const previousValue = previousRow[columnIndex] === undefined ? '' : previousRow[columnIndex];
-        if (String(nextValue) !== String(previousValue)) {
-          recordVisualizerCellUpdate_ACU(visualizer, sheetKey, rowId, columnName, nextValue);
-        }
-      }
-    }
-
-    for (const [rowId] of previousById) {
-      if (!candidateIds.has(rowId)) recordVisualizerRowDelete_ACU(visualizer, sheetKey, rowId);
+    for (const op of diffAssistantCandidateRows(previousSheet, candidateSheet)) {
+      if (op.kind === 'insert') recordVisualizerRowInsert_ACU(visualizer, sheetKey, op.rowId);
+      else if (op.kind === 'delete') recordVisualizerRowDelete_ACU(visualizer, sheetKey, op.rowId);
+      else recordVisualizerCellUpdate_ACU(visualizer, sheetKey, op.rowId, op.columnName, op.value);
     }
   }
 }
@@ -552,16 +603,7 @@ export function useVisualizerAssistant() {
 
   function exportPrompt(): void {
     try {
-      const text = JSON.stringify(promptSegments.value, null, 2);
-      const blob = new Blob([text], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'acu-visualizer-assistant-prompt.json';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      downloadJsonToHost_ACU('acu-visualizer-assistant-prompt.json', promptSegments.value);
     } catch (error: any) {
       toastStore.error(error?.message || '提示词导出失败。', { muteable: false });
     }
@@ -635,6 +677,8 @@ export function useVisualizerAssistant() {
     }
 
     const requestSheetKey = visualizer.currentSheetKey;
+    const runId = ++activeAssistantRunId;
+    const isCurrentRun = () => runId === activeAssistantRunId;
     const createdAt = Date.now();
     const sessionBaselineFingerprint = buildTemplateAssistantFingerprint_ACU(visualizer.tempData || {});
     guardController = createTemplateAssistantSessionGuard_ACU();
@@ -663,12 +707,13 @@ export function useVisualizerAssistant() {
         tableApiPreset: tableApiPreset.value,
         guard: guardController.createRunGuard(),
         onRoundComplete(progress) {
-          if (requestSheetKey !== visualizer.currentSheetKey) return;
+          if (!isCurrentRun() || requestSheetKey !== visualizer.currentSheetKey) return;
           // 一问一答：单轮即最终，round 与 final 是同一份成功结果。
           // 不创建独立 round turn（避免一条请求出现两条 AI 消息），仅同步轮次状态供摘要使用。
           visualizer.assistantRounds = [...progress.rounds];
         },
       });
+      if (!isCurrentRun()) return false;
       if (requestSheetKey !== visualizer.currentSheetKey) {
         visualizer.assistantErrorMessage = '当前选中表已变化，请重新生成 AI 草稿。';
         appendErrorTurn(
@@ -694,6 +739,7 @@ export function useVisualizerAssistant() {
       userRequest.value = '';
       return true;
     } catch (error) {
+      if (!isCurrentRun()) return false;
       if (error instanceof TemplateAssistantSessionStoppedError_ACU) {
         visualizer.assistantErrorMessage = error.message;
         appendErrorTurn(error.message, requestSheetKey, (error as any)?.failureRawText);
@@ -707,7 +753,7 @@ export function useVisualizerAssistant() {
       }
       return false;
     } finally {
-      visualizer.assistantIsRunning = false;
+      if (isCurrentRun()) visualizer.assistantIsRunning = false;
     }
   }
 
@@ -809,6 +855,10 @@ export function useVisualizerAssistant() {
     if (payload && payload.baselineFingerprint !== currentFingerprint) {
       return '当前结构已变化，该草稿已失效，请重新生成。';
     }
+    const mixedSheets = payload ? findSheetsMixingSchemaAndRowChanges(visualizer.tempData || {}, payload.candidateData || {}) : [];
+    if (mixedSheets.length > 0) {
+      return `这份草稿同时改了「${mixedSheets.join('」「')}」的列结构和行数据，无法一次保存。请让助手分两步：先只改结构并「保存模板到当前聊天」，再让它填数据。`;
+    }
     return '';
   }
 
@@ -907,6 +957,8 @@ export function useVisualizerAssistant() {
     () => {
       guardController.invalidate();
       if (isRunning.value) {
+        // 作废在飞会话：它之后的 catch/finally 不再改写共享状态
+        activeAssistantRunId += 1;
         visualizer.assistantIsRunning = false;
         visualizer.assistantErrorMessage = '会话已失效（结构变化或切表）。';
       }

@@ -52,8 +52,8 @@ import { rebindSqlMutationTableReferences_ACU, rebindSqlMutationColumnsByTarget_
 import { buildSheetTableAliasMap_ACU, buildSheetColumnAliasMap_ACU } from '../../shared/sql-read-resolver';
 import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../shared/stable-row-id-allocator';
 import { extractBusinessKeyColumns_ACU } from '../template/template-data-preflight';
-import { getTableLockIdentitiesForSheet_ACU } from '../runtime/helpers-table-lock';
-import { buildLockRevertPlanForSheet_ACU, formatLockRevertSummary_ACU, type LockRevertItem_ACU } from './table-lock-enforcement';
+import { getTableLockIdentitiesForSheet_ACU, hasAnyTableLocksInCurrentScope_ACU } from '../runtime/helpers-table-lock';
+import { buildLockRevertPlanForSheet_ACU, formatLockRevertSummary_ACU, formatLockViolationSummary_ACU, type LockRevertItem_ACU } from './table-lock-enforcement';
 import { splitSqlStatements_ACU } from '../../shared/sql-statement-splitter';
 
 export interface SnapshotSqlApplyResult_ACU extends ApplyEditsResult {
@@ -1149,6 +1149,20 @@ export function materializeSystemRowIdsForSqlInserts_ACU(
 }
 
 /**
+ * 外部写入（原生 SQL API、CRUD、SQL 控制台）的隐藏列守卫（R9-04）：
+ * 只检查数据变更语句；原生 SQL API 允许的 CREATE/ALTER/DROP 是既定公开面，不在此拒绝。
+ */
+function assertExternalWriteSkipsHiddenColumns_ACU(statements: string[], tableData: Record<string, any>): void {
+  const dmlStatements = statements.filter(statement => {
+    const tokens = tokenizeSqlMutationIdentifiers_ACU(statement);
+    const action = tokens[getSqlMutationActionIndex_ACU(tokens)];
+    const keyword = action?.quote === null ? action.value.toUpperCase() : '';
+    return keyword === 'INSERT' || keyword === 'REPLACE' || keyword === 'UPDATE' || keyword === 'DELETE';
+  });
+  if (dmlStatements.length > 0) assertNoHiddenPhysicalColumnMutations_ACU(dmlStatements, tableData);
+}
+
+/**
  * Rejects AI-authored INSERT/UPDATE assignments that target hidden physical
  * columns. It deliberately reuses the mutation tokenizer so strings and
  * comments cannot masquerade as identifiers.
@@ -1596,7 +1610,7 @@ export class SqlTableService implements ITableStorageProvider {
    * 防止聊天回放和 SQLite hydrate 拥有两套不同逻辑。
    *
    * 冷入口接线（P1-c 续）：长聊天的全量回放按统一预算在 frame/entry 边界让出事件循环，
-   * 并接入聊天变更取消信号（删楼/ROLL/切聊天）——让出窗口内切聊时回放在边界抛
+   * 并接入切聊天取消信号（CHAT_CHANGED）——让出窗口内切聊时回放在边界抛
    * V2ReplayAbortedError，此处按「回放中止」返回，绝不进入 loadFromData 发布半成品 runtime。
    */
   async loadFromChat(): Promise<{
@@ -1882,7 +1896,7 @@ export class SqlTableService implements ITableStorageProvider {
     const statementParams = userParams;
 
     try {
-      const result = this.engine.runBatch(statements, statementParams);
+      const result = this._runExternalMutationGuarded_ACU(statements, statementParams);
       const syncedView = this._syncToJson();
 
       const modifiedTables = extractTableNamesFromStatements(statements);
@@ -2063,9 +2077,9 @@ export class SqlTableService implements ITableStorageProvider {
         [normalizedSql],
         (this._readCanonicalView_ACU() || { mate: DEFAULT_MATE_ACU }) as TableDataObject_ACU,
       )[0];
-      const result = this.engine.run(runtimeSql, params);
+      const result = this._runExternalMutationGuarded_ACU([runtimeSql], [params]);
       const syncedView = this._syncToJson();
-      return { changes: result.changes, errors: [], syncedView, ...jsonViewSyncDiagnostics_ACU('executeMutation', syncedView) };
+      return { changes: result.totalChanges, errors: [], syncedView, ...jsonViewSyncDiagnostics_ACU('executeMutation', syncedView) };
     } catch (e: any) {
       // 同步 JSON 视图避免 SQLite/JSON 状态分裂
       const syncedView = this._syncToJson();
@@ -2076,6 +2090,35 @@ export class SqlTableService implements ITableStorageProvider {
         ...jsonViewSyncDiagnostics_ACU('executeMutation（语句失败后的视图同步同样未成功）', syncedView),
       };
     }
+  }
+
+  /**
+   * 外部写入（CRUD、原生 SQL API、SQL 控制台）与 AI 写路径同一套守卫（R9-04）：
+   * 不得写隐藏列；改到已锁定的行/列/单元格（含外键级联改到的别的表）整笔拒绝并回滚。
+   * 与 AI 路径不同，这里不做补偿：补偿语句进不了调用方的持久化语句集，冷回放会分叉。
+   */
+  private _runExternalMutationGuarded_ACU(
+    statements: string[],
+    paramsList?: ((string | number | null)[] | undefined)[],
+  ): { totalChanges: number } {
+    const lookupData = (this._readCanonicalView_ACU() || { mate: DEFAULT_MATE_ACU }) as TableDataObject_ACU;
+    assertExternalWriteSkipsHiddenColumns_ACU(statements, lookupData);
+    if (!hasAnyTableLocksInCurrentScope_ACU()) return this.engine.runBatch(statements, paramsList);
+    const lockBeforeData = JSON.parse(JSON.stringify(this._exportCurrentDataStrict())) as TableDataObject_ACU;
+    return this.engine.runBatchWithFinalize(statements, paramsList, (): null => {
+      const interimData = this._exportCurrentDataStrict();
+      const modifiedKeys = this._tableNamesToSheetKeys(extractTableNamesFromStatements(statements));
+      const violations = enforceTableLocksAfterSqlApply_ACU(
+        this.engine,
+        this.syncBridge,
+        lockBeforeData,
+        interimData,
+        modifiedKeys,
+        { detectOnly: true },
+      );
+      if (violations.reverted.length > 0) throw new Error(formatLockViolationSummary_ACU(violations.reverted));
+      return null;
+    });
   }
 
   /**
@@ -2592,7 +2635,7 @@ function enforceTableLocksAfterSqlApply_ACU(
   beforeData: TableDataObject_ACU,
   interimData: TableDataObject_ACU,
   modifiedKeys: readonly string[],
-  options: { runStatementsIndividually?: boolean } = {},
+  options: { runStatementsIndividually?: boolean; detectOnly?: boolean } = {},
 ): { workingData: TableDataObject_ACU; statements: string[]; reverted: LockRevertItem_ACU[] } {
   const allStatements: string[] = [];
   const allReverted: LockRevertItem_ACU[] = [];
@@ -2642,6 +2685,10 @@ function enforceTableLocksAfterSqlApply_ACU(
 
   if (allStatements.length === 0) {
     return { workingData: interimData, statements: [], reverted: [] };
+  }
+  // 外部写入只判定、不补偿：由调用方整笔回滚（R9-04）。
+  if (options.detectOnly) {
+    return { workingData: interimData, statements: allStatements, reverted: allReverted };
   }
   if (options.runStatementsIndividually) {
     // 调用方事务内联执行：补偿语句必须与用户语句同生共死（COMMIT 前生效，失败一起回滚）。

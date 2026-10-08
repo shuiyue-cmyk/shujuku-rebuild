@@ -1,20 +1,9 @@
 /**
- * service/runtime/state-manager.ts — Re-export 门面
- * 
- * 此文件已拆分为三处：
- * - shared/host-api.ts        — 宿主 API 引用（SillyTavern_API、jQuery_API 等）
- * - presentation/state/ui-refs.ts — UI jQuery 元素引用（$popupInstance、$xxx 等）
- * - 本文件保留                — 业务状态 + 门控逻辑（settings、generationGate 等）
- * 
- * 为保持向后兼容，本文件 re-export 所有三处的符号。
- * 后续逐步将各文件的 import 路径改为直接引用新位置。
+ * service/runtime/state-manager.ts — 业务运行态 + 门控逻辑（settings、generationGate 等）
+ *
+ * 宿主 API 引用在 shared/host-api.ts，消费方直接从那里导入。
+ * （旧弹窗的 jQuery 元素引用 presentation/state/ui-refs.ts 已随旧弹窗删除，R9-11。）
  */
-
-// ═══ 宿主 API re-export 已移除 ═══
-// 消费方应直接从 shared/host-api import 宿主 API 符号
-
-// ═══ ui-refs re-export 已移除（P5）═══
-// 消费方应直接从 presentation/state/ui-refs import $xxx 变量
 
 // ═══ 业务状态 + 门控逻辑（保留在本文件） ═══
 
@@ -502,7 +491,7 @@ export function _set_pendingBaseStatePlacement_ACU(v: any) { pendingBaseStatePla
 export function _set_suppressWorldbookInjectionInGreeting_ACU(v: any) { suppressWorldbookInjectionInGreeting_ACU = v; }
 export function _set_independentTableStates_ACU(v: any) { independentTableStates_ACU = v; }
 
-// ═══ 从 plot-editors.ts 迁移的业务状态 ═══
+// ═══ 自动/手动填表运行态 ═══
 export let isAutoUpdatingCard_ACU = false;
 export let wasStoppedByUser_ACU = false;
 // 用户停止会使当前自动填表代次失效；排队中的旧回调必须携带并校验停止代次。
@@ -513,21 +502,33 @@ export let currentAbortController_ACU: any = null;
 export let activeAbortControllers_ACU = new Set<any>();
 export let manualExtraHint_ACU = '';
 
-export function trackAbortController_ACU(controller: any) {
-    if (controller) activeAbortControllers_ACU.add(controller);
+/** R10A-19：剧情推进登记的请求；终止填表时不应连带中止它们。 */
+const plotOwnedAbortControllers_ACU = new WeakSet<object>();
+
+export function trackAbortController_ACU(controller: any, owner?: 'plot') {
+    if (!controller) return;
+    activeAbortControllers_ACU.add(controller);
+    if (owner === 'plot' && typeof controller === 'object') plotOwnedAbortControllers_ACU.add(controller);
 }
 export function untrackAbortController_ACU(controller: any) {
     if (controller) activeAbortControllers_ACU.delete(controller);
 }
-export function abortAllActiveRequests_ACU() {
-    logWarn_ACU(`[状态管理] abortAllActiveRequests: 中止 ${activeAbortControllers_ACU.size} 个活跃请求`);
-    activeAbortControllers_ACU.forEach(controller => {
+/**
+ * 中止登记的在飞请求。keepPlot：只中止填表相关请求（用户终止填表时用），剧情推进请求保留。
+ */
+export function abortAllActiveRequests_ACU(options: { keepPlot?: boolean } = {}) {
+    const targets = [...activeAbortControllers_ACU].filter(controller =>
+        !(options.keepPlot && typeof controller === 'object' && plotOwnedAbortControllers_ACU.has(controller)));
+    logWarn_ACU(`[状态管理] abortAllActiveRequests: 中止 ${targets.length} 个活跃请求${options.keepPlot ? '（保留剧情推进请求）' : ''}`);
+    targets.forEach(controller => {
         try { controller.abort(); } catch (e) {}
+        activeAbortControllers_ACU.delete(controller);
     });
-    activeAbortControllers_ACU.clear();
 }
 
-// ═══ 全局「聊天变更」中止信号（删楼/ROLL/切聊天时中止在飞的依赖楼层的 API 调用） ═══
+// ═══ 全局「聊天变更」中止信号（仅切聊天 CHAT_CHANGED 时中止在飞的依赖楼层的 API 调用） ═══
+// 注意：删楼 / 滑动（MESSAGE_DELETED / MESSAGE_SWIPED）不会触发中止；
+// 这些场景由各写回路径自己校验目标（如正文优化的消息写回目标快照）。
 let chatMutationAbortController_ACU: AbortController | null = null;
 
 /** 获取当前聊天变更中止信号（供依赖楼层的调用方监听：楼层变化即中止） */
@@ -537,9 +538,9 @@ export function getChatMutationAbortSignal_ACU(): AbortSignal | null {
     return chatMutationAbortController_ACU.signal;
 }
 
-/** 楼层/聊天变更（CHAT_CHANGED：删楼/ROLL/切聊天）：中止所有在飞的依赖楼层调用，并重建信号供下一轮使用 */
+/** 切聊天（CHAT_CHANGED，唯一调用点）：中止所有在飞的依赖楼层调用，并重建信号供下一轮使用 */
 export function abortOnChatMutation_ACU() {
-    logWarn_ACU('[状态管理] 聊天变更（删楼/ROLL/切聊天）：中止在飞的依赖楼层 API 调用');
+    logWarn_ACU('[状态管理] 切换聊天：中止在飞的依赖楼层 API 调用');
     if (chatMutationAbortController_ACU) {
         try { chatMutationAbortController_ACU.abort(); } catch (e) {}
         chatMutationAbortController_ACU = null;

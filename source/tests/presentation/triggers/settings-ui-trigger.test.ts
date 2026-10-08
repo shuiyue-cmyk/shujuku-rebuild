@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
   wasStopped: false,
+  chatId: 'test-chat',
   executePlan: vi.fn(),
   logSkip: vi.fn(),
   buildPlan: vi.fn(() => ({ tablesToUpdate: [{ sheetKey: 'sheet_0' }], updateGroups: { group_1: {} } })),
@@ -13,17 +14,15 @@ const m = vi.hoisted(() => ({
 // 自动填表「已处理集合」的内存替身（真实实现走 window + localStorage，本文件只验接线）
 const guardStore = vi.hoisted(() => ({ fill: new Map<string, any>() }));
 
-vi.mock('../../../src/presentation/components/plot-editors', () => ({
-  getCharCardPromptFromUI_ACU: vi.fn(), isAutoUpdatingCard_ACU: false,
-  renderPromptSegments_ACU: vi.fn(), get wasStoppedByUser_ACU() { return m.wasStopped; },
-  _set_isAutoUpdatingCard_ACU: vi.fn(),
-}));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
+  isAutoUpdatingCard_ACU: false,
+  get wasStoppedByUser_ACU() { return m.wasStopped; },
+  _set_isAutoUpdatingCard_ACU: vi.fn(),
   NEW_MESSAGE_DEBOUNCE_DELAY_ACU: 500, abortAllActiveRequests_ACU: vi.fn(),
   allChatMessages_ACU: [{ is_user: true }, { is_user: false }], coreApisAreReady_ACU: true,
   currentJsonTableData_ACU: { sheet_0: {} }, getCurrentIsolationKey_ACU: vi.fn(() => ''),
   lastTotalAiMessages_ACU: 1, settings_ACU: { autoUpdateEnabled: true, maxConcurrentGroups: 1, toastMuteEnabled: true },
-  currentChatFileIdentifier_ACU: 'test-chat',
+  get currentChatFileIdentifier_ACU() { return m.chatId; },
   _set_coreApisAreReady_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: vi.fn(),
   _set_manualExtraHint_ACU: vi.fn(), _set_wasStoppedByUser_ACU: vi.fn(),
 }));
@@ -39,7 +38,6 @@ vi.mock('../../../src/shared/trigger-diagnostics', () => ({ logAutoFillSkip_ACU:
 vi.mock('../../../src/service/template/chat-scope', () => ({ getSortedSheetKeys_ACU: vi.fn(() => ['sheet_0']) }));
 vi.mock('../../../src/service/table/storage-mode', () => ({ isSqliteMode: vi.fn(() => true) }));
 vi.mock('../../../src/presentation/theme/toast', () => ({ showToastr_ACU: vi.fn() }));
-vi.mock('../../../src/presentation/components/update-status-display', () => ({ updateCardUpdateStatusDisplay_ACU: vi.fn() }));
 vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logError_ACU: vi.fn(), logWarn_ACU: vi.fn(), isSummaryOrOutlineTable_ACU: vi.fn() }));
 vi.mock('../../../src/service/worldbook/pipeline', () => ({ loadAllChatMessages_ACU: vi.fn(), updateReadableLorebookEntry_ACU: vi.fn() }));
 vi.mock('../../../src/service/table/table-storage-strategy', () => ({ getStorageProvider: vi.fn(() => ({ getCurrentData: vi.fn() })) }));
@@ -63,7 +61,7 @@ vi.mock('../../../src/data/storage/optimization-cache-storage', () => ({
 async function settleMicrotasks() { await Promise.resolve(); await Promise.resolve(); }
 
 describe('triggerAutomaticUpdateIfNeeded_ACU 并发补跑', () => {
-  beforeEach(() => { m.wasStopped = false; m.executePlan.mockReset(); m.logSkip.mockReset(); m.buildPlan.mockReset(); m.preCheck = { canProceed: true, reason: '' }; });
+  beforeEach(() => { m.wasStopped = false; m.chatId = 'test-chat'; m.executePlan.mockReset(); m.logSkip.mockReset(); m.buildPlan.mockReset(); m.preCheck = { canProceed: true, reason: '' }; });
 
   it('前置检查失败时记录稳定原因码到诊断日志', async () => {
     m.preCheck = { canProceed: false, reason: 'Pre-flight checks failed.', code: 'runtime_not_ready' };
@@ -99,6 +97,25 @@ describe('triggerAutomaticUpdateIfNeeded_ACU 并发补跑', () => {
     expect(m.executePlan).toHaveBeenCalledTimes(2);
     releaseFollowUp();
     await settleMicrotasks();
+  });
+
+  it('R9-18：登记跟发后切换了聊天，在途填表结束时不在新聊天上补跑', async () => {
+    let releaseFirst!: () => void;
+    m.executePlan.mockImplementationOnce(() => new Promise(resolve => {
+      releaseFirst = () => resolve({ failedGroups: 0, errors: [], autoMergeTriggered: false, autoMergeSuccess: false });
+    }));
+
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    const first = triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    m.chatId = 'other-chat';
+
+    releaseFirst();
+    await first;
+    await settleMicrotasks();
+
+    expect(m.executePlan).toHaveBeenCalledTimes(1);
   });
 
   it('用户停止后清除 pending 触发而不补跑', async () => {
@@ -276,66 +293,5 @@ describe('triggerAutomaticUpdateIfNeeded_ACU 回声防重', () => {
     expect(triggerSource.match(/shouldSkipDuplicateAutoTableFill_ACU\(/g) || []).toHaveLength(1);
     expect(manualSource).not.toContain('auto-fill-echo-guard');
     expect(manualSource).not.toContain('shouldSkipDuplicateAutoTableFill_ACU');
-  });
-});
-
-// ═══ [静默进度框] 「自动填表进行中」常驻 toast 不受静默提示框拦截（MANUAL_TABLE 类别在白名单）═══
-describe('triggerAutomaticUpdateIfNeeded_ACU 静默进度框', () => {
-  const okResult = { success: true, totalGroups: 1, failedGroups: 0, errors: [] };
-
-  beforeEach(() => {
-    guardStore.fill.clear();
-    m.wasStopped = false;
-    m.executePlan.mockReset();
-    m.logSkip.mockReset();
-    m.buildPlan.mockReset();
-    m.preCheck = { canProceed: true, reason: '' };
-    m.getChat.mockImplementation(() => [
-      { is_user: true, message_id: 10, mes: '玩家行动' },
-      { is_user: false, message_id: 11, mes: '夜色漫过屋檐。' },
-    ]);
-  });
-
-  afterEach(async () => {
-    // isSqliteMode/showToastr/settings 均为跨用例共享 mock，必须显式回滚默认实现
-    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
-    vi.mocked(isSqliteMode).mockReturnValue(true);
-    const toast = await import('../../../src/presentation/theme/toast');
-    toast.showToastr_ACU.mockReset();
-    toast.showToastr_ACU.mockImplementation(undefined);
-    const state = await import('../../../src/service/runtime/state-manager');
-    (state.settings_ACU as any).toastMuteEnabled = true;
-  });
-
-  async function runGroupedFill(mute: boolean) {
-    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
-    vi.mocked(isSqliteMode).mockReturnValue(false);   // 非 SQLite=分组并发路径（常驻进度框所在分支）
-    const state = await import('../../../src/service/runtime/state-manager');
-    (state.settings_ACU as any).toastMuteEnabled = mute;
-    const toast = await import('../../../src/presentation/theme/toast');
-    const fakeToast = { find: vi.fn(() => ({ text: vi.fn() })) };
-    toast.showToastr_ACU.mockReturnValue(fakeToast as any);
-    m.executePlan.mockResolvedValue(okResult);
-    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
-    await triggerAutomaticUpdateIfNeeded_ACU();
-    await settleMicrotasks();
-    return toast.showToastr_ACU;
-  }
-
-  it('静默开启+分组模式：仍创建常驻进度 toast（timeOut:0 + manual_table 白名单类别），填表开始即提示进行中', async () => {
-    const showToastr = await runGroupedFill(true);
-    // 首条「检测到 N 个表格需要更新」公告 + 常驻进度框；进度框必须存在且带进行中文案与终止按钮形状
-    const progressCall = showToastr.mock.calls.find((args: any[]) =>
-      args[0] === 'info' && String(args[1]).includes('自动填表正在准备') && args[2]?.timeOut === 0);
-    expect(progressCall).toBeTruthy();
-    expect(progressCall![2].acuToastCategory).toBe('manual_table'); // 静默白名单类别，toast 层不会拦截
-  });
-
-  it('静默关闭：同样创建常驻进度 toast（本改动不改变非静默路径）', async () => {
-    const showToastr = await runGroupedFill(false);
-    const progressCall = showToastr.mock.calls.find((args: any[]) =>
-      args[0] === 'info' && String(args[1]).includes('自动填表正在准备') && args[2]?.timeOut === 0);
-    expect(progressCall).toBeTruthy();
-    expect(progressCall![2].acuToastCategory).toBe('manual_table');
   });
 });

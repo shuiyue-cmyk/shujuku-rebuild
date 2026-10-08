@@ -46,8 +46,8 @@
         :error="wbEntries.error.value"
         :empty-text="entryEmptyText"
         @update:filter="entryFilter = $event"
-        @select-all="wbEntries.selectAll()"
-        @deselect-all="wbEntries.deselectAll()"
+        @select-all="wbEntries.selectAll($event)"
+        @deselect-all="wbEntries.deselectAll($event)"
         @toggle="(bookName, uid, checked) => wbEntries.toggleEntry(bookName, uid, checked)"
         @toggle-group="wbEntries.toggleGroupExpanded($event)"
       />
@@ -100,14 +100,18 @@ function resolveEntryEmptyText(names: string[]): string {
   return plotCopy.worldbook.emptyDefault;
 }
 
+let entriesRefreshSeq = 0;
 async function refreshWorldbookEntries(): Promise<void> {
+  // R10B-17：快速切换来源/勾选世界书时，晚到的旧解析结果不得覆盖新列表
+  const seq = ++entriesRefreshSeq;
   let names: string[];
   try {
     names = await plotWorldbook.resolveBookNames();
   } catch {
-    wbEntries.reportLoadFailure();
+    if (seq === entriesRefreshSeq) wbEntries.reportLoadFailure();
     return;
   }
+  if (seq !== entriesRefreshSeq) return;
   entryEmptyText.value = resolveEntryEmptyText(names);
   await wbEntries.loadEntries(names);
 }

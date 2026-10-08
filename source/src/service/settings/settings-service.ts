@@ -597,6 +597,12 @@ export   function loadSettings_ACU() {
               if (typeof settings_ACU.plotSettings.lastUsedPresetName !== 'string') {
                   settings_ACU.plotSettings.lastUsedPresetName = '';
               }
+              // 条件模板恒开启（界面已无开关）：旧设置里的 false 在加载时归一，
+              // 不再由总览页每次刷新时隐式改写并保存（R10A-23）。
+              if (!settings_ACU.promptTemplateSettings || typeof settings_ACU.promptTemplateSettings !== 'object' || Array.isArray(settings_ACU.promptTemplateSettings)) {
+                  settings_ACU.promptTemplateSettings = {};
+              }
+              settings_ACU.promptTemplateSettings.enabled = true;
 
               // [Profile] 强制以 globalMeta.activeIsolationCode 作为当前标识
               settings_ACU.dataIsolationCode = activeCode;

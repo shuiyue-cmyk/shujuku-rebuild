@@ -1,7 +1,7 @@
 import { reactive, ref } from "vue";
-import { saveSettings_ACU } from "../../service/settings/settings-service";
 import {
   getCurrentVectorMemoryConfig_ACU,
+  updateGlobalVectorMemoryConfigFields_ACU,
   validateSummaryVectorIndexConfig_ACU,
 } from "../../service/vector/vector-memory-config";
 import {
@@ -62,26 +62,33 @@ export function useVectorApiConfig() {
   }
 
   function save(): boolean {
-    const config = getCurrentVectorMemoryConfig_ACU();
-    config.embeddingEndpoint = form.embeddingEndpoint.trim();
-    config.embeddingModel = form.embeddingModel.trim();
-    config.embeddingApiKey = form.embeddingApiKey;
-    config.rerankEndpoint = form.rerankEndpoint.trim();
-    config.rerankModel = form.rerankModel.trim();
-    config.rerankApiKey = form.rerankApiKey;
-    config.rerankInstruction = form.rerankInstruction.trim();
+    // R10A-08：先在副本上组装并校验；通过后经带回滚的事务式更新写入活配置。
+    // 原先先改活引用再校验，校验失败时非法配置已生效，下一次任何保存都会把它落盘。
     const batchSize = normalizeRerankBatchSize_ACU(form.rerankBatchSize);
     form.rerankBatchSize = batchSize;
-    config.rerankBatchSize = batchSize;
+    const patch = {
+      embeddingEndpoint: form.embeddingEndpoint.trim(),
+      embeddingModel: form.embeddingModel.trim(),
+      embeddingApiKey: form.embeddingApiKey,
+      rerankEndpoint: form.rerankEndpoint.trim(),
+      rerankModel: form.rerankModel.trim(),
+      rerankApiKey: form.rerankApiKey,
+      rerankInstruction: form.rerankInstruction.trim(),
+      rerankBatchSize: batchSize,
+    };
 
-    const validation = validateSummaryVectorIndexConfig_ACU(config);
+    const validation = validateSummaryVectorIndexConfig_ACU({ ...getCurrentVectorMemoryConfig_ACU(), ...patch });
     if (!validation.valid) {
       errors.value = formatVectorApiErrors(validation.errors);
       return false;
     }
 
+    const result = updateGlobalVectorMemoryConfigFields_ACU(patch);
+    if (!result.ok) {
+      errors.value = [`保存失败：${result.message || '未知错误'}`];
+      return false;
+    }
     errors.value = [];
-    saveSettings_ACU();
     savedAt.value = Date.now();
     toast.success("向量服务配置已保存。");
     return true;

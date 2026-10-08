@@ -11,12 +11,12 @@
       />
       <div class="ub-wbe__actions">
         <template v-if="showEntryToggle">
-          <UbButton size="sm" variant="ghost" @click="emit('select-all')">全选</UbButton>
-          <UbButton size="sm" variant="ghost" @click="emit('deselect-all')">全不选</UbButton>
+          <UbButton size="sm" variant="ghost" @click="emit('select-all', filterScope())">全选</UbButton>
+          <UbButton size="sm" variant="ghost" @click="emit('deselect-all', filterScope())">全不选</UbButton>
         </template>
         <template v-if="showSkillifyControls">
-          <UbButton size="sm" variant="ghost" @click="emit('skillify-select-all')">Skill 全选</UbButton>
-          <UbButton size="sm" variant="ghost" @click="emit('skillify-deselect-all')">Skill 全不选</UbButton>
+          <UbButton size="sm" variant="ghost" @click="emit('skillify-select-all', filterScope())">Skill 全选</UbButton>
+          <UbButton size="sm" variant="ghost" @click="emit('skillify-deselect-all', filterScope())">Skill 全不选</UbButton>
           <UbButton size="sm" variant="soft" icon="fa-solid fa-wand-sparkles" @click="emit('skillify-selected')">对所选 Skill 化</UbButton>
         </template>
       </div>
@@ -118,6 +118,7 @@ import UbCheck from '../ui/UbCheck.vue';
 import UbDisclosure from '../ui/UbDisclosure.vue';
 import UbInput from '../ui/UbInput.vue';
 import UbTextarea from '../ui/UbTextarea.vue';
+import type { WorldbookEntryScope_ACU } from '../../presentation-v2/composables/worldbook-entry-scope';
 
 interface SkillDraft {
   description: string;
@@ -149,10 +150,10 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:filter', value: string): void;
-  (e: 'select-all'): void;
-  (e: 'deselect-all'): void;
-  (e: 'skillify-select-all'): void;
-  (e: 'skillify-deselect-all'): void;
+  (e: 'select-all', scope: WorldbookEntryScope_ACU): void;
+  (e: 'deselect-all', scope: WorldbookEntryScope_ACU): void;
+  (e: 'skillify-select-all', scope: WorldbookEntryScope_ACU): void;
+  (e: 'skillify-deselect-all', scope: WorldbookEntryScope_ACU): void;
   (e: 'skillify-selected'): void;
   (e: 'toggle', bookName: string, uid: number, checked: boolean): void;
   (e: 'toggle-skillify', bookName: string, uid: number, checked: boolean): void;
@@ -186,6 +187,12 @@ const filteredGroups = computed(() => {
     })
     .filter((g): g is WorldbookEntryDisplayGroup_ACU => g !== null);
 });
+
+/** R10B-05：有搜索词时批量按钮只作用于筛选结果；无搜索词时返回 null 表示全部。 */
+function filterScope(): WorldbookEntryScope_ACU {
+  if (!props.filter.trim()) return null;
+  return filteredGroups.value.flatMap(group => group.entries.map(entry => ({ bookName: group.bookName, uid: entry.uid })));
+}
 
 function visibleEntriesOf(group: WorldbookEntryDisplayGroup_ACU): WorldbookEntryDisplayItem_ACU[] {
   return group.entries.slice(0, visibleCount[group.bookName] ?? PAGE_SIZE);

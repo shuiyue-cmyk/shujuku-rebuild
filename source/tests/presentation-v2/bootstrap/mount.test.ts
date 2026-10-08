@@ -229,6 +229,8 @@ describe('mount — 当前文档场景', () => {
     const formFillButton = launcher!.querySelector<HTMLButtonElement>('[data-page-id="form-fill"]');
     expect(formFillButton).not.toBeNull();
     formFillButton!.click();
+    // 切页先异步过页面守卫（R10B-06）
+    await vi.waitFor(() => expect(document.querySelector('.ub-launcher')).toBeNull());
     await nextTick();
 
     expect(document.querySelector('.ub-launcher')).toBeNull();

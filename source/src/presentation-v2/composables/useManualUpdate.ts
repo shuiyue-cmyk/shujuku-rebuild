@@ -314,7 +314,8 @@ export function useManualUpdate(): ManualUpdateState {
     if (abortRequested) return;
     abortRequested = true;
     _set_wasStoppedByUser_ACU(true);
-    abortAllActiveRequests_ACU();
+    // R10A-19：只终止填表请求，不连带中止正在进行的剧情推进规划
+    abortAllActiveRequests_ACU({ keepPlot: true });
     _set_isAutoUpdatingCard_ACU(false);
     if (progressToastId) {
       toast.update(progressToastId, 'warning', '手动填表已终止，正在停止当前任务与后续批次...', {
@@ -501,6 +502,8 @@ export function useManualUpdate(): ManualUpdateState {
     }
 
     manualUpdateBusy.value = true;
+    // R10A-19：真正开始执行后才清空额外要求；取消确认或被拦下时保留用户填的内容
+    let runStarted = false;
     try {
       const injectionTargetLabel = await describeInjectionTargetForConfirm();
       if (currentManualExecutionContext_ACU().key !== snapshotContext.key) {
@@ -534,6 +537,7 @@ export function useManualUpdate(): ManualUpdateState {
       abortRequested = false;
       _set_wasStoppedByUser_ACU(false);
       notifyProgress('手动填表开始。');
+      runStarted = true;
       const extra = manualExtraHint.value.trim();
       if (extra) _set_manualExtraHint_ACU(`以下为用户的额外填表要求,请严格遵守:\n${extra}`);
       const handleProgress = (event: CardUpdateProgressEvent) => {
@@ -577,7 +581,9 @@ export function useManualUpdate(): ManualUpdateState {
       finishToast('error', error?.message || '手动填表执行异常。');
     } finally {
       manualUpdateBusy.value = false;
+      const keptHint = runStarted ? '' : manualExtraHint.value;
       refresh();
+      if (keptHint) manualExtraHint.value = keptHint;
     }
   }
 

@@ -31,6 +31,7 @@ import {
 import { assertVisualizerDataOpsEditable_ACU } from '../../../service/visualizer/visualizer-data-ops';
 import { useToastStore } from '../../stores/toast-store';
 import { useVisualizerStore } from '../../stores/visualizer-store';
+import { persistedSheetNameForOverrides_ACU } from './table-api-preset-rename';
 
 type SourceDataKey = 'note' | 'initNode' | 'insertNode' | 'updateNode' | 'deleteNode' | 'ddl';
 type UpdateConfigKey = 'contextDepth' | 'updateFrequency' | 'batchSize' | 'groupId' | 'skipFloors' | 'sendLatestRows' | 'sendRowsSqlTemplate';
@@ -89,6 +90,26 @@ function ensureEditableExportConfig(sheet: any): any {
     target[key] = normalized[key];
   });
   return target;
+}
+
+/**
+ * R10A-15：额外索引列按表头名匹配（extraIndexColumns / extraIndexColumnModes），
+ * 改列名时同步过去，否则该列从额外索引里静默消失。
+ */
+function renameExtraIndexColumn(sheet: any, previousName: string, nextName: string): void {
+  const config = sheet?.exportConfig;
+  if (!config || typeof config !== 'object' || !previousName || previousName === nextName) return;
+  if (Array.isArray(config.extraIndexColumns) && config.extraIndexColumns.includes(previousName)) {
+    const renamed = config.extraIndexColumns.map((col: unknown) => (col === previousName ? nextName : col));
+    config.extraIndexColumns = [...new Set(renamed)];
+  }
+  const modes = config.extraIndexColumnModes;
+  if (modes && typeof modes === 'object' && Object.prototype.hasOwnProperty.call(modes, previousName)) {
+    const nextModes = { ...modes };
+    if (!Object.prototype.hasOwnProperty.call(nextModes, nextName)) nextModes[nextName] = nextModes[previousName];
+    delete nextModes[previousName];
+    config.extraIndexColumnModes = nextModes;
+  }
 }
 
 export function useVisualizerConfigEditing() {
@@ -151,7 +172,8 @@ export function useVisualizerConfigEditing() {
   ]);
 
   const currentTableApiPreset = computed(() => {
-    const sheetName = stringValue(currentSheet.value?.name).trim();
+    // R10A-14：覆盖按已保存的表名读写，草稿改名在模板保存成功后才迁移
+    const sheetName = persistedSheetNameForOverrides_ACU(visualizer.templateBaseData, visualizer.currentSheetKey, currentSheet.value?.name);
     if (!sheetName || !settings_ACU.tableApiPresetOverridesByName) return '';
     return stringValue(settings_ACU.tableApiPresetOverridesByName[sheetName]).trim();
   });
@@ -230,11 +252,6 @@ export function useVisualizerConfigEditing() {
       if (!config.extraIndexEntryName || config.extraIndexEntryName === `${previousName}-索引`) {
         config.extraIndexEntryName = `${nextName}-索引`;
       }
-      if (previousName && previousName !== nextName && settings_ACU.tableApiPresetOverridesByName?.[previousName]) {
-        settings_ACU.tableApiPresetOverridesByName[nextName] = settings_ACU.tableApiPresetOverridesByName[previousName];
-        delete settings_ACU.tableApiPresetOverridesByName[previousName];
-        saveSettings_ACU();
-      }
     });
   }
 
@@ -243,7 +260,9 @@ export function useVisualizerConfigEditing() {
       const content = ensureSheetContent(sheet);
       const headerIndex = Math.trunc(index) + 1;
       if (headerIndex < 1) return;
+      const previousHeader = stringValue(content[0][headerIndex]);
       content[0][headerIndex] = stringValue(value);
+      renameExtraIndexColumn(sheet, previousHeader, stringValue(value));
       if (String(sheet.sourceData?.ddl || '').trim()) {
         const ddlColumns = parseDDLColumnNames(sheet.sourceData.ddl);
         const ddlColumn = ddlColumns[headerIndex];
@@ -299,6 +318,7 @@ export function useVisualizerConfigEditing() {
         if (Array.isArray(row)) row.splice(targetIndex, 1);
       });
     });
+    visualizer.shiftLockDraftAfterDelete(visualizer.currentSheetKey, 'col', targetIndex - 1);
   }
 
   function updateUpdateConfig(key: UpdateConfigKey, value: string | number): void {
@@ -336,7 +356,7 @@ export function useVisualizerConfigEditing() {
 
   function setTableApiPreset(value: string): void {
     assertVisualizerDataOpsEditable_ACU(visualizer);
-    const sheetName = stringValue(currentSheet.value?.name).trim();
+    const sheetName = persistedSheetNameForOverrides_ACU(visualizer.templateBaseData, visualizer.currentSheetKey, currentSheet.value?.name);
     if (!sheetName) return;
     if (!settings_ACU.tableApiPresetOverridesByName || typeof settings_ACU.tableApiPresetOverridesByName !== 'object') {
       settings_ACU.tableApiPresetOverridesByName = {};

@@ -41,12 +41,13 @@ async function importManualUpdate() {
   const refreshMergedDataAndNotify_ACU = vi.fn(async () => undefined);
   const setWasStoppedByUser = vi.fn();
   const saveSettings_ACU = vi.fn();
+  const abortAllActiveRequests = vi.fn();
 
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
     currentJsonTableData_ACU: currentJsonTableData,
     get currentChatFileIdentifier_ACU() { return currentChatIdentity; },
     settings_ACU: settings,
-    abortAllActiveRequests_ACU: vi.fn(),
+    abortAllActiveRequests_ACU: abortAllActiveRequests,
     _set_isAutoUpdatingCard_ACU: vi.fn(),
     _set_manualExtraHint_ACU: vi.fn(),
     _set_wasStoppedByUser_ACU: setWasStoppedByUser,
@@ -112,6 +113,7 @@ async function importManualUpdate() {
     prepareManualCatchUpPlan_ACU,
     refreshMergedDataAndNotify_ACU,
     setWasStoppedByUser,
+    abortAllActiveRequests,
     setChatIdentity: (value: string) => { currentChatIdentity = value; },
   };
 }
@@ -262,6 +264,40 @@ describe('useManualUpdate destructive refill confirmation', () => {
 
     expect(orchestrateManualUpdate_ACU).not.toHaveBeenCalled();
     expect(toast.items.some(item => item.kind === 'error')).toBe(false);
+    __resetToastStoreForTests();
+  });
+
+  it('R10A-19：取消确认时保留用户填写的额外要求', async () => {
+    const { useManualUpdate, dialog, __resetToastStoreForTests } = await importManualUpdate();
+    const manual = useManualUpdate();
+    manual.manualExtraHint.value = '请把物品数量写全';
+
+    const pending = manual.runManualUpdate();
+    await waitForCondition(() => dialog.active?.title === '执行手动填表', '确认弹窗出现');
+    dialog.cancelActive();
+    await pending;
+
+    expect(manual.manualExtraHint.value).toBe('请把物品数量写全');
+    __resetToastStoreForTests();
+  });
+
+  it('R10A-19：终止手动填表只中止填表请求，不连带中止剧情推进', async () => {
+    const { useManualUpdate, dialog, toast, orchestrateManualUpdate_ACU, abortAllActiveRequests, __resetToastStoreForTests } = await importManualUpdate();
+    let release!: (value: unknown) => void;
+    orchestrateManualUpdate_ACU.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+    const manual = useManualUpdate();
+
+    const pending = manual.runManualUpdate();
+    await waitForCondition(() => dialog.active?.title === '执行手动填表', '确认弹窗出现');
+    dialog.submitActive();
+    await waitForCondition(() => orchestrateManualUpdate_ACU.mock.calls.length === 1, 'orchestrator 已调用');
+    const abortAction = toast.items.find(item => item.action?.label === '终止')?.action;
+    expect(abortAction).toBeTruthy();
+    abortAction!.onClick();
+    release({ success: false, error: 'aborted' });
+    await pending;
+
+    expect(abortAllActiveRequests).toHaveBeenCalledWith({ keepPlot: true });
     __resetToastStoreForTests();
   });
 

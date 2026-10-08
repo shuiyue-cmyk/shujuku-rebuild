@@ -4,6 +4,7 @@ import {
   openAcuV2App,
 } from '../../bootstrap/mount';
 import { getAcuHostWindow } from '../../bootstrap/host-document';
+import { canLeaveCurrentPage } from '../../composables/useUiCloseGuard';
 import { useRootShellStore } from '../../stores/root-shell-store';
 import { useRouterStore } from '../../stores/router-store';
 import {
@@ -46,6 +47,17 @@ export async function openVisualizerSurface_ACU(
     const previousPageId = existingPinia
       ? useRouterStore(existingPinia).activePageId
       : null;
+    // R10B-06：面板开着时进入编辑器会卸载当前页，页内未保存修改要先过守卫。
+    // 新版界面内的入口（v2-shell）在切预设等前置动作之前自行检查，这里只拦外部调用。
+    const visualizerAlreadyActive = existingPinia ? useVisualizerStore(existingPinia).isActive : false;
+    if (
+      (options.source ?? 'external-api') === 'external-api'
+      && wasShellOpen
+      && !visualizerAlreadyActive
+      && !(await canLeaveCurrentPage())
+    ) {
+      return false;
+    }
 
     await openAcuV2App();
 

@@ -106,6 +106,22 @@ describe('useVisualizerConfigEditing', () => {
     expect(store.dirty).toBe(true);
   });
 
+  it('R10A-15：改列名同步额外索引列与其模式，不让该列从额外索引里消失', async () => {
+    const store = await loadSheet();
+    store.currentSheet.exportConfig = {
+      extraIndexEnabled: true,
+      extraIndexColumns: ['旧物品', '数量'],
+      extraIndexColumnModes: { 旧物品: 'index_only', 数量: 'both' },
+    };
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const config = useVisualizerConfigEditing();
+
+    config.updateHeader(0, '物品名');
+
+    expect(store.currentSheet.exportConfig.extraIndexColumns).toEqual(['物品名', '数量']);
+    expect(store.currentSheet.exportConfig.extraIndexColumnModes).toEqual({ 物品名: 'index_only', 数量: 'both' });
+  });
+
   it('新增列会同步所有数据行', async () => {
     const store = await loadSheet();
     const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
@@ -164,6 +180,22 @@ describe('useVisualizerConfigEditing', () => {
     config.deleteColumn(1);
 
     expect(JSON.stringify(store.tempData)).toBe(beforeUnique);
+  });
+
+  it('R10A-14：改表名只改草稿，不立即迁移表级 API 预设覆盖；面板仍按已保存的表名读写覆盖', async () => {
+    const store = await loadSheet();
+    runtimeMock.settings_ACU.tableApiPresetOverridesByName = { 背包表: 'alpha' };
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const config = useVisualizerConfigEditing();
+
+    config.renameSheet('行囊表');
+
+    expect(store.currentSheet.name).toBe('行囊表');
+    expect(runtimeMock.settings_ACU.tableApiPresetOverridesByName).toEqual({ 背包表: 'alpha' });
+    expect(saveSettingsMock.saveSettings_ACU).not.toHaveBeenCalled();
+    expect(config.currentTableApiPreset.value).toBe('alpha');
+    config.setTableApiPreset('beta');
+    expect(runtimeMock.settings_ACU.tableApiPresetOverridesByName).toEqual({ 背包表: 'beta' });
   });
 
   it('全局注入配置作为模板级草稿写入 mate.globalInjectionConfig', async () => {
@@ -339,5 +371,22 @@ describe('useVisualizerConfigEditing', () => {
 
     expect(store.currentSheet.exportConfig.entryType).toBe('keyword');
     expect(store.dirty).toBe(true);
+  });
+
+  it('R10B-02：删列后列锁与单元格锁随列平移，被删列的锁一并移除', async () => {
+    const store = await loadSheet();
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const config = useVisualizerConfigEditing();
+    store.toggleColumnLock('sheet_a', 1);
+    store.toggleColumnLock('sheet_a', 0);
+    store.toggleCellLock('sheet_a', 0, 1);
+    store.toggleCellLock('sheet_a', 0, 0);
+
+    config.deleteColumn(0);
+
+    const draft = store.getLockDraft('sheet_a');
+    expect(draft.cols).toEqual([0]);
+    expect(draft.cells).toEqual(['0:0']);
+    expect(store.currentSheet.content[0]).toEqual([null, '数量']);
   });
 });

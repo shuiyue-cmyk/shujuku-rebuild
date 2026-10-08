@@ -474,7 +474,7 @@ describe('语义⑤：两份导出共用同一个 payload builder（P1 脱敏不
     expect(count("plugin: 'UnbirthDB'")).toBe(1);
     expect(count('clearHistory: getClearHistory_ACU()')).toBe(1);
     expect(count('function debugExportFilename_ACU(')).toBe(1);
-    expect(count('downloadJson(debugExportFilename_ACU()')).toBe(2);
+    expect(count('downloadJsonToHost_ACU(debugExportFilename_ACU()')).toBe(2);
   });
 });
 

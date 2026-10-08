@@ -79,7 +79,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted } from 'vue';
-import { getAcuHostDocument } from '../../presentation-v2/bootstrap/host-document';
+import { downloadTextToHost_ACU } from '../../presentation-v2/bootstrap/host-download';
 import { useApiPresetSelectOptions } from '../../presentation-v2/composables/useApiPresetSelectOptions';
 import { useApiPresetStaleness } from '../../presentation-v2/composables/useApiPresetStaleness';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
@@ -155,15 +155,7 @@ function onExport(name: string): void {
   const text = management.exportPresetAsText(name);
   if (!text) return;
   try {
-    const doc = getAcuHostDocument();
-    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
-    const a = doc.createElement('a');
-    a.href = url;
-    a.download = `${name}.plot-preset.json`;
-    doc.body.appendChild(a);
-    a.click();
-    doc.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadTextToHost_ACU(`${name}.plot-preset.json`, text);
     toast.success('剧情推进预设 JSON 已导出。');
   } catch {
     toast.error('剧情推进预设 JSON 导出失败。');
@@ -172,7 +164,7 @@ function onExport(name: string): void {
 
 async function onImportFile(file: File): Promise<void> {
   try {
-    management.importFromJsonText(await readFileText_UB(file));
+    await management.importFromJsonText(await readFileText_UB(file));
   } catch {
     toast.error('剧情推进预设导入失败。');
   }

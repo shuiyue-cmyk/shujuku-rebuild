@@ -27,7 +27,7 @@
             class="ub-dialog__input"
             autocomplete="off"
             :placeholder="shown.placeholder"
-            @keyup.enter="dialog.submitActive()"
+            @keydown.enter="onPromptEnter"
           >
         </label>
         <div v-if="shown.kind === 'multiselect'" class="ub-dialog__checks">
@@ -127,6 +127,13 @@ watch(() => dialog.active, (active) => {
     closing.value = false;
   }, LEAVE_MS);
 }, { immediate: true });
+
+/** R10B-11：输入法组字中的回车只是上屏，不能提交半截输入。 */
+function onPromptEnter(event: KeyboardEvent): void {
+  if (event.isComposing || event.keyCode === 229) return;
+  event.preventDefault();
+  dialog.submitActive();
+}
 
 onBeforeUnmount(() => acuClearTimeout(leaveTimer));
 </script>

@@ -151,6 +151,8 @@ export function useSqlConsole() {
   }
 
   async function executeCurrent(): Promise<void> {
+    // R10A-11：快捷键（Ctrl+Enter 连按/按住）绕过按钮忙碌态；执行中再触发会排进第二次写入。
+    if (busyAction.value) return;
     const sql = sqlText.value.trim();
     if (!sql) {
       toast.warning('SQL 语句不能为空。');
@@ -208,8 +210,14 @@ export function useSqlConsole() {
         mapValue: () => null,
       });
       if (currentSqlConsoleContext().key !== executionContext.key) {
-        result.value = { ...emptyResult(), kind: 'error', error: '聊天已切换，旧 SQL 已拒绝执行。' };
-        toast.error('聊天已切换，旧 SQL 已拒绝执行。');
+        // R10A-11：提交已成功时如实说明，否则用户回到原聊天重做会重复写入。
+        const committed = commitResult.success && !(commitResult.mutationResult?.errors?.length);
+        const error = committed
+          ? `聊天已切换；这条 SQL 已在原聊天提交（${commitResult.mutationResult?.changes ?? 0} 行受影响），请勿在原聊天重复执行。`
+          : '聊天已切换，旧 SQL 未执行。';
+        result.value = { ...emptyResult(), kind: 'error', error };
+        if (committed) addHistory(sql, true, executionContext);
+        toast.error(error);
         return;
       }
       const mutationResult = commitResult.mutationResult || { changes: 0, errors: commitResult.error ? [commitResult.error] : [] };

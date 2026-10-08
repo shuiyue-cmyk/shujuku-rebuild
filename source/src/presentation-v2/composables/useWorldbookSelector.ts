@@ -28,8 +28,9 @@ export function useWorldbookSelector(): UseWorldbookSelector {
     status.value = 'loading';
     error.value = '';
     try {
+      // R10A-21：列表读取失败要进 error 状态，不能伪装成「没有世界书」；主世界书读不到只降级为 null
       const [list, primary] = await Promise.all([
-        getWorldbookNames_ACU().catch((): string[] => []),
+        getWorldbookNames_ACU(),
         getCurrentCharPrimaryLorebook_ACU().catch((): string | null => null),
       ]);
       names.value = Array.isArray(list) ? list.slice() : [];

@@ -37,12 +37,3 @@ export function acuCancelAnimationFrame(handle: AcuTimerHandle | null | undefine
   }
   win.clearTimeout(handle);
 }
-
-export function acuGetComputedStyle(el: Element): CSSStyleDeclaration {
-  return (el.ownerDocument.defaultView ?? getAcuHostWindow()).getComputedStyle(el);
-}
-
-export function acuMatchesMedia(query: string): boolean {
-  const win = getAcuHostWindow();
-  return typeof win.matchMedia === 'function' && win.matchMedia(query).matches;
-}

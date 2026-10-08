@@ -11,7 +11,7 @@ async function importManagement() {
   const applyTemplatePresetToCurrent = vi.fn(async () => ({ presetName: '', isDefault: true }));
   const renameTemplatePreset = vi.fn(() => ({ ok: true }));
   const openVisualizerSurface = vi.fn(async () => true);
-  const ensureTemplateRecoveryOrDeleteCurrentIsolationData = vi.fn(async () => ({ success: true, dataWasReset: false }));
+  const ensureTemplateRecoveryReady = vi.fn(async () => ({ success: true, dataWasReset: false }));
   let activeTemplateMode = 'inherit_global';
   const promptFollowGlobalAfterSetDefault = vi.fn(async () => true);
   const runFollowGlobalTemplateFlow = vi.fn(async () => true);
@@ -49,7 +49,7 @@ async function importManagement() {
     getCurrentIsolationKey_ACU: () => '',
   }));
   vi.doMock('../../../src/presentation-v2/composables/useTemplateRecoveryGuard', () => ({
-    ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU: ensureTemplateRecoveryOrDeleteCurrentIsolationData,
+    ensureTemplateRecoveryReady_ACU: ensureTemplateRecoveryReady,
   }));
   vi.doMock('../../../src/service/template/chat-scope', () => ({
     sanitizeChatSheetsObject_ACU: (value: any) => value,
@@ -73,7 +73,7 @@ async function importManagement() {
     renameTemplatePreset,
     openVisualizerSurface,
     resolveTemplateForExport,
-    ensureTemplateRecoveryOrDeleteCurrentIsolationData,
+    ensureTemplateRecoveryReady,
     promptFollowGlobalAfterSetDefault,
     runFollowGlobalTemplateFlow,
     setRuntimeSnapshot: (value: any) => { runtimeSnapshot = value; },
@@ -114,6 +114,37 @@ describe('useTablePresetManagement', () => {
     await management.openVisualizer();
 
     expect(openVisualizerSurface).toHaveBeenCalledWith({ source: 'v2-shell' });
+  });
+
+  it('R10B-06：打开/编辑进可视化编辑器前先过页面守卫，拒绝则不切预设也不打开', async () => {
+    const { management, applyTemplatePresetToCurrent, openVisualizerSurface } = await importManagement();
+    const { registerUiCloseGuard } = await import('../../../src/presentation-v2/composables/useUiCloseGuard');
+    const unregister = registerUiCloseGuard(() => false);
+
+    await management.openVisualizer();
+    await management.editPreset('global-B');
+    unregister();
+
+    expect(openVisualizerSurface).not.toHaveBeenCalled();
+    expect(applyTemplatePresetToCurrent).not.toHaveBeenCalled();
+  });
+
+  it('R10A-23：操作在途时拒绝重入，不会并发切两次预设', async () => {
+    const { management, applyTemplatePresetToCurrent } = await importManagement();
+    let release!: () => void;
+    applyTemplatePresetToCurrent.mockImplementationOnce(() => new Promise(resolve => {
+      release = () => resolve({ success: true, saved: true, runtimeApplied: true } as any);
+    }));
+
+    const first = management.editPreset('global-B');
+    await vi.waitFor(() => expect(applyTemplatePresetToCurrent).toHaveBeenCalledTimes(1));
+    expect(management.busy.value).toBe(true);
+    await management.editPreset('global-B');
+    expect(applyTemplatePresetToCurrent).toHaveBeenCalledTimes(1);
+
+    release();
+    await first;
+    expect(management.busy.value).toBe(false);
   });
 
   it('编辑指定预设时先切换聊天预设，再打开 v2 visualizer', async () => {
@@ -223,8 +254,8 @@ describe('useTablePresetManagement', () => {
   });
 
   it('editPreset 在恢复守卫失败时不调用切换', async () => {
-    const { management, applyTemplatePresetToCurrent, ensureTemplateRecoveryOrDeleteCurrentIsolationData } = await importManagement();
-    ensureTemplateRecoveryOrDeleteCurrentIsolationData.mockResolvedValueOnce({ success: false, dataWasReset: false });
+    const { management, applyTemplatePresetToCurrent, ensureTemplateRecoveryReady } = await importManagement();
+    ensureTemplateRecoveryReady.mockResolvedValueOnce({ success: false, dataWasReset: false });
 
     await management.editPreset('global-B');
 

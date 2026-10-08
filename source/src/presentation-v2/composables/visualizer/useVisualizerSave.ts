@@ -8,7 +8,6 @@ import {
   notifyTemplateRuntimeCommitted_ACU
 } from '../../../shared/template-runtime-change';
 import {
-  applySheetOrderNumbers_ACU,
   ensureSheetOrderNumbers_ACU,
   isSummaryOrOutlineTable_ACU,
   logDebug_ACU,
@@ -29,9 +28,7 @@ import {
   _set_currentJsonTableData_ACU,
 } from '../../../service/runtime/state-manager';
 import {
-  applySummaryIndexSequenceToTable_ACU,
   deleteTableLocksForSheet_ACU,
-  getSummaryIndexColumnIndex_ACU,
   saveTableLocksForSheet_ACU,
   setSpecialIndexLockEnabled_ACU,
 } from '../../../service/runtime/helpers-remaining';
@@ -107,6 +104,7 @@ import {
   useVisualizerStore,
   type VisualizerLockDraft
 } from '../../stores/visualizer-store';
+import { migrateTableApiPresetOverridesForRenames_ACU } from './table-api-preset-rename';
 
 export interface VisualizerSaveInteractions {
   requestGlobalPresetName?: (defaultName: string) => string | null | Promise<string | null>;
@@ -151,31 +149,10 @@ function visualizerDraftBelongsToCurrentChat(visualizer: ReturnType<typeof useVi
     || (!visualizer.draftContextInvalid && visualizer.draftContextKey === currentVisualizerContextKey());
 }
 
-function applySpecialIndexSequenceFromDrafts(
-  data: Record<string, any>,
-  lockDrafts: Record<string, VisualizerLockDraft>,
-): void {
-  Object.keys(data || {}).forEach(sheetKey => {
-    if (!sheetKey.startsWith('sheet_')) return;
-    const table = data[sheetKey];
-    if (!table || !isSummaryOrOutlineTable_ACU(String(table.name || ''))) return;
-    if (lockDrafts[sheetKey]?.specialIndexLocked === false) return;
-    const colIndex = getSummaryIndexColumnIndex_ACU(table);
-    if (colIndex < 0) return;
-    applySummaryIndexSequenceToTable_ACU(table, colIndex);
-  });
-}
-
+// 按编辑器表顺序重排；保留已有 orderNo（允许稀疏），不改写纪要特殊索引列的内容。
 function buildOrderedData(
   tempData: Record<string, any> | null,
   sheetOrder: string[],
-  lockDrafts: Record<string, VisualizerLockDraft>,
-  options: {
-    /** When false, preserve existing orderNo values (sparse holes allowed). Default true. */
-    renumberOrder?: boolean;
-    /** When false, skip summary special-index rewrite that mutates content. Default true. */
-    applySpecialIndex?: boolean;
-  } = {},
 ): Record<string, any> {
   const source = tempData || { mate: { type: 'chatSheets', version: 1 } };
   const orderedData: Record<string, any> = {};
@@ -185,10 +162,6 @@ function buildOrderedData(
   sheetOrder.forEach(key => {
     if (source[key]) orderedData[key] = cloneData(source[key]);
   });
-  const renumberOrder = options.renumberOrder !== false;
-  const applySpecialIndex = options.applySpecialIndex !== false;
-  if (renumberOrder) applySheetOrderNumbers_ACU(orderedData, sheetOrder);
-  if (applySpecialIndex) applySpecialIndexSequenceFromDrafts(orderedData, lockDrafts);
   return orderedData;
 }
 
@@ -646,6 +619,8 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         try {
           (topLevelWindow_ACU as any).AutoCardUpdaterAPI?._notifyTableUpdate?.();
         } catch {}
+        // R10A-14：模板提交成功后才把表级 API 预设覆盖从旧表名迁到新表名
+        migrateTableApiPresetOverridesForRenames_ACU(visualizer.templateBaseData, visualizer.tempData);
         if (lockSaveFailed && (visualizer.lockDirty || visualizer.pendingLockChanges.length > 0)) {
           visualizer.markTemplateSavedWithPendingLocks();
         } else {
@@ -664,10 +639,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
         return false;
       }
-      const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder, visualizer.tableLockDrafts, {
-        renumberOrder: false,
-        applySpecialIndex: false,
-      });
+      const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder);
       const changes = classifyVisualizerTemplateChanges_ACU(
         visualizer.templateBaseData,
         orderedData,
@@ -1060,6 +1032,8 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
       try {
         (topLevelWindow_ACU as any).AutoCardUpdaterAPI?._notifyTableUpdate?.();
       } catch {}
+      // R10A-14：模板提交成功后才把表级 API 预设覆盖从旧表名迁到新表名
+      migrateTableApiPresetOverridesForRenames_ACU(visualizer.templateBaseData, visualizer.tempData);
       if (lockSaveFailed && (visualizer.lockDirty || visualizer.pendingLockChanges.length > 0)) {
         visualizer.markTemplateSavedWithPendingLocks();
       } else {
@@ -1091,10 +1065,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
         return false;
       }
-      const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder, visualizer.tableLockDrafts, {
-        renumberOrder: false,
-        applySpecialIndex: false,
-      });
+      const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder);
       const saveContextKey = currentVisualizerContextKey();
       const globalTemplateResult = await saveGlobalTemplateSnapshot(
         orderedData,

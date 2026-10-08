@@ -7,6 +7,7 @@
 import { defineStore } from 'pinia';
 import { settings_ACU } from '../../service/runtime/state-manager';
 import { saveSettings_ACU, setGlobalPlotEnabled_ACU } from '../../service/settings/settings-service';
+import { useToastStore } from './toast-store';
 import { setFeatureApiPreset_ACU } from '../../service/settings/feature-preset-reference-service';
 import { DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
 import {
@@ -20,7 +21,6 @@ import {
   normalizePlotPresetExcludeRules_ACU,
   normalizePlotPresetSelectionValue_ACU,
   persistPlotPresetSelectionState_ACU,
-  resetPlotSettingsToDefault_ACU,
   stripPlotPresetWorldbookEntrySelectionForExport_ACU,
   switchCurrentChatPlotPreset_ACU,
 } from '../../service/plot/plot-logic';
@@ -51,6 +51,22 @@ interface PlotPresetState {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value ?? null));
+}
+
+/** R10B-12：改动前拍下 plotSettings，保存失败时原地还原（运行时可能持有同一个对象引用）。 */
+function snapshotPlotSettings_ACU(): Record<string, any> {
+  ensureSettingsShape();
+  return clone(settings_ACU.plotSettings as Record<string, any>);
+}
+
+function savePlotSettingsOrRollback_ACU(snapshot: Record<string, any>): boolean {
+  const result = saveSettings_ACU();
+  if (!result || result.saved !== false) return true;
+  const target = settings_ACU.plotSettings as Record<string, any>;
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, snapshot);
+  useToastStore().error(`剧情推进设置保存失败，已撤销本次修改：${result.error || result.warning || '未知错误'}`, { muteable: false });
+  return false;
 }
 
 function ensureSettingsShape(): void {
@@ -195,25 +211,22 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
     /** 设置伪装发送楼层可选项（默认关闭，需用户显式开启）。 */
     setPendingDisguiseEnabled(enabled: boolean): void {
       const next = enabled === true;
+      const snapshot = snapshotPlotSettings_ACU();
       this.pendingDisguiseEnabled = next;
-      try {
-        ensureSettingsShape();
-        (settings_ACU.plotSettings as Record<string, any>).pendingDisguiseEnabled = next;
-      } catch {
-        if (settings_ACU.plotSettings) (settings_ACU.plotSettings as Record<string, any>).pendingDisguiseEnabled = next;
-      }
-      saveSettings_ACU();
+      (settings_ACU.plotSettings as Record<string, any>).pendingDisguiseEnabled = next;
+      if (!savePlotSettingsOrRollback_ACU(snapshot)) this.pendingDisguiseEnabled = snapshot.pendingDisguiseEnabled === true;
     },
     /** 设置剧情推进总开关。 */
     setEnabled(enabled: boolean): void {
       const next = !!enabled;
+      const snapshot = snapshotPlotSettings_ACU();
       this.enabled = next;
       try {
         setGlobalPlotEnabled_ACU(next);
       } catch {
-        if (settings_ACU.plotSettings) (settings_ACU.plotSettings as Record<string, any>).enabled = next;
+        (settings_ACU.plotSettings as Record<string, any>).enabled = next;
       }
-      saveSettings_ACU();
+      if (!savePlotSettingsOrRollback_ACU(snapshot)) this.enabled = snapshot.enabled === true;
     },
 
     /** D23.2：切换"当前聊天使用"——即 PresetDropdown 主操作。 */
@@ -226,12 +239,6 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
     },
 
     /** 清除当前聊天 binding，回退到跟随全局。 */
-    clearChatOverride(): void {
-      clearPlotPresetBindingForChat_ACU();
-      saveSettings_ACU();
-      this.refreshFromSettings();
-    },
-
     /** D23.2：标记某预设为全局默认。 */
     setDefaultPreset(name: string): boolean {
       if (isDefaultPlotPresetSelection_ACU(name)) {
@@ -287,12 +294,14 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
       if (!newName) return false;
       const normalized = normalizePlotPresetExcludeRules_ACU({ ...preset.raw, name: newName });
       if (!normalized) return false;
-      ensureSettingsShape();
+      const snapshot = snapshotPlotSettings_ACU();
       const plot = settings_ACU.plotSettings as Record<string, any>;
       const list = (plot.promptPresets as any[]) || [];
       const oldName = String(originalName || '').trim();
       const idxByNew = list.findIndex((p: any) => p?.name === newName);
       const idxByOld = oldName ? list.findIndex((p: any) => p?.name === oldName) : -1;
+      // R10A-10：新建或改名撞上另一个已有预设时 fail-closed，不静默覆盖它（改名时还会残留旧预设）。
+      if (idxByNew >= 0 && newName !== oldName) return false;
 
       if (oldName && oldName !== newName && idxByOld >= 0 && idxByNew < 0) {
         list[idxByOld] = normalized;
@@ -324,16 +333,16 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
         applyPlotPresetToSettings_ACU(plot, normalized);
       }
 
-      saveSettings_ACU();
+      const saved = savePlotSettingsOrRollback_ACU(snapshot);
       this.refreshFromSettings();
-      return true;
+      return saved;
     },
 
     /** 删除指定预设。 */
     deletePreset(name: string): boolean {
       const target = String(name || '').trim();
       if (!target) return false;
-      ensureSettingsShape();
+      const snapshot = snapshotPlotSettings_ACU();
       const plot = settings_ACU.plotSettings as Record<string, any>;
       const list = (plot.promptPresets as any[]) || [];
       const before = list.length;
@@ -344,21 +353,27 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
       if (binding && binding.presetName === target) {
         clearPlotPresetBindingForChat_ACU();
       }
-      saveSettings_ACU();
+      const saved = savePlotSettingsOrRollback_ACU(snapshot);
       this.refreshFromSettings();
-      return true;
+      return saved;
     },
 
-    /** 重置当前 plotSettings 到 defaults（仅运行时，不动 promptPresets）。 */
-    resetCurrentToDefaults(): void {
-      ensureSettingsShape();
-      const plot = settings_ACU.plotSettings as Record<string, any>;
-      resetPlotSettingsToDefault_ACU(plot);
-      saveSettings_ACU();
-      this.refreshFromSettings();
+    /** R10B-04：导入前列出会被同名覆盖的已有预设；JSON 无效或没有有效预设时返回 null。 */
+    listImportConflicts(json: string): string[] | null {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(json);
+      } catch {
+        return null;
+      }
+      const presetPayloads = normalizeImportedPresetPayloads(parsed);
+      if (presetPayloads.length === 0) return null;
+      const existing = new Set(readPresetList().map(preset => preset.name));
+      return [...new Set(presetPayloads.map(preset => String(preset.name || '').trim()))]
+        .filter(name => name && existing.has(name));
     },
 
-    /** 从旧 UI JSON 文件格式导入预设数组；同名覆盖。返回第一个有效预设名或 null。 */
+    /** 导入预设 JSON（沿用旧版导出的文件格式，旧文件仍可导入）；同名覆盖。返回第一个有效预设名或 null。 */
     importPresetFromJson(json: string): string | null {
       let parsed: any;
       try {
@@ -369,7 +384,7 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
       const presetPayloads = normalizeImportedPresetPayloads(parsed);
       if (presetPayloads.length === 0) return null;
 
-      ensureSettingsShape();
+      const snapshot = snapshotPlotSettings_ACU();
       const plot = settings_ACU.plotSettings as Record<string, any>;
       const list = (plot.promptPresets as any[]) || [];
       let firstImportedName = '';
@@ -388,9 +403,15 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
 
       if (!firstImportedName) return null;
       plot.promptPresets = list;
-      saveSettings_ACU();
+      // R10B-04：覆盖到当前生效预设时同步应用到运行时，否则运行时仍按旧内容执行
+      const activeName = getCurrentRuntimePlotPresetName_ACU({ fallbackToGlobal: true });
+      const activeImported = activeName ? list.find((preset: any) => preset?.name === activeName) : null;
+      if (activeImported && presetPayloads.includes(activeImported)) {
+        applyPlotPresetToSettings_ACU(plot, activeImported);
+      }
+      const saved = savePlotSettingsOrRollback_ACU(snapshot);
       this.refreshFromSettings();
-      return firstImportedName;
+      return saved ? firstImportedName : null;
     },
 
     /** 导出指定预设为 JSON。返回 string 或 null（找不到时）。 */

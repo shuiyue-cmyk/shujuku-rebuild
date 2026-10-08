@@ -463,8 +463,11 @@ export function useContinuationRuntime() {
     }
   }
 
-  async function saveActiveOutline(outline: StageOutline_ACU): Promise<boolean> {
-    return run_ACU(() => runtime.orchestrator.replaceActiveOutline({ outline }));
+  /** base：编辑底稿所属阶段与 revision（R10B-07），由编排器校验未被更新过。 */
+  async function saveActiveOutline(outline: StageOutline_ACU, base?: { stageId: string; revision: number } | null): Promise<boolean> {
+    return run_ACU(() => runtime.orchestrator.replaceActiveOutline(base
+      ? { outline, expectedStageId: base.stageId, expectedRevision: base.revision }
+      : { outline }));
   }
 
   /**

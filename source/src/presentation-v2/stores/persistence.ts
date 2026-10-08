@@ -5,7 +5,7 @@
  * - 单一根 key：acu_v2_ui_state，值是 JSON。各 store 通过 sectionKey 读写自己的子节
  * - localStorage 不可用（SSR / 隐私模式）时静默降级到内存
  *
- * 阶段 0 仅覆盖：theme（批次 C）+ router.activePageId（批次 D）。
+ * 当前子节：theme、appearance、router（activePageId）、uiMode、devOptions。
  */
 import { ACU_V2_STORAGE_KEY } from '../../shared/v2-ui-state';
 import { logWarn_ACU } from '../../shared/utils';

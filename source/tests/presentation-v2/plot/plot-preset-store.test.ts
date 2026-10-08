@@ -199,6 +199,37 @@ describe('usePlotPresetStore', () => {
     expect(settings.plotSettings.promptPresets.map((p: any) => p.name)).toContain('新预设');
   });
 
+  // R10A-10：新建或改名撞上已有预设时不得静默覆盖另一个预设（改名时还会残留旧预设）。
+  it('R10A-10：改名为已有预设名时拒绝，两个预设都保持原样', async () => {
+    const settings = createSettings();
+    const { store } = await importStore(settings);
+    store.refreshFromSettings();
+
+    const ok = store.savePreset({
+      name: '低速推进',
+      raw: { name: '低速推进', plotTasks: [{ id: 'tx', name: '改名后的内容', stage: 1, order: 0 }] },
+    }, '记忆召回');
+
+    expect(ok).toBe(false);
+    const names = settings.plotSettings.promptPresets.map((p: any) => p.name);
+    expect(names).toEqual(['记忆召回', '低速推进']);
+    expect(settings.plotSettings.promptPresets[1].plotTasks[0].name).toBe('B');
+  });
+
+  it('R10A-10：新建预设与已有预设重名时拒绝', async () => {
+    const settings = createSettings();
+    const { store } = await importStore(settings);
+    store.refreshFromSettings();
+
+    const ok = store.savePreset({
+      name: '低速推进',
+      raw: { name: '低速推进', plotTasks: [{ id: 'tx', name: '新建内容', stage: 1, order: 0 }] },
+    });
+
+    expect(ok).toBe(false);
+    expect(settings.plotSettings.promptPresets[1].plotTasks[0].name).toBe('B');
+  });
+
   it('savePreset 更新当前活动预设时应用预设内的匹配替换参数', async () => {
     const settings = createSettings();
     const { store } = await importStore(settings);
@@ -406,3 +437,99 @@ describe('usePlotPresetStore', () => {
     expect(store.importPresetFromJson('not json')).toBeNull();
   });
 });
+
+describe('剧情推进预设导入撞名（R10B-04）', () => {
+  const importJson = JSON.stringify([
+    { name: '新预设', plotTasks: [{ id: 'tn', name: 'N', stage: 1, order: 0 }] },
+    { name: '记忆召回', plotTasks: [{ id: 'tx', name: 'X', stage: 1, order: 0 }] },
+  ]);
+
+  it('listImportConflicts 列出会被覆盖的已有预设名', async () => {
+    const settings = createSettings();
+    const { store } = await importStore(settings);
+    store.refreshFromSettings();
+
+    expect(store.listImportConflicts(importJson)).toEqual(['记忆召回']);
+    expect(store.listImportConflicts('not json')).toBeNull();
+  });
+
+  it('覆盖的是当前生效预设（且不是第一个导入项）时同步应用到运行时', async () => {
+    const settings = createSettings();
+    const { store } = await importStore(settings);
+    store.refreshFromSettings();
+
+    store.importPresetFromJson(importJson);
+
+    expect(settings.plotSettings.plotTasks.map((task: any) => task.id)).toEqual(['tx']);
+  });
+
+  it('导入撞名时先确认；取消则不导入、不覆盖', async () => {
+    const settings = createSettings();
+    const { store } = await importStore(settings);
+    store.refreshFromSettings();
+    const { usePlotPresetManagement } = await import('../../../src/presentation-v2/composables/usePlotPresetManagement');
+    const { useDialogStore } = await import('../../../src/presentation-v2/stores/dialog-store');
+    const management = usePlotPresetManagement();
+    const dialog = useDialogStore();
+
+    const pending = management.importFromJsonText(importJson);
+    await vi.waitFor(() => expect(dialog.active?.kind).toBe('confirm'));
+    expect(JSON.stringify(dialog.active)).toContain('记忆召回');
+    dialog.cancelActive();
+
+    expect(await pending).toBe(false);
+    expect(settings.plotSettings.promptPresets.map((p: any) => p.name)).toEqual(['记忆召回', '低速推进']);
+    expect(settings.plotSettings.promptPresets[0].plotTasks[0].id).toBe('t1');
+  });
+
+  it('导入撞名确认后覆盖并切换', async () => {
+    const settings = createSettings();
+    const { store } = await importStore(settings);
+    store.refreshFromSettings();
+    const { usePlotPresetManagement } = await import('../../../src/presentation-v2/composables/usePlotPresetManagement');
+    const { useDialogStore } = await import('../../../src/presentation-v2/stores/dialog-store');
+    const management = usePlotPresetManagement();
+    const dialog = useDialogStore();
+
+    const pending = management.importFromJsonText(importJson);
+    await vi.waitFor(() => expect(dialog.active?.kind).toBe('confirm'));
+    dialog.submitActive();
+
+    expect(await pending).toBe(true);
+    expect(settings.plotSettings.promptPresets.find((p: any) => p.name === '记忆召回').plotTasks[0].id).toBe('tx');
+  });
+});
+
+describe('剧情推进预设设置保存失败（R10B-12）', () => {
+  it('保存失败时 savePreset / deletePreset / 导入 返回失败并回滚内存', async () => {
+    const settings = createSettings();
+    const { store, saveSettings } = await importStore(settings);
+    store.refreshFromSettings();
+    const before = JSON.stringify(settings.plotSettings);
+
+    saveSettings.mockReturnValueOnce({ saved: false, storageType: 'memory', error: '写入失败' } as any);
+    expect(store.savePreset({ name: '新预设', raw: { name: '新预设', plotTasks: [] } })).toBe(false);
+    expect(JSON.stringify(settings.plotSettings)).toBe(before);
+
+    saveSettings.mockReturnValueOnce({ saved: false, storageType: 'memory', error: '写入失败' } as any);
+    expect(store.deletePreset('低速推进')).toBe(false);
+    expect(JSON.stringify(settings.plotSettings)).toBe(before);
+
+    saveSettings.mockReturnValueOnce({ saved: false, storageType: 'memory', error: '写入失败' } as any);
+    expect(store.importPresetFromJson(JSON.stringify([{ name: '导入的', plotTasks: [] }]))).toBeNull();
+    expect(JSON.stringify(settings.plotSettings)).toBe(before);
+  });
+
+  it('总开关保存失败时回到原值', async () => {
+    const settings = createSettings();
+    const { store, saveSettings } = await importStore(settings);
+    store.refreshFromSettings();
+
+    saveSettings.mockReturnValueOnce({ saved: false, storageType: 'memory', error: '写入失败' } as any);
+    store.setEnabled(true);
+
+    expect(store.enabled).toBe(false);
+    expect(settings.plotSettings.enabled).toBe(false);
+  });
+});
+

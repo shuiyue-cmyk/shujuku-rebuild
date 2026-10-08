@@ -3,7 +3,7 @@
  *
  * @vitest-environment jsdom
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createV3Settings, flush, mountV3 } from './v3-harness';
 
 function allFeaturesSettings(): any {
@@ -96,4 +96,35 @@ describe('v3 外壳', () => {
     expect(document.querySelector('.ub-launcher')).toBeNull();
     expect(document.querySelector('#ub-portal .ub-sheet-layer')?.textContent).toContain('界面缩放');
   });
+
+  it('R10B-06：页内有未保存修改时，切页与切模式先过关闭守卫，拒绝则留在原页', async () => {
+    const { mount, router } = await mountV3();
+    cleanup = () => mount.__resetAcuV2MountForTests();
+    router.setActivePage('api');
+    await flush();
+    const { registerUiCloseGuard } = await import('../../src/presentation-v2/composables/useUiCloseGuard');
+    let allow = false;
+    const guard = vi.fn(() => allow);
+    const unregister = registerUiCloseGuard(guard);
+
+    document.querySelector<HTMLButtonElement>('.ub-rail [data-page-id="dashboard"]')!.click();
+    await flush();
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(router.activePageId).toBe('api');
+
+    const modeButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-rail button'))
+      .find(button => button.textContent?.includes('返回基础模式'))!;
+    modeButton.click();
+    await flush();
+    expect(guard).toHaveBeenCalledTimes(2);
+    expect(router.activePageId).toBe('api');
+    expect(document.querySelector('.ub-brand__tag')?.textContent).toContain('高手模式');
+
+    allow = true;
+    document.querySelector<HTMLButtonElement>('.ub-rail [data-page-id="dashboard"]')!.click();
+    await flush();
+    expect(router.activePageId).toBe('dashboard');
+    unregister();
+  });
 });
+

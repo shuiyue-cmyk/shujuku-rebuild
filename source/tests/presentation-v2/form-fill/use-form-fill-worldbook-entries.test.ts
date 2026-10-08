@@ -61,6 +61,41 @@ beforeEach(() => {
 });
 
 describe('useFormFillWorldbookEntries', () => {
+  it('R10B-05：有筛选范围时全选/全不选只作用于范围内条目', async () => {
+    const config = createWorldbookConfig();
+    config.enabledEntries = { CharBook: [1, 2], Other: [9] };
+    mockGetEntries.mockResolvedValue({
+      CharBook: [makeEntry(1, '人物'), makeEntry(2, '地点'), makeEntry(3, '道具')],
+      Other: [makeEntry(9, '别的')],
+    });
+    const c = await getComposable(config);
+    await c.loadEntries(['CharBook', 'Other']);
+
+    c.deselectAll([{ bookName: 'CharBook', uid: 2 }]);
+    expect(worldbookConfig.enabledEntries.CharBook).toEqual([1]);
+    expect(worldbookConfig.enabledEntries.Other).toEqual([9]);
+
+    c.selectAll([{ bookName: 'CharBook', uid: 3 }]);
+    expect(worldbookConfig.enabledEntries.CharBook).toEqual([1, 3]);
+    expect(worldbookConfig.enabledEntries.Other).toEqual([9]);
+  });
+
+  // R10A-06：读取失败（服务层同样返回空数组）不能被当成「条目已不存在」清空勾选并落盘。
+  it('R10A-06：某本书读取失败时保留已有勾选，不落盘', async () => {
+    const config = createWorldbookConfig();
+    config.enabledEntries = { CharBook: [1, 2] };
+    mockGetEntries.mockImplementation(async (_names: string[], options: any) => {
+      options?.failedBooks?.add('CharBook');
+      return { CharBook: [] };
+    });
+
+    const c = await getComposable(config);
+    await c.loadEntries(['CharBook']);
+
+    expect(worldbookConfig.enabledEntries.CharBook).toEqual([1, 2]);
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
   it('首次加载默认全不选但分组保持折叠', async () => {
     mockGetEntries.mockResolvedValue({
       'CharBook': [makeEntry(1, '人物'), makeEntry(2, '地点')],

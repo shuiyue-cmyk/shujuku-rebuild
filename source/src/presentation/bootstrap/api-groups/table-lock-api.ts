@@ -1,7 +1,14 @@
 /**
  * presentation/bootstrap/api-groups/table-lock-api.ts
  * 表格锁定 API — 行/列/单元格锁定与特殊索引锁定
+ *
+ * 口径说明（R9-14）：
+ * - 表用 sheetKey（如 sheet_xxx）寻址，不是表名；
+ * - rowIndex / colIndex 是 0 基的「数据行 / 数据列」下标（不含表头行与 row_id 列），
+ *   与 CRUD API（updateCell / updateRow 等）里 1 表示第一个数据行的行号口径不同；
+ * - 推荐用 lockTableRowById 按 row_id 加锁，插行/删行后不会锁错行。
  */
+import { currentJsonTableData_ACU } from '../../../service/runtime/state-manager';
 
 import { logError_ACU } from '../../../shared/utils';
 import {
@@ -65,6 +72,26 @@ export function createTableLockApi(_ctx: ApiGroupContext): Record<string, Functi
                 return false;
             }
         },
+        /** 按 row_id 锁定/解锁一行（推荐）；row_id 在当前表中不存在时返回 false。 */
+        lockTableRowById: function(sheetKey: string, rowId: string, locked = true) {
+            try {
+                const content = (currentJsonTableData_ACU as any)?.[sheetKey]?.content;
+                const targetId = String(rowId ?? '').trim();
+                if (!sheetKey || !targetId || !Array.isArray(content)) return false;
+                const contentIndex = content.findIndex((row: any, index: number) =>
+                    index > 0 && Array.isArray(row) && String(row[0] ?? '').trim() === targetId);
+                if (contentIndex < 1) return false;
+                const lockState = getTableLocksForSheet_ACU(sheetKey);
+                if (locked) lockState.rows.add(contentIndex - 1);
+                else lockState.rows.delete(contentIndex - 1);
+                saveTableLocksForSheet_ACU(sheetKey, lockState);
+                return true;
+            } catch (e) {
+                logError_ACU('lockTableRowById failed:', e);
+                return false;
+            }
+        },
+        /** rowIndex：0 基数据行下标（不含表头），与 CRUD API 的 1 基行号不同。 */
         lockTableRow: function(sheetKey: string, rowIndex: number, locked = true) {
             try {
                 if (!sheetKey || !Number.isFinite(rowIndex)) return false;
@@ -78,6 +105,7 @@ export function createTableLockApi(_ctx: ApiGroupContext): Record<string, Functi
                 return false;
             }
         },
+        /** colIndex：0 基数据列下标（不含 row_id 列）。 */
         lockTableCol: function(sheetKey: string, colIndex: number, locked = true) {
             try {
                 if (!sheetKey || !Number.isFinite(colIndex)) return false;
@@ -91,6 +119,7 @@ export function createTableLockApi(_ctx: ApiGroupContext): Record<string, Functi
                 return false;
             }
         },
+        /** rowIndex / colIndex：0 基数据行 / 数据列下标。 */
         lockTableCell: function(sheetKey: string, rowIndex: number, colIndex: number, locked = true) {
             try {
                 if (!sheetKey || !Number.isFinite(rowIndex) || !Number.isFinite(colIndex)) return false;

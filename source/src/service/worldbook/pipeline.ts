@@ -142,7 +142,7 @@ export   async function updateReadableLorebookEntry_ACU(createIfNeeded = false, 
     } else {
         // 冷启动/切换聊天/显式刷新时，才使用全表合并逻辑从整段聊天记录恢复最新版本。
         // 冷入口接线（P1-c 续）：长聊天全量回放按统一预算在 frame/entry 边界让出事件循环，
-        // 并接入聊天变更取消信号（删楼/ROLL/切聊天）。
+        // 并接入切聊天取消信号（CHAT_CHANGED）。
         // 本函数全程不持任何锁（世界书更新链无互斥量，让出不会让出到半完成的临界区），
         // 但让出窗口内可能切聊，因此 await 之后必须复检聊天身份：陈旧结果一律丢弃，
         // 既不写内存表数据也不更新任何世界书条目（与可视化器载入的 contextKey 校验同口径）。
@@ -1126,7 +1126,12 @@ export async function getLorebookEntriesStrict_ACU(bookNames: string[] = [], opt
 }
 
 
-export   async function getLorebookEntriesByNames_ACU(bookNames: string[] = []) {
+/**
+ * options.failedBooks：读取失败（不在可用列表、宿主读取异常、裸环境未取到该书）的书名会加入此集合。
+ * 这些书在返回值里同样是空数组；调用方据此区分「读不到」与「书里确实没条目」，
+ * 不要把读取失败当成条目已删除去清理勾选（R10A-06）。
+ */
+export   async function getLorebookEntriesByNames_ACU(bookNames: string[] = [], options: { failedBooks?: Set<string> } = {}) {
       const uniqueNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).map((name: string) => String(name || '').trim()).filter(Boolean))];
       let readTargets = uniqueNames.map(requestedName => ({ requestedName, hostName: requestedName }));
       const entriesMap: Record<string, any[]> = {};
@@ -1148,6 +1153,7 @@ export   async function getLorebookEntriesByNames_ACU(bookNames: string[] = []) 
                       bookName: target.requestedName,
                   });
                   entriesMap[target.requestedName] = []; // 为不存在的书返回空数组，保持接口一致
+                  options.failedBooks?.add(target.requestedName);
                   return [];
               });
           }
@@ -1172,6 +1178,7 @@ export   async function getLorebookEntriesByNames_ACU(bookNames: string[] = []) 
                   const fallbackName = resolveLorebookNameFromList_ACU(hostName, fallbackBooks);
                   if (fallbackName) hostName = fallbackName;
                   const matchedBook = fallbackBooks.find((book: any) => book?.name === hostName);
+                  if (!matchedBook) options.failedBooks?.add(requestedName);
                   entries = normalizeLorebookEntriesForRead_ACU((matchedBook as any)?.entries, hostName);
               }
               // 返回键保留调用方请求名称以兼容现有接口；条目 book 使用真实宿主名称。
@@ -1184,6 +1191,7 @@ export   async function getLorebookEntriesByNames_ACU(bookNames: string[] = []) 
                   error: { category: 'read_failed' },
               });
               entriesMap[requestedName] = [];
+              options.failedBooks?.add(requestedName);
           }
       }
       return entriesMap;

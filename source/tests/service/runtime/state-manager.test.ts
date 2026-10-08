@@ -608,6 +608,22 @@ describe('AbortController 管理', () => {
     expect(activeAbortControllers_ACU.size).toBe(0);
   });
 
+  it('R10A-19：abortAllActiveRequests_ACU({ keepPlot: true }) 只中止填表请求，剧情推进请求保留在登记中', () => {
+    const table = { abort: vi.fn() };
+    const plot = { abort: vi.fn() };
+    trackAbortController_ACU(table);
+    trackAbortController_ACU(plot, 'plot');
+
+    abortAllActiveRequests_ACU({ keepPlot: true });
+
+    expect(table.abort).toHaveBeenCalled();
+    expect(plot.abort).not.toHaveBeenCalled();
+    expect(activeAbortControllers_ACU.has(plot)).toBe(true);
+    abortAllActiveRequests_ACU();
+    expect(plot.abort).toHaveBeenCalled();
+    expect(activeAbortControllers_ACU.size).toBe(0);
+  });
+
   it('abortAllActiveRequests_ACU 中止失败不影响其他', () => {
     const c1 = { abort: vi.fn(() => { throw new Error('abort error'); }) };
     const c2 = { abort: vi.fn() };
@@ -618,7 +634,7 @@ describe('AbortController 管理', () => {
     expect(activeAbortControllers_ACU.size).toBe(0);
   });
 
-  it('abortOnChatMutation_ACU 中止活跃请求并轮换全局信号（删楼/ROLL/切聊天场景）', () => {
+  it('abortOnChatMutation_ACU 中止活跃请求并轮换全局信号（切聊天场景）', () => {
     const c = { abort: vi.fn() };
     trackAbortController_ACU(c);
     const s1 = getChatMutationAbortSignal_ACU();

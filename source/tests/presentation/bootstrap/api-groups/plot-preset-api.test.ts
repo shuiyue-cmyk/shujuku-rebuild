@@ -339,3 +339,18 @@ describe('initGameSession options.presetName 弃用提示（fix8）', () => {
     expect(vi.mocked(logWarn_ACU)).not.toHaveBeenCalled();
   });
 });
+
+describe('importPlotPresetFromData 保存结果（R9-16）', () => {
+  it('设置保存失败时返回失败并回滚预设库，不报「已成功导入」', async () => {
+    const { settings_ACU } = await import('../../../../src/service/runtime/state-manager');
+    (settings_ACU as any).plotSettings = { promptPresets: [{ name: '旧预设', plotTasks: [] }] };
+    mocks.saveSettings.mockReturnValueOnce({ saved: false, storageType: 'memory', error: '写入失败' });
+    const api = createApi();
+
+    const result = await api.importPlotPresetFromData({ name: '新预设', plotTasks: [] });
+
+    expect(result.success).toBe(false);
+    expect((settings_ACU as any).plotSettings.promptPresets.map((p: any) => p.name)).toEqual(['旧预设']);
+  });
+});
+

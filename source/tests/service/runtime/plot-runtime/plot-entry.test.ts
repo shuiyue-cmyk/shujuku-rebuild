@@ -116,7 +116,7 @@ describe('runOptimizationLogic_ACU', () => {
 
     await runOptimizationLogic_ACU('继续');
 
-    expect(mockTrackAbortController).toHaveBeenCalledWith(expect.any(AbortController));
+    expect(mockTrackAbortController).toHaveBeenCalledWith(expect.any(AbortController), 'plot');
     const controller = mockTrackAbortController.mock.calls[0][0];
     expect(mockUntrackAbortController).toHaveBeenCalledWith(controller);
   });

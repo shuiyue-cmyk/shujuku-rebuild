@@ -9,7 +9,7 @@ async function importTrigger() {
   const orchestrateManualUpdate_ACU = vi.fn();
   const processUpdatesBatch_ACU = vi.fn();
   const executeCardUpdateCore_ACU = vi.fn();
-  const resetManualUpdateButton_ACU = vi.fn();
+  const setManualExtraHint = vi.fn();
   const clear = vi.fn();
 
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
@@ -18,6 +18,7 @@ async function importTrigger() {
     getCurrentIsolationKey_ACU: vi.fn(() => ''),
     _set_wasStoppedByUser_ACU: vi.fn(),
     _set_isAutoUpdatingCard_ACU: vi.fn(),
+    _set_manualExtraHint_ACU: setManualExtraHint,
     abortAllActiveRequests_ACU: vi.fn(),
   }));
   vi.doMock('../../../src/service/chat/chat-service', () => ({
@@ -31,18 +32,12 @@ async function importTrigger() {
   vi.doMock('../../../src/shared/constants', () => ({ ACU_TOAST_CATEGORY_ACU: { MANUAL_TABLE: 'manual' } }));
   vi.doMock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logError_ACU: vi.fn(), logWarn_ACU: vi.fn() }));
   vi.doMock('../../../src/shared/host-api', () => ({ toastr_API_ACU: { clear } }));
-  vi.doMock('../../../src/presentation/state/ui-refs', () => ({ $statusMessageSpan_ACU: null }));
   vi.doMock('../../../src/shared/env', () => ({ topLevelWindow_ACU: { AutoCardUpdaterAPI: { _notifyTableFillStart: vi.fn(), _notifyTableUpdate: vi.fn() } } }));
   vi.doMock('../../../src/shared/html-helpers', () => ({ renderStopButton_ACU: vi.fn(() => '<button>stop</button>') }));
   vi.doMock('../../../src/presentation/components/status-display', () => ({
     bindTableFillStopButton_ACU: vi.fn(),
-    resetManualUpdateButton_ACU,
     shouldShowVectorMemoryManualUpdateWarning_ACU: vi.fn(() => false),
-    syncManualUpdateButtonAvailability_ACU: vi.fn(),
   }));
-  vi.doMock('../../../src/presentation/components/update-status-display', () => ({ updateCardUpdateStatusDisplay_ACU: vi.fn() }));
-
-  vi.doMock('../../../src/presentation/triggers/settings-ui-sync', () => ({ collectManualExtraHint_ACU: vi.fn() }));
   vi.doMock('../../../src/presentation/components/pipeline-ui-helpers', () => ({ refreshMergedDataAndNotifyWithUI_ACU: vi.fn(async () => undefined) }));
   vi.doMock('../../../src/service/table/update-orchestrator', () => ({
     processUpdatesBatch_ACU,
@@ -64,7 +59,7 @@ async function importTrigger() {
     processUpdatesBatch_ACU,
     executeCardUpdateCore_ACU,
     clear,
-    resetManualUpdateButton_ACU,
+    setManualExtraHint,
   };
 }
 
@@ -87,6 +82,13 @@ describe('handleManualUpdate_ACU destructive refill confirmation', () => {
     expect(message).toContain('此前楼层的表格数据将无法恢复');
     expect(message).toContain('范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除');
     expect(message).not.toContain('第二次破坏性确认');
+  });
+
+  it('R9-11：手动更新开始时清空上一次残留的额外提示（旧弹窗复选框已不存在）', async () => {
+    const t = await importTrigger();
+    t.showCustomConfirm_ACU.mockResolvedValueOnce(false);
+    await t.handleManualUpdate_ACU();
+    expect(t.setManualExtraHint).toHaveBeenCalledWith('');
   });
 
   it('用户取消唯一确认时不调用 orchestrator，且不展示 error toast', async () => {

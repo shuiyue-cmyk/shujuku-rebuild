@@ -259,6 +259,20 @@ describe('usePlotWorldbookAgentControl', () => {
     expect(toast.warning).toHaveBeenCalledWith('请先勾选要 Skill 化的世界书条目。', { muteable: false });
   });
 
+  it('R10A-17：连点 Skill 化只弹一次确认、只跑一批', async () => {
+    mockSkillify.mockImplementation(async () => ({ totalCandidates: 1, updated: 1, skipped: 0, failed: 0 }));
+    const c = await getComposable();
+
+    const [first, second] = await Promise.all([
+      c.skillifySelected([{ bookName: '角色A世界书', uid: 2 }]),
+      c.skillifySelected([{ bookName: '角色A世界书', uid: 2 }]),
+    ]);
+
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+    expect(dialog.confirm).toHaveBeenCalledTimes(1);
+    expect(mockSkillify).toHaveBeenCalledTimes(1);
+  });
+
   it('skillifySelected 非空选择时透传 selectedEntries 并复用 Skill 化流程', async () => {
     mockSkillify.mockImplementation(async (options: any) => {
       options.onProgress?.({ phase: 'collecting' });
@@ -271,6 +285,8 @@ describe('usePlotWorldbookAgentControl', () => {
 
     expect(result).toBe(true);
     expect(dialog.confirm).toHaveBeenCalledTimes(1);
+    // R10B-05：确认框写明将处理的条目数
+    expect(JSON.stringify(dialog.confirm.mock.calls[0][0])).toContain('1 条');
     expect(mockSkillify).toHaveBeenCalledWith(expect.objectContaining({
       selectedEntries: [{ bookName: '角色A世界书', uid: 2 }],
       maxConcurrency: 3,

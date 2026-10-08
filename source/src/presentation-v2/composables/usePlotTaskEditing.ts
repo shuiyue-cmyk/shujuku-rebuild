@@ -147,9 +147,18 @@ function tasksFromRaw(rawList: any[]): PlotTaskDraft[] {
   return normalized.map((t: any, i: number) => taskFromRaw(t, i));
 }
 
-function makeDefaultTask(index: number): PlotTaskDraft {
+// 同一毫秒连加两个任务时时间戳会相同：追加序号并跳过已存在的 id（R10A-23）。
+function makeUniqueTaskId(existing: readonly PlotTaskDraft[]): string {
+  const used = new Set(existing.map(t => t.id));
+  const base = `plotTask${Date.now()}`;
+  let id = base;
+  for (let n = 2; used.has(id); n++) id = `${base}_${n}`;
+  return id;
+}
+
+function makeDefaultTask(index: number, existing: readonly PlotTaskDraft[] = []): PlotTaskDraft {
   return {
-    id: `plotTask${Date.now()}`,
+    id: makeUniqueTaskId(existing),
     name: `剧情任务${index + 1}`,
     enabled: true,
     promptGroup: cloneSegments(buildDefaultPlotPromptGroup_ACU()),
@@ -197,7 +206,7 @@ export function usePlotTaskEditing() {
   }
 
   function addTask(): void {
-    const next = makeDefaultTask(tasks.value.length);
+    const next = makeDefaultTask(tasks.value.length, tasks.value);
     tasks.value = [...tasks.value, next];
     currentTaskId.value = next.id;
   }
@@ -206,9 +215,22 @@ export function usePlotTaskEditing() {
     if (tasks.value.length <= 1) return;
     const idx = tasks.value.findIndex(t => t.id === currentTaskId.value);
     if (idx < 0) return;
+    const removedId = tasks.value[idx].id;
     const copy = tasks.value.slice();
     copy.splice(idx, 1);
-    tasks.value = copy;
+    // 其它任务对被删任务的依赖/阻塞引用一并清掉，否则保存后留下指向不存在任务的悬空引用（R10A-23）。
+    tasks.value = copy.map(t => {
+      const { dependsOnTaskIds, blocksTaskIds } = t.agentControl;
+      if (!dependsOnTaskIds.includes(removedId) && !blocksTaskIds.includes(removedId)) return t;
+      return {
+        ...t,
+        agentControl: {
+          ...t.agentControl,
+          dependsOnTaskIds: dependsOnTaskIds.filter(id => id !== removedId),
+          blocksTaskIds: blocksTaskIds.filter(id => id !== removedId),
+        },
+      };
+    });
     currentTaskId.value = copy[Math.max(0, idx - 1)].id;
   }
 

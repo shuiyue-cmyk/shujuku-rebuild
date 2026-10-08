@@ -214,6 +214,16 @@ export function buildLockRevertPlanForSheet_ACU(options: BuildLockRevertPlanOpti
 }
 
 /** 把回滚项汇总为一句可上报/可注入日志的人类可读描述。 */
+/** 外部写入被锁定保护整笔拒绝时的说明（不做补偿，只列出触及的锁定目标）。 */
+export function formatLockViolationSummary_ACU(reverted: readonly LockRevertItem_ACU[]): string {
+    const parts = reverted.map(item => {
+        if (item.kind === 'row_restored') return `${item.tableName} 行 ${item.rowId}（删除）`;
+        if (item.kind === 'column_restored') return `${item.tableName} 列「${item.colName}」（删除）`;
+        return `${item.tableName} 行 ${item.rowId} 列「${item.colName}」（修改）`;
+    });
+    return `写入触及 ${reverted.length} 处已锁定的内容，已整笔拒绝并回滚：${parts.join('；')}。如需修改请先解锁。`;
+}
+
 export function formatLockRevertSummary_ACU(reverted: readonly LockRevertItem_ACU[]): string {
     if (!reverted.length) return '';
     const parts = reverted.map(item => {

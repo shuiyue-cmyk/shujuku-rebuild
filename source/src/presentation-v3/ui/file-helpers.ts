@@ -1,6 +1,6 @@
 /**
- * file-helpers — 新版界面里"读本地文件 / 下载 JSON"的小工具。
- * 下载节点挂在 host document 上（扩展可能跑在 iframe 里），延迟 revoke 兼容 WebView2。
+ * file-helpers — 新版界面里"读本地文件 / 文件名清洗"的小工具。
+ * 下载统一走 presentation-v2/bootstrap/host-download（R10B-18）。
  */
 
 export function readFileText_UB(file: File): Promise<string> {
@@ -18,16 +18,4 @@ export function sanitizeFilename_UB(value: string, fallback: string): string {
     .replace(/[\\/:*?"<>|]+/g, '-')
     .replace(/\s+/g, '-')
     .slice(0, 48) || fallback;
-}
-
-export function downloadJsonFile_UB(doc: Document, filename: string, data: unknown): void {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = doc.createElement('a');
-  a.href = url;
-  a.download = filename;
-  doc.body.appendChild(a);
-  a.click();
-  doc.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

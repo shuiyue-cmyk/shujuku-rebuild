@@ -3,6 +3,7 @@
 
 import {
   _set_isAutoUpdatingCard_ACU,
+  _set_manualExtraHint_ACU,
   _set_wasStoppedByUser_ACU,
   currentJsonTableData_ACU,
   getCurrentIsolationKey_ACU,
@@ -31,9 +32,6 @@ import {
   toastr_API_ACU
 } from '../../shared/host-api';
 import {
-  $statusMessageSpan_ACU
-} from '../state/ui-refs';
-import {
   topLevelWindow_ACU
 } from '../../shared/env';
 import {
@@ -41,16 +39,8 @@ import {
 } from '../../shared/html-helpers';
 import {
   bindTableFillStopButton_ACU,
-  resetManualUpdateButton_ACU,
-  shouldShowVectorMemoryManualUpdateWarning_ACU,
-  syncManualUpdateButtonAvailability_ACU
+  shouldShowVectorMemoryManualUpdateWarning_ACU
 } from '../components/status-display';
-import {
-  updateCardUpdateStatusDisplay_ACU
-} from '../components/update-status-display';
-import {
-  collectManualExtraHint_ACU
-} from './settings-ui-sync';
 import {
   refreshMergedDataAndNotifyWithUI_ACU
 } from '../components/pipeline-ui-helpers';
@@ -75,20 +65,12 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
 // UI 辅助函数
 // ============================================================
 
-function updateStatusText(text: string, isSilentMode: boolean) {
-    if (!isSilentMode && $statusMessageSpan_ACU) $statusMessageSpan_ACU.text(text);
-}
-
 function notifyTableFillStart() {
     try { (topLevelWindow_ACU as any).AutoCardUpdaterAPI._notifyTableFillStart(); } catch (_) {}
 }
 
 function notifyTableUpdate() {
     try { (topLevelWindow_ACU as any).AutoCardUpdaterAPI._notifyTableUpdate(); } catch (_) {}
-}
-
-function updateStatusDisplay() {
-    if (typeof updateCardUpdateStatusDisplay_ACU === 'function') updateCardUpdateStatusDisplay_ACU();
 }
 
 function buildBatchProgressLabel(event: Partial<CardUpdateProgressEvent>): string {
@@ -196,12 +178,10 @@ function clearLoadingToast(loadingToast: any) {
 function handleProgressEvent(event: CardUpdateProgressEvent, isSilentMode: boolean, loadingToast?: any) {
     if (isSilentMode) return;
     const message = buildProgressMessage(event);
-    updateStatusText(message, false);
     updateLoadingToastMessage(loadingToast, message);
 
     switch (event.phase) {
         case 'complete':
-            updateStatusDisplay();
             notifyTableUpdate();
             break;
         case 'retry':
@@ -257,9 +237,8 @@ export async function proceedWithCardUpdate_ACU(
                 if (typeof bindTableFillStopButton_ACU === 'function') {
                     bindTableFillStopButton_ACU(stopButtonId, () => {
                         _set_wasStoppedByUser_ACU(true);
-                        abortAllActiveRequests_ACU();
+                        abortAllActiveRequests_ACU({ keepPlot: true });
                         _set_isAutoUpdatingCard_ACU(false);
-                        updateStatusText('填表任务已终止，正在停止当前任务与后续批次...', false);
                         updateLoadingToastMessage(loadingToast, '填表任务已终止，正在停止当前任务与后续批次...');
                         showToastr_ACU('warning', '填表任务已由用户终止，当前任务与后续批次将立即停止。');
                     });
@@ -290,7 +269,6 @@ export async function proceedWithCardUpdate_ACU(
             }, 250);
         } else if (!result.success && !result.aborted && !isSilentMode && showFinalErrorToast) {
             showToastr_ACU('error', `更新失败: ${result.error || '未知错误'}`);
-            updateStatusText('错误：更新失败。', false);
         }
 
         return result;
@@ -341,14 +319,13 @@ export async function handleManualUpdate_ACU() {
     let manualProgressToast: any = null;
     try {
         if (shouldShowVectorMemoryManualUpdateWarning_ACU()) {
-            syncManualUpdateButtonAvailability_ACU();
             showToastr_ACU('warning', '向量功能启用时不建议手动更新表格；本次将继续执行。', {
                 acuToastCategory: ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
             });
         }
  
-        // UI：收集手动额外提示
-        collectManualExtraHint_ACU();
+        // 旧弹窗的「额外提示」复选框已不存在：每次手动更新都从空提示开始，不沿用上一次的残留（R9-11）。
+        _set_manualExtraHint_ACU('');
 
         // 从持久化设置读取表格选择，不能依赖已移除的 V1 checkbox DOM。
         const targetKeys = getSelectedManualTableKeys_ACU();
@@ -395,9 +372,8 @@ export async function handleManualUpdate_ACU() {
                 if (typeof bindTableFillStopButton_ACU === 'function') {
                     bindTableFillStopButton_ACU(stopButtonId, () => {
                         _set_wasStoppedByUser_ACU(true);
-                        abortAllActiveRequests_ACU();
+                        abortAllActiveRequests_ACU({ keepPlot: true });
                         _set_isAutoUpdatingCard_ACU(false);
-                        updateStatusText('填表任务已终止，正在停止当前任务与后续批次...', false);
                         updateLoadingToastMessage(manualProgressToast, '填表任务已终止，正在停止当前任务与后续批次...');
                         showToastr_ACU('warning', '填表任务已由用户终止，当前任务与后续批次将立即停止。');
                     });
@@ -427,7 +403,6 @@ export async function handleManualUpdate_ACU() {
         // UI：根据返回值显示 toast
         if (result.success) {
             showToastr_ACU(result.checkpointWarning ? 'warning' : 'success', result.checkpointWarning ? `手动更新完成，但 AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}` : '手动更新完成！');
-            updateStatusDisplay();
             notifyTableUpdate();
 
         } else if (result.error) {
@@ -438,8 +413,6 @@ export async function handleManualUpdate_ACU() {
         }
     } finally {
         clearLoadingToast(manualProgressToast);
-        // UI：重置手动更新按钮
-        if (typeof resetManualUpdateButton_ACU === 'function') resetManualUpdateButton_ACU();
     }
 }
 

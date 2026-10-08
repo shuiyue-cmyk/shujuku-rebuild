@@ -1462,9 +1462,15 @@ function rejectSnapshotEdit_ACU(message: string, details?: Record<string, unknow
  * 逐类比对条目数，只要有条目被丢弃就整份拒绝并指出是哪一类。
  * @param raw 用户编辑后的快照对象（可只带 hooks / infoGap / constraints / storyArc）
  * @param chat 聊天数组，缺省取当前聊天
+ * @param options.expectedRevisions 用户载入草稿时各模块的修订号；与当前不一致说明编辑期间资料已被更新
+ *   （通常是续写 Agent 写入），用陈旧草稿整体替换会抹掉那些写入，整份拒绝（R10A-09）
  * @returns 落盘后的快照
  */
-export async function replaceAgentModuleSnapshotByUser_ACU(raw: unknown, chat?: any[]): Promise<AgentModuleSnapshot_ACU> {
+export async function replaceAgentModuleSnapshotByUser_ACU(
+  raw: unknown,
+  chat?: any[],
+  options: { expectedRevisions?: Partial<Record<keyof AgentModuleSnapshot_ACU['revisions'], number>> } = {},
+): Promise<AgentModuleSnapshot_ACU> {
   const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
   const targetIndex = messages.length - 1;
   if (targetIndex < 0) rejectSnapshotEdit_ACU('当前聊天没有可承载资料快照的楼层');
@@ -1474,6 +1480,12 @@ export async function replaceAgentModuleSnapshotByUser_ACU(raw: unknown, chat?: 
   if (!messages.some(message => isAiFloor_ACU(message))) rejectSnapshotEdit_ACU('当前聊天没有可承载资料快照的 AI 楼层（用户楼、工具楼、隐藏楼都不能承载）');
   if (!isRecord_ACU(raw)) rejectSnapshotEdit_ACU('资料快照必须是 JSON 对象');
   const current = readAgentModuleSnapshot_ACU(messages);
+  for (const [module, expected] of Object.entries(options.expectedRevisions || {})) {
+    const actual = (current.revisions as unknown as Record<string, number>)[module];
+    if (typeof expected === 'number' && actual !== expected) {
+      rejectSnapshotEdit_ACU(`资料「${module}」在你编辑期间已被更新（通常是续写 Agent 写入），本次保存未执行；请重新载入后再改`, { module, expected, actual });
+    }
+  }
   const merged = {
     ...current,
     ...raw,

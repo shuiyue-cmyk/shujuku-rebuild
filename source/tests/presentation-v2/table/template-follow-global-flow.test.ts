@@ -19,7 +19,7 @@ vi.mock('../../../src/service/template/chat-scope', () => ({
   getGlobalTemplateSnapshotForCurrentProfile_ACU: mocks.globalSnapshot,
 }));
 vi.mock('../../../src/presentation-v2/composables/useTemplateRecoveryGuard', () => ({
-  ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU: mocks.guard,
+  ensureTemplateRecoveryReady_ACU: mocks.guard,
 }));
 
 import {
