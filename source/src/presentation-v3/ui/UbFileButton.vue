@@ -67,11 +67,13 @@ function onChange(ev: Event): void {
 <style scoped>
 .ub-file {
   display: inline-flex;
+  flex-shrink: 0;
   min-width: 0;
 }
 
 .ub-file--block {
   display: flex;
+  flex-shrink: 1;
   width: 100%;
 }
 

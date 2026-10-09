@@ -11,7 +11,18 @@ const harness = vi.hoisted(() => ({
   refreshControl: vi.fn(async () => undefined),
   loadEntries: vi.fn(async () => ['AgentBook']),
   refreshWorldbooks: vi.fn(async () => undefined),
+  refreshApiPresets: vi.fn(),
 }));
+
+vi.mock('../../src/presentation-v2/stores/api-preset-store', async () => {
+  const { reactive } = await import('vue');
+  const store = reactive({
+    activePresetName: 'Fast',
+    presets: [{ name: 'Fast' }],
+    refreshFromSettings: harness.refreshApiPresets,
+  });
+  return { useApiPresetStore: () => store };
+});
 
 vi.mock('../../src/presentation-v2/composables/usePlotWorldbookAgentControl', async () => {
   const { ref } = await import('vue');
@@ -24,7 +35,7 @@ vi.mock('../../src/presentation-v2/composables/usePlotWorldbookAgentControl', as
     mode: ref('off'),
     agentApiPreset: ref(''),
     agentSkillApiPreset: ref(''),
-    apiPresetOptions: ref([]),
+    apiPresetOptions: ref([{ value: '', label: '当前 API' }, { value: 'Fast', label: 'Fast' }]),
     configStatusText: ref(''),
     contextSettings: ref({}),
     contextSettingsLimits: {},
@@ -101,6 +112,31 @@ describe('AgentPage', () => {
     manual!.click();
     await Promise.resolve();
     expect(harness.setScope).toHaveBeenCalledWith('manual');
+
+    app.unmount();
+  });
+
+  it('两个 API 下拉的「跟随当前」项显示当前预设名，而不是「使用当前 API 配置」', async () => {
+    const Page = (await import('../../src/presentation-v3/pages/AgentPage.vue')).default;
+    const portal = document.createElement('div');
+    portal.id = 'ub-portal';
+    document.body.appendChild(portal);
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const app = createApp(Page);
+    app.use(createPinia());
+    app.mount(el);
+    await Promise.resolve();
+
+    expect(harness.refreshApiPresets).toHaveBeenCalled();
+    const selects = Array.from(el.querySelectorAll<HTMLSelectElement>('#agent-control select'));
+    expect(selects).toHaveLength(2);
+    for (const select of selects) {
+      const options = Array.from(select.options).map(option => option.textContent?.trim());
+      expect(options).toEqual(['Fast（当前）', 'Fast']);
+      expect(select.options[select.selectedIndex].textContent?.trim()).toBe('Fast（当前）');
+    }
+    expect(el.textContent).not.toContain('使用当前 API 配置');
 
     app.unmount();
   });

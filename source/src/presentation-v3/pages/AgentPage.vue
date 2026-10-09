@@ -18,18 +18,18 @@
       </div>
       <UbRow :label="copy.apiPresets.decisionLabel" :hint="copy.apiPresets.decisionHint" :flagged="agentStale">
         <UbSelect
-          :options="agentControl.apiPresetOptions.value"
+          :options="apiPresetOptions"
           :model-value="agentControl.agentApiPreset.value"
-          :placeholder="copy.apiPresets.followCurrentLabel"
+          :placeholder="followActiveApiLabel"
           :aria-label="copy.apiPresets.decisionLabel"
           @update:model-value="setDecisionApi"
         />
       </UbRow>
       <UbRow :label="copy.apiPresets.skillLabel" :hint="copy.apiPresets.skillHint" :flagged="agentStale">
         <UbSelect
-          :options="agentControl.apiPresetOptions.value"
+          :options="apiPresetOptions"
           :model-value="agentControl.agentSkillApiPreset.value"
-          :placeholder="copy.apiPresets.followCurrentLabel"
+          :placeholder="followActiveApiLabel"
           :aria-label="copy.apiPresets.skillLabel"
           @update:model-value="setSkillApi"
         />
@@ -114,6 +114,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useAgentWorldbookEntries } from '../../presentation-v2/composables/useAgentWorldbookEntries';
+import { useApiPresetSelectOptions } from '../../presentation-v2/composables/useApiPresetSelectOptions';
 import { useApiPresetStaleness } from '../../presentation-v2/composables/useApiPresetStaleness';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
 import { usePlotWorldbookAgentControl } from '../../presentation-v2/composables/usePlotWorldbookAgentControl';
@@ -142,6 +143,10 @@ const toast = useToastStore();
 const entries = useAgentWorldbookEntries({
   onSkillMetaChanged: agentControl.syncAgentWorldbookTakeoverAfterSkillChange,
 });
+// 「跟随当前」项显示当前活动预设名，与其它页面的 API 预设下拉同一口径
+const { apiStore, followActiveApiLabel } = useApiPresetSelectOptions();
+const apiPresetOptions = computed(() => agentControl.apiPresetOptions.value.map(option =>
+  option.value === '' ? { ...option, label: followActiveApiLabel.value } : option));
 // 防呆：API 预设在别处被改过时标黄，重选决策或 Skill 任一即确认
 const { isStale: agentStale, markConfirmed: markAgentConfirmed } = useApiPresetStaleness('agent-wb-control');
 
@@ -265,6 +270,7 @@ async function refreshEntries(): Promise<void> {
 }
 
 async function refreshAll(): Promise<void> {
+  apiStore.refreshFromSettings();
   await Promise.all([agentControl.refresh(), worldbook.refresh()]);
   await refreshEntries();
 }

@@ -44,10 +44,10 @@ export const plotCopy = {
     },
     apiPresets: {
       decisionLabel: "Agent 决策 API",
-      decisionHint: "用于 Agent 判断世界书条目是否应启用；留空则使用当前 API 配置。",
+      decisionHint: "用于 Agent 判断世界书条目是否应启用；默认使用当前 API。",
       skillLabel: "Agent Skill 化 API",
-      skillHint: "用于一键生成世界书 Skill 元数据；留空则使用当前 API 配置。",
-      followCurrentLabel: "使用当前 API 配置",
+      skillHint: "用于一键生成世界书 Skill 元数据；默认使用当前 API。",
+      followCurrentLabel: "当前 API",
     },
     restore: {
       button: "清理并初始化",

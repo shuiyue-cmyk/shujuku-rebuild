@@ -79,7 +79,8 @@ withDefaults(defineProps<{
   align-items: center;
   justify-content: flex-end;
   gap: var(--ub-s2);
-  flex: 0 1 auto;
+  /* 控件区不随长说明按比例收缩（否则说明越长按钮越窄、只剩图标）；宽度上限交给 max-width */
+  flex: 0 0 auto;
   min-width: 0;
   max-width: 62%;
 }

@@ -57,6 +57,8 @@ withDefaults(defineProps<{
   align-items: center;
   justify-content: center;
   gap: var(--ub-s2);
+  /* 不参与 flex 收缩：与输入框（width:100%）或长说明并排时，按比例收缩会把文字挤成「加…」甚至只剩图标 */
+  flex-shrink: 0;
   min-width: 0;
   height: var(--ub-control-h);
   padding: 0 var(--ub-s4);
@@ -105,6 +107,7 @@ withDefaults(defineProps<{
 
 .ub-btn--block {
   display: flex;
+  flex-shrink: 1;
   width: 100%;
 }
 
