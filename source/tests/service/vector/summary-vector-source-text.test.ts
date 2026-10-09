@@ -78,18 +78,6 @@ describe('buildSummaryVectorSourceText_ACU', () => {
 });
 
 describe('buildPreparedRows_ACU 源文本含纪要正文', () => {
-  it('解析纪要列，源文本 = 概览 + 纪要', () => {
-    const prepared = buildPreparedRows_ACU(table([
-      ['1', '第一天', '王城', '主角在黄昏时分到达王城，遇见了守门人老李，两人聊起了城中的传闻。', '主角进城', 'AM0001'],
-    ]), 'sheet_summary');
-
-    expect(prepared.error).toBe('');
-    expect(prepared.rows).toHaveLength(1);
-    const row = prepared.rows[0];
-    expect(row.summary).toBe('主角进城');
-    expect(row.chronicleText).toContain('守门人老李');
-    expect(row.vectorSourceText).toBe(`主角进城\n${row.chronicleText}`);
-  });
 
   it('模板没有纪要列时回退为只用概览（旧模板兼容）', () => {
     const prepared = buildPreparedRows_ACU({

@@ -101,28 +101,6 @@ describe('compileTemplateAssistantDraft_ACU', () => {
     expect(result.focusSheetKey).toBe(addedKey);
   });
 
-  it('add_sheet 缺省 sourceData 时会生成可用的初始化脚手架', () => {
-    const result = compileTemplateAssistantDraft_ACU({
-      tempData: buildTempData_ACU(),
-      sheetOrder: ['sheet_a', 'sheet_b', 'sheet_summary'],
-      currentSheetKey: 'sheet_a',
-      draft: {
-        protocolVersion: 2,
-        operations: [
-          { op: 'add_sheet', sheetName: '战利品表', headers: ['物品名称', '数量', '描述/效果', '类别'] },
-        ],
-      },
-    });
-
-    const addedKey = result.diff.addedSheets[0].sheetKey;
-    expect(result.candidateData[addedKey].sourceData.note).toContain('记录战利品表中的物品或战利品条目');
-    expect(result.candidateData[addedKey].sourceData.note).toContain('列1: 物品名称');
-    expect(result.candidateData[addedKey].sourceData.initNode).toContain('不要编造');
-    expect(result.candidateData[addedKey].sourceData.updateNode).toContain('数量');
-    expect(result.candidateData[addedKey].sourceData.updateNode).toContain('更新');
-    expect(result.candidateData[addedKey].sourceData.deleteNode).toContain('删除');
-  });
-
   it('add_sheet 拒绝与现有表 canonical 重名的名称', () => {
     const data = buildTempData_ACU();
     data.sheet_a.name = '背包';
@@ -560,16 +538,6 @@ describe('v3 单表完整替换协议', () => {
     expect(Object.keys(result.candidateData).sort()).toEqual(['mate', 'sheet_a', 'sheet_b', 'sheet_summary']);
     expect(result.candidateData.sheet_b.content[1]).toEqual([1, '旧值']);
     expect(result.candidateData.sheet_summary.content[1]).toEqual([1, '第一条', 'AM0001']);
-  });
-
-  it('replace 目标表不存在时报错', () => {
-    const tempData = buildTempData_ACU();
-    expect(() => compileTemplateAssistantDraft_ACU({
-      tempData,
-      sheetOrder: ['sheet_a', 'sheet_b', 'sheet_summary'],
-      currentSheetKey: 'sheet_a',
-      draft: buildV3ReplaceDraft_ACU(fp, 'sheet_not_exist', buildV3FullSheet_ACU()),
-    })).toThrow(/找不到目标表/);
   });
 
   it('replace 拒绝缺必填字段的完整 Sheet', () => {

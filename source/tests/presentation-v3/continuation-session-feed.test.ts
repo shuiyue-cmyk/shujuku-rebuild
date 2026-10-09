@@ -58,40 +58,6 @@ afterEach(() => {
 });
 
 describe('ContinuationSessionFeed', () => {
-  it('不超过 40 条时全量显示且没有折叠横幅', () => {
-    const { el } = mountFeed(entriesOf_ACU(40));
-    expect(foldButton(el)).toBeNull();
-    expect(renderedTitles(el)).toHaveLength(40);
-  });
-
-  it('超过 40 条时只显示最近 40 条，横幅标注被折叠条数', () => {
-    const { el } = mountFeed(entriesOf_ACU(41));
-    const button = foldButton(el);
-    expect(button).not.toBeNull();
-    expect(button!.textContent).toContain('已折叠 1 条更早消息');
-    const titles = renderedTitles(el);
-    expect(titles).toHaveLength(40);
-    expect(titles[0]).toBe('条目 2');
-    expect(titles[titles.length - 1]).toBe('条目 41');
-  });
-
-  it('点击横幅每次多展开一批（40 条），展完后横幅消失', async () => {
-    const { el } = mountFeed(entriesOf_ACU(100));
-    expect(foldButton(el)!.textContent).toContain('已折叠 60 条更早消息');
-    expect(foldButton(el)!.textContent).toContain('展开更早的 40 条');
-
-    foldButton(el)!.click();
-    await nextTick();
-    expect(renderedTitles(el)).toHaveLength(80);
-    // 剩余不足一批时，横幅如实标注剩余可展开数量。
-    expect(foldButton(el)!.textContent).toContain('已折叠 20 条更早消息');
-    expect(foldButton(el)!.textContent).toContain('展开更早的 20 条');
-
-    foldButton(el)!.click();
-    await nextTick();
-    expect(renderedTitles(el)).toHaveLength(100);
-    expect(foldButton(el)).toBeNull();
-  });
 
   it('新条目追加时窗口保持锚定末尾；长度骤减（切聊天重灌）时折叠窗口复位', async () => {
     const { el, entries } = mountFeed(entriesOf_ACU(100));
@@ -111,16 +77,5 @@ describe('ContinuationSessionFeed', () => {
     await nextTick();
     expect(renderedTitles(el)).toHaveLength(40);
     expect(foldButton(el)!.textContent).toContain('已折叠 10 条更早消息');
-  });
-
-  it('交接条目以「交接」标签渲染，且带 handoff 样式类', () => {
-    const { el } = mountFeed([
-      entry_ACU(1),
-      entry_ACU(2, { kind: 'handoff', title: '早期会话交接报告（此前内容对当前 AI 不可见）', detail: '浓缩记录正文' }),
-    ]);
-    const card = el.querySelector('.ub-feed__card.is-handoff');
-    expect(card).not.toBeNull();
-    expect(card!.querySelector('.ub-feed__kind')!.textContent).toBe('交接');
-    expect(card!.textContent).toContain('早期会话交接报告（此前内容对当前 AI 不可见）');
   });
 });

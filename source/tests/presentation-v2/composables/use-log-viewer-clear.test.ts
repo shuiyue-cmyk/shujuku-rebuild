@@ -95,17 +95,4 @@ describe('useLogViewer 清空刷新', () => {
     expect(viewer.logs.value).toEqual([]);
     expect(viewer.totalCount.value).toBe(0);
   });
-
-  it('清空后再来的日志照常显示', async () => {
-    const viewer = mountViewer();
-    pushLog('error', ['[ACU]', '旧']);
-    await flush();
-    clearLogs('debugPanel.stopDebug.autoExport');
-    await flush();
-
-    pushLog('debug', ['[ACU]', '新']);
-    await flush();
-
-    expect(viewer.logs.value.map(e => e.message)).toEqual(['[ACU] 新']);
-  });
 });

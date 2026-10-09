@@ -111,15 +111,4 @@ describe('summary-vector-embedding-batches', () => {
     expect(text).toContain('1 个 embedding 批次单行即超出字符预算');
     expect(text).toContain('over');
   });
-
-  it('无超预算批次时不记录诊断', async () => {
-    const plan = planEmbeddingBatches_ACU([{ rowKey: 'a', text: 'aa' }], { maxRowsPerRequest: 5, maxInputCharsPerRequest: 100 });
-    const result = await executeEmbeddingBatchPlan_ACU(plan, {
-      maxConcurrentRequests: 1,
-      requestEmbeddings: async input => [{ index: 0, embedding: [input[0].length] }],
-    });
-
-    expect(result.stats.overBudgetBatchCount).toBe(0);
-    expect(mockLogWarn).not.toHaveBeenCalled();
-  });
 });

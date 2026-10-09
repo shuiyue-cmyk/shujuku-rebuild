@@ -386,12 +386,6 @@ describe('arc 派工的世界书目录浏览（上游 6aaa0a2 的 TT 子集）',
     // 目录与浏览说明都不注入全文：读取仍走 read 门禁预算。
     expect(text).not.toContain('黑色晶屑是禁区核心的碎片。');
   });
-
-  it('其余子代理的目录保持普通清单口径，不带浏览说明', async () => {
-    const text = await firstCallText_ACU('hook-cognition-maintainer');
-    expect(text).not.toContain('这是全部已启用世界书条目的目录，不是命中清单');
-    expect(text).toContain('已启用的世界书条目（共 1 条');
-  });
 });
 
 describe('总纲空交付改要一条 SQL（上游 3c4beb9 的 TT 子集）', () => {

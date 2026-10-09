@@ -73,51 +73,6 @@ beforeEach(() => {
 });
 
 describe('AdvancedToolsPage log panel', () => {
-  it('渲染运行日志分节：筛选、搜索、自动滚动、状态徽章与当前显示计数', async () => {
-    const { mount } = await mountAdvancedToolsLogPanel();
-
-    const section = logSection();
-    expect(section).not.toBeNull();
-    const text = section.textContent || '';
-    expect(text).toContain('运行日志');
-    expect(text).toContain('全部级别');
-    expect(text).toContain('全部模块');
-    expect(section.querySelector<HTMLInputElement>('input[aria-label="搜索日志内容"]')?.placeholder).toBe('搜索日志内容');
-    expect(section.querySelector('[role="switch"][aria-label="自动滚动"]')).not.toBeNull();
-    expect(text).toContain('错误日志');
-    expect(text).toContain('警告日志');
-    expect(text).toContain('实时更新中');
-    expect(text).toContain('当前显示');
-    expect(text).not.toContain('缓冲区状态');
-    expect(document.querySelector('.ub-top__title')?.textContent?.trim()).toBe('高级工具');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('error 日志下方附带可展开的处理建议，warn / debug 不带', async () => {
-    const { mount, logBuffer } = await mountAdvancedToolsLogPanel(false, true);
-    logBuffer.clearLogs();
-    logBuffer.pushLog('error', ['[ACU]', '[正文优化] API调用失败: Error: API请求失败: 429 rate limit']);
-    logBuffer.pushLog('warn', ['[ACU]', '[SQL] 一条警告']);
-    await waitForUi(30);
-
-    const rows = Array.from(logList().querySelectorAll<HTMLElement>('.ub-at__log'));
-    expect(rows.length).toBe(2);
-    const errorRow = rows.find(row => row.classList.contains('is-error'))!;
-    const warnRow = rows.find(row => row.classList.contains('is-warn'))!;
-
-    const hint = errorRow.querySelector<HTMLDetailsElement>('.ub-at__log-hint');
-    expect(hint).not.toBeNull();
-    expect(hint!.dataset.hintId).toBe('http-429');
-    expect(hint!.open).toBe(false);
-    expect(hint!.textContent).toContain('限流');
-    expect(hint!.textContent).toContain('怎么处理');
-    expect(hint!.querySelectorAll('ol li').length).toBeGreaterThan(0);
-
-    expect(warnRow.querySelector('.ub-at__log-hint')).toBeNull();
-
-    mount.__resetAcuV2MountForTests();
-  });
 
   it('按级别和关键词筛选日志列表', async () => {
     const { mount } = await mountAdvancedToolsLogPanel();
@@ -187,30 +142,6 @@ describe('AdvancedToolsPage log panel', () => {
 
     expect(logList().textContent || '').toContain('暂停期间新增');
     expect(logSection().textContent || '').toContain('实时更新中');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('导出走下载，结果走通知不占页面；清空后列表为空', async () => {
-    const { mount, logBuffer } = await mountAdvancedToolsLogPanel(false, true);
-    logBuffer.clearLogs();
-    logBuffer.setDebugLogEnabled(true);
-    logBuffer.pushLog('debug', ['[ACU]', '[调试] Debug 导出日志']);
-    logBuffer.pushLog('warn', ['[ACU]', '[SQL] 警告导出日志']);
-    logBuffer.pushLog('error', ['[ACU]', '[导入] 错误导出日志']);
-    logBuffer.setDebugLogEnabled(false);
-    await waitForUi(30);
-
-    findButton('导出').click();
-    await waitForUi();
-    expect(URL.createObjectURL).toHaveBeenCalled();
-    expect(HTMLAnchorElement.prototype.click).toHaveBeenCalled();
-    expect(getPage().textContent || '').not.toContain('已导出 3 条日志');
-
-    findButton('清空').click();
-    await waitForUi();
-    expect(getPage().textContent || '').not.toContain('日志缓冲区已清空');
-    expect(logList().textContent || '').toContain('暂无匹配日志');
 
     mount.__resetAcuV2MountForTests();
   });

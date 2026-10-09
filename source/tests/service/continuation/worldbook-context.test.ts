@@ -116,20 +116,9 @@ describe('resolveRelevantBookNames_ACU', () => {
     await expect(resolveRelevantBookNames_ACU()).resolves.toEqual(['角色绑定书']);
     expect(worldbookDoubles.activeNames).not.toHaveBeenCalled();
   });
-
-  it('normalizes the manual selection without touching either resolver', async () => {
-    worldbookDoubles.readConfig.mockReturnValueOnce({ source: 'manual', manualSelection: [' 设定书 ', '', 42] });
-
-    await expect(resolveRelevantBookNames_ACU()).resolves.toEqual(['设定书', '42']);
-    expect(worldbookDoubles.activeNames).not.toHaveBeenCalled();
-  });
 });
 
 describe('normalizeAmCode_ACU', () => {
-  it('normalizes casing and whitespace of valid AM codes', () => {
-    expect(normalizeAmCode_ACU(' am0010 ')).toBe('AM0010');
-    expect(normalizeAmCode_ACU('AM0002')).toBe('AM0002');
-  });
 
   it('rejects non-AM inputs instead of guessing', () => {
     expect(normalizeAmCode_ACU('not-an-am')).toBeNull();

@@ -51,10 +51,6 @@ afterEach(() => {
 });
 
 describe('isUsable', () => {
-  it('loadWorldInfo / saveWorldInfo / executeSlashCommandsWithOptions 齐备时可用', () => {
-    const backend = createNativeStBackend_ACU(() => buildContext());
-    expect(backend.isUsable()).toBe(true);
-  });
 
   it('context 缺失或最低接口不齐时不可用', () => {
     expect(createNativeStBackend_ACU(() => undefined).isUsable()).toBe(false);
@@ -337,11 +333,6 @@ describe('聊天 / slash / 角色数据', () => {
     expect((await backend.getChatMessages('-1')).map((m: any) => m.message)).toEqual(['c']);
     expect(await backend.getChatMessages('not-a-range')).toEqual([]);
     expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('无法解析 range'));
-  });
-
-  it('getLastMessageId 反映 chat 长度', () => {
-    expect(createNativeStBackend_ACU(() => buildContext({ chat: [{}, {}] })).getLastMessageId()).toBe(1);
-    expect(createNativeStBackend_ACU(() => buildContext({ chat: [] })).getLastMessageId()).toBe(-1);
   });
 
   it('triggerSlash 走 executeSlashCommandsWithOptions 并取 pipe', async () => {

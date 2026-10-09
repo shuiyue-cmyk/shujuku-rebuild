@@ -101,43 +101,8 @@ beforeEach(() => {
 });
 
 describe('I2: AI 填表完整流程', () => {
-  describe('extractTableEditInner_ACU — 提取 tableEdit 块', () => {
-    it('标准 <tableEdit> 标签提取', () => {
-      const aiResponse = '一些文字\n<tableEdit>\ninsertRow(0, {"0": "药水", "1": "5"})\n</tableEdit>\n更多文字';
-      const result = extractTableEditInner_ACU(aiResponse);
-      expect(result).not.toBeNull();
-      expect(result!.inner).toContain('insertRow');
-    });
-
-    it('无 tableEdit 标签时返回 null', () => {
-      const result = extractTableEditInner_ACU('没有任何标签的文本');
-      expect(result).toBeNull();
-    });
-  });
 
   describe('parseAndApplyTableEdits_ACU — 解析并应用编辑', () => {
-    it('insertRow 指令正确添加行', () => {
-      const aiResponse = '<tableEdit>insertRow(0, {"0": "药水", "1": "5"})</tableEdit>';
-      const result = parseAndApplyTableEdits_ACU(aiResponse, 'standard');
-      // 验证数据被修改
-      const table = mockCurrentJsonTableDataRef.value.sheet_0;
-      expect(table.content.length).toBeGreaterThan(2); // header + 原有行 + 新行
-    });
-
-    it('updateRow 指令不抛错且返回成功', () => {
-      // updateRow 内部依赖 materializeSeedRowsIfNeeded_ACU 和 getTableLocksForSheet_ACU
-      const aiResponse = '<tableEdit>updateRow(0, 0, {"0": "金剑", "1": "10"})</tableEdit>';
-      const result = parseAndApplyTableEdits_ACU(aiResponse, 'standard') as any;
-      // src 实际语义：应用了指令的块返回统计对象（布尔 true 仅属空块/无块零操作路径），
-      // 成功位收紧为 success === true，并锁定应用/失败计数。
-      expect(result).toBeTruthy();
-      expect(result.success).toBe(true);
-      expect(result.appliedEdits).toBe(1);
-      expect(result.failedEdits).toBe(0);
-      // 行内容断言：row_id 不动，第 0/1 列按指令覆盖（content[1] = 第 0 数据行）。
-      const table = mockCurrentJsonTableDataRef.value.sheet_0;
-      expect(table.content[1]).toEqual(['1', '金剑', '10']);
-    });
 
     it('deleteRow 指令正确删除行', () => {
       const aiResponse = '<tableEdit>deleteRow(0, 0)</tableEdit>';

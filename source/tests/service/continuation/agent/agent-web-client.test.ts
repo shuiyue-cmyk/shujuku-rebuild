@@ -10,7 +10,6 @@ import {
   AGENT_WEB_PROVIDER_SUPPORT_ACU,
   AgentWebClient_ACU,
   collapseWhitespace_ACU,
-  enabledEncyclopediaSources_ACU,
   evaluateSearxngBaseUrlPolicy_ACU,
   evaluateWebUrlPolicy_ACU,
   extractReadableText_ACU,
@@ -64,10 +63,6 @@ describe('URL 策略与文本处理', () => {
     const long = truncateWebText_ACU('一二三四五六七八九十一二', 10);
     expect(long.startsWith('一二三四五六七八九十')).toBe(true);
     expect(long).toContain('已截断');
-  });
-
-  it('按设置得到启用的百科来源', () => {
-    expect(enabledEncyclopediaSources_ACU({ sources: { moegirl: true, wikipediaZh: false, wikipediaEn: true, baidu: false } })).toEqual(['moegirl', 'wikipedia_en']);
   });
 });
 

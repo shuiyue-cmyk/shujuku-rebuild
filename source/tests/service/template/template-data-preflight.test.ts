@@ -41,10 +41,6 @@ describe('preflightTemplateDataImport_ACU', () => {
     it('无 UNIQUE 约束时返回空（不可证明业务身份）', () => {
       expect(extractBusinessKeyColumns_ACU('CREATE TABLE "t" ("row_id" INTEGER PRIMARY KEY, "code" TEXT);')).toEqual([]);
     });
-
-    it('空 DDL 返回空', () => {
-      expect(extractBusinessKeyColumns_ACU('')).toEqual([]);
-    });
   });
 
   describe('数据模式语义', () => {

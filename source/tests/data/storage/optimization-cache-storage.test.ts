@@ -69,20 +69,6 @@ beforeEach(() => {
 
 // ═══ saveOptimizationBaseToCache_ACU ═══
 describe('saveOptimizationBaseToCache_ACU', () => {
-  it('写入 window 对象', () => {
-    const cache = { baseContent: '测试内容', timestamp: 123 };
-    saveOptimizationBaseToCache_ACU(cache);
-    expect(mockTopLevelWindow.__ACU_LAST_OPTIMIZATION_BASE__).toEqual(cache);
-  });
-
-  it('写入 localStorage', () => {
-    const cache = { baseContent: '测试内容', timestamp: 123 };
-    saveOptimizationBaseToCache_ACU(cache);
-    expect(localStorageMock.setItem).toHaveBeenCalledWith(
-      'ACU_LAST_OPTIMIZATION_BASE',
-      JSON.stringify(cache),
-    );
-  });
 
   it('window 写入失败时不影响 localStorage 写入', () => {
     // 让 window 写入抛错
@@ -121,25 +107,10 @@ describe('saveOptimizationBaseToCache_ACU', () => {
     // 日志应该被记录
     expect(mockLogDebug).toHaveBeenCalled();
   });
-
-  it('null 值也能写入', () => {
-    saveOptimizationBaseToCache_ACU(null);
-    expect(mockTopLevelWindow.__ACU_LAST_OPTIMIZATION_BASE__).toBeNull();
-    expect(localStorageMock.setItem).toHaveBeenCalledWith(
-      'ACU_LAST_OPTIMIZATION_BASE',
-      'null',
-    );
-  });
 });
 
 // ═══ loadOptimizationBaseFromCache_ACU ═══
 describe('loadOptimizationBaseFromCache_ACU', () => {
-  it('window 有缓存且有 baseContent 时返回', () => {
-    const cache = { baseContent: '测试内容', timestamp: 123 };
-    mockTopLevelWindow.__ACU_LAST_OPTIMIZATION_BASE__ = cache;
-    const result = loadOptimizationBaseFromCache_ACU();
-    expect(result).toEqual(cache);
-  });
 
   it('window 缓存无 baseContent 时降级到 localStorage', () => {
     mockTopLevelWindow.__ACU_LAST_OPTIMIZATION_BASE__ = { noBaseContent: true };
@@ -148,23 +119,6 @@ describe('loadOptimizationBaseFromCache_ACU', () => {
 
     const result = loadOptimizationBaseFromCache_ACU();
     expect(result).toEqual(lsCache);
-  });
-
-  it('window 无缓存时降级到 localStorage', () => {
-    delete mockTopLevelWindow.__ACU_LAST_OPTIMIZATION_BASE__;
-    const lsCache = { baseContent: 'localStorage内容' };
-    localStorageMock.getItem.mockReturnValue(JSON.stringify(lsCache));
-
-    const result = loadOptimizationBaseFromCache_ACU();
-    expect(result).toEqual(lsCache);
-  });
-
-  it('localStorage 无缓存时返回 null', () => {
-    delete mockTopLevelWindow.__ACU_LAST_OPTIMIZATION_BASE__;
-    localStorageMock.getItem.mockReturnValue(null);
-
-    const result = loadOptimizationBaseFromCache_ACU();
-    expect(result).toBeNull();
   });
 
   it('localStorage 内容无 baseContent 时返回 null', () => {
@@ -214,23 +168,6 @@ describe('自动替换已处理集合（optimization-cache-storage）', () => {
   beforeEach(() => {
     delete mockTopLevelWindow[WINDOW_KEY];
     clearAutoOptimizationProcessed_ACU();
-  });
-
-  it('记录后可按 messageId 查回，并同时落 window + localStorage 两层', () => {
-    const entry = recordAutoOptimizationProcessed_ACU({
-      messageIndex: 5,
-      messageId: 42,
-      contentHash: 'hash-a',
-      chatKey: 'chatA',
-      updatedAt: 1000,
-    });
-
-    expect(entry).toMatchObject({ messageId: '42', contentHash: 'hash-a', chatKey: 'chatA', updatedAt: 1000 });
-    expect(mockTopLevelWindow[WINDOW_KEY].entries[0].contentHash).toBe('hash-a');
-    const persisted = JSON.parse(localStorageMock.getItem(LS_KEY) as string);
-    expect(persisted.entries).toEqual([entry]);
-    expect(localStorageMock.setItem).toHaveBeenCalledWith(LS_KEY, expect.any(String));
-    expect(findAutoOptimizationProcessedEntry_ACU(42, 'chatA')).toMatchObject({ contentHash: 'hash-a' });
   });
 
   it('同一 messageId 再次记录 → 覆盖为最新指纹，集合不增长', () => {

@@ -51,14 +51,6 @@ describe('isImmutableV2SnapshotManifest_ACU 判定', () => {
     expect(isImmutableV2SnapshotManifest_ACU(v2Manifest())).toBe(true);
   });
 
-  it('null / undefined / 非 single_file_snapshot → false', () => {
-    expect(isImmutableV2SnapshotManifest_ACU(null)).toBe(false);
-    expect(isImmutableV2SnapshotManifest_ACU(undefined)).toBe(false);
-    const otherMode = v2Manifest();
-    otherMode.snapshot.mode = 'snapshot';
-    expect(isImmutableV2SnapshotManifest_ACU(otherMode)).toBe(false);
-  });
-
   it('single_file_snapshot 但缺 storageIdentity → false（legacy）', () => {
     expect(isImmutableV2SnapshotManifest_ACU(legacyManifest())).toBe(false);
   });

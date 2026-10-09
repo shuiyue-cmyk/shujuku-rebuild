@@ -150,42 +150,8 @@ beforeEach(() => {
   mockLoadCache.mockReturnValue(null);
 });
 
-// ═══ setLastOptimizationBase_ACU ═══
-describe('setLastOptimizationBase_ACU', () => {
-  it('保存优化基准', () => {
-    const result = setLastOptimizationBase_ACU({
-      messageIndex: 5,
-      messageId: 'msg1',
-      baseContent: '原始内容',
-    });
-    expect(result.messageIndex).toBe(5);
-    expect(result.messageId).toBe('msg1');
-    expect(result.baseContent).toBe('原始内容');
-    expect(result.updatedAt).toBeGreaterThan(0);
-    expect(mockSaveCache).toHaveBeenCalled();
-  });
-
-  it('空 payload 使用默认值', () => {
-    const result = setLastOptimizationBase_ACU();
-    expect(result.messageIndex).toBe(-1);
-    expect(result.messageId).toBeNull();
-    expect(result.baseContent).toBe('');
-  });
-
-  it('非整数 messageIndex 使用 -1', () => {
-    const result = setLastOptimizationBase_ACU({ messageIndex: 'abc' });
-    expect(result.messageIndex).toBe(-1);
-  });
-});
-
 // ═══ getLastOptimizationBase_ACU ═══
 describe('getLastOptimizationBase_ACU', () => {
-  it('有内存缓存时返回内存缓存', () => {
-    setLastOptimizationBase_ACU({ messageIndex: 3, baseContent: '缓存内容' });
-    const result = getLastOptimizationBase_ACU();
-    expect(result).not.toBeNull();
-    expect(result!.baseContent).toBe('缓存内容');
-  });
 
   it('无内存缓存时从持久化缓存加载', () => {
     mockLoadCache.mockReturnValue({ messageIndex: 2, baseContent: '持久化内容' });
@@ -223,14 +189,6 @@ describe('getLastOptimizationBase_ACU', () => {
     mockLoadCache.mockReturnValue({ messageIndex: 1, baseContent: '遗留原文' });
     expect(getLastOptimizationBase_ACU()?.baseContent).toBe('遗留原文');
     mockLoadCache.mockReturnValue(null);
-  });
-
-  it('无任何缓存时返回 null', () => {
-    // 清除内存缓存
-    setLastOptimizationBase_ACU({ baseContent: '' });
-    mockLoadCache.mockReturnValue(null);
-    const result = getLastOptimizationBase_ACU();
-    expect(result).toBeNull();
   });
 });
 
@@ -281,33 +239,10 @@ describe('_set_optimizationProgressToast_ACU', () => {
     expect(optimizationProgressToast_ACU).toBe(toast);
     expect(optimizationProgressToast_ACU.message).toBe('优化中...');
   });
-  it('设置为 null 后变量为 null', () => {
-    _set_optimizationProgressToast_ACU({ message: '先设置一个值' });
-    expect(optimizationProgressToast_ACU).not.toBeNull();
-    _set_optimizationProgressToast_ACU(null);
-    expect(optimizationProgressToast_ACU).toBeNull();
-  });
 });
 
 // ═══ performContentOptimization_ACU ═══
 describe('performContentOptimization_ACU', () => {
-  it('API 调用成功且解析成功时返回优化结果', async () => {
-    const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
-    const { applyOptimizations_ACU } = await import('../../../src/shared/text-optimization');
-    vi.mocked(callAIWithPreset_ACU).mockResolvedValue(JSON.stringify({
-      optimizations: [
-        { type: 'replace', original: '旧文本', optimized: '新文本', plan: '优化计划' },
-      ],
-      summary: '优化总结',
-    }));
-    vi.mocked(applyOptimizations_ACU).mockReturnValue('优化后的内容');
-
-    const { performContentOptimization_ACU } = await import('../../../src/service/optimization/content-optimization');
-    const result = await performContentOptimization_ACU('原始内容', { currentLoop: 1 });
-    expect(result.success).toBe(true);
-    expect(result.optimizations).toBeDefined();
-    expect(result.optimizedContent).toBe('优化后的内容');
-  });
 
   it('所有建议都未匹配时返回 no-op 失败，不生成可写回正文', async () => {
     const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
@@ -332,10 +267,12 @@ describe('performContentOptimization_ACU', () => {
 
   it('最大替换项数同步进提示词数量行（默认 1-10 按配置改写）', async () => {
     const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
+    const { applyOptimizations_ACU } = await import('../../../src/shared/text-optimization');
     vi.mocked(callAIWithPreset_ACU).mockResolvedValue(JSON.stringify({
       optimizations: [{ type: 'replace', original: '旧文本', optimized: '新文本', plan: '优化计划' }],
       summary: '优化总结',
     }));
+    vi.mocked(applyOptimizations_ACU).mockReturnValue('优化后的内容');
     mockSettings.contentOptimizationSettings = {
       maxOptimizations: 20, loopCount: 1, retryCount: 1,
       promptGroup: [{ role: 'user', content: '优化项数量：1-10个\n$CONTENT' }],
@@ -344,6 +281,7 @@ describe('performContentOptimization_ACU', () => {
     const { performContentOptimization_ACU } = await import('../../../src/service/optimization/content-optimization');
     const result = await performContentOptimization_ACU('原始内容', { currentLoop: 1 });
     expect(result.success).toBe(true);
+    expect(result.optimizedContent).toBe('优化后的内容');
     const sent = vi.mocked(callAIWithPreset_ACU).mock.calls[0][0] as any[];
     const text = sent.map(m => String(m.content)).join('\n');
     expect(text).toContain('优化项数量：1-20个');

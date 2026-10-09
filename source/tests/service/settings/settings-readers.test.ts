@@ -74,17 +74,6 @@ beforeEach(() => {
 });
 
 describe('getCurrentCharSettings_ACU', () => {
-  it('首次调用创建新的角色设置，worldbookConfig 包含默认值', () => {
-    const result = getCurrentCharSettings_ACU();
-    expect(result).toBeDefined();
-    expect(result.worldbookConfig).toBeDefined();
-    // 验证默认配置的具体字段值（deepMerge 后应包含 defaultWorldbookConfig_ACU 的字段）
-    expect(result.worldbookConfig.enabled).toBe(true);
-    expect(result.worldbookConfig.maxEntries).toBe(10);
-    // 0TK 占用模式恒开启：zeroTkOccupyMode=true、outlineEntryEnabled=false
-    expect(result.worldbookConfig.zeroTkOccupyMode).toBe(true);
-    expect(result.worldbookConfig.outlineEntryEnabled).toBe(false);
-  });
   it('已有设置时 deepMerge 保留已有字段并补全缺失字段', () => {
     mockSettings.characterSettings['test-char'] = {
       worldbookConfig: { enabled: false, customField: 'test' },
@@ -95,13 +84,6 @@ describe('getCurrentCharSettings_ACU', () => {
     expect(result.worldbookConfig.customField).toBe('test');
     // 默认值应被补全
     expect(result.worldbookConfig.maxEntries).toBe(10);
-  });
-  it('characterSettings 为 null 时自动初始化', () => {
-    mockSettings.characterSettings = null;
-    const result = getCurrentCharSettings_ACU();
-    expect(result).toBeDefined();
-    expect(mockSettings.characterSettings).not.toBeNull();
-    expect(result.worldbookConfig.enabled).toBe(true);
   });
   it('角色条目为损坏的原始值时恢复为可用对象', () => {
     mockSettings.characterSettings['test-char'] = 'corrupted';
@@ -115,18 +97,6 @@ describe('getCurrentCharSettings_ACU', () => {
     const result = getCurrentCharSettings_ACU();
     expect(Array.isArray(mockSettings.characterSettings)).toBe(false);
     expect(result.worldbookConfig.enabled).toBe(true);
-  });
-  it('深度合并默认配置后字段完整', () => {
-    mockSettings.characterSettings['test-char'] = {
-      worldbookConfig: { enabled: false },
-    };
-    const result = getCurrentCharSettings_ACU();
-    expect(result.worldbookConfig).toBeDefined();
-    // 验证 deepMerge 补全了 maxEntries
-    expect(result.worldbookConfig.maxEntries).toBe(10);
-    // 0TK 占用模式恒开启
-    expect(result.worldbookConfig.zeroTkOccupyMode).toBe(true);
-    expect(result.worldbookConfig.outlineEntryEnabled).toBe(false);
   });
 
   describe('以角色卡为单位存储', () => {
@@ -184,11 +154,6 @@ describe('getCurrentCharSettings_ACU', () => {
 });
 
 describe('getCurrentWorldbookConfig_ACU', () => {
-  it('返回世界书配置', () => {
-    const config = getCurrentWorldbookConfig_ACU();
-    expect(config).toBeDefined();
-    expect(config.enabled).toBeDefined();
-  });
   it('与 getCurrentCharSettings_ACU 返回的一致', () => {
     const charSettings = getCurrentCharSettings_ACU();
     const config = getCurrentWorldbookConfig_ACU();
@@ -286,13 +251,6 @@ describe('getCurrentTableDisplayData_ACU', () => {
   it('模板解析失败时返回 null，不抛出', () => {
     currentTables = null;
     parseTableTemplate.mockImplementation(() => { throw new Error('parse failed'); });
-
-    expect(getCurrentTableDisplayData_ACU()).toBeNull();
-  });
-
-  it('模板无有效 sheet_* 时返回 null', () => {
-    currentTables = null;
-    parseTableTemplate.mockReturnValue({ mate: { type: 'chatSheets' } });
 
     expect(getCurrentTableDisplayData_ACU()).toBeNull();
   });

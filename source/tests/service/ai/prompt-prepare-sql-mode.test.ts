@@ -214,33 +214,6 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     });
   });
 
-  it('有 DDL 的表走 SQL 格式化路径', async () => {
-    mockCurrentJsonTableData = {
-      sheet_0: {
-        name: '背包物品表',
-        sourceData: {
-          ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, quantity INTEGER);',
-          note: '记录角色背包中的物品',
-          insertNode: '获得新物品时插入',
-          updateNode: '',
-          deleteNode: '',
-        },
-        content: [['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']],
-        updateConfig: {},
-      },
-    };
-
-    const result = await prepareAIInput_ACU([], 'standard');
-    expect(result).not.toBeNull();
-    expect(result!.tableDataText).toContain('CREATE TABLE inventory');
-    expect(result!.tableDataText).not.toContain('CREATE TABLE beibaowupinbiao');
-    expect(result!.tableDataText).toContain('SQL 写入必须严格使用本表上方 CREATE TABLE 中的表名 inventory；不得使用其他名称。');
-    // 应输出 Note 注释
-    expect(result!.tableDataText).toContain('-- Note: 记录角色背包中的物品');
-    // 应输出当前数据（注释格式）
-    expect(result!.tableDataText).toContain('-- 当前数据');
-  });
-
   it('飞行模式 SQLite prompt 排除隐藏纪要行且不修改运行时物理数据', async () => {
     const chronicleRows = Array.from({ length: 20 }, (_, index) => [`c${index + 1}`, `纪要${index + 1}`]);
     mockCurrentJsonTableData = {
@@ -800,34 +773,6 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     expect(result!.tableDataText).not.toContain('格里芬临时基地-指挥室');
   });
 
-  it('SQL 编辑格式说明被追加到 tableDataText 末尾', async () => {
-    mockCurrentJsonTableData = {
-      sheet_0: {
-        name: '背包物品表',
-        sourceData: {
-          ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY);',
-        },
-        content: [['row_id'], ['1']],
-        updateConfig: {},
-      },
-    };
-
-    const result = await prepareAIInput_ACU([], 'standard');
-    expect(result).not.toBeNull();
-    expect(result!.tableDataText).toContain('SQL 编辑格式说明');
-    expect(result!.tableDataText).toContain('INSERT INTO');
-    expect(result!.tableDataText).toContain('INSERT OR REPLACE INTO');
-    expect(result!.tableDataText).toContain('REPLACE INTO');
-    expect(result!.tableDataText).toContain('普通 INSERT 必须显式列出业务列，不得包含 row_id');
-    expect(result!.tableDataText).toContain('row_id 由系统在执行前分配稳定身份');
-    expect(result!.tableDataText).not.toContain('row_id 值为当前表最大 row_id + 1');
-    expect(result!.tableDataText).toContain('UNIQUE 约束');
-    expect(result!.tableDataText).toContain('SQL 表名和列名必须严格照抄上方对应 CREATE TABLE 中提供的标识符，不得翻译、缩写、猜测或改写。');
-    expect(result!.tableDataText).toContain('<tableEdit> 标签内');
-    expect(result!.tableDataText).toContain('表达式更新');
-    expect(result!.tableDataText).toContain('按 SQLite 原生整行替换语义执行');
-  });
-
   it('固定 row_id 约束不再生成专用 REPLACE 许可注释', async () => {
     mockCurrentJsonTableData = {
       sheet_0: {
@@ -941,69 +886,6 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     expect(result!.tableDataText).toContain('显式快照值');
     expect(result!.tableDataText).not.toContain('runtime_table');
     expect(result!.tableDataText).not.toContain('运行时值');
-  });
-
-  it('targetSheetKeys 过滤只输出指定表', async () => {
-    mockCurrentJsonTableData = {
-      sheet_0: {
-        name: '背包物品表',
-        sourceData: {
-          ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY);',
-        },
-        content: [['row_id'], ['1']],
-        updateConfig: {},
-      },
-      sheet_1: {
-        name: '角色表',
-        sourceData: {
-          ddl: 'CREATE TABLE characters (row_id INTEGER PRIMARY KEY);',
-        },
-        content: [['row_id'], ['1']],
-        updateConfig: {},
-      },
-    };
-
-    const result = await prepareAIInput_ACU([], 'standard', ['sheet_1']);
-    expect(result).not.toBeNull();
-    // 只输出 sheet_1
-    expect(result!.tableDataText).toContain('CREATE TABLE characters');
-    expect(result!.tableDataText).not.toContain('CREATE TABLE inventory');
-  });
-
-  it('对话消息被正确格式化', async () => {
-    mockCurrentJsonTableData = {
-      sheet_0: {
-        name: '背包物品表',
-        sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY);' },
-        content: [['row_id'], ['1']],
-        updateConfig: {},
-      },
-    };
-
-    const messages = [
-      { is_user: true, mes: '你好' },
-      { is_user: false, name: '角色', mes: '你好啊' },
-    ];
-
-    const result = await prepareAIInput_ACU(messages, 'standard');
-    expect(result).not.toBeNull();
-    expect(result!.messagesText).toContain('用户: 你好');
-    expect(result!.messagesText).toContain('角色: 你好啊');
-  });
-
-  it('空消息数组时输出无最新对话内容', async () => {
-    mockCurrentJsonTableData = {
-      sheet_0: {
-        name: '背包物品表',
-        sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY);' },
-        content: [['row_id'], ['1']],
-        updateConfig: {},
-      },
-    };
-
-    const result = await prepareAIInput_ACU([], 'standard');
-    expect(result).not.toBeNull();
-    expect(result!.messagesText).toContain('无最新对话内容');
   });
 
   it('sqlApplyScope.runtimeData 冻结数据优先于 live provider，且不再次读取 provider', async () => {

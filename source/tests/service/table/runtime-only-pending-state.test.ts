@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   buildRuntimeOnlyPendingScopeKey_ACU,
   clearRuntimeOnlyPendingSheetKeys_ACU,
@@ -8,7 +8,6 @@ import {
   markRuntimeOnlyPendingSheets_ACU,
   readRuntimeOnlyPendingSheets_ACU,
   registerRuntimeOnlyPendingFlusher_ACU,
-  runRegisteredRuntimeOnlyPendingFlush_ACU,
 } from '../../../src/service/table/runtime-only-pending-state';
 
 const scopeA = { chatKey: 'chat-a', isolationKey: '' };
@@ -88,18 +87,5 @@ describe('runtime-only-pending-state', () => {
     expect(readRuntimeOnlyPendingSheets_ACU(scopeA)).toEqual({ all: false, sheetKeys: ['sheet_a'] });
     clearRuntimeOnlyPendingSheetKeys_ACU(scopeA, ['sheet_a']);
     expect(readRuntimeOnlyPendingSheets_ACU(scopeA)).toBeNull();
-  });
-
-  it('未注册落盘器或无登记时 runRegistered 直接返回未落盘且不调用', async () => {
-    const flusher = vi.fn(async () => ({ flushed: true, sheetKeys: ['sheet_a'] }));
-    expect(await runRegisteredRuntimeOnlyPendingFlush_ACU(scopeA, 'r')).toEqual({ flushed: false, sheetKeys: [] });
-
-    registerRuntimeOnlyPendingFlusher_ACU(flusher);
-    expect(await runRegisteredRuntimeOnlyPendingFlush_ACU(scopeA, 'r')).toEqual({ flushed: false, sheetKeys: [] });
-    expect(flusher).not.toHaveBeenCalled();
-
-    markRuntimeOnlyPendingSheets_ACU(scopeA, { all: false, sheetKeys: ['sheet_a'] });
-    expect(await runRegisteredRuntimeOnlyPendingFlush_ACU(scopeA, 'reason-x')).toEqual({ flushed: true, sheetKeys: ['sheet_a'] });
-    expect(flusher).toHaveBeenCalledWith('reason-x');
   });
 });

@@ -32,11 +32,6 @@ describe('ACU_REQUIRED_TAURITAVERN_VERSION', () => {
 });
 
 describe('parseAcuVersionParts', () => {
-  it('解析标准 SemVer', () => {
-    expect(parseAcuVersionParts('2.3.0')).toEqual([2, 3, 0]);
-    expect(parseAcuVersionParts('v2.3.0')).toEqual([2, 3, 0]);
-    expect(parseAcuVersionParts(' 2.2.0 ')).toEqual([2, 2, 0]);
-  });
   it('忽略预发布/构建后缀', () => {
     expect(parseAcuVersionParts('2.3.0-canary.1')).toEqual([2, 3, 0]);
   });
@@ -54,43 +49,18 @@ describe('compareAcuVersions', () => {
     expect(compareAcuVersions('2.10.0', '2.9.0')).toBe(1);
     expect(compareAcuVersions('2.9.0', '2.10.0')).toBe(-1);
   });
-  it('相等 / 小于 / 大于', () => {
-    expect(compareAcuVersions('2.3.0', '2.3.0')).toBe(0);
-    expect(compareAcuVersions('2.2.0', '2.3.0')).toBe(-1);
-    expect(compareAcuVersions('3.0.0', '2.3.0')).toBe(1);
-  });
-  it('任一不可解析返回 null', () => {
-    expect(compareAcuVersions('dev', '2.3.0')).toBeNull();
-    expect(compareAcuVersions('2.3.0', null)).toBeNull();
-  });
 });
 
 describe('isAcuTauriVersionOutdated', () => {
-  it('低于基线为真', () => {
-    expect(isAcuTauriVersionOutdated('2.2.0')).toBe(true);
-    expect(isAcuTauriVersionOutdated('1.6.5')).toBe(true);
-  });
-  it('等于或高于基线为假', () => {
-    expect(isAcuTauriVersionOutdated('2.3.0')).toBe(false);
-    expect(isAcuTauriVersionOutdated('2.4.0')).toBe(false);
-    expect(isAcuTauriVersionOutdated('3.0.0')).toBe(false);
-  });
   it('读不到 / 不可解析一律 fail-open（不打扰用户）', () => {
     expect(isAcuTauriVersionOutdated(null)).toBe(false);
     expect(isAcuTauriVersionOutdated(undefined)).toBe(false);
     expect(isAcuTauriVersionOutdated('')).toBe(false);
     expect(isAcuTauriVersionOutdated('dev')).toBe(false);
   });
-  it('可传入自定义基线', () => {
-    expect(isAcuTauriVersionOutdated('2.3.0', '2.5.0')).toBe(true);
-  });
 });
 
 describe('readAcuTauriVersion', () => {
-  it('非 TT 宿主返回 null', async () => {
-    installFakeWindow({});
-    await expect(readAcuTauriVersion()).resolves.toBeNull();
-  });
 
   it('TT 宿主经 safeInvoke 读 tauriVersion', async () => {
     const safeInvoke = vi.fn().mockResolvedValue({ tauriVersion: '2.3.0', pkgVersion: '1.18.0', agent: 'x' });

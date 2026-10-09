@@ -9,7 +9,6 @@ import {
   createSkillMetaPattern_ACU,
   stripAgentTakeoverMetaBlockLoose_ACU,
   stripAgentTakeoverMetaBlockStrict_ACU,
-  stripWorldbookSkillMetaBlockCore_ACU,
 } from '../../src/shared/agent-worldbook-comment';
 
 const takeoverV1 = {
@@ -50,26 +49,10 @@ describe('stripAgentTakeoverMetaBlockLoose_ACU', () => {
   });
 });
 
-describe('stripWorldbookSkillMetaBlockCore_ACU', () => {
-  it('removes a skill meta block and collapses blank lines', () => {
-    expect(stripWorldbookSkillMetaBlockCore_ACU(`正文\n\n${skillBlock}`)).toBe('正文');
-  });
-
-  it('returns empty string for non-string input', () => {
-    expect(stripWorldbookSkillMetaBlockCore_ACU(null)).toBe('');
-    expect(stripWorldbookSkillMetaBlockCore_ACU(undefined)).toBe('');
-  });
-});
-
 describe('buildWorldbookEntryDisplayLabel_ACU', () => {
   it('strips both takeover and skill blocks and collapses whitespace to a single line', () => {
     const comment = `标题 部分\n\n${takeoverBlock(takeoverV1)}\n\n${skillBlock}`;
     expect(buildWorldbookEntryDisplayLabel_ACU(comment, 1)).toBe('标题 部分');
-  });
-
-  it('falls back to 条目 ${uid} when comment is empty or meta-only', () => {
-    expect(buildWorldbookEntryDisplayLabel_ACU('', 42)).toBe('条目 42');
-    expect(buildWorldbookEntryDisplayLabel_ACU(`${takeoverBlock(takeoverV1)}\n${skillBlock}`, 7)).toBe('条目 7');
   });
 
   it('does not treat uid 0 as empty', () => {

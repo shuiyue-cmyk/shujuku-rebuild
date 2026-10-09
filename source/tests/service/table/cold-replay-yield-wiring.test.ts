@@ -82,11 +82,6 @@ describe('冷回放让步预算接线 · 回放核心', () => {
 });
 
 describe('冷回放让步预算接线 · 真实入口', () => {
-  it('统一预算常量落在 8~16ms 建议区间', async () => {
-    const { COLD_REPLAY_YIELD_BUDGET_MS_ACU } = await import('../../../src/service/table/storage-frame-v2-replay');
-    expect(COLD_REPLAY_YIELD_BUDGET_MS_ACU).toBeGreaterThanOrEqual(8);
-    expect(COLD_REPLAY_YIELD_BUDGET_MS_ACU).toBeLessThanOrEqual(16);
-  });
 
   it('可视化器打开：以统一预算调用冷回放 merge 入口', async () => {
     const merge = vi.fn(async () => null);

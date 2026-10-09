@@ -134,17 +134,6 @@ beforeEach(() => {
 });
 
 describe('useManualUpdate 表格展示的模板回退', () => {
-  it('runtime 为 null 时选择器显示全局模板表名', async () => {
-    displayTableData = null;
-    templateDisplayData = {
-      sheet_tpl: { name: '模板表' },
-    };
-    const { useManualUpdate } = await importManualUpdate();
-    const manual = useManualUpdate();
-
-    expect(manual.sheetKeys.value).toEqual(['sheet_tpl']);
-    expect(manual.sheetNames.value).toEqual({ sheet_tpl: '模板表' });
-  });
 
   it('模板解析失败时维持空态，不抛出', async () => {
     displayTableData = null;

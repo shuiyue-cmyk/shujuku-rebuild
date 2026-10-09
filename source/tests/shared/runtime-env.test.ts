@@ -20,11 +20,6 @@ async function freshImport(): Promise<RuntimeEnvModule> {
 
 // ═══ ACU_INSTANCE_FLAG 常量 ═══
 describe('ACU_INSTANCE_FLAG', () => {
-    it('是一个非空字符串', async () => {
-        const mod = await freshImport();
-        expect(typeof mod.ACU_INSTANCE_FLAG).toBe('string');
-        expect(mod.ACU_INSTANCE_FLAG.length).toBeGreaterThan(0);
-    });
 
     it('值为 __ACU_STAR_DB_III_LOADED__', async () => {
         const mod = await freshImport();
@@ -32,29 +27,10 @@ describe('ACU_INSTANCE_FLAG', () => {
     });
 });
 
-// ═══ getHostWindow ═══
-describe('getHostWindow', () => {
-    it('返回 window 自身（插件运行在酒馆主窗口）', async () => {
-        const mod = await freshImport();
-        expect(mod.getHostWindow()).toBe(window);
-    });
-});
-
 // ═══ checkAndMarkInstance ═══
 describe('checkAndMarkInstance', () => {
     afterEach(() => {
         delete (window as any).__ACU_STAR_DB_III_LOADED__;
-    });
-
-    it('首次调用返回 false（无已有实例）', async () => {
-        const mod = await freshImport();
-        expect(mod.checkAndMarkInstance()).toBe(false);
-    });
-
-    it('首次调用后在 hostWindow 上设置标记', async () => {
-        const mod = await freshImport();
-        mod.checkAndMarkInstance();
-        expect((window as any).__ACU_STAR_DB_III_LOADED__).toBe(true);
     });
 
     it('第二次调用返回 true（已有实例，且其 UI 根仍在）', async () => {

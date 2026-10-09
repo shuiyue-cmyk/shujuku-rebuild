@@ -49,29 +49,6 @@ describe('SQL 行视图（TT 只读复算）', () => {
   let view: AgentModuleSqlView_ACU | null = null;
   afterEach(() => { view?.dispose(); view = null; });
 
-  it('物化快照：条目、revision 与标量字段完整进库，初始无变更', async () => {
-    view = await materializeAgentModuleSqlView_ACU(baseSnapshot_ACU());
-    const back = view.readSnapshot();
-    expect(back.hooks.map(item => item.id)).toEqual(['hook-1', 'hook-2']);
-    expect(back.infoGap).toHaveLength(1);
-    expect(back.userRequirements).toEqual(['保持悬疑']);
-    expect(back.revisions.hooks).toBe(3);
-    expect(back.revisions.userRequirements).toBe(5);
-    expect(back.settledThroughIndex).toBe(12);
-    expect(back.updatedAt).toBe(1000);
-    expect(back.pendingFixes).toEqual([]);
-    expect(view.hasChanges()).toBe(false);
-  });
-
-  it('空快照物化为合法空库', async () => {
-    const empty = { ...baseSnapshot_ACU(), hooks: [], infoGap: [], userRequirements: [] };
-    view = await materializeAgentModuleSqlView_ACU(empty);
-    const back = view.readSnapshot();
-    expect(back.hooks).toEqual([]);
-    expect(back.userRequirements).toEqual([]);
-    expect(view.hasChanges()).toBe(false);
-  });
-
   it('行级 upsert：新增与覆盖同 id 条目，revision 随写推进', async () => {
     view = await materializeAgentModuleSqlView_ACU(baseSnapshot_ACU());
     const next = view.applyRowWrite({

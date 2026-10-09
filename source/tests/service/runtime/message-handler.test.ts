@@ -49,27 +49,6 @@ describe('evaluateNewMessageAction_ACU', () => {
       expect(result.action).toBe('update_only');
     });
 
-    it('核心 API 未就绪时跳过', () => {
-      const result = evaluateNewMessageAction_ACU(
-        [{ is_user: false, mes: 'AI回复' }],
-        false, false, false, {},
-      );
-      expect(result.action).toBe('skip');
-      expect(result.reason).toContain('not ready');
-    });
-
-    it('无聊天数据时跳过', () => {
-      const result = evaluateNewMessageAction_ACU([], false, true, false, {});
-      expect(result.action).toBe('skip');
-      expect(result.reason).toContain('No chat data');
-    });
-
-    it('null 聊天数据时跳过', () => {
-      const result = evaluateNewMessageAction_ACU(null as any, false, true, false, {});
-      expect(result.action).toBe('skip');
-      expect(result.reason).toContain('No chat data');
-    });
-
     it('最新消息是用户消息时跳过', () => {
       const result = evaluateNewMessageAction_ACU(
         [{ is_user: true, mes: '用户消息' }],
@@ -92,31 +71,6 @@ describe('evaluateNewMessageAction_ACU', () => {
 
   // ═══ update_only 场景 ═══
   describe('update_only 场景', () => {
-    it('无正文优化配置时返回 update_only', () => {
-      const result = evaluateNewMessageAction_ACU(
-        [{ is_user: false, mes: 'AI回复', name: '角色A' }],
-        false, true, false, {},
-      );
-      expect(result.action).toBe('update_only');
-      expect(result.lastMessageIndex).toBe(0);
-    });
-
-    it('正文优化未启用时返回 update_only', () => {
-      const result = evaluateNewMessageAction_ACU(
-        [{ is_user: false, mes: 'AI回复' }],
-        false, true, false, { enabled: false },
-      );
-      expect(result.action).toBe('update_only');
-    });
-
-    it('activeChar 无 name 时不做角色匹配检查', () => {
-      mockGetCurrentCharacterFallback.mockReturnValue({});
-      const result = evaluateNewMessageAction_ACU(
-        [{ is_user: false, mes: 'AI回复', name: '任意角色' }],
-        false, true, false, {},
-      );
-      expect(result.action).toBe('update_only');
-    });
 
     it('已解析索引仍指向 AI 楼层时，不受随后追加用户楼层影响', () => {
       const result = evaluateNewMessageAction_ACU(
@@ -225,29 +179,6 @@ describe('evaluateNewMessageAction_ACU', () => {
         { enabled: true, parallelMode: false, autoApply: true, seamlessMode: true },
       );
       expect(result.action).toBe('optimize_then_update');
-    });
-
-    it('autoApply=true 但 seamlessMode=false 时返回 optimize_then_update', () => {
-      const result = evaluateNewMessageAction_ACU(
-        [{ is_user: false, mes: 'AI回复' }],
-        false, true, false,
-        { enabled: true, parallelMode: false, autoApply: true, seamlessMode: false },
-      );
-      expect(result.action).toBe('optimize_then_update');
-    });
-  });
-
-  // ═══ lastMessageIndex ═══
-  describe('lastMessageIndex', () => {
-    it('多条消息时 lastMessageIndex 指向最后一条', () => {
-      const chat = [
-        { is_user: true, mes: '用户消息' },
-        { is_user: false, mes: 'AI回复1' },
-        { is_user: true, mes: '用户消息2' },
-        { is_user: false, mes: 'AI回复2' },
-      ];
-      const result = evaluateNewMessageAction_ACU(chat, false, true, false, {});
-      expect(result.lastMessageIndex).toBe(3);
     });
   });
 

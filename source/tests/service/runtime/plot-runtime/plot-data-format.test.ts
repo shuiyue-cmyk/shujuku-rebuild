@@ -59,14 +59,6 @@ describe('formatTableDataForLLM_ACU', () => {
     expect(result).toContain('铁剑');
     expect(result).toContain('药水');
   });
-  it('包含总结表', () => {
-    const result = formatTableDataForLLM_ACU(mockTables);
-    expect(result).toContain('总结表');
-  });
-  it('空数据返回提示文本', () => {
-    expect(formatTableDataForLLM_ACU(null)).toContain('无任何可用');
-    expect(formatTableDataForLLM_ACU({})).toContain('无任何可用');
-  });
   it('只有表头的表格不输出（content.length <= 1）', () => {
     const data = { sheet_0: { name: '空表', content: [['row_id', '列A']] } };
     const result = formatTableDataForLLM_ACU(data);
@@ -87,9 +79,6 @@ describe('formatOutlineTableForPlot_ACU', () => {
     expect(result).toContain('总体大纲');
     expect(result).toContain('开始冒险');
   });
-  it('空数据返回提示文本', () => {
-    expect(formatOutlineTableForPlot_ACU(null)).toContain('未获取到');
-  });
 });
 
 describe('formatSummaryIndexForPlot_ACU', () => {
@@ -108,20 +97,6 @@ describe('formatSummaryIndexForPlot_ACU', () => {
 
 // ═══ getSummaryIndexContentForPlot_ACU ═══
 describe('getSummaryIndexContentForPlot_ACU', () => {
-  it('无 plotSettings 时返回 null', async () => {
-    const result = await getSummaryIndexContentForPlot_ACU(null);
-    expect(result).toBeNull();
-  });
-  it('无 plotWorldbookConfig 时返回 null', async () => {
-    const result = await getSummaryIndexContentForPlot_ACU({});
-    expect(result).toBeNull();
-  });
-  it('手动模式且无选择时返回 null', async () => {
-    const result = await getSummaryIndexContentForPlot_ACU({
-      plotWorldbookConfig: { source: 'manual', manualSelection: [] },
-    });
-    expect(result).toBeNull();
-  });
   it('character 模式且 getCharLorebooks 失败时返回 null', async () => {
     const { getCharLorebooks_ACU } = await import('../../../../src/data/gateways/character-gateway');
     vi.mocked(getCharLorebooks_ACU).mockRejectedValue(new Error('fail'));

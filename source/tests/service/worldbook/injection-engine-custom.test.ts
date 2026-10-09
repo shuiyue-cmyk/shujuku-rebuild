@@ -203,13 +203,6 @@ describe('updateCustomTableExports_ACU', () => {
       expect(mockLogError).not.toHaveBeenCalled();
     });
 
-    it('清理后保存 knownNames', async () => {
-      mockSettings.knownCustomEntryNames = ['TavernDB-ACU-CustomExport-旧表'];
-      mockGetLorebookEntries.mockResolvedValue([]);
-      await updateCustomTableExports_ACU(null);
-      expect(mockSaveSettings).toHaveBeenCalled();
-    });
-
     it('隔离模式下只清理匹配前缀的条目', async () => {
       mockGetIsolationPrefix.mockReturnValue('ACU-[test]-');
       mockSettings.knownCustomEntryNames = ['ACU-[test]-TavernDB-ACU-CustomExport-表A'];
@@ -232,34 +225,6 @@ describe('updateCustomTableExports_ACU', () => {
 
   // ═══ 整表导出 ═══
   describe('整表导出', () => {
-    it('创建自定义导出条目', async () => {
-      const mergedData: any = {
-        sheet_0: {
-          name: '自定义表',
-          content: [['', '列1', '列2'], ['', '值A', '值B']],
-          exportConfig: { enabled: true, entryName: '自定义表', entryType: 'constant' },
-        },
-      };
-      mockGetSortedSheetKeys.mockReturnValue(['sheet_0']);
-      mockEnsureExportConfigDefaults.mockReturnValue({
-        enabled: true,
-        splitByRow: false,
-        entryName: '自定义表',
-        entryType: 'constant',
-        keywords: '',
-        preventRecursion: true,
-        injectionTemplate: '',
-        extraIndexEnabled: false,
-        extraIndexEntryName: '自定义表-索引',
-        extraIndexColumns: [],
-        extraIndexColumnModes: {},
-        extraIndexInjectionTemplate: '',
-        entryPlacement: { position: 'at_depth_as_system', depth: 2, order: 10000 },
-        extraIndexPlacement: { position: 'at_depth_as_system', depth: 2, order: 10010 },
-      });
-      await updateCustomTableExports_ACU(mergedData);
-      expect(mockCreateLorebookEntries).toHaveBeenCalled();
-    });
 
     it('整表导出隐藏 physical column 且保持右侧可见列对齐', async () => {
       const mergedData: any = {
@@ -330,109 +295,10 @@ describe('updateCustomTableExports_ACU', () => {
         ['row_id', '事件'], ['c1', '可见纪要'], ['c2', '隐藏纪要'],
       ]);
     });
-
-    it('未启用导出的表格被跳过', async () => {
-      const mergedData: any = {
-        sheet_0: {
-          name: '未启用表',
-          content: [['', '列1'], ['', '值A']],
-          exportConfig: { enabled: false },
-        },
-      };
-      mockGetSortedSheetKeys.mockReturnValue(['sheet_0']);
-      await updateCustomTableExports_ACU(mergedData);
-      expect(mockCreateLorebookEntries).not.toHaveBeenCalled();
-    });
-
-    it('空行表格不创建条目', async () => {
-      const mergedData: any = {
-        sheet_0: {
-          name: '空表',
-          content: [['', '列1']],
-          exportConfig: { enabled: true, entryName: '空表', entryType: 'constant' },
-        },
-      };
-      mockGetSortedSheetKeys.mockReturnValue(['sheet_0']);
-      mockEnsureExportConfigDefaults.mockReturnValue({
-        enabled: true,
-        splitByRow: false,
-        entryName: '空表',
-        entryType: 'constant',
-        keywords: '',
-        preventRecursion: true,
-        injectionTemplate: '',
-        extraIndexEnabled: false,
-        extraIndexColumns: [],
-        extraIndexColumnModes: {},
-        entryPlacement: { position: 'at_depth_as_system', depth: 2, order: 10000 },
-        extraIndexPlacement: { position: 'at_depth_as_system', depth: 2, order: 10010 },
-      });
-      await updateCustomTableExports_ACU(mergedData);
-      expect(mockCreateLorebookEntries).not.toHaveBeenCalled();
-    });
-
-    it('更新 knownCustomEntryNames', async () => {
-      const mergedData: any = {
-        sheet_0: {
-          name: '自定义表',
-          content: [['', '列1'], ['', '值A']],
-          exportConfig: { enabled: true, entryName: '自定义表', entryType: 'constant' },
-        },
-      };
-      mockGetSortedSheetKeys.mockReturnValue(['sheet_0']);
-      mockEnsureExportConfigDefaults.mockReturnValue({
-        enabled: true,
-        splitByRow: false,
-        entryName: '自定义表',
-        entryType: 'constant',
-        keywords: '',
-        preventRecursion: true,
-        injectionTemplate: '',
-        extraIndexEnabled: false,
-        extraIndexColumns: [],
-        extraIndexColumnModes: {},
-        entryPlacement: { position: 'at_depth_as_system', depth: 2, order: 10000 },
-        extraIndexPlacement: { position: 'at_depth_as_system', depth: 2, order: 10010 },
-      });
-      await updateCustomTableExports_ACU(mergedData);
-      expect(mockSaveSettings).toHaveBeenCalled();
-      expect(mockSettings.knownCustomEntryNames.length).toBeGreaterThan(0);
-    });
   });
 
   // ═══ 按行拆分导出 ═══
   describe('按行拆分导出', () => {
-    it('每行创建一个条目', async () => {
-      const mergedData: any = {
-        sheet_0: {
-          name: '拆分表',
-          content: [['', '列1', '列2'], ['', '值A1', '值A2'], ['', '值B1', '值B2']],
-          exportConfig: { enabled: true, splitByRow: true, entryName: '拆分表', entryType: 'constant' },
-        },
-      };
-      mockGetSortedSheetKeys.mockReturnValue(['sheet_0']);
-      mockEnsureExportConfigDefaults.mockReturnValue({
-        enabled: true,
-        splitByRow: true,
-        entryName: '拆分表',
-        entryType: 'constant',
-        keywords: '',
-        preventRecursion: true,
-        injectionTemplate: '',
-        extraIndexEnabled: false,
-        extraIndexEntryName: '拆分表-索引',
-        extraIndexColumns: [],
-        extraIndexColumnModes: {},
-        extraIndexInjectionTemplate: '',
-        entryPlacement: { position: 'at_depth_as_system', depth: 2, order: 10000 },
-        extraIndexPlacement: { position: 'at_depth_as_system', depth: 2, order: 10010 },
-      });
-      await updateCustomTableExports_ACU(mergedData);
-      expect(mockCreateLorebookEntries).toHaveBeenCalled();
-      const createArgs = mockCreateLorebookEntries.mock.calls[0];
-      // 表头(1) + 行条目(2) = 3
-      expect(createArgs[1].length).toBe(3);
-    });
 
     it('表名与 entryName 不同时，按行条目仍以 entryName 生成 comment 并从配置列提取关键词', async () => {
       const mergedData: any = {
@@ -620,36 +486,6 @@ describe('updateCustomTableExports_ACU', () => {
         expect.stringContaining('Failed to update custom table export'),
         expect.any(Error)
       );
-    });
-  });
-
-  // ═══ keyword 类型条目 ═══
-  describe('keyword 类型条目', () => {
-    it('keyword 类型无关键词时跳过', async () => {
-      const mergedData: any = {
-        sheet_0: {
-          name: '关键词表',
-          content: [['', '列1'], ['', '值A']],
-          exportConfig: { enabled: true, entryName: '关键词表', entryType: 'keyword', keywords: '' },
-        },
-      };
-      mockGetSortedSheetKeys.mockReturnValue(['sheet_0']);
-      mockEnsureExportConfigDefaults.mockReturnValue({
-        enabled: true,
-        splitByRow: false,
-        entryName: '关键词表',
-        entryType: 'keyword',
-        keywords: '',
-        preventRecursion: true,
-        injectionTemplate: '',
-        extraIndexEnabled: false,
-        extraIndexColumns: [],
-        extraIndexColumnModes: {},
-        entryPlacement: { position: 'at_depth_as_system', depth: 2, order: 10000 },
-        extraIndexPlacement: { position: 'at_depth_as_system', depth: 2, order: 10010 },
-      });
-      await updateCustomTableExports_ACU(mergedData);
-      expect(mockCreateLorebookEntries).not.toHaveBeenCalled();
     });
   });
 

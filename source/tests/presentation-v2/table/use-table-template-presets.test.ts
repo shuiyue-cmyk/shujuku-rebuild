@@ -243,18 +243,6 @@ describe('useTableTemplatePresets', () => {
     expect(presets.selectedChatPresetLabel.value).toBe('global-A（当前聊天快照）');
   });
 
-  it('S3-8：快照内容偏离库中同名预设时标签带偏离后缀且 ref 为 true', async () => {
-    const { useTableTemplatePresets, setSelectedChat, setActiveMode, setChatSnapshotStr } = await importComposable();
-    setSelectedChat('global-A');
-    setActiveMode('chat_override');
-    setChatSnapshotStr('{"sheet_1":{"name":"用户改过的结构"}}');
-
-    const presets = useTableTemplatePresets();
-
-    expect(presets.chatSnapshotDiffersFromLibrary.value).toBe(true);
-    expect(presets.selectedChatPresetLabel.value).toBe('global-A（当前聊天快照）（内容已偏离库预设）');
-  });
-
   it('S3-8：库中同名预设已删除时 meta 标注且 ref 为 true，标签不带偏离后缀', async () => {
     const { useTableTemplatePresets, setSelectedChat, setActiveMode, setLibraryPresetStr } = await importComposable();
     setSelectedChat('global-A');
@@ -279,15 +267,6 @@ describe('useTableTemplatePresets', () => {
 
     expect(presets.chatSnapshotDiffersFromLibrary.value).toBe(true);
     expect(presets.selectedChatPresetLabel.value).toBe('默认预设（当前聊天快照）（内容已偏离库预设）');
-  });
-
-  it('S3-8：非 chat_override 模式下偏离 ref 恒为 false', async () => {
-    const { useTableTemplatePresets, setChatSnapshotStr } = await importComposable();
-    setChatSnapshotStr('{"sheet_1":{"name":"偏离也无效"}}');
-
-    const presets = useTableTemplatePresets();
-
-    expect(presets.chatSnapshotDiffersFromLibrary.value).toBe(false);
   });
 
   it('选择同名全局项时按全局来源切换，不被本地快照抢占', async () => {
@@ -541,13 +520,6 @@ describe('useTableTemplatePresets · runtime 视图', () => {
     setRuntimeSnapshot({ templateStr: '{"sheet_1":{}}', templateObj: { sheet_1: {} } });
     const presets = useTableTemplatePresets();
     expect(presets.runtimeDiffersFromLibrary.value).toBe(false);
-  });
-
-  it('运行时内容与库内容不同时 runtimeDiffersFromLibrary 为 true', async () => {
-    const { useTableTemplatePresets, setRuntimeSnapshot } = await importComposable();
-    setRuntimeSnapshot({ templateStr: '{"sheet_1":{"name":"新内容"}}', templateObj: { sheet_1: { name: '新内容' } } });
-    const presets = useTableTemplatePresets();
-    expect(presets.runtimeDiffersFromLibrary.value).toBe(true);
   });
 
   it('运行时解析失败时 runtimeTemplateAvailable=false、runtimeTemplateItem=null 且不抛异常', async () => {

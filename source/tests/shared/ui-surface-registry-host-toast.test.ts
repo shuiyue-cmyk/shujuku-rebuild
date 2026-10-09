@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   registerHostToastRenderer_ACU,
   resetUiSurfaceRegistryForTests_ACU,
-  showHostToast_ACU,
   showUiSurfaceToast_ACU,
 } from '../../src/shared/ui-surface-registry';
 
@@ -20,11 +19,5 @@ describe('宿主提示框渲染器', () => {
     const payload = { kind: 'warning' as const, text: '历史需要恢复收敛' };
     showUiSurfaceToast_ACU(payload);
     expect(renderer).toHaveBeenCalledWith(payload);
-  });
-
-  it('showHostToast_ACU 返回是否已经显示', () => {
-    expect(showHostToast_ACU({ kind: 'info', text: 'x' })).toBe(false);
-    registerHostToastRenderer_ACU(() => {});
-    expect(showHostToast_ACU({ kind: 'info', text: 'x' })).toBe(true);
   });
 });

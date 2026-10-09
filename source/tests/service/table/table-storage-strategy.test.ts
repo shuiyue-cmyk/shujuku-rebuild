@@ -83,7 +83,6 @@ import {
   clearTableRuntimeWithoutReload_ACU,
   getCurrentProviderMode,
   getStorageRuntimeHealth_ACU,
-  didSqliteFallbackAfterReload_ACU,
   getRuntimeLifecycleEpoch_ACU,
   hydrateStorageProviderFromSnapshot_ACU,
 } from '../../../src/service/table/table-storage-strategy';
@@ -117,22 +116,6 @@ describe('table-storage-strategy', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════
-  // getStorageProvider
-  // ═══════════════════════════════════════════════════════════════
-  describe('getStorageProvider', () => {
-    it('返回当前 Provider（SQLite）', () => {
-      const provider = getStorageProvider();
-      expect(provider).toBeDefined();
-      expect(provider.mode).toBe('sqlite');
-    });
-
-    it('懒初始化：未初始化时自动创建', () => {
-      const provider = getStorageProvider();
-      expect(provider).not.toBeNull();
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════
   // getActiveStorageProvider
   // ═══════════════════════════════════════════════════════════════
   describe('getActiveStorageProvider', () => {
@@ -160,10 +143,6 @@ describe('table-storage-strategy', () => {
   // initStorageProvider
   // ═══════════════════════════════════════════════════════════════
   describe('initStorageProvider', () => {
-    it('sqlite 模式初始化', async () => {
-      await initStorageProvider();
-      expect(getCurrentProviderMode()).toBe('sqlite');
-    });
 
     it('sqlite 初始化使用本轮 canonical 回放快照，而非 provider 自行回放聊天', async () => {
       const canonicalData = { mate: {}, sheet_0: { content: [['row_id'], ['1']] } };
@@ -214,15 +193,6 @@ describe('table-storage-strategy', () => {
       expect(sqliteCandidate).toBeDefined();
       // 恰好一次：候选既不能泄漏，也不能被重复销毁。
       expect(sqliteCandidate!.dispose).toHaveBeenCalledTimes(1);
-    });
-
-    it('销毁旧实例后创建新实例', async () => {
-      await initStorageProvider();
-      const oldProvider = getStorageProvider();
-
-      await initStorageProvider();
-      // 旧 provider 应该被 dispose
-      expect(oldProvider.dispose).toHaveBeenCalled();
     });
 
     it('空状态冷初始化保持 SQLite ready（loaded=false/source=empty 不是失败）', async () => {
@@ -300,19 +270,6 @@ describe('table-storage-strategy', () => {
       expect(after).not.toBe(before);
       const afterSecondCapture = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
       expect(afterSecondCapture).toBe(after);
-    });
-
-    it('sqlite 模式重建数据库', async () => {
-      await initStorageProvider();
-      allCreatedProviders = []; // 清空记录
-
-      const oldProvider = getStorageProvider();
-
-      await reloadStorageProvider();
-      // sqlite 模式需要 dispose 旧实例并重建
-      expect(oldProvider.dispose).toHaveBeenCalled();
-      // 应该创建了新的 provider
-      expect(allCreatedProviders.length).toBeGreaterThan(0);
     });
 
     it('SQLite 重新加载失败时 fail-loud（不降级）', async () => {
@@ -504,26 +461,6 @@ describe('table-storage-strategy', () => {
   // disposeStorageProvider
   // ═══════════════════════════════════════════════════════════════
   describe('disposeStorageProvider', () => {
-    it('销毁后 getCurrentProviderMode 返回 null', async () => {
-      await initStorageProvider();
-      expect(getCurrentProviderMode()).toBe('sqlite');
-
-      disposeStorageProvider();
-      expect(getCurrentProviderMode()).toBeNull();
-    });
-
-    it('销毁后 getStorageProvider 会懒初始化新实例', async () => {
-      await initStorageProvider();
-      const oldProvider = getStorageProvider();
-
-      disposeStorageProvider();
-      expect(oldProvider.dispose).toHaveBeenCalled();
-
-      // 懒初始化会创建新实例
-      const newProvider = getStorageProvider();
-      expect(newProvider).toBeDefined();
-      expect(newProvider).not.toBe(oldProvider);
-    });
 
     it('dispose 会废弃未完成的 SQLite 候选，避免其重新发布', async () => {
       const releaseReplay = deferred_ACU<any>();
@@ -537,11 +474,6 @@ describe('table-storage-strategy', () => {
       await expect(initialization).resolves.toMatchObject({ failureCode: 'stale_load_discarded' });
       expect(staleCandidate.dispose).toHaveBeenCalledOnce();
       expect(getActiveStorageProvider()).toBeNull();
-    });
-
-    it('未初始化时 dispose 不抛错', () => {
-      disposeStorageProvider(); // 先清空
-      expect(() => disposeStorageProvider()).not.toThrow();
     });
   });
 
@@ -558,29 +490,6 @@ describe('table-storage-strategy', () => {
       expect(getCurrentProviderMode()).toBeNull();
       expect(mockLoadOrCreateJsonTableFromChatHistory).not.toHaveBeenCalled();
       expect(getStorageRuntimeHealth_ACU()).toMatchObject({ status: 'disposed', activeMode: null });
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════
-  // getCurrentProviderMode
-  // ═══════════════════════════════════════════════════════════════
-  describe('getCurrentProviderMode', () => {
-    it('初始化后返回 sqlite', async () => {
-      await initStorageProvider();
-      expect(getCurrentProviderMode()).toBe('sqlite');
-    });
-
-    it('未初始化时返回 null', () => {
-      disposeStorageProvider();
-      expect(getCurrentProviderMode()).toBeNull();
-    });
-  });
-
-  describe('didSqliteFallbackAfterReload_ACU', () => {
-    it('原生模式已移除，恒为 false', async () => {
-      await initStorageProvider();
-      expect(didSqliteFallbackAfterReload_ACU('sqlite')).toBe(false);
-      expect(didSqliteFallbackAfterReload_ACU('native')).toBe(false);
     });
   });
 

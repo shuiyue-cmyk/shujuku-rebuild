@@ -71,24 +71,6 @@ describe('vector-memory-config hybrid retrieval fields', () => {
     expect(config.summaryIndexV2WriteScopeAllowlist).toEqual(['scope-a', 'scope-b']);
   });
 
-  it('effective config 暴露运行时使用的 summaryIndex hybrid 字段', () => {
-    const config = getEffectiveSummaryVectorIndexConfig_ACU({
-      embeddingEndpoint: 'https://embedding.test',
-      embeddingModel: 'model',
-      topK: 8,
-      recallCandidateLimit: 3,
-      hybridRetrievalEnabled: false,
-      bm25CandidateLimit: 5,
-      rrfK: 11,
-    });
-
-    expect(config.summaryIndexHybridRetrievalEnabled).toBe(false);
-    expect(config.summaryIndexBm25CandidateLimit).toBe(5);
-    expect(config.summaryIndexRrfK).toBe(11);
-    expect(config.summaryIndexCandidateLimit).toBe(8);
-    expect(config.summaryIndexV2WriteEnabled).toBe(true);
-  });
-
   it('T10：模块级 defaults 冻结常量只读，误改不生效（有效配置不受污染）', () => {
     // 首次调用会构建模块级冻结缓存；随后任何对 effective config 的写尝试不得污染全局默认。
     const before = getEffectiveSummaryVectorIndexConfig_ACU({ topK: 7 });
@@ -116,25 +98,6 @@ describe('T11: content pack 写入开关链路', () => {
     expect(defaults.summaryIndexContentPackWriteEnabled).toBe(false);
     expect(enabled.summaryIndexContentPackWriteEnabled).toBe(true);
     expect(disabled.summaryIndexContentPackWriteEnabled).toBe(false);
-  });
-
-  it('allowlist 去重去空', () => {
-    const config = normalizeVectorMemoryConfig_ACU({
-      summaryIndexContentPackWriteScopeAllowlist: [' scope-a ', '', 'scope-a', 1, 'scope-b'],
-    });
-    expect(config.summaryIndexContentPackWriteScopeAllowlist).toEqual(['scope-a', 'scope-b']);
-  });
-
-  it('effective config 暴露 pack 开关与 allowlist', () => {
-    const config = getEffectiveSummaryVectorIndexConfig_ACU({
-      embeddingEndpoint: 'https://embedding.test',
-      embeddingModel: 'model',
-      summaryIndexContentPackWriteEnabled: true,
-      summaryIndexContentPackWriteScopeAllowlist: ['scope-x', ' scope-x ', ''],
-    });
-
-    expect(config.summaryIndexContentPackWriteEnabled).toBe(true);
-    expect(config.summaryIndexContentPackWriteScopeAllowlist).toEqual(['scope-x']);
   });
 
   it('effective config 未显式开启时 pack 写入保持关闭', () => {

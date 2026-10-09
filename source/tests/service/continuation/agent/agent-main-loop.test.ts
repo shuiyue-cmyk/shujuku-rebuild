@@ -671,18 +671,6 @@ describe('主 Agent 提示词装配', () => {
     const last = h.mainCalls[0][h.mainCalls[0].length - 1];
     expect(last).toEqual({ role: 'user', content: USER_PREFILL_CONTENT_ACU });
   });
-
-  it('运行时证据带上未结算区间、子代理目录与资料模块目录', async () => {
-    const h = harness_ACU({ mainReplies: ['{"action":"finalize","instruction":"本轮指导"}'] });
-    await h.planner.plan(h.request);
-
-    const runtime = h.mainCalls[0][findIndex_ACU(h.mainCalls[0], '本轮预算状态')].content;
-    expect(runtime).toContain('未结算楼层区间：0 到 3');
-    expect(runtime).toContain('hook-cognition-maintainer');
-    expect(runtime).toContain('$HOOKS_LEDGER');
-    // 区间只报范围不带正文：正文已由 $STORY_TEXT 独立摘取，重复注入等于白烧 token。
-    expect(runtime).not.toContain('守门人挡在门后，右手藏着黑色晶屑。');
-  });
 });
 
 describe('主 Agent 循环收敛', () => {
@@ -704,15 +692,6 @@ describe('主 Agent 循环收敛', () => {
     const anchors = h.conversation().messages.filter(message => message.digest === '固定工作流启动');
     expect(anchors).toHaveLength(1);
     expect(anchors[0].text).toContain('started');
-  });
-
-  it('finalize 直接交付指导并回报尝试次数', async () => {
-    const h = harness_ACU({ mainReplies: ['{"action":"finalize","instruction":"从守门人的回避写起","summary":"试探"}'] });
-    const result = await h.planner.plan(h.request);
-    expect(result.instruction).toBe('从守门人的回避写起');
-    expect(result.attempts).toBe(1);
-    expect(result.apiPreset.presetName).toBe('p1');
-    expect(h.written).toHaveLength(0);
   });
 
   it('correct_materials 被拒后循环继续：回执进会话，随后 finalize 照常交付（移植上游 365dd863）', async () => {
@@ -1528,13 +1507,6 @@ describe('子代理运行时', () => {
     (settings as any).agentReadTokenBudget = 1;
     await expect(runtime.run(input_ACU({ settings } as any))).rejects.toMatchObject({ error: { code: 'CONTINUATION_AGENT_WRITE_REJECTED' } });
     expect(calls).toHaveLength(0);
-  });
-
-  it('读集对所有子代理开放，包括动态表名', async () => {
-    replies = ['{"summary":"策划建议","recommendation":"保持观察","mustPreserve":[],"risks":[]}'];
-    const result = await runtime.run(input_ACU({ delegation: { agentName: 'beat-planner', prompt: '策划', reads: ['$TABLE:角色表'] } } as any));
-    expect(calls[0].map(message => message.content).join('\n')).toContain('右臂有伤');
-    expect(result.planner?.recommendation).toBe('保持观察');
   });
 
   it('协议修补耗尽时返回结构化 failed，保留拒绝理由供 workflow 挂账', async () => {

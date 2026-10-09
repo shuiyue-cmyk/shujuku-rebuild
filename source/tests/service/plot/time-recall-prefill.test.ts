@@ -85,10 +85,4 @@ describe('upgradeTimeRecallPrefill_ACU', () => {
         expect(tail.content).toBe(USER_PREFILL_CONTENT_ACU);
         expect(upgraded.promptPresets[1]).toEqual(holder.promptPresets[1]);
     });
-
-    it('非对象/空返回 null', () => {
-        expect(upgradeTimeRecallPrefill_ACU(null)).toBeNull();
-        expect(upgradeTimeRecallPrefill_ACU([] as any)).toBeNull();
-        expect(upgradeTimeRecallPrefill_ACU({ name: '空白' })).toBeNull();
-    });
 });

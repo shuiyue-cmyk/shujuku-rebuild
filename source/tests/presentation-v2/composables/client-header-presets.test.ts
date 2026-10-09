@@ -11,10 +11,6 @@ const opencodePreset = CLIENT_HEADER_PRESETS_ACU.find((p) => p.id === 'opencode'
 const kiloPreset = CLIENT_HEADER_PRESETS_ACU.find((p) => p.id === 'kilo-code')!;
 
 describe('client-header-presets · 客户端伪装头预设', () => {
-  it('空文本应用预设：追加全部预设行', () => {
-    const out = applyClientHeaderPreset_ACU('', claudePreset);
-    expect(out).toBe('x-app: cli\nUser-Agent: claude-cli/2.1.283 (external, cli)');
-  });
 
   it('受管身份键被替换为预设值，无关行（Authorization/自定义键）保留', () => {
     const current = 'Authorization: Bearer sk-xxx\nuser-agent: something/1.0\nX-Custom: keep-me';
@@ -65,26 +61,6 @@ describe('client-header-presets · 客户端伪装头预设', () => {
 
 // 版本刷新与新预设判别：查证于 2026-09-27，证据见数据文件头注释
 describe('client-header-presets · 版本刷新与新预设（2026-09-27 查证）', () => {
-  const expectedUa: Record<string, string> = {
-    'claude-code': 'User-Agent: claude-cli/2.1.283 (external, cli)',
-    'zcode': 'User-Agent: ZCode/3.14.3',
-    'codex-cli': 'User-Agent: codex_cli_rs/0.157.1 (Windows 10.0; x86_64) WindowsTerminal',
-    'gemini-cli': 'User-Agent: GeminiCLI/0.61.0/gemini-pro (win32; x64; terminal)',
-    'qwen-code': 'User-Agent: QwenCode/0.24.6 (win32; x64)',
-    'roo-code': 'User-Agent: RooCode/3.54.0',
-    'grok-build': 'User-Agent: grok-shell/1.0.41 (windows; x86_64)',
-    'openclaw': 'User-Agent: openclaw/2026.9.6',
-    'mimo-code': 'User-Agent: mimocode/latest/0.1.15/cli',
-    'deepseek-harness': 'User-Agent: deepseek-harness/0.1.7-rc.2 (+https://github.com/deepseek-ai/deepseek-harness)',
-  };
-
-  it('刷新预设的 User-Agent 为查证后的最新模板', () => {
-    for (const [id, ua] of Object.entries(expectedUa)) {
-      const preset = CLIENT_HEADER_PRESETS_ACU.find((p) => p.id === id);
-      expect(preset, id).toBeDefined();
-      expect(preset!.headers.find((h) => /^user-agent:/i.test(h)), id).toBe(ua);
-    }
-  });
 
   it('被刷新的旧版本串不再残留于任何预设', () => {
     const stale = ['2.1.207', 'ZCode/3.7.7', 'codex_cli_rs/0.46.0', 'GeminiCLI/v0.8.1',

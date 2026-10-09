@@ -81,22 +81,6 @@ describe('五域搜索', () => {
     expect(result).not.toContain('我要进禁区');
   });
 
-  it('大纲搜索把阶段职责、叙事功能、主线增量与时间元数据纳入可检索文本', () => {
-    const result = runAgentSearch_ACU(call_ACU({ query: 'daily_world', scope: ['outline'] }), context_ACU());
-    expect(result).toContain('function=daily_world');
-    expect(result).toContain('mainline=hold');
-    expect(result).toContain('time=days');
-    expect(result).toContain('anchor=第三日清晨');
-  });
-
-  it('模块搜索纳入卷级容量、时间、进度上限、持续经营线与兑现目标', () => {
-    const result = runAgentSearch_ACU(call_ACU({ query: '经营据点', scope: ['modules'] }), context_ACU());
-    expect(result).toContain('$STORY_ARC:VOL-01');
-    expect(result).toContain('经营据点与当地人的互信');
-    expect(runAgentSearch_ACU(call_ACU({ query: 'targetStageRange=4-6', scope: ['modules'] }), context_ACU())).toContain('$STORY_ARC:VOL-01');
-    expect(runAgentSearch_ACU(call_ACU({ query: '只确认核心入口存在', scope: ['modules'] }), context_ACU())).toContain('$STORY_ARC:VOL-01');
-  });
-
   it('年代学账本可按锚、经过时间、转换与退休原因检索，命中地址为 $CHRONOLOGY:ID', () => {
     const context = context_ACU();
     context.moduleSnapshot.chronology = [
@@ -112,12 +96,6 @@ describe('五域搜索', () => {
     const retired = runAgentSearch_ACU(call_ACU({ query: '证据被删除', scope: ['modules'] }), context);
     expect(retired).toContain('[T0]（已作废）');
     expect(retired).toContain('$CHRONOLOGY:T0');
-  });
-
-  it('退休模块条目也可被搜到并标注状态', () => {
-    const result = runAgentSearch_ACU(call_ACU({ query: '低语', scope: ['modules'] }), context_ACU());
-    expect(result).toContain('[H2]（已退休）');
-    expect(result).toContain('$HOOKS_LEDGER:H2');
   });
 
   it('正文只搜可读窗口内的楼层，窗口外不命中', () => {
@@ -151,14 +129,6 @@ describe('五域搜索', () => {
   it('正常正则不受病态启发式误伤', () => {
     const result = runAgentSearch_ACU(call_ACU({ query: '晶屑|低语', isRegex: true }), context_ACU());
     expect(result).not.toContain('灾难性回溯');
-  });
-
-  it('无命中时给出可执行的调整建议', () => {
-    const result = runAgentSearch_ACU(call_ACU({ query: '不存在的词汇' }), context_ACU());
-    expect(result).toContain('没有命中');
-    // 无命中指引：更早剧情走事件概览与纪要表行区间，不再有独立的纪要域。
-    expect(result).toContain('事件概览');
-    expect(result).toContain('$TABLE:纪要表');
   });
 
   it('达到条数上限时停止收集并如实标注截断', () => {

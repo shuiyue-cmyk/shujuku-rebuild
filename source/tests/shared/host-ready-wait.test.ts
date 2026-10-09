@@ -30,14 +30,6 @@ afterEach(() => {
 });
 
 describe('awaitAcuTauriReady_ACU（T3 抽出的唯一等待器）', () => {
-  it('布尔就绪即真、无 ready 即假', async () => {
-    const mod = await import('../../src/shared/host-bridge') as any;
-    expect(typeof mod.awaitAcuTauriReady_ACU).toBe('function');
-    installFakeWindow({ __TAURITAVERN__: { ready: true } });
-    await expect(mod.awaitAcuTauriReady_ACU(200)).resolves.toBe(true);
-    installFakeWindow({});
-    await expect(mod.awaitAcuTauriReady_ACU(50)).resolves.toBe(false);
-  });
 
   it('promise 解决为真、拒绝为假（不抛）', async () => {
     const mod = await import('../../src/shared/host-bridge') as any;

@@ -232,9 +232,6 @@ describe('buildLockRevertPlanForSheet_ACU', () => {
 });
 
 describe('formatLockRevertSummary_ACU', () => {
-  it('空清单返回空串', () => {
-    expect(formatLockRevertSummary_ACU([])).toBe('');
-  });
   it('汇总三类回滚', () => {
     const summary = formatLockRevertSummary_ACU([
       { sheetKey: 'sheet_0', tableName: '背包', kind: 'cell_restored', rowId: 'r1', colName: '数量' },

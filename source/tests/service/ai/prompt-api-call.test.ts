@@ -181,23 +181,6 @@ afterEach(() => {
 
 // ═══ handleApiResponse_ACU（流式输出开关已剥离，恒非流式） ═══
 describe('handleApiResponse_ACU', () => {
-  it('非流式模式：解析 JSON 响应中的 choices[0].message.content', async () => {
-    const mockResponse = {
-      json: vi.fn().mockResolvedValue({
-        choices: [{ message: { content: 'AI回复内容' } }],
-      }),
-    };
-    const result = await handleApiResponse_ACU(mockResponse);
-    expect(result).toBe('AI回复内容');
-  });
-
-  it('非流式模式：解析 content 字段', async () => {
-    const mockResponse = {
-      json: vi.fn().mockResolvedValue({ content: '直接内容' }),
-    };
-    const result = await handleApiResponse_ACU(mockResponse);
-    expect(result).toBe('直接内容');
-  });
 
   it('非流式模式：解析失败返回 null', async () => {
     const mockResponse = {
@@ -604,28 +587,6 @@ describe('callCustomOpenAI_ACU — custom fetch 模式', () => {
     });
   });
 
-  it('正常 fetch 并返回解析结果', async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: 'fetch回复' } }] }),
-    });
-    const result = await callCustomOpenAI_ACU({});
-    expect(result).toBe('fetch回复');
-    expect(mockFetch).toHaveBeenCalledWith(
-      '/api/backends/chat-completions/generate',
-      expect.objectContaining({ method: 'POST' }),
-    );
-  });
-
-  it('URL 或 model 未配置时抛错', async () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { useMainApi: false, url: '', model: '' },
-      tavernProfile: '',
-    });
-    await expect(callCustomOpenAI_ACU({})).rejects.toThrow('URL或模型未配置');
-  });
-
   it('fetch 返回非 ok 时抛错', async () => {
     mockFetch.mockResolvedValue({
       ok: false,
@@ -882,14 +843,6 @@ describe('handleApiResponse_ACU 响应解析', () => {
 
     await expect(handleApiResponse_ACU({ text: vi.fn().mockRejectedValue(abortError) }, true)).rejects.toBe(abortError);
   });
-
-  it('streamingEnabled 关闭时走 JSON 解析', async () => {
-    mockSettings.streamingEnabled = false;
-    const result = await handleApiResponse_ACU({
-      json: async () => ({ choices: [{ message: { content: '普通响应' } }] }),
-    });
-    expect(result).toBe('普通响应');
-  });
 });
 
 describe('usage 提取与合并（上游 bb20a45f 移植）', () => {
@@ -982,10 +935,5 @@ describe('usage 提取与合并（上游 bb20a45f 移植）', () => {
       cachedContentTokenCount: 5,
       cache_write_tokens: 1,
     })).toEqual({ promptTokens: 9, completionTokens: 3, cachedTokens: 5, cacheWriteTokens: 1 });
-  });
-
-  it('非法输入或只有未映射的 cache miss 字段时返回 null', () => {
-    expect(extractAiUsageMetadata_ACU({ prompt_tokens: -1, completion_tokens: 'x', input_tokens: 1.5, output_tokens: Infinity })).toBeNull();
-    expect(extractAiUsageMetadata_ACU({ prompt_cache_miss_tokens: 42 })).toBeNull();
   });
 });

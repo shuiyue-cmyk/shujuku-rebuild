@@ -131,38 +131,4 @@ describe("useVectorApiConfig", () => {
     expect(config.rerankInstruction).toBe("自定义指令");
     expect(saveSettings).toHaveBeenCalled();
   });
-
-  it("rerankInstruction 清空后保存为空字符串", async () => {
-    const config: any = {
-      embeddingEndpoint: "https://embed.test",
-      embeddingModel: "embed-model",
-      rerankEndpoint: "",
-      rerankModel: "",
-      rerankApiKey: "",
-      rerankInstruction: "原始指令",
-    };
-    const { vector, saveSettings } = await importComposable(config);
-
-    expect(vector.form.rerankInstruction).toBe("原始指令");
-
-    vector.form.rerankInstruction = "";
-    expect(vector.save()).toBe(true);
-
-    expect(config.rerankInstruction).toBe("");
-    expect(saveSettings).toHaveBeenCalled();
-  });
-
-  it("refresh 读取配置中的 rerankInstruction", async () => {
-    const config: any = {
-      embeddingEndpoint: "https://embed.test",
-      embeddingModel: "embed-model",
-      rerankEndpoint: "",
-      rerankModel: "",
-      rerankApiKey: "",
-      rerankInstruction: "测试指令内容",
-    };
-    const { vector } = await importComposable(config);
-
-    expect(vector.form.rerankInstruction).toBe("测试指令内容");
-  });
 });

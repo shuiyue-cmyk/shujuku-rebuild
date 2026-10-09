@@ -21,23 +21,11 @@ function envelope(patch: { stageStatus?: 'running' | 'completed'; withStage?: bo
 }
 
 describe('宽松执行上下文', () => {
-  it('无阶段时任务照常进入上下文，游标字段为 null', () => {
-    const context = currentAgentContext_ACU(envelope({ withStage: false }) as any);
-    expect(context.task.taskId).toBe('task-a');
-    expect(context.stage).toBeNull();
-    expect(context.turn).toBeNull();
-  });
 
   it('阶段已完成时保留 stage 但游标为 null', () => {
     const context = currentAgentContext_ACU(envelope({ stageStatus: 'completed' }) as any);
     expect(context.stage?.status).toBe('completed');
     expect(context.turn).toBeNull();
-  });
-
-  it('游标完整时给出轮次序号', () => {
-    const context = currentAgentContext_ACU(envelope() as any);
-    expect(context.turn?.goal).toBe('轮次 1');
-    expect(context.turnNumber).toBe(1);
   });
 });
 

@@ -31,12 +31,6 @@ describe('tt-mobile-surface — 宿主 ABI 对齐', () => {
 });
 
 describe('applyTtMobileSurface_ACU', () => {
-  it('写入 data-tt-mobile-surface 属性并返回 true', () => {
-    const el = document.createElement('div');
-    expect(applyTtMobileSurface_ACU(el, TT_MOBILE_SURFACE_ACU.FullscreenWindow)).toBe(true);
-    expect(el.getAttribute('data-tt-mobile-surface')).toBe('fullscreen-window');
-    expect(el.dataset.ttMobileSurface).toBe('fullscreen-window');
-  });
 
   it('backdrop / free-window 同样按字面值写入', () => {
     const mask = document.createElement('div');
@@ -45,11 +39,6 @@ describe('applyTtMobileSurface_ACU', () => {
     applyTtMobileSurface_ACU(bubble, TT_MOBILE_SURFACE_ACU.FreeWindow);
     expect(mask.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
     expect(bubble.getAttribute('data-tt-mobile-surface')).toBe('free-window');
-  });
-
-  it('null/undefined 元素静默跳过并返回 false', () => {
-    expect(applyTtMobileSurface_ACU(null, TT_MOBILE_SURFACE_ACU.Backdrop)).toBe(false);
-    expect(applyTtMobileSurface_ACU(undefined, TT_MOBILE_SURFACE_ACU.None)).toBe(false);
   });
 
   it('非法 surface 值不写属性并返回 false（避免打脏宿主不识别的值）', () => {

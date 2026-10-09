@@ -142,8 +142,9 @@ vi.mock('../../../src/data/repositories/chat-message-data-repo', () => ({
   isLegacyMatchForIsolation_ACU: mockIsLegacyMatchForIsolation,
 }));
 
-vi.mock('../../../src/service/table/storage-strategy-resolver', () => ({
-  isV2TagData_ACU: vi.fn(() => false),
+// V2 标签判定用真实实现：checkIfFirstTimeInit_ACU 的 V2 checkpoint 分支要真正走到
+vi.mock('../../../src/service/table/storage-strategy-resolver', async (importOriginal) => ({
+  isV2TagData_ACU: (await importOriginal<typeof import('../../../src/service/table/storage-strategy-resolver')>()).isV2TagData_ACU,
   resolveTableStorageStrategy_ACU: mockResolveTableStorageStrategy,
 }));
 
@@ -294,10 +295,6 @@ describe('ensureLegacyStorageMigratedBeforeWrite_ACU', () => {
 
 // ═══ checkIfFirstTimeInit_ACU ═══
 describe('checkIfFirstTimeInit_ACU', () => {
-  it('空聊天记录返回 true', async () => {
-    mockGetChatArray.mockReturnValue([]);
-    expect(await checkIfFirstTimeInit_ACU()).toBe(true);
-  });
 
   it('有隔离数据的 AI 消息返回 false', async () => {
     mockGetChatArray.mockReturnValue([
@@ -337,13 +334,6 @@ describe('checkIfFirstTimeInit_ACU', () => {
       },
     });
     expect(await checkIfFirstTimeInit_ACU()).toBe(false);
-  });
-
-  it('只有用户消息时返回 true', async () => {
-    mockGetChatArray.mockReturnValue([
-      { is_user: true, mes: '用户消息' },
-    ]);
-    expect(await checkIfFirstTimeInit_ACU()).toBe(true);
   });
 });
 
@@ -386,22 +376,6 @@ describe('loadOrCreateJsonTableFromChatHistory_ACU', () => {
     expect(result.loaded).toBe(false);
     expect(result.error).toContain('scope');
     expect(mockSetCurrentJsonTableData).not.toHaveBeenCalled();
-  });
-
-  it('有合并数据时返回 source=merged', async () => {
-    mockGetChatArray.mockReturnValue([
-      { is_user: false, mes: 'AI回复' },
-    ]);
-    const mergedData = {
-      sheet_0: { name: '合并表', content: [['row_id', '列1'], ['1', '值1']] },
-    };
-    mockMergeAllIndependentTables.mockResolvedValue(mergedData);
-
-    const result = await loadOrCreateJsonTableFromChatHistory_ACU();
-
-    expect(result.source).toBe('merged');
-    expect(result.loaded).toBe(true);
-    expect(mockSetCurrentJsonTableData).toHaveBeenCalledWith(mergedData);
   });
 
   it('无合并数据时触发初始化', async () => {

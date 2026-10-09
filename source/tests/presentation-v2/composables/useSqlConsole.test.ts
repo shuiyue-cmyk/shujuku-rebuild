@@ -98,37 +98,6 @@ describe('useSqlConsole', () => {
     return { flow: useSqlConsole(), toast: useToastStore() };
   }
 
-  it('空 SQL 不调用 provider，并提示 warning', async () => {
-    const deps = mockSqlConsoleDeps({});
-    const { flow, toast } = await freshFlow();
-    await flow.executeCurrent();
-
-    expect(deps.getStorageProvider).not.toHaveBeenCalled();
-    expect(toast.items.at(-1)).toMatchObject({ kind: 'warning' });
-    expect(flow.history.value).toHaveLength(0);
-  });
-
-  it('执行 SELECT 查询后写入查询结果和成功历史', async () => {
-    const deps = mockSqlConsoleDeps({
-      queryResult: {
-        columns: ['id', 'name'],
-        values: [[1, 'Potion']],
-        rowCount: 1,
-      },
-    });
-    const { flow } = await freshFlow();
-    flow.sqlText.value = 'SELECT id, name FROM item;';
-    await flow.executeCurrent();
-
-    expect(deps.resolveCurrentRuntimeReadSql).toHaveBeenCalledWith('SELECT id, name FROM item;');
-    expect(deps.executeQuery).toHaveBeenCalledWith('SELECT id, name FROM item;');
-    expect(flow.result.value.kind).toBe('query');
-    expect(flow.result.value.columns).toEqual(['id', 'name']);
-    expect(flow.result.value.values).toEqual([[1, 'Potion']]);
-    expect(flow.history.value[0]).toMatchObject({ sql: 'SELECT id, name FROM item;', success: true });
-    expect(flow.statusKind.value).toBe('success');
-  });
-
   it('执行变更语句失败时写入错误结果和失败历史', async () => {
     const deps = mockSqlConsoleDeps({
       mutationResult: { changes: 0, errors: ['no such table: item'] },

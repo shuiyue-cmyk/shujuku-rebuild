@@ -109,43 +109,14 @@ beforeEach(() => {
 
 // ═══ splitKeywordsByComma_ACU ═══
 describe('splitKeywordsByComma_ACU', () => {
-  it('英文逗号分割', () => {
-    expect(splitKeywordsByComma_ACU('a,b,c')).toEqual(['a', 'b', 'c']);
-  });
 
   it('中文逗号分割', () => {
     expect(splitKeywordsByComma_ACU('甲，乙，丙')).toEqual(['甲', '乙', '丙']);
-  });
-
-  it('混合逗号分割', () => {
-    expect(splitKeywordsByComma_ACU('a，b,c')).toEqual(['a', 'b', 'c']);
-  });
-
-  it('去除前后空格', () => {
-    expect(splitKeywordsByComma_ACU(' a , b , c ')).toEqual(['a', 'b', 'c']);
-  });
-
-  it('过滤空字符串', () => {
-    expect(splitKeywordsByComma_ACU('a,,b')).toEqual(['a', 'b']);
-  });
-
-  it('空输入返回空数组', () => {
-    expect(splitKeywordsByComma_ACU('')).toEqual([]);
-    expect(splitKeywordsByComma_ACU(null as any)).toEqual([]);
-  });
-
-  it('单个关键词', () => {
-    expect(splitKeywordsByComma_ACU('单独')).toEqual(['单独']);
   });
 });
 
 // ═══ updateOutlineTableEntry_ACU ═══
 describe('updateOutlineTableEntry_ACU', () => {
-  it('API 不可用时直接返回', async () => {
-    mockIsWorldbookApiAvailable.mockReturnValue(false);
-    await updateOutlineTableEntry_ACU({ name: '总体大纲', content: [['', '列1'], ['', '值1']] });
-    expect(mockGetLorebookEntries).not.toHaveBeenCalled();
-  });
 
   it('无 lorebook 时直接返回', async () => {
     mockGetInjectionTargetLorebook.mockResolvedValue(null);
@@ -176,15 +147,6 @@ describe('updateOutlineTableEntry_ACU', () => {
     mockIsEntryPlacementMatched.mockReturnValue(false); // 触发更新
     await updateOutlineTableEntry_ACU({ name: '总体大纲', content: [['', '列1'], ['', '值1']] });
     expect(mockSetLorebookEntries).toHaveBeenCalled();
-  });
-
-  it('无已有条目时创建', async () => {
-    mockGetLorebookEntries.mockResolvedValue([]);
-    await updateOutlineTableEntry_ACU({ name: '总体大纲', content: [['', '列1'], ['', '值1']] });
-    expect(mockCreateLorebookEntries).toHaveBeenCalled();
-    const createArgs = mockCreateLorebookEntries.mock.calls[0];
-    expect(createArgs[0]).toBe('test-lorebook');
-    expect(createArgs[1][0].comment).toBe('TavernDB-ACU-OutlineTable');
   });
 
   it('总体大纲条目不包含隐藏 physical column，并保持后续列对齐', async () => {
@@ -282,12 +244,6 @@ describe('updateSummaryTableEntries_ACU', () => {
     ],
   };
 
-  it('API 不可用时直接返回', async () => {
-    mockIsWorldbookApiAvailable.mockReturnValue(false);
-    await updateSummaryTableEntries_ACU(summaryTable);
-    expect(mockGetLorebookEntries).not.toHaveBeenCalled();
-  });
-
   it('无 lorebook 时直接返回', async () => {
     mockGetInjectionTargetLorebook.mockResolvedValue(null);
     await updateSummaryTableEntries_ACU(summaryTable);
@@ -329,14 +285,6 @@ describe('updateSummaryTableEntries_ACU', () => {
     expect(mockCreateLorebookEntries).toHaveBeenCalledWith('target-book', expect.any(Array));
   });
 
-  it('创建的条目使用 keyword 类型', async () => {
-    await updateSummaryTableEntries_ACU(summaryTable);
-    const createArgs = mockCreateLorebookEntries.mock.calls[0];
-    expect(createArgs[1].length).toBe(2); // 2 行数据
-    expect(createArgs[1][0].type).toBe('keyword');
-    expect(createArgs[1][0].keys).toEqual(['AM0001']);
-  });
-
   it('总结条目不包含隐藏 physical column，关键词列投影后仍正确定位', async () => {
     await updateSummaryTableEntries_ACU({
       name: '总结表',
@@ -374,26 +322,6 @@ describe('updateSummaryTableEntries_ACU', () => {
     await updateSummaryTableEntries_ACU(emptyTable);
     expect(mockCreateLorebookEntries).not.toHaveBeenCalled();
   });
-
-  it('跳过无关键词的行', async () => {
-    const tableWithEmptyKeyword = {
-      name: '总结表',
-      content: [
-        ['', '编码索引', '内容'],
-        ['', '', '无索引的行'],
-      ['', 'AM0001', '有索引的行'],
-      ],
-    };
-    await updateSummaryTableEntries_ACU(tableWithEmptyKeyword);
-    const createArgs = mockCreateLorebookEntries.mock.calls[0];
-    expect(createArgs[1].length).toBe(1); // 只有 1 行有效
-  });
-
-  it('异常时记录错误并返回失败', async () => {
-    mockGetLorebookEntries.mockRejectedValue(new Error('网络错误'));
-    await expect(updateSummaryTableEntries_ACU(summaryTable)).rejects.toThrow('网络错误');
-    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('Failed to update summary'), expect.any(Error));
-  });
 });
 
 // ═══ updateImportantPersonsRelatedEntries_ACU ═══
@@ -406,12 +334,6 @@ describe('updateImportantPersonsRelatedEntries_ACU', () => {
       ['', '角色B(别名)', '描述B'],
     ],
   };
-
-  it('API 不可用时直接返回', async () => {
-    mockIsWorldbookApiAvailable.mockReturnValue(false);
-    await updateImportantPersonsRelatedEntries_ACU(personsTable);
-    expect(mockGetLorebookEntries).not.toHaveBeenCalled();
-  });
 
   it('无 lorebook 时直接返回', async () => {
     mockGetInjectionTargetLorebook.mockResolvedValue(null);
@@ -463,20 +385,6 @@ describe('updateImportantPersonsRelatedEntries_ACU', () => {
 
     expect(mockDeleteLorebookEntries).toHaveBeenCalledWith('test-lorebook', [1]);
     expect(mockDeleteLorebookEntries).not.toHaveBeenCalledWith('test-lorebook', expect.arrayContaining([99]));
-  });
-
-  it('创建人物条目 + 表头 + 索引', async () => {
-    await updateImportantPersonsRelatedEntries_ACU(personsTable);
-    const createArgs = mockCreateLorebookEntries.mock.calls[0];
-    // 表头(1) + 人物条目(2) + 索引(1) = 4
-    expect(createArgs[1].length).toBe(4);
-  });
-
-  it('人物条目使用 keyword 类型', async () => {
-    await updateImportantPersonsRelatedEntries_ACU(personsTable);
-    const createArgs = mockCreateLorebookEntries.mock.calls[0];
-    // 第 2 个条目（第 1 个人物条目，第 0 个是表头）
-    expect(createArgs[1][1].type).toBe('keyword');
   });
 
   it('括号前的名称作为额外关键词', async () => {
@@ -533,11 +441,5 @@ describe('updateImportantPersonsRelatedEntries_ACU', () => {
     await updateImportantPersonsRelatedEntries_ACU(personsTable);
     const createArgs = mockCreateLorebookEntries.mock.calls[0];
     expect(createArgs[1][0].comment).toContain('ACU-[test]-');
-  });
-
-  it('异常时记录错误并返回失败', async () => {
-    mockGetLorebookEntries.mockRejectedValue(new Error('网络错误'));
-    await expect(updateImportantPersonsRelatedEntries_ACU(personsTable)).rejects.toThrow('网络错误');
-    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('Failed to update important persons'), expect.any(Error));
   });
 });

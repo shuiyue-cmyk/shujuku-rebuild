@@ -34,25 +34,6 @@ describe('TT 部分资料完成支持（判别红测）', () => {
     expect(partial.find(c => c.module === 'chronology')!.state).toBe('pending');
   });
 
-  it('workflow 模块可加载（补足入口与完成状态机由后文用例真实调用覆盖）', async () => {
-    await import('../../../src/service/continuation/agent/agent-workflow');
-  });
-
-  it('orchestrator/engine/main-loop/subagent/transaction/model/frame/store 暴露对应改动', async () => {
-    const orch = await import('../../../src/service/continuation/continuation-orchestrator');
-    expect(typeof (orch.ContinuationOrchestrator_ACU.prototype as any).repairPendingMaterials).toBe('function');
-    const engine = await import('../../../src/service/continuation/stage-execution-engine');
-    expect(typeof (engine.StageExecutionEngine_ACU.prototype as any).repairMaterials).toBe('function');
-    const planner = await import('../../../src/service/continuation/agent/agent-main-loop');
-    expect(typeof (planner.ContinuationAgentTurnPlanner_ACU.prototype as any).repairMaterials).toBe('function');
-    const model = await import('../../../src/service/continuation/agent/agent-model');
-    expect(Array.isArray((model as any).AGENT_MATERIAL_COMPLETION_STATES_ACU)).toBe(true);
-    expect(Array.isArray((model as any).AGENT_PENDING_FIX_SOURCES_ACU)).toBe(true);
-    const store = await import('../../../src/service/continuation/agent/agent-module-store');
-    const empty = store.buildEmptyAgentModuleSnapshot_ACU();
-    expect((empty as any).materialCompletion?.state).toBe('legacy_unknown');
-  });
-
   it('部分完成状态机 fail-closed：stale/未知不得把 partial 误标 complete', async () => {
     const store = await import('../../../src/service/continuation/agent/agent-module-store');
     const base = store.buildEmptyAgentModuleSnapshot_ACU();

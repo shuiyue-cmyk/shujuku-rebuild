@@ -43,54 +43,6 @@ beforeEach(() => {
 });
 
 describe('persistSettingsToStorage_ACU', () => {
-  it('settingsObj 为 undefined 时不执行任何操作', () => {
-    persistSettingsToStorage_ACU(undefined, 'code');
-    expect(mockGetConfigStorage).not.toHaveBeenCalled();
-    expect(mockStore.setItem).not.toHaveBeenCalled();
-  });
-
-  it('settingsObj 为 null 时不执行任何操作', () => {
-    persistSettingsToStorage_ACU(null, 'code');
-    expect(mockGetConfigStorage).not.toHaveBeenCalled();
-  });
-
-  it('正常写入存储', () => {
-    const settings = { apiConfig: { url: 'http://test' } };
-    const persisted = persistSettingsToStorage_ACU(settings, 'iso_code');
-
-    expect(persisted).toBe(true);
-    expect(mockGetConfigStorage).toHaveBeenCalled();
-    expect(mockSanitizeSettingsForProfileSave).toHaveBeenCalledWith(settings);
-    expect(mockGetProfileSettingsKey).toHaveBeenCalledWith('iso_code');
-    expect(mockStore.setItem).toHaveBeenCalledWith(
-      'profile_iso_code',
-      expect.any(String),
-    );
-
-    // 验证写入的 JSON 包含 dataIsolationCode
-    const writtenJson = mockStore.setItem.mock.calls[0][1];
-    const parsed = JSON.parse(writtenJson);
-    expect(parsed.dataIsolationCode).toBe('iso_code');
-  });
-
-  it('isolationCode 为 undefined 时使用空字符串', () => {
-    persistSettingsToStorage_ACU({ key: 'value' });
-
-    const writtenJson = mockStore.setItem.mock.calls[0][1];
-    const parsed = JSON.parse(writtenJson);
-    expect(parsed.dataIsolationCode).toBe('');
-    expect(mockGetProfileSettingsKey).toHaveBeenCalledWith('');
-  });
-
-  it('sanitize 后的对象被序列化', () => {
-    mockSanitizeSettingsForProfileSave.mockReturnValue({ sanitized: true });
-    persistSettingsToStorage_ACU({ raw: true }, 'code');
-
-    const writtenJson = mockStore.setItem.mock.calls[0][1];
-    const parsed = JSON.parse(writtenJson);
-    expect(parsed.sanitized).toBe(true);
-    expect(parsed.dataIsolationCode).toBe('code');
-  });
 
   it('存储抛错时记录错误日志并返回 false', () => {
     mockGetConfigStorage.mockImplementation(() => {

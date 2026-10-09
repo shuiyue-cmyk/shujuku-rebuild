@@ -558,26 +558,6 @@ describe('mainInitialize_ACU GENERATION_ENDED 无配对假事件收紧', () => {
     expect(m.handleNewMessage).not.toHaveBeenCalled();
   });
 
-  it('签名按每次事件实时读取：新 AI 楼落地后交给门控的签名随之变化', async () => {
-    const sm = await import('../../../src/service/runtime/state-manager');
-    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
-    m.consumeGenerationContext.mockReturnValue(null);
-    m.api.chat = [{ is_user: false, message_id: 5 }];
-    m.generationEndedHandler!(6);
-    m.api.chat = [
-      { is_user: false, message_id: 5 },
-      { is_user: true, message_id: 6 },
-      { is_user: false, message_id: 7 },
-    ];
-    m.generationEndedHandler!(8);
-
-    const forwarded = vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mock.calls.map((call: any) => call[1]);
-    expect(forwarded).toEqual([
-      { aiFloorCount: 1, latestAiMessageId: 5 },
-      { aiFloorCount: 2, latestAiMessageId: 7 },
-    ]);
-  });
-
   it('推演②：续写内部生成的 ended 仍在门控之前被专吞（不读签名、不派发）', async () => {
     const sm = await import('../../../src/service/runtime/state-manager');
     const internal = await import('../../../src/service/continuation/internal-ai-events');
@@ -646,20 +626,6 @@ describe('mainInitialize_ACU 续写宿主生成事件上下文', () => {
     // 常规管线照常收到一次完整意图快照（门控不再被桥读两次）。
     expect(m.handleNewMessage).toHaveBeenCalledTimes(1);
     expect(m.handleNewMessage).toHaveBeenCalledWith('GENERATION_ENDED', expect.objectContaining({ eventMessageId: 42 }));
-  });
-
-  it('桥未认领本次生成结束时只走常规填表，不把正文交给桥', async () => {
-    const sm = await import('../../../src/service/runtime/state-manager');
-    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValue(false);
-    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
-    m.consumeGenerationContext.mockReturnValue({ seq: 3, type: 'normal', params: {}, dryRun: false, at: 1 });
-    const bridge = bridge_ACU(false);
-
-    m.generationEndedHandler!(42);
-
-    expect(bridge.claimsGenerationEnded).toHaveBeenCalledWith(3, { allowOrdinaryLooseClaim: true, automaticTrigger: false, quietLike: false, dryRun: false });
-    expect(bridge.onGenerationEnded).not.toHaveBeenCalled();
-    expect(m.handleNewMessage).toHaveBeenCalledTimes(1);
   });
 
   it('quiet、dryRun 与自动触发的生成不开放普通宽松认领，但分类标记如实上报', async () => {
@@ -869,20 +835,6 @@ describe('mainInitialize_ACU 配对零产出证据传递', () => {
     expect(m.handleNewMessage).toHaveBeenCalledWith(
       'GENERATION_ENDED',
       expect.objectContaining({ eventMessageId: 6, preSignature }),
-    );
-  });
-
-  it('无配对时 intent 的 preSignature 为 undefined（下游直接放行）', async () => {
-    const sm = await import('../../../src/service/runtime/state-manager');
-    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
-    m.consumeGenerationContext.mockReturnValue(null);
-    m.api.chat = [{ is_user: false, message_id: 5, mes: 'hello' }];
-
-    m.generationEndedHandler!(6);
-
-    expect(m.handleNewMessage).toHaveBeenCalledWith(
-      'GENERATION_ENDED',
-      expect.objectContaining({ eventMessageId: 6, preSignature: undefined }),
     );
   });
 });

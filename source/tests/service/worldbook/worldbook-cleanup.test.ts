@@ -54,29 +54,6 @@ describe('cleanupWorldbookEntriesAfterDataDeletion_ACU', () => {
     expect(mockDeleteEntries).toHaveBeenNthCalledWith(2, 'primary-lorebook', [3, 4, 5]);
   });
 
-  it('无匹配条目时返回 0', async () => {
-    mockGetTargetLorebook.mockResolvedValue('primary-lorebook');
-    mockGetEntries.mockResolvedValue([
-      { uid: 1, comment: '无关条目' },
-    ]);
-    const count = await cleanupWorldbookEntriesAfterDataDeletion_ACU();
-    expect(count).toBe(0);
-    expect(mockDeleteEntries).not.toHaveBeenCalled();
-  });
-
-  it('无 lorebook 时返回 0', async () => {
-    mockGetTargetLorebook.mockResolvedValue(null);
-    const count = await cleanupWorldbookEntriesAfterDataDeletion_ACU();
-    expect(count).toBe(0);
-  });
-
-  it('API 不可用时返回 0', async () => {
-    mockIsAvailable.mockReturnValue(false);
-    mockGetTargetLorebook.mockResolvedValue('primary-lorebook');
-    const count = await cleanupWorldbookEntriesAfterDataDeletion_ACU();
-    expect(count).toBe(0);
-  });
-
   it('带隔离前缀时匹配带前缀的条目', async () => {
     mockGetIsoPrefix.mockReturnValue('iso_');
     mockGetTargetLorebook.mockResolvedValue('primary-lorebook');

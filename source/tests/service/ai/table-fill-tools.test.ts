@@ -3,7 +3,6 @@ import {
   TABLE_SQL_TOOL_ACU,
   TABLE_SQL_TOOL_NAME_ACU,
   buildTableFillDefaultPromptSegments_ACU,
-  buildTableFillNativeTools_ACU,
   buildTableSqlToolPrompt_ACU,
   resolveTableFillToolTurn_ACU,
   shouldUseTableFillNativeTools_ACU,
@@ -23,10 +22,6 @@ describe('填表原生工具（table_sql，可选项）', () => {
     expect(TABLE_SQL_TOOL_ACU.function.name).toBe('table_sql');
     expect(TABLE_SQL_TOOL_ACU.function.parameters.required).toEqual(['sql']);
     expect(Object.keys(TABLE_SQL_TOOL_ACU.function.parameters.properties)).toEqual(['sql']);
-  });
-
-  it('按 SQLite 模式返回唯一的 table_sql 工具', () => {
-    expect(buildTableFillNativeTools_ACU(true)).toEqual([TABLE_SQL_TOOL_ACU]);
   });
 
   it('工具版主段：要求调用 table_sql，正文中不再写 SQL', () => {

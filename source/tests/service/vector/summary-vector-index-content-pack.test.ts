@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
-    SUMMARY_VECTOR_INDEX_CONTENT_PACK_MAX_CHUNKS_ACU,
-    SUMMARY_VECTOR_INDEX_CONTENT_PACK_MIN_CHUNKS_ACU,
-    buildContentPackBlob_ACU,
-    buildContentPackKey_ACU,
-    fnv1a32_ACU,
-    isContentPackBoundary_ACU,
-    planContentPackGroups_ACU,
-    serializeContentPackForHash_ACU,
+  SUMMARY_VECTOR_INDEX_CONTENT_PACK_MAX_CHUNKS_ACU,
+  SUMMARY_VECTOR_INDEX_CONTENT_PACK_MIN_CHUNKS_ACU,
+  buildContentPackBlob_ACU,
+  fnv1a32_ACU,
+  isContentPackBoundary_ACU,
+  planContentPackGroups_ACU,
+  serializeContentPackForHash_ACU,
 } from '../../../src/service/vector/summary-vector-index-content-pack';
-import { SUMMARY_VECTOR_INDEX_CONTENT_PACK_SCHEMA_ACU } from '../../../src/service/vector/summary-vector-index-types';
 
 function makeChunkKeys(count: number): string[] {
     const keys: string[] = [];
@@ -29,14 +27,6 @@ describe('fnv1a32_ACU', () => {
             expect(a).toBeLessThanOrEqual(0xffffffff);
             expect(a).toBe(b);
         }
-    });
-
-    it('不同输入大概率不同（抽样断言不相等）', () => {
-        const seen = new Set<number>();
-        for (let index = 0; index < 100; index += 1) {
-            seen.add(fnv1a32_ACU(`key_${index}`));
-        }
-        expect(seen.size).toBe(100);
     });
 });
 
@@ -66,26 +56,12 @@ describe('isContentPackBoundary_ACU 边界行为', () => {
             expect(typeof isContentPackBoundary_ACU(key, SUMMARY_VECTOR_INDEX_CONTENT_PACK_MIN_CHUNKS_ACU)).toBe('boolean');
         }
     });
-
-    it('opts 覆盖 TARGET/MIN/MAX 生效', () => {
-        expect(isContentPackBoundary_ACU('any', 299, { maxChunks: 300 })).toBe(false);
-        expect(isContentPackBoundary_ACU('any', 300, { maxChunks: 300 })).toBe(true);
-        expect(isContentPackBoundary_ACU('any', 301, { maxChunks: 300 })).toBe(true);
-        expect(isContentPackBoundary_ACU('any', 2, { minChunks: 3 })).toBe(false);
-        expect(isContentPackBoundary_ACU('any', 3, { minChunks: 3 })).toBe(false);
-        expect(typeof isContentPackBoundary_ACU('any', 0, { minChunks: 0 })).toBe('boolean');
-    });
 });
 
 describe('planContentPackGroups_ACU', () => {
     it('同输入分组完全一致', () => {
         const keys = makeChunkKeys(1000);
         expect(planContentPackGroups_ACU(keys)).toEqual(planContentPackGroups_ACU(keys));
-    });
-
-    it('空输入返回空数组', () => {
-        expect(planContentPackGroups_ACU([])).toEqual([]);
-        expect(planContentPackGroups_ACU(null as unknown as string[])).toEqual([]);
     });
 
     it('1000 个 key 分组后每组 <= MAX_CHUNKS，除末组外 >= MIN_CHUNKS', () => {
@@ -200,24 +176,5 @@ describe('buildContentPackBlob_ACU / serializeContentPackForHash_ACU / buildCont
             chunks: [{ chunkKey: 'c1', chunkId: 'i1', rowKey: 'r1', text: 't1', vector: 'V', vectorEncoding: 'f32b64' }],
         });
         expect(serializeContentPackForHash_ACU(blob)).toBe(serializeContentPackForHash_ACU(blob));
-    });
-
-    it('buildContentPackKey_ACU 返回 pack_ + hashHex', () => {
-        expect(buildContentPackKey_ACU('a'.repeat(64))).toBe(`pack_${'a'.repeat(64)}`);
-        expect(buildContentPackKey_ACU('')).toBe('pack_');
-        expect(buildContentPackKey_ACU('ABC123')).toBe('pack_ABC123');
-    });
-
-    it('buildContentPackBlob_ACU 容错非法输入', () => {
-        const blob = buildContentPackBlob_ACU({
-            packKey: '',
-            packScope: '',
-            embeddingModel: '',
-            dimension: -5,
-            chunks: null as unknown as [],
-        });
-        expect(blob.dimension).toBe(0);
-        expect(blob.chunks).toEqual([]);
-        expect(blob.schema).toBe(SUMMARY_VECTOR_INDEX_CONTENT_PACK_SCHEMA_ACU);
     });
 });

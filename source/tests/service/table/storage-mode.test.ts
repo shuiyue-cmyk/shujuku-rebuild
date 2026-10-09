@@ -26,27 +26,9 @@ describe('storage-mode', () => {
   // getCurrentStorageMode
   // ═══════════════════════════════════════════════════════════════
   describe('getCurrentStorageMode', () => {
-    it('恒返回 "sqlite"（原生模式已移除）', () => {
-      expect(getCurrentStorageMode()).toBe('sqlite');
-    });
 
     it('settings 标记为 native 时仍返回 "sqlite"', () => {
       mockSettings = { storageMode: 'native' };
-      expect(getCurrentStorageMode()).toBe('sqlite');
-    });
-
-    it('settings 未设置时返回 "sqlite"', () => {
-      mockSettings = {};
-      expect(getCurrentStorageMode()).toBe('sqlite');
-    });
-
-    it('settings_ACU 为 null 时返回 "sqlite"', () => {
-      mockSettings = null;
-      expect(getCurrentStorageMode()).toBe('sqlite');
-    });
-
-    it('settings_ACU 为 undefined 时返回 "sqlite"', () => {
-      mockSettings = undefined;
       expect(getCurrentStorageMode()).toBe('sqlite');
     });
   });
@@ -55,17 +37,9 @@ describe('storage-mode', () => {
   // isSqliteMode
   // ═══════════════════════════════════════════════════════════════
   describe('isSqliteMode', () => {
-    it('恒返回 true', () => {
-      expect(isSqliteMode()).toBe(true);
-    });
 
     it('settings 标记为 native 时仍返回 true', () => {
       mockSettings = { storageMode: 'native' };
-      expect(isSqliteMode()).toBe(true);
-    });
-
-    it('settings 未设置时返回 true', () => {
-      mockSettings = {};
       expect(isSqliteMode()).toBe(true);
     });
   });

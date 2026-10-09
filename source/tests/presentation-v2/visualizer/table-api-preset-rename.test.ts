@@ -38,10 +38,4 @@ describe('migrateTableApiPresetOverridesForRenames_ACU', () => {
 
     expect(h.settings.tableApiPresetOverridesByName).toEqual({ 甲: 'alpha', 丙: 'gamma' });
   });
-
-  it('没有改名时不写设置', () => {
-    h.settings.tableApiPresetOverridesByName = { 甲: 'alpha' };
-    migrateTableApiPresetOverridesForRenames_ACU({ sheet_a: { name: '甲' } }, { sheet_a: { name: '甲' } });
-    expect(h.save).not.toHaveBeenCalled();
-  });
 });

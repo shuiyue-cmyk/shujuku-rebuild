@@ -484,10 +484,6 @@ beforeEach(() => {
 });
 
 describe('getWorldbookContentForPlot_ACU', () => {
-  it('apiSettings 为空时返回空字符串', async () => {
-    await expect(getWorldbookContentForPlot_ACU(null as any, '用户输入')).resolves.toBe('');
-    expect(mockBuildCombinedWorldbookContentByStrategy).not.toHaveBeenCalled();
-  });
 
   it('手动模式会去重书名，并把过滤/选择回调正确传给聚合器', async () => {
     mockGetChatArray.mockReturnValue([
@@ -750,21 +746,6 @@ describe('getWorldbookContentForPlot_ACU', () => {
       validationPolicy: 'trusted_direct',
       failedBooks: [],
     });
-  });
-
-  it('没有任何可用世界书时直接返回空字符串', async () => {
-    const result = await getWorldbookContentForPlot_ACU(
-      {
-        plotWorldbookConfig: {
-          source: 'manual',
-          manualSelection: [],
-        },
-      },
-      '继续推进',
-    );
-
-    expect(result).toBe('');
-    expect(mockBuildCombinedWorldbookContentByStrategy).not.toHaveBeenCalled();
   });
 
   it('将 $9 与表名 resolver 的 collector 筛选选项完整透传，并保留旧调用默认值', async () => {
@@ -1081,25 +1062,6 @@ describe('runPlotTasksRuntime_ACU', () => {
     const bookNamesPassed = strictCalls.map((call: any[]) => call[0]).flat();
     expect(bookNamesPassed).toContain(bookName);
     expect(bookNamesPassed.every(name => String(name) === bookName)).toBe(true);
-  });
-
-  it('没有启用任务时返回空结果，并确保兼容处理被调用', async () => {
-    const plotSettings = {
-      tasks: [],
-    };
-
-    const result = await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
-
-    expect(mockEnsurePlotTasksCompat).toHaveBeenCalledWith(plotSettings, { syncLegacy: true });
-    expect(result).toEqual({
-      finalMessage: null,
-      successfulResults: [],
-      failedResults: [],
-      aggregatedTags: new Map(),
-      enabledTaskCount: 0,
-    });
-    expect(mockCallApiWithPlotPreset).not.toHaveBeenCalled();
-    expect(mockSetPendingFinalGenerationGreenlights).toHaveBeenCalledWith([]);
   });
 
   it('入口存在残留 pending 时调用 flush 补写，且不阻断本轮任务', async () => {

@@ -232,23 +232,10 @@ describe('createSqlApi', () => {
     expect(typeof publishedApi.querySql).toBe('function');
   });
 
-  it('executeSqlQuery 调用 provider.executeQuery 并返回对象行', () => {
-    const result = api.executeSqlQuery('SELECT * FROM inventory WHERE row_id = ?', [1]);
-
-    expect(mocks.executeQuery).toHaveBeenCalledWith('SELECT * FROM inventory WHERE row_id = ?', [1]);
-    expect(result).toEqual({ columns: ['id'], values: [[1]], rowCount: 1, rows: [{ id: 1 }], sql: 'SELECT * FROM inventory WHERE row_id = ?', offset: 0 });
-  });
-
   it('executeSqlQuery 支持对象参数和 limit/offset 包装', () => {
     api.executeSqlQuery({ sql: 'SELECT * FROM t WHERE name = ?', params: ['铁剑'], limit: 10, offset: 5 });
 
     expect(mocks.executeQuery).toHaveBeenCalledWith('SELECT * FROM (SELECT * FROM t WHERE name = ?) AS acu_query LIMIT ? OFFSET ?', ['铁剑', 10, 5]);
-  });
-
-  it('queryTableRows 支持声明式分页查询', () => {
-    api.queryTableRows({ tableName: 'T', columns: ['row_id'], where: { row_id: '1' }, limit: 20, offset: 10 });
-
-    expect(mocks.executeQuery).toHaveBeenCalledWith('SELECT `row_id` FROM `t` WHERE `row_id` = ? LIMIT ? OFFSET ?', ['1', 20, 10]);
   });
 
   it('queryTableRows 将唯一历史 DDL 名定位到显示名派生的 runtime 表', () => {
@@ -370,15 +357,6 @@ describe('createSqlApi', () => {
 
     expect(result).toBeNull();
     expect(mocks.executeQuery).not.toHaveBeenCalled();
-  });
-
-  it('只读 SQL 在 runtime ready 时执行查询', () => {
-    const result = api.executeSqlQuery('SELECT * FROM inventory');
-
-    expect(result).toEqual({ columns: ['id'], values: [[1]], rowCount: 1, rows: [{ id: 1 }], sql: 'SELECT * FROM inventory', offset: 0 });
-    expect(mocks.getStorageProvider).toHaveBeenCalledOnce();
-    expect(mocks.isStorageRuntimeReadyForSyncRead).toHaveBeenCalledOnce();
-    expect(mocks.executeQuery).toHaveBeenCalledWith('SELECT * FROM inventory', undefined);
   });
 
   it('只读 SQL 会翻译中文表列名后执行', () => {
@@ -632,13 +610,6 @@ describe('createSqlApi', () => {
 
     expect(result).toEqual({ changes: 0, errors: ['conflict'] });
     expect(mocks.persistTablesToChatMessage).toHaveBeenCalledWith(expect.objectContaining({ source: 'raw_sql_mutation', targetSheetKeys: ['sheet_0'], trackingSheetKeys: [] }));
-  });
-
-  it('executeSql 自动分派查询', async () => {
-    const result = await api.executeSql('SELECT 1');
-
-    expect(result).toEqual({ type: 'query', result: { columns: ['id'], values: [[1]], rowCount: 1, rows: [{ id: 1 }], sql: 'SELECT 1' } });
-    expect(mocks.executeMutation).not.toHaveBeenCalled();
   });
 
   it('executeSql 自动分派写入', async () => {

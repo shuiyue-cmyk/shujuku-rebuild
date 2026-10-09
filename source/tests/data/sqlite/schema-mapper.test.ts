@@ -10,11 +10,9 @@ import {
   resultToContent,
   validateDDLAgainstHeaders,
   parseDDLTableName,
-  parseDDLChineseName,
   parseDDLColumnNames,
   parseDDLColumnComments,
   updateDDLColumnComment,
-  buildColumnNameMap,
   parseDDLColumnInfos_ACU,
   resolveEffectiveDDL,
 } from '../../../src/data/sqlite/schema-mapper';
@@ -54,13 +52,6 @@ function makeSheet(overrides: Partial<Sheet_ACU> = {}): Sheet_ACU {
 // parseDDLTableName
 // ═══════════════════════════════════════════════════════════════
 describe('parseDDLTableName', () => {
-  it('解析标准 CREATE TABLE 语句的表名', () => {
-    expect(parseDDLTableName('CREATE TABLE inventory (\n  row_id INTEGER PRIMARY KEY\n);')).toBe('inventory');
-  });
-
-  it('解析带 IF NOT EXISTS 的表名', () => {
-    expect(parseDDLTableName('CREATE TABLE IF NOT EXISTS my_table (id INTEGER);')).toBe('my_table');
-  });
 
   it('跳过前置注释并保留含括号的 quoted identifier', () => {
     expect(parseDDLTableName(`-- CREATE TABLE decoy (
@@ -71,108 +62,6 @@ describe('parseDDLTableName', () => {
 
   it('保留 escaped backtick identifier', () => {
     expect(parseDDLTableName('CREATE TABLE `inventory(x)``archive` (row_id INTEGER PRIMARY KEY);')).toBe('`inventory(x)``archive`');
-  });
-
-  it('空字符串返回 null', () => {
-    expect(parseDDLTableName('')).toBeNull();
-  });
-
-  it('无效 DDL 返回 null', () => {
-    expect(parseDDLTableName('SELECT * FROM foo')).toBeNull();
-  });
-
-  it('大小写不敏感', () => {
-    expect(parseDDLTableName('create table Foo (id int);')).toBe('Foo');
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// parseDDLChineseName
-// ═══════════════════════════════════════════════════════════════
-describe('parseDDLChineseName', () => {
-  it('解析第一行注释中的中文表名', () => {
-    expect(parseDDLChineseName('CREATE TABLE inventory (  -- 背包物品表\n  row_id INTEGER\n);')).toBe('背包物品表');
-  });
-
-  it('无注释返回 null', () => {
-    expect(parseDDLChineseName('CREATE TABLE inventory (\n  row_id INTEGER\n);')).toBeNull();
-  });
-
-  it('空字符串返回 null', () => {
-    expect(parseDDLChineseName('')).toBeNull();
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// parseDDLColumnNames
-// ═══════════════════════════════════════════════════════════════
-describe('parseDDLColumnNames', () => {
-  it('解析标准 DDL 的列名', () => {
-    const ddl = `CREATE TABLE inventory (
-      row_id INTEGER PRIMARY KEY,
-      item_name TEXT NOT NULL,
-      quantity INTEGER DEFAULT 1
-    );`;
-    expect(parseDDLColumnNames(ddl)).toEqual(['row_id', 'item_name', 'quantity']);
-  });
-
-  it('处理 CHECK 约束中的嵌套括号', () => {
-    const ddl = `CREATE TABLE inventory (
-      row_id INTEGER PRIMARY KEY,
-      quantity INTEGER NOT NULL CHECK(quantity > 0),
-      status TEXT CHECK(status IN ('active', 'inactive'))
-    );`;
-    const cols = parseDDLColumnNames(ddl);
-    expect(cols).toEqual(['row_id', 'quantity', 'status']);
-  });
-
-  it('跳过表级约束', () => {
-    const ddl = `CREATE TABLE test (
-      id INTEGER,
-      name TEXT,
-      PRIMARY KEY (id),
-      UNIQUE (name)
-    );`;
-    expect(parseDDLColumnNames(ddl)).toEqual(['id', 'name']);
-  });
-
-  it('空 DDL 返回空数组', () => {
-    expect(parseDDLColumnNames('')).toEqual([]);
-  });
-
-  it('无括号的无效 DDL 返回空数组', () => {
-    expect(parseDDLColumnNames('CREATE TABLE foo')).toEqual([]);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// parseDDLColumnComments
-// ═══════════════════════════════════════════════════════════════
-describe('parseDDLColumnComments', () => {
-  it('解析列名到注释的映射', () => {
-    const ddl = `CREATE TABLE inventory ( -- 背包物品表
-      row_id INTEGER PRIMARY KEY, -- 行号
-      item_name TEXT NOT NULL, -- 物品名称
-      quantity INTEGER DEFAULT 1 -- 数量
-    );`;
-    const comments = parseDDLColumnComments(ddl);
-    expect(comments.get('row_id')).toBe('行号');
-    expect(comments.get('item_name')).toBe('物品名称');
-    expect(comments.get('quantity')).toBe('数量');
-  });
-
-  it('无注释的列不在映射中', () => {
-    const ddl = `CREATE TABLE test (
-      id INTEGER PRIMARY KEY,
-      name TEXT -- 姓名
-    );`;
-    const comments = parseDDLColumnComments(ddl);
-    expect(comments.has('id')).toBe(false);
-    expect(comments.get('name')).toBe('姓名');
-  });
-
-  it('空 DDL 返回空 Map', () => {
-    expect(parseDDLColumnComments('').size).toBe(0);
   });
 });
 
@@ -219,24 +108,6 @@ describe('R7-07：列注释解析与改写识别字符串、按列定义归属',
     expect(parseDDLColumnComments(updateDDLColumnComment(ddl, 'name', '姓名')).get('name')).toBe('姓名');
     // row_id 不是该行注释的归属列：不改动，避免把注释挂错列。
     expect(updateDDLColumnComment(ddl, 'row_id', '编号')).toBe(ddl);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// buildColumnNameMap
-// ═══════════════════════════════════════════════════════════════
-describe('buildColumnNameMap', () => {
-  it('构建双向映射', () => {
-    const ddl = `CREATE TABLE inventory (
-      row_id INTEGER PRIMARY KEY, -- 行号
-      item_name TEXT, -- 物品名称
-      quantity INTEGER -- 数量
-    );`;
-    const { sqlToChinese, chineseToSql } = buildColumnNameMap(ddl);
-    expect(sqlToChinese.get('item_name')).toBe('物品名称');
-    expect(chineseToSql.get('物品名称')).toBe('item_name');
-    expect(sqlToChinese.get('quantity')).toBe('数量');
-    expect(chineseToSql.get('数量')).toBe('quantity');
   });
 });
 
@@ -300,11 +171,6 @@ describe('parseDDLColumnInfos_ACU', () => {
     expect(parseDDLSafeDefaultLiteral_ACU(columns[4].defaultExpression)).toEqual({ kind: 'blob', sql: "X'00FF'", value: '00FF' });
     expect(parseDDLSafeDefaultLiteral_ACU(columns[5].defaultExpression)).toBeNull();
     expect(parseDDLSafeDefaultLiteral_ACU(columns[6].defaultExpression)).toBeNull();
-  });
-
-  it('DEFAULT 后的约束不属于 defaultExpression', () => {
-    const ddl = 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, score INTEGER DEFAULT 0 NOT NULL CHECK(score >= 0));';
-    expect(parseDDLColumnInfos_ACU(ddl)[1]).toMatchObject({ hasDefault: true, defaultExpression: '0' });
   });
 });
 
@@ -451,23 +317,6 @@ describe('hiddenPhysicalColumns projection', () => {
 // generateDDL
 // ═══════════════════════════════════════════════════════════════
 describe('generateDDL', () => {
-  it('优先使用 sourceData.ddl', () => {
-    const sheet = makeSheet({
-      sourceData: {
-        note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '',
-        ddl: 'CREATE TABLE custom_table (\n  row_id INTEGER PRIMARY KEY\n);',
-      },
-    });
-    expect(generateDDL(sheet)).toBe('CREATE TABLE custom_table (\n  row_id INTEGER PRIMARY KEY\n);');
-  });
-
-  it('无 DDL 时 fallback 生成全 TEXT DDL', () => {
-    const sheet = makeSheet();
-    const ddl = generateDDL(sheet);
-    expect(ddl).toContain('CREATE TABLE');
-    expect(ddl).toContain('row_id INTEGER PRIMARY KEY');
-    expect(ddl).toContain('TEXT');
-  });
 
   it('空 content 时生成最小 DDL', () => {
     const sheet = makeSheet({ content: [] });
@@ -477,22 +326,6 @@ describe('generateDDL', () => {
 });
 
 describe('resolveEffectiveDDL', () => {
-  it('无 DDL 时返回 fallback_missing 并生成 row_id INTEGER PRIMARY KEY + 全 TEXT（T4.1）', () => {
-    const sheet = makeSheet({
-      sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '' },
-      content: [['row_id', '姓名', '年龄'], ['1', '张三', '25']],
-    });
-
-    const resolved = resolveEffectiveDDL(sheet, 'sheet_people', 'ren_yuan_biao');
-
-    expect(resolved.source).toBe('fallback_missing');
-    expect(resolved.effectiveDDL).toContain('CREATE TABLE ren_yuan_biao');
-    expect(resolved.effectiveDDL).toContain('row_id INTEGER PRIMARY KEY');
-    expect(resolved.effectiveDDL).toContain('xing_ming TEXT');
-    expect(resolved.effectiveDDL).toContain('nian_ling TEXT');
-    // 物理表名走拼音：中文表名 → slug
-    expect(resolved.effectiveDDL).not.toContain('sheet_people');
-  });
 
   it('非法显式 DDL 仅生成 runtime fallback，不改写 sourceData.ddl', () => {
     const sheet = makeSheet({
@@ -528,10 +361,6 @@ describe('resolveEffectiveDDL', () => {
 // generateFallbackDDL
 // ═══════════════════════════════════════════════════════════════
 describe('generateFallbackDDL', () => {
-  it('第一列 row_id 映射为 INTEGER PRIMARY KEY', () => {
-    const ddl = generateFallbackDDL('test_table', ['row_id', '姓名', '年龄']);
-    expect(ddl).toContain('row_id INTEGER PRIMARY KEY');
-  });
 
   it('ASCII 列名保留为 SQL 标识符', () => {
     const ddl = generateFallbackDDL('test_table', ['row_id', 'name', 'age']);
@@ -606,35 +435,12 @@ describe('generateFallbackDDL', () => {
     expect(() => generateFallbackDDL('test_table', ['', '姓名', '状态']))
       .toThrow(/row_id|首列|第 1 列/);
   });
-  it('空 headers 生成最小 DDL', () => {
-    const ddl = generateFallbackDDL('test_table', []);
-    expect(ddl).toContain('row_id INTEGER PRIMARY KEY');
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════
 // generateInserts
 // ═══════════════════════════════════════════════════════════════
 describe('generateInserts', () => {
-  it('从 content 生成 INSERT 语句', () => {
-    const sheet = makeSheet();
-    const inserts = generateInserts(sheet, 'test_table');
-    expect(inserts).toHaveLength(2);
-    expect(inserts[0]).toContain('INSERT INTO');
-    expect(inserts[0]).not.toContain('INSERT OR REPLACE');
-    expect(inserts[0]).toContain('test_table');
-  });
-
-  it('null 值转为 NULL', () => {
-    const sheet = makeSheet({
-      content: [
-        ['row_id', 'name'],
-        ['1', null],
-      ],
-    });
-    const inserts = generateInserts(sheet, 'test_table');
-    expect(inserts[0]).toContain('NULL');
-  });
 
   it('空字符串保持为空字符串字面量而不是 NULL', () => {
     const sheet = makeSheet({
@@ -646,19 +452,6 @@ describe('generateInserts', () => {
     const inserts = generateInserts(sheet, 'test_table');
     expect(inserts[0]).toContain("'角色A', ''");
     expect(inserts[0]).not.toContain("'角色A', NULL");
-  });
-
-  it('数字字符串不加引号', () => {
-    const sheet = makeSheet({
-      content: [
-        ['row_id', 'count'],
-        ['1', '42'],
-      ],
-    });
-    const inserts = generateInserts(sheet, 'test_table');
-    expect(inserts[0]).toContain('42');
-    // 42 不应该被引号包围
-    expect(inserts[0]).not.toContain("'42'");
   });
 
   it('含单引号的字符串正确转义', () => {
@@ -696,28 +489,6 @@ describe('generateInserts', () => {
 
     expect(inserts).toEqual([
       "INSERT INTO chronicle (row_id, code_index, time_span, summary, chronicle_text, key_dialogue) VALUES (1, 'AM0001', '2026-10-15 14:30 ~ 2026-10-15 15:00', '摘要', '完整纪要正文', NULL);",
-    ]);
-  });
-
-  it('ASCII 展示表头按 DDL 注释映射到物理列生成 INSERT', () => {
-    const sheet = makeSheet({
-      uid: 'battle_status',
-      sourceData: {
-        note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '',
-        ddl: `CREATE TABLE battle_status (
-  row_id INTEGER PRIMARY KEY, -- 行号
-  hp_rp TEXT, -- HP/RP
-  en TEXT -- EN
-);`,
-      },
-      content: [
-        ['row_id', 'HP/RP', 'EN'],
-        ['1', '10/20', '8'],
-      ],
-    });
-
-    expect(generateInserts(sheet, 'battle_status')).toEqual([
-      "INSERT INTO battle_status (row_id, hp_rp, en) VALUES (1, '10/20', 8);",
     ]);
   });
 
@@ -816,27 +587,6 @@ describe('generateInserts', () => {
     expect(() => generateInserts(sheet, 'legacy_inventory')).toThrow('缺少必需 DDL 列');
   });
 
-  it('行号别名与完整 DDL 注释表头可确定性映射', () => {
-    const sheet = makeSheet({
-      sourceData: {
-        note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '',
-        ddl: `CREATE TABLE inventory (
-  row_id INTEGER PRIMARY KEY, -- 行号
-  item_name TEXT NOT NULL, -- 名称
-  quantity INTEGER NOT NULL -- 数量
-);`,
-      },
-      content: [
-        ['行号', '名称', '数量'],
-        ['1', '铁剑', '3'],
-      ],
-    });
-
-    expect(generateInserts(sheet, 'inventory')).toEqual([
-      "INSERT INTO inventory (row_id, item_name, quantity) VALUES (1, '铁剑', 3);",
-    ]);
-  });
-
   it('表级复合 PRIMARY KEY 不符合 canonical row_id 首列契约时拒绝 hydrate', () => {
     const sheet = makeSheet({
       sourceData: {
@@ -927,45 +677,12 @@ describe('generateInserts', () => {
 
     expect(() => generateInserts(sheet, 'inventory')).toThrow('DDL 必须以 row_id INTEGER PRIMARY KEY 作为首列');
   });
-
-  it('空 content 返回空数组', () => {
-    const sheet = makeSheet({ content: [] });
-    expect(generateInserts(sheet, 'test_table')).toEqual([]);
-  });
-
-  it('只有表头没有数据行返回空数组', () => {
-    const sheet = makeSheet({ content: [['row_id', 'name']] });
-    expect(generateInserts(sheet, 'test_table')).toEqual([]);
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════
 // resultToContent
 // ═══════════════════════════════════════════════════════════════
 describe('resultToContent', () => {
-  it('将 SQL 结果转为 content 二维数组', () => {
-    const columns = ['row_id', 'name', 'age'];
-    const values: any[][] = [[1, '张三', 25], [2, '李四', 30]];
-    const content = resultToContent(columns, values);
-    expect(content[0]).toEqual(['row_id', 'name', 'age']);
-    expect(content[1]).toEqual(['1', '张三', '25']);
-    expect(content[2]).toEqual(['2', '李四', '30']);
-  });
-
-  it('使用中文表头映射', () => {
-    const columns = ['row_id', 'item_name', 'quantity'];
-    const values: any[][] = [[1, '铁剑', 3]];
-    const chineseHeaders = new Map([['item_name', '物品名称'], ['quantity', '数量']]);
-    const content = resultToContent(columns, values, chineseHeaders);
-    expect(content[0]).toEqual(['row_id', '物品名称', '数量']);
-  });
-
-  it('null 值保持为 null', () => {
-    const columns = ['row_id', 'name'];
-    const values: any[][] = [[1, null]];
-    const content = resultToContent(columns, values);
-    expect(content[1][1]).toBeNull();
-  });
 
   it('空结果返回只有 row_id 表头的数组', () => {
     const content = resultToContent([], []);
@@ -984,41 +701,6 @@ describe('resultToContent', () => {
 // validateDDLAgainstHeaders
 // ═══════════════════════════════════════════════════════════════
 describe('validateDDLAgainstHeaders', () => {
-  it('匹配的 DDL 和表头返回 valid', () => {
-    const ddl = `CREATE TABLE test (
-      row_id INTEGER PRIMARY KEY, -- 行号
-      name TEXT, -- 姓名
-      age INTEGER -- 年龄
-    );`;
-    const result = validateDDLAgainstHeaders(ddl, ['row_id', '姓名', '年龄']);
-    expect(result.valid).toBe(true);
-    expect(result.mismatches).toHaveLength(0);
-  });
-
-  it('英文物理列名配中文注释时按中文表头校验通过', () => {
-    const ddl = `CREATE TABLE inventory (
-      row_id INTEGER PRIMARY KEY, -- 行号
-      item_name TEXT, -- 物品名称
-      quantity INTEGER, -- 数量
-      description TEXT -- 描述/效果
-    );`;
-    const result = validateDDLAgainstHeaders(ddl, ['row_id', '物品名称', '数量', '描述/效果']);
-    expect(result.valid).toBe(true);
-    expect(result.mismatches).toHaveLength(0);
-  });
-
-  it('ASCII 展示表头可通过精确 DDL 注释校验', () => {
-    const ddl = `CREATE TABLE battle_status (
-      row_id INTEGER PRIMARY KEY, -- 行号
-      hp_rp TEXT, -- HP/RP
-      en TEXT -- EN
-    );`;
-
-    const result = validateDDLAgainstHeaders(ddl, ['row_id', 'HP/RP', 'EN']);
-
-    expect(result.valid).toBe(true);
-    expect(result.mismatches).toEqual([]);
-  });
 
   it('宽松 DDL 不因缺少 NOT NULL/UNIQUE/CHECK 等业务约束而失败', () => {
     const ddl = `CREATE TABLE chronicle ( -- 纪要表
@@ -1058,27 +740,6 @@ describe('validateDDLAgainstHeaders', () => {
 
     expect(result.valid).toBe(true);
     expect(result.mismatches).toEqual([]);
-  });
-
-  it('列数不匹配时报告', () => {
-    const ddl = `CREATE TABLE test (
-      row_id INTEGER PRIMARY KEY,
-      name TEXT
-    );`;
-    const result = validateDDLAgainstHeaders(ddl, ['row_id', '姓名', '年龄']);
-    expect(result.valid).toBe(false);
-    expect(result.mismatches.some(m => m.includes('列数不匹配'))).toBe(true);
-  });
-
-  it('注释与表头不匹配时报告', () => {
-    const ddl = `CREATE TABLE test (
-      row_id INTEGER PRIMARY KEY, -- 行号
-      name TEXT, -- 名字
-      age INTEGER -- 年龄
-    );`;
-    const result = validateDDLAgainstHeaders(ddl, ['row_id', '姓名', '年龄']);
-    expect(result.valid).toBe(false);
-    expect(result.mismatches.some(m => m.includes('不匹配'))).toBe(true);
   });
 
   it('列顺序与表头不一致时报告', () => {

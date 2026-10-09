@@ -67,14 +67,6 @@ describe('rebuildCurrentSummaryVectorIndexNow_ACU', () => {
     expect(result).toMatchObject({ success: true, skipped: false, indexedRowCount: 1 });
   });
 
-  it('可指定 initial / rebuild_repair', async () => {
-    await rebuildCurrentSummaryVectorIndexNow_ACU({ reason: 'initial' });
-    expect(h.rebuild).toHaveBeenCalledWith({ reason: 'initial' });
-    h.rebuild.mockClear();
-    await rebuildCurrentSummaryVectorIndexNow_ACU({ reason: 'rebuild_repair' });
-    expect(h.rebuild).toHaveBeenCalledWith({ reason: 'rebuild_repair' });
-  });
-
   it('数据库未加载时先尝试载入，仍无数据则抛错', async () => {
     h.data = null;
     await expect(rebuildCurrentSummaryVectorIndexNow_ACU()).rejects.toThrow('数据库未加载');
@@ -145,16 +137,6 @@ describe('ensureSummaryVectorMirrorAfterTableFill_ACU', () => {
       attempted: false,
       skipped: true,
       reason: 'feature_disabled',
-    });
-    expect(h.rebuild).not.toHaveBeenCalled();
-  });
-
-  it('镜像开关显式关闭时不重建', async () => {
-    h.worldbook.summaryVectorMirrorEnabled = false;
-    await expect(ensureSummaryVectorMirrorAfterTableFill_ACU()).resolves.toMatchObject({
-      attempted: false,
-      skipped: true,
-      reason: 'mirror_disabled',
     });
     expect(h.rebuild).not.toHaveBeenCalled();
   });

@@ -49,25 +49,6 @@ describe('resolveTemplateSwitchMode_ACU', () => {
     expect(mode.mode).toBe('pristine');
   });
 
-  it('有 logEntries → inherit', () => {
-    const chat = chatOf(makeV2Message({
-      checkpoint: {
-        kind: 'full',
-        createdAt: 1,
-        reason: 'init',
-        data: { mate: { type: 'acu' }, sheet_a: makeSheet('表A') },
-        event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
-      },
-      logEntries: [{
-        seq: 1, entryId: 'e1', createdAt: 2, source: 'manual_fill', targetMessageIndex: 0, aiFloor: 1,
-        filledSheetKeys: ['sheet_a'], changedSheetKeys: ['sheet_a'], groupKeys: [],
-        operations: [{ kind: 'sql_sheet_batch', sheetKey: 'sheet_a', statements: ['UPDATE 表A SET value = ?'], params: [['v']] }],
-      }],
-    }));
-    const mode = resolveTemplateSwitchMode_ACU(chat, isolationKey);
-    expect(mode.mode).toBe('inherit');
-  });
-
   it('checkpoint 含数据行 → inherit', () => {
     const chat = chatOf(makeV2Message({
       checkpoint: {

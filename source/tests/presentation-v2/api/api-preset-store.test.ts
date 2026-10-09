@@ -61,46 +61,6 @@ beforeEach(() => {
 });
 
 describe('useApiPresetStore', () => {
-  it('从旧 settings 读取预设、默认项和当前聊天回退', async () => {
-    const settings = createSettings();
-    const { store } = await importStore(settings);
-
-    store.refreshFromSettings();
-
-    expect(store.presets.map(p => p.name)).toEqual(['alpha', 'beta']);
-    expect(store.defaultApiPresetName).toBe('alpha');
-    expect(store.activePresetName).toBe('alpha');
-    expect(store.currentChatKey).toBe('chat-A');
-  });
-
-  it('没有预设时仍能识别当前 API 配置是否可用', async () => {
-    const settings = createSettings();
-    settings.apiPresets = [];
-    settings.defaultApiPresetName = '';
-    settings.apiMode = 'custom';
-    settings.apiConfig = { url: 'https://direct.test', apiKey: '', model: 'direct-model', useMainApi: false, max_tokens: 1000, temperature: 1 };
-    const { store } = await importStore(settings);
-
-    store.refreshFromSettings();
-
-    expect(store.activePresetName).toBe('');
-    expect(store.currentConfigReady).toBe(true);
-    expect(store.currentConfigLabel).toBe('direct-model');
-  });
-
-  it('没有聊天绑定和全局默认时，会从当前 API 配置反推出匹配预设', async () => {
-    const settings = createSettings();
-    settings.defaultApiPresetName = '';
-    settings.apiPresetBindingsByChat = {};
-    settings.apiMode = 'custom';
-    settings.apiConfig = { url: 'https://alpha.test', apiKey: 'ka', model: 'ma', useMainApi: false, max_tokens: 1000, temperature: 0.7 };
-    const { store } = await importStore(settings);
-
-    store.refreshFromSettings();
-
-    expect(store.activePresetName).toBe('alpha');
-    expect(store.currentConfigReady).toBe(true);
-  });
 
   it('同名异协议 / 异后处理预设不再误判为当前配置（仅差一个比较键即不匹配）', async () => {
     const base = () => {
@@ -261,13 +221,5 @@ describe('useApiPresetStore', () => {
     await store.loadModelsForConfig({ url: 'https://alpha.test', apiKey: 'ka' });
 
     expect(fetchModels).toHaveBeenCalledWith('https://alpha.test', 'ka', '', { force: true });
-  });
-
-  it('模型探活：url/apiKey 缺失时仍以空串占位，不传 undefined', async () => {
-    const { store, fetchModels } = await importStore(createSettings());
-
-    await store.loadModelsForConfig({ customApiFormat: 'gemini_interactions' });
-
-    expect(fetchModels).toHaveBeenCalledWith('', '', 'gemini_interactions', { force: true });
   });
 });

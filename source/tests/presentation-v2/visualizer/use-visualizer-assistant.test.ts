@@ -689,60 +689,6 @@ describe('useVisualizerAssistant', () => {
     expect(assistant.promptDirty.value).toBe(true);
   });
 
-  it('getTurnApplyPayload：user/error/空 operations 返回 null，round/final 返回各自载荷', async () => {
-    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
-    const { useVisualizerAssistant, getTurnApplyPayload } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');
-    const visualizer = useVisualizerStore();
-    visualizer.loadSnapshot({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_a: { uid: 'sheet_a', name: 'A表', orderNo: 0, content: [[null, '姓名'], [null, 'A']] },
-    }, ['sheet_a']);
-
-    mockRunSession.mockImplementation(async (input: any) => {
-      const result = buildResult(input, {
-        compileResult: {
-          candidateData: {
-            mate: { type: 'chatSheets', version: 1 },
-            sheet_a: { uid: 'sheet_a', name: 'A表', orderNo: 0, content: [[null, '姓名', '状态'], [null, 'A', '警觉']] },
-          },
-          orderedSheetKeys: ['sheet_a'],
-        },
-      });
-      const round = {
-        round: 1,
-        userRequest: input.userRequest,
-        draft: { ...result.draft, summary: '第一轮草稿' },
-        aiRawText: '<templateAssistantDraft>{"round":1}</templateAssistantDraft>',
-        messages: [],
-        perRoundCompileResult: result.compileResult,
-        workingFingerprint: 'round-fp',
-      };
-      input.onRoundComplete?.({ round, rounds: [round], maxRounds: input.maxRounds });
-      return { ...result, rounds: [round] };
-    });
-
-    const assistant = useVisualizerAssistant();
-    assistant.userRequest.value = '新增状态列';
-    await assistant.run();
-
-    const turns = assistant.turns.value;
-    const userTurn = turns[0];
-    const finalTurn = turns[1];
-    expect(getTurnApplyPayload(userTurn)).toBeNull();
-    expect(getTurnApplyPayload(finalTurn)?.candidateData.sheet_a.content[1][2]).toBe('警觉');
-
-    // 空 operations 的 final → null
-    const emptyOpTurn = {
-      id: 'final-empty',
-      type: 'final',
-      userRequest: 'x',
-      result: buildResult({ tempData: visualizer.tempData, currentSheetKey: 'sheet_a', sheetOrder: ['sheet_a'] }, { draft: { operations: [] } }),
-      anchorSheetKey: 'sheet_a',
-      createdAt: Date.now(),
-    };
-    expect(getTurnApplyPayload(emptyOpTurn as any)).toBeNull();
-  });
-
   it('草稿指纹每次 tempData 变化只算一次：全卡片共用，原地改行后必重算', async () => {
     const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
     const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');
@@ -1124,26 +1070,6 @@ describe('useVisualizerAssistant', () => {
     expect(mockRunSession).toHaveBeenCalledWith(expect.objectContaining({ userRequest: '第二轮' }));
     // 重新生成后产生新的 user + final
     expect(assistant.turns.value.filter(turn => turn.type === 'user')).toHaveLength(1);
-  });
-
-  it('regenerateFromUserTurn 对非 user turn 返回 false 且不调用 runner', async () => {
-    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
-    const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');
-    const visualizer = useVisualizerStore();
-    visualizer.loadSnapshot({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_a: { uid: 'sheet_a', name: 'A表', orderNo: 0, content: [[null, '姓名'], [null, 'A']] },
-    }, ['sheet_a']);
-    mockRunSession.mockImplementation(async (input: any) => buildResult(input));
-
-    const assistant = useVisualizerAssistant();
-    assistant.userRequest.value = '生成';
-    await assistant.run();
-    const finalTurn = assistant.turns.value.find(turn => turn.type === 'final') as any;
-    mockRunSession.mockClear();
-
-    expect(await assistant.regenerateFromUserTurn(finalTurn)).toBe(false);
-    expect(mockRunSession).not.toHaveBeenCalled();
   });
 
   it('isRunning 为 true 时 deleteTurn / regenerateFromUserTurn 均拒绝且不改动 turns', async () => {

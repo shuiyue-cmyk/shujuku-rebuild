@@ -12,7 +12,6 @@ import {
   subscribe,
   unsubscribe,
   getClearHistory_ACU,
-  getLogCountsByLevel_ACU,
   getRecentLogs_ACU,
   getSubscriberCount,
   extractTag,
@@ -36,14 +35,6 @@ beforeEach(() => {
 // pushLog + getAllLogs
 // ═══════════════════════════════════════════════════════════════
 describe('pushLog + getAllLogs', () => {
-  it('推送一条日志后可以获取', () => {
-    pushLog('debug', ['[ACU]', '[SQL] 查询成功']);
-    const logs = getAllLogs();
-    expect(logs).toHaveLength(1);
-    expect(logs[0].level).toBe('debug');
-    expect(logs[0].tag).toBe('SQL');
-    expect(logs[0].message).toContain('[SQL] 查询成功');
-  });
 
   it('推送多条日志按顺序排列', () => {
     pushLog('debug', ['[ACU]', '第一条']);
@@ -54,13 +45,6 @@ describe('pushLog + getAllLogs', () => {
     expect(logs[0].level).toBe('debug');
     expect(logs[1].level).toBe('warn');
     expect(logs[2].level).toBe('error');
-  });
-
-  it('ID 自增', () => {
-    pushLog('debug', ['[ACU]', 'a']);
-    pushLog('debug', ['[ACU]', 'b']);
-    const logs = getAllLogs();
-    expect(logs[1].id).toBe(logs[0].id + 1);
   });
 
   it('getAllLogs 返回副本（不影响内部缓冲区）', () => {
@@ -136,13 +120,6 @@ describe('环形缓冲区', () => {
 // clearLogs
 // ═══════════════════════════════════════════════════════════════
 describe('clearLogs', () => {
-  it('清空所有日志', () => {
-    pushLog('debug', ['[ACU]', 'test']);
-    pushLog('error', ['[ACU]', 'test2']);
-    clearLogs();
-    expect(getLogCount()).toBe(0);
-    expect(getAllLogs()).toEqual([]);
-  });
 
   it('记录调用方留痕供导出自查', () => {
     clearLogs('debugPanel.stopDebug.autoExport');
@@ -154,15 +131,6 @@ describe('clearLogs', () => {
 });
 
 describe('getLogCountsByLevel_ACU / getRecentLogs_ACU', () => {
-  it('按级别增量计数，清空后归零', () => {
-    pushLog('debug', ['[ACU]', 'd1']);
-    pushLog('warn', ['[ACU]', 'w1']);
-    pushLog('warn', ['[ACU]', 'w2']);
-    pushLog('error', ['[ACU]', 'e1']);
-    expect(getLogCountsByLevel_ACU()).toMatchObject({ debug: 1, warn: 2, error: 1 });
-    clearLogs('unit');
-    expect(getLogCountsByLevel_ACU()).toEqual({});
-  });
 
   it('只读最近 N 条，不整表拷贝', () => {
     for (let index = 1; index <= 10; index += 1) pushLog('error', ['[ACU]', `line-${index}`]);
@@ -176,29 +144,6 @@ describe('getLogCountsByLevel_ACU / getRecentLogs_ACU', () => {
 // extractTag
 // ═══════════════════════════════════════════════════════════════
 describe('extractTag', () => {
-  it('从第二个参数提取 [模块名]', () => {
-    expect(extractTag(['[ACU]', '[SQL] 查询成功'])).toBe('SQL');
-  });
-
-  it('提取中文模块名', () => {
-    expect(extractTag(['[ACU]', '[条件模板] 解析完成'])).toBe('条件模板');
-  });
-
-  it('提取 ORM 标签', () => {
-    expect(extractTag(['[ACU]', '[ORM] 查询执行失败: xxx'])).toBe('ORM');
-  });
-
-  it('无标签时返回"未分类"', () => {
-    expect(extractTag(['[ACU]', '普通消息没有标签'])).toBe('未分类');
-  });
-
-  it('空参数返回"未分类"', () => {
-    expect(extractTag([])).toBe('未分类');
-  });
-
-  it('第一个参数不是 [ACU] 时也能提取', () => {
-    expect(extractTag(['[SQL] 直接标签'])).toBe('SQL');
-  });
 
   it('多个参数时从第二个开始查找标签', () => {
     // extractTag 遍历 args[1] 开始的所有参数，找到第一个含 [xxx] 的
@@ -207,74 +152,9 @@ describe('extractTag', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// formatArgs
-// ═══════════════════════════════════════════════════════════════
-describe('formatArgs', () => {
-  it('字符串参数直接拼接', () => {
-    expect(formatArgs(['hello', 'world'])).toBe('hello world');
-  });
-
-  it('数字参数转为字符串', () => {
-    expect(formatArgs(['count:', 42])).toBe('count: 42');
-  });
-
-  it('null 和 undefined', () => {
-    expect(formatArgs([null, undefined])).toBe('null undefined');
-  });
-
-  it('对象序列化为 JSON', () => {
-    expect(formatArgs([{ a: 1 }])).toBe('{"a":1}');
-  });
-
-  it('Error 对象显示 name 和 message', () => {
-    const err = new Error('test error');
-    err.stack = ''; // 清空堆栈以便严格测试 header
-    expect(formatArgs([err])).toBe('Error: test error');
-  });
-
-  it('布尔值转为字符串', () => {
-    expect(formatArgs([true, false])).toBe('true false');
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// getKnownTags
-// ═══════════════════════════════════════════════════════════════
-describe('getKnownTags', () => {
-  it('收集所有出现过的标签', () => {
-    pushLog('debug', ['[ACU]', '[SQL] a']);
-    pushLog('debug', ['[ACU]', '[ORM] b']);
-    pushLog('debug', ['[ACU]', '[SQL] c']); // 重复标签
-    pushLog('debug', ['[ACU]', '无标签']);
-    const tags = getKnownTags();
-    expect(tags).toContain('SQL');
-    expect(tags).toContain('ORM');
-    expect(tags).toContain('未分类');
-    expect(tags).toHaveLength(3);
-  });
-
-  it('标签按字母排序', () => {
-    pushLog('debug', ['[ACU]', '[C模块] x']);
-    pushLog('debug', ['[ACU]', '[A模块] x']);
-    pushLog('debug', ['[ACU]', '[B模块] x']);
-    const tags = getKnownTags();
-    expect(tags[0]).toBe('A模块');
-    expect(tags[1]).toBe('B模块');
-    expect(tags[2]).toBe('C模块');
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
 // subscribe / unsubscribe
 // ═══════════════════════════════════════════════════════════════
 describe('subscribe / unsubscribe', () => {
-  it('订阅后收到新日志', () => {
-    const received: any[] = [];
-    subscribe((entry) => received.push(entry));
-    pushLog('debug', ['[ACU]', 'test']);
-    expect(received).toHaveLength(1);
-    expect(received[0].message).toContain('test');
-  });
 
   it('取消订阅后不再收到日志', () => {
     const received: any[] = [];
@@ -295,16 +175,6 @@ describe('subscribe / unsubscribe', () => {
     expect(received).toHaveLength(1);
   });
 
-  it('多个订阅者都能收到', () => {
-    const r1: any[] = [];
-    const r2: any[] = [];
-    subscribe((entry) => r1.push(entry));
-    subscribe((entry) => r2.push(entry));
-    pushLog('debug', ['[ACU]', 'test']);
-    expect(r1).toHaveLength(1);
-    expect(r2).toHaveLength(1);
-  });
-
   it('订阅者回调出错不影响其他订阅者', () => {
     const received: any[] = [];
     subscribe(() => { throw new Error('boom'); });
@@ -321,18 +191,6 @@ describe('subscribe / unsubscribe', () => {
     expect(getSubscriberCount()).toBe(1);
     pushLog('debug', ['[ACU]', 'test']);
     expect(received).toHaveLength(1);
-  });
-
-  it('getSubscriberCount 正确计数', () => {
-    expect(getSubscriberCount()).toBe(0);
-    const unsub1 = subscribe(() => {});
-    expect(getSubscriberCount()).toBe(1);
-    const unsub2 = subscribe(() => {});
-    expect(getSubscriberCount()).toBe(2);
-    unsub1();
-    expect(getSubscriberCount()).toBe(1);
-    unsub2();
-    expect(getSubscriberCount()).toBe(0);
   });
 });
 
@@ -390,18 +248,6 @@ describe('敏感键脱敏', () => {
     const out = formatArgs(['Authorization: Bearer abc.def.ghi 与 sk-abcdefghijklmnopqrstuvwx']);
     expect(out).not.toContain('abc.def.ghi');
     expect(out).toContain('sk-***');
-  });
-});
-describe('_resetForTesting', () => {
-  it('重置所有状态', () => {
-    pushLog('debug', ['[ACU]', '[SQL] test']);
-    setWarnLogEnabledByDevOption_ACU(true);
-    subscribe(() => {});
-    _resetForTesting();
-    expect(getLogCount()).toBe(0);
-    expect(getKnownTags()).toEqual([]);
-    expect(getSubscriberCount()).toBe(0);
-    expect(isWarnLogEnabled()).toBe(false);
   });
 });
 

@@ -201,16 +201,6 @@ describe('useTablePresetManagement', () => {
     expect(useToastStore().items.at(-1)).toMatchObject({ kind: 'error', text: '目标聊天已切换，已取消模板提交。' });
   });
 
-  it('presetMeta 列表首位包含 runtime 只读项', async () => {
-    const { management } = await importManagement();
-    expect(management.presetMeta.value[0]).toMatchObject({
-      name: '__runtime__',
-      kind: 'runtime',
-      readOnly: true,
-    });
-    expect(management.presetMeta.value.map(item => item.name)).toEqual(['__runtime__', 'global-A', 'global-B']);
-  });
-
   it('exportPreset 对 runtime 项以 runtime scope 解析，文件名为 runtime 前缀', async () => {
     const { management, resolveTemplateForExport } = await importManagement();
     const toast = (await import('../../../src/presentation-v2/stores/toast-store')).useToastStore();

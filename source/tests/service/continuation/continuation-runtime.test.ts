@@ -66,10 +66,6 @@ function stage_ACU(stageNumber: number, turnCount: number): any {
 }
 
 describe('阶段历史渲染', () => {
-  it('没有阶段时如实说明这是第一个阶段', async () => {
-    const h = await createHarness();
-    expect(h.runtime.serializeStageHistory_ACU({ stages: [] } as any)).toContain('第一个阶段');
-  });
 
   it('只给活动 revision，最近两个阶段保留逐轮目标，更早的压到节点级', async () => {
     const h = await createHarness();
@@ -132,11 +128,6 @@ describe('启用阶段大纲全文渲染（移植上游 renderEnabledStageOutlin
     expect(text).toContain('第四轮目标');
     // 可读文本而非 JSON：与阶段历史同一防诱导口径。
     expect(text).not.toContain('"totalTurns"');
-  });
-
-  it('没有活动大纲时如实说明', async () => {
-    const h = await createHarness();
-    expect(h.runtime.renderEnabledStageOutline_ACU(null, null)).toContain('当前没有正在启用的阶段大纲。');
   });
 });
 

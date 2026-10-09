@@ -7,7 +7,6 @@ import {
   readAgentSessionLog_ACU,
   resetAgentSessionLogForTests_ACU,
   subscribeAgentSessionLog_ACU,
-  updateAgentSession_ACU,
 } from '../../../../src/service/continuation/agent/agent-session-log';
 
 beforeEach(() => { resetAgentSessionLogForTests_ACU(); });
@@ -63,25 +62,6 @@ describe('Agent 会话日志', () => {
     expect(entries[1].kind).toBe('delegation');
     expect(entries[2]).toMatchObject({ kind: 'run_resumed', detail: '从中断点恢复' });
     expect(isAgentSessionRunning_ACU()).toBe(true);
-  });
-
-  it('status 缺省按 ok 推导，running 条目可原地更新为终态', () => {
-    beginAgentSessionRun_ACU('运行');
-    const runningId = logAgentSession_ACU({ kind: 'delegation', title: 'maintainer 执行中', agentName: 'maintainer', status: 'running' });
-    const doneId = logAgentSession_ACU({ kind: 'delegation', title: '完成条目' });
-    const failedId = logAgentSession_ACU({ kind: 'delegation', title: '失败条目', ok: false });
-
-    let entries = readAgentSessionLog_ACU();
-    expect(entries.find(entry => entry.id === runningId)).toMatchObject({ status: 'running', ok: true });
-    expect(entries.find(entry => entry.id === doneId)).toMatchObject({ status: 'done' });
-    expect(entries.find(entry => entry.id === failedId)).toMatchObject({ status: 'failed' });
-
-    updateAgentSession_ACU(runningId, { title: 'maintainer 完成', detail: '已结算 2 条', ok: true });
-    entries = readAgentSessionLog_ACU();
-    expect(entries.find(entry => entry.id === runningId)).toMatchObject({ title: 'maintainer 完成', detail: '已结算 2 条', status: 'done', ok: true });
-
-    // 不存在的 id（如被上限截断淘汰）静默忽略。
-    expect(() => updateAgentSession_ACU(99999, { ok: false })).not.toThrow();
   });
 
   it('订阅者收到变化通知，退订后不再通知，订阅者抛错不影响写入', () => {

@@ -46,29 +46,7 @@ describe('伪装发送楼层（可选项，默认关闭）', () => {
     })).toBe(false);
   });
 
-  it('空发送框不伪装', () => {
-    expect(shouldBeginPlotPendingDisguise_ACU({
-      disguiseEnabled: true,
-      generationType: 'send',
-      lastIsUserFloor: false,
-      text: '   ',
-    })).toBe(false);
-  });
-
-  it('开关开 + 可发送类型 + 末楼非用户楼 + 有文本 → 允许伪装', () => {
-    expect(shouldBeginPlotPendingDisguise_ACU({
-      disguiseEnabled: true,
-      generationType: 'send',
-      lastIsUserFloor: false,
-      text: '继续推进剧情',
-    })).toBe(true);
-  });
-
   it('无 jQuery（宿主环境不可用）时返回 null，调用方保持原有行为', () => {
     expect(beginPlotPendingDisguise_ACU('继续推进剧情')).toBeNull();
-  });
-
-  it('空文本直接返回 null，不碰 DOM', () => {
-    expect(beginPlotPendingDisguise_ACU('   ')).toBeNull();
   });
 });

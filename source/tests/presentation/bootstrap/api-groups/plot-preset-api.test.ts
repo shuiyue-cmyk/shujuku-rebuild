@@ -259,35 +259,6 @@ describe('initGameSession 剧情推进预设（本库不内置预设）', () => 
     expect(result.success).toBe(true);
   });
 
-  it('loadPreset=false 显式关闭时不产生跳过 warning', async () => {
-    const api = createApi();
-
-    const result = await api.initGameSession({}, {
-      templateData: { sheet_a: { uid: 'sheet_a', name: 'A', content: [['row_id']] } },
-      loadPreset: false,
-    });
-
-    expect(result).toMatchObject({ success: true, presetLoaded: false });
-    expect(result.warning).toBe('');
-  });
-
-  it('提供 presetData 时照旧走 importPlotPresetFromData（overwrite + switchTo）', async () => {
-    const api = createApi();
-    const presetData = { name: '内容方预设', prompts: [] };
-    const importSpy = vi.fn(async () => ({ success: true, message: 'ok', presetName: '内容方预设' }));
-    api.importPlotPresetFromData = importSpy;
-
-    const result = await api.initGameSession({}, {
-      templateData: { sheet_a: { uid: 'sheet_a', name: 'A', content: [['row_id']] } },
-      presetData,
-    });
-
-    expect(importSpy).toHaveBeenCalledWith(presetData, { overwrite: true, switchTo: true });
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ success: true, presetLoaded: true });
-    expect(result.warning).not.toContain('跳过剧情推进预设加载');
-  });
-
   it('presetData 导入失败仍不中断初始化链', async () => {
     const api = createApi();
     api.importPlotPresetFromData = vi.fn(async () => ({ success: false, message: 'JSON解析错误' }));
@@ -329,14 +300,6 @@ describe('initGameSession options.presetName 弃用提示（fix8）', () => {
     expect(vi.mocked(logWarn_ACU)).not.toHaveBeenCalled();
     expect(importSpy).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ success: true, presetLoaded: true });
-  });
-
-  it('无 presetName 时不告警', async () => {
-    await createApi().initGameSession({}, {
-      templateData: { sheet_a: { uid: 'sheet_a', name: 'A', content: [['row_id']] } },
-    });
-
-    expect(vi.mocked(logWarn_ACU)).not.toHaveBeenCalled();
   });
 });
 

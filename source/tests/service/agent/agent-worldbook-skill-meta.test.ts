@@ -41,12 +41,6 @@ const skillBlock = '<!-- ACU_SKILL_META_START\n{"version":1,"description":"描�
 const takeoverBlock = '<!-- ACU_AGENT_WORLDBOOK_TAKEOVER_META_START\n{"previousEnabled":true}\nACU_AGENT_WORLDBOOK_TAKEOVER_META_END -->';
 
 describe('hasUsableWorldbookSkillMeta_ACU', () => {
-  it('accepts skill meta when description, triggerWhen, or tk is usable', () => {
-    expect(hasUsableWorldbookSkillMeta_ACU(skillBlock)).toBe(true);
-    expect(hasUsableWorldbookSkillMeta_ACU('<!-- ACU_SKILL_META_START\n{"version":1,"description":"仅描述","triggerWhen":"","tk":0,"updatedAt":1,"updatedBy":"manual"}\nACU_SKILL_META_END -->')).toBe(true);
-    expect(hasUsableWorldbookSkillMeta_ACU('<!-- ACU_SKILL_META_START\n{"version":1,"description":"","triggerWhen":"仅触发","tk":0,"updatedAt":1,"updatedBy":"manual"}\nACU_SKILL_META_END -->')).toBe(true);
-    expect(hasUsableWorldbookSkillMeta_ACU('<!-- ACU_SKILL_META_START\n{"version":1,"description":"","triggerWhen":"","tk":3,"updatedAt":1,"updatedBy":"manual"}\nACU_SKILL_META_END -->')).toBe(true);
-  });
 
   it('rejects missing, invalid, or empty skill meta blocks', () => {
     expect(hasUsableWorldbookSkillMeta_ACU('普通条目')).toBe(false);

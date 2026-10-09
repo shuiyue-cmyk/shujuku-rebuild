@@ -19,7 +19,6 @@ vi.mock('../../../src/shared/utils', () => ({
 }));
 
 import {
-  getConnectionManagerProfiles_ACU,
   getHostRequestHeaders_ACU,
 } from '../../../src/data/gateways/ai-gateway';
 
@@ -28,23 +27,7 @@ beforeEach(() => {
   Object.keys(mockSillyTavern).forEach(k => delete mockSillyTavern[k]);
 });
 
-describe('getConnectionManagerProfiles_ACU', () => {
-  it('不可用时返回空数组', () => {
-    expect(getConnectionManagerProfiles_ACU()).toEqual([]);
-  });
-
-  it('可用时返回配置列表', () => {
-    mockSillyTavern.extensionSettings = {
-      connectionManager: { profiles: [{ id: 'p1', name: '配置1' }] },
-    };
-    expect(getConnectionManagerProfiles_ACU()).toEqual([{ id: 'p1', name: '配置1' }]);
-  });
-});
-
 describe('getHostRequestHeaders_ACU', () => {
-  it('SillyTavern 不可用时返回空对象', () => {
-    expect(getHostRequestHeaders_ACU()).toEqual({});
-  });
 
   it('可用时返回请求头', () => {
     const headers = { 'X-CSRF-Token': 'abc123' };

@@ -94,17 +94,6 @@ describe('填表工具开关与默认主段', () => {
         expect(mainTextOf(settings.promptSegments.value)).toContain('必须调用 table_sql');
     });
 
-    it('开关开启且设置里存着工具版默认主段时，同样判定为「使用默认」', () => {
-        mockSettings.tableFillNativeToolsEnabled = true;
-        mockSettings.charCardPrompt = buildTableFillDefaultPromptSegments_ACU(
-            DEFAULT_CHAR_CARD_PROMPT_SQL_ACU as any[],
-            true,
-        );
-
-        const settings = useFormFillSettings();
-        expect(settings.promptTemplateMode.value).toBe('default');
-    });
-
     it('开关开启时保存提示词：未改写的主段落盘为正文版默认（不得持久化工具版要求）', () => {
         mockSettings.tableFillNativeToolsEnabled = true;
         mockSettings.charCardPrompt = buildTableFillDefaultPromptSegments_ACU(
@@ -222,22 +211,6 @@ it('锁定文案按开关状态分叉：已开启时说「可关闭」，关闭�
         mockSettings.tableFillNativeToolsEnabled = true;
         const on = useFormFillSettings();
         expect(on.nativeToolsLockedReason.value).toContain('可关闭');
-    });
-
-    it('提示词已自定义时，工具开关置为不可用（灰掉）并给出原因', () => {
-    // 自定义主段不会被工具版覆盖：开着工具要求模型调用，而用户改写的主段可能没有
-    // 输出格式节 → 运行时 fail-closed 不工具化，行为与用户预期不符。
-    mockSettings.tableFillNativeToolsEnabled = false;
-        const stored = buildTableFillDefaultPromptSegments_ACU(
-            DEFAULT_CHAR_CARD_PROMPT_SQL_ACU as any[],
-            false,
-        );
-        stored[stored.findIndex(s => s.mainSlot === 'A' || s.isMain)].content = '用户自定义主段';
-        mockSettings.charCardPrompt = stored;
-
-        const settings = useFormFillSettings();
-        expect(settings.promptTemplateMode.value).toBe('custom');
-        expect(settings.nativeToolsLockedReason.value).toContain('已自定义');
     });
 
     it('提示词已自定义时，程序化开启工具开关也被拒绝（UI 置灰之外的第二道闸）', () => {

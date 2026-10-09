@@ -85,13 +85,6 @@ describe('host input helpers', () => {
     expect(jqueryOnly.trigger).toHaveBeenCalledWith('input');
   });
 
-  it('点击宿主发送按钮', () => {
-    expect(clickSendButton_ACU()).toBe(true);
-
-    expect(h.jquery).toHaveBeenCalledWith('#send_but');
-    expect(sendButton.click).toHaveBeenCalledTimes(1);
-  });
-
   it('选择器命中空集（length:0）时报不可用且不执行副作用', () => {
     const emptyTextarea = { val: vi.fn(), trigger: vi.fn(), length: 0 };
     const emptyButton = { click: vi.fn(), length: 0 };

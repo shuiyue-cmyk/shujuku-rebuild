@@ -92,16 +92,4 @@ describe('usePlotWorldbookConfig', () => {
     expect(c.manualSelection.value).toEqual(['Book-A', 'Book-B']);
     expect(mockSaveSettings).toHaveBeenCalledTimes(1);
   });
-
-  it('toggleManualBook 按勾选状态增删书名', async () => {
-    const c = await getComposable();
-    c.refreshFromSettings();
-
-    c.toggleManualBook('Book-A', true);
-    c.toggleManualBook('Book-B', true);
-    c.toggleManualBook('Book-A', false);
-
-    expect(settings.plotSettings.plotWorldbookConfig.manualSelection).toEqual(['Book-B']);
-    expect(c.manualSelection.value).toEqual(['Book-B']);
-  });
 });

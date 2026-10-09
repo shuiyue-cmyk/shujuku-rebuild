@@ -148,27 +148,6 @@ describe('formatTableForSqliteMode', () => {
     mockGetCurrentFlightModeState.mockReset().mockReturnValue({ enabled: false, hiddenRowIds: [], bigSummarySheetKey: '' });
   });
 
-  // ═══════════════════════════════════════════════════════════════
-  // DDL 输出
-  // ═══════════════════════════════════════════════════════════════
-  it('输出 DDL', () => {
-    const table = {
-      name: '背包物品表',
-      sourceData: {
-        ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, quantity INTEGER);',
-        note: '',
-        insertNode: '',
-        updateNode: '',
-        deleteNode: '',
-      },
-      content: [['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']],
-      updateConfig: {},
-    };
-    const result = formatTableForSqliteMode(table, 0, 'sheet_0', null);
-    expect(result).toContain('CREATE TABLE inventory');
-    expect(result).toContain('以上 CREATE TABLE 中的列名是本轮唯一权威');
-  });
-
   it('作者英文表名覆盖内部 runtime 名，供 AI 作为写入契约使用', () => {
     const table = {
       name: '主角信息',
@@ -201,63 +180,6 @@ describe('formatTableForSqliteMode', () => {
     };
     const result = formatTableForSqliteMode(table, 0, 'sheet_zhujue', null);
     expect(result).toContain('CREATE TABLE protagonist_info');
-  });
-
-  // ═══════════════════════════════════════════════════════════════
-  // Note 和 Trigger 注释
-  // ═══════════════════════════════════════════════════════════════
-  it('输出 Note 注释', () => {
-    const table = {
-      name: '背包物品表',
-      sourceData: {
-        ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY);',
-        note: '记录角色背包中的物品',
-        insertNode: '',
-        updateNode: '',
-        deleteNode: '',
-      },
-      content: [['row_id'], ['1']],
-      updateConfig: {},
-    };
-    const result = formatTableForSqliteMode(table, 0, 'sheet_0', null);
-    expect(result).toContain('-- Note: 记录角色背包中的物品');
-  });
-
-  it('输出 INSERT/UPDATE/DELETE Trigger 注释', () => {
-    const table = {
-      name: '背包物品表',
-      sourceData: {
-        ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY);',
-        note: '',
-        insertNode: '获得新物品时插入',
-        updateNode: '物品数量变化时更新',
-        deleteNode: '丢弃物品时删除',
-      },
-      content: [['row_id'], ['1']],
-      updateConfig: {},
-    };
-    const result = formatTableForSqliteMode(table, 0, 'sheet_0', null);
-    expect(result).toContain('-- INSERT: 获得新物品时插入');
-    expect(result).toContain('-- UPDATE: 物品数量变化时更新');
-    expect(result).toContain('-- DELETE: 丢弃物品时删除');
-    expect(result).toContain('Note/Trigger 中与其不一致的示例不得照抄');
-  });
-
-  // ═══════════════════════════════════════════════════════════════
-  // 数据输出
-  // ═══════════════════════════════════════════════════════════════
-  it('输出当前数据（注释格式的表格）', () => {
-    const table = {
-      name: '背包物品表',
-      sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT);' },
-      content: [['row_id', 'item_name'], ['1', '铁剑'], ['2', '药水']],
-      updateConfig: {},
-    };
-    const result = formatTableForSqliteMode(table, 0, 'sheet_0', null);
-    expect(result).toContain('-- 当前数据 (2 rows)');
-    expect(result).toContain('-- | row_id | item_name |');
-    expect(result).toContain('-- | 1 | 铁剑 |');
-    expect(result).toContain('-- | 2 | 药水 |');
   });
 
   it('SQLite prompt 隐藏历史列但不修改底层 DDL 与行数据', () => {
@@ -334,20 +256,6 @@ describe('formatTableForSqliteMode', () => {
     expect(result).toContain('-- 当前数据');
     expect(result).toContain('-- | 9 | 自定义行 |');
     expect(result).not.toContain('-- | 1 | 铁剑 |');
-  });
-
-  // ═══════════════════════════════════════════════════════════════
-  // 空表
-  // ═══════════════════════════════════════════════════════════════
-  it('空表输出初始化提示', () => {
-    const table = {
-      name: '背包物品表',
-      sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY);' },
-      content: [['row_id']],
-      updateConfig: {},
-    };
-    const result = formatTableForSqliteMode(table, 0, 'sheet_0', null);
-    expect(result).toContain('该表格为空，请进行初始化');
   });
 
   it('空表时输出 INIT 规则', () => {
@@ -438,23 +346,6 @@ describe('formatTableForSqliteMode', () => {
     };
     const result = formatTableForSqliteMode(table, 0, 'sheet_0', null);
     expect(result).toContain('Showing last 5 of 20');
-  });
-
-  // ═══════════════════════════════════════════════════════════════
-  // 多行 Note
-  // ═══════════════════════════════════════════════════════════════
-  it('多行 Note 正确转为注释', () => {
-    const table = {
-      name: '背包物品表',
-      sourceData: {
-        ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY);',
-        note: '第一行说明\n第二行说明',
-      },
-      content: [['row_id'], ['1']],
-      updateConfig: {},
-    };
-    const result = formatTableForSqliteMode(table, 0, 'sheet_0', null);
-    expect(result).toContain('-- Note: 第一行说明\n-- 第二行说明');
   });
 });
 

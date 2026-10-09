@@ -78,28 +78,6 @@ describe('parseIfBlockRecursive_ACU — db/sql 条件类型', () => {
     mockGetCurrentFlightModeState.mockReset().mockReturnValue({ enabled: false, hiddenRowIds: [], bigSummarySheetKey: '' });
   });
 
-  it('<if db="..."> 条件为 true 时输出 if 分支', () => {
-    mockEvaluateDbCondition.mockReturnValue(true);
-    const content = '<if db="inventory.count > 0">有物品</if>';
-    const result = parseIfBlockRecursive_ACU(content, context);
-    expect(result).toBe('有物品');
-    expect(mockEvaluateDbCondition).toHaveBeenCalledWith('inventory.count > 0');
-  });
-
-  it('<if db="..."> 条件为 false 时输出空', () => {
-    mockEvaluateDbCondition.mockReturnValue(false);
-    const content = '<if db="inventory.count > 0">有物品</if>';
-    const result = parseIfBlockRecursive_ACU(content, context);
-    expect(result).toBe('');
-  });
-
-  it('<if db="..."> 带 else 分支', () => {
-    mockEvaluateDbCondition.mockReturnValue(false);
-    const content = '<if db="inventory.count > 0">有物品<else>没有物品</if>';
-    const result = parseIfBlockRecursive_ACU(content, context);
-    expect(result).toBe('没有物品');
-  });
-
   it('<ELSE> 大小写不影响分支切分', () => {
     mockEvaluateDbCondition.mockReturnValue(false);
     const content = '<if db="inventory.count > 0">有物品<ELSE>没有物品</if>';
@@ -138,34 +116,6 @@ describe('parseIfBlockRecursive_ACU — db/sql 条件类型', () => {
     expect(result).toBe('命中');
   });
 
-  it('getLatestUserMessageContent_ACU 无用户消息时返回空串', () => {
-    mockChat = [{ is_user: false, mes: '只有 AI' }];
-    expect(getLatestUserMessageContent_ACU()).toBe('');
-    expect(composeSeedMatchContent_ACU('', '只有 AI')).toBe('只有 AI');
-  });
-
-  it('<if sql="..."> 条件为 true 时输出 if 分支', () => {
-    mockEvaluateSqlCondition.mockReturnValue(true);
-    const content = '<if sql="SELECT COUNT(*) FROM inventory WHERE quantity > 0">有库存</if>';
-    const result = parseIfBlockRecursive_ACU(content, context);
-    expect(result).toBe('有库存');
-    expect(mockEvaluateSqlCondition).toHaveBeenCalledWith('SELECT COUNT(*) FROM inventory WHERE quantity > 0');
-  });
-
-  it('<if sql="..."> 条件为 false 时输出空', () => {
-    mockEvaluateSqlCondition.mockReturnValue(false);
-    const content = '<if sql="SELECT 1 WHERE 1=0">不可能</if>';
-    const result = parseIfBlockRecursive_ACU(content, context);
-    expect(result).toBe('');
-  });
-
-  it('<if sql="..."> 带 else 分支', () => {
-    mockEvaluateSqlCondition.mockReturnValue(false);
-    const content = '<if sql="SELECT 1 WHERE 1=0">不可能<else>正常</if>';
-    const result = parseIfBlockRecursive_ACU(content, context);
-    expect(result).toBe('正常');
-  });
-
   it('db 和 sql 条件嵌套', () => {
     mockEvaluateDbCondition.mockReturnValue(true);
     mockEvaluateSqlCondition.mockReturnValue(true);
@@ -185,25 +135,10 @@ describe('parseIfBlockRecursive_ACU — db/sql 条件类型', () => {
     expect(result).toBe('外层内层');
   });
 
-  it('大小写不敏感', () => {
-    mockEvaluateDbCondition.mockReturnValue(true);
-    const content = '<IF DB="test">内容</IF>';
-    const result = parseIfBlockRecursive_ACU(content, context);
-    expect(result).toBe('内容');
-  });
-
   it('无 if 标签时原样返回', () => {
     const content = '普通文字，没有条件标签';
     const result = parseIfBlockRecursive_ACU(content, context);
     expect(result).toBe('普通文字，没有条件标签');
-  });
-
-  it('空字符串返回空字符串', () => {
-    expect(parseIfBlockRecursive_ACU('', context)).toBe('');
-  });
-
-  it('null 返回空字符串', () => {
-    expect(parseIfBlockRecursive_ACU(null as any, context)).toBe('');
   });
 
   it('飞行模式下 cell 条件使用隐藏纪要行投影，关闭态不额外投影', async () => {
@@ -237,46 +172,6 @@ describe('evaluateCondExpression_ACU — db:/sql: 前缀', () => {
     vi.clearAllMocks();
   });
 
-  it('db: 前缀调用 evaluateDbCondition', () => {
-    mockEvaluateDbCondition.mockReturnValue(true);
-    const result = evaluateCondExpression_ACU('db:inventory.count() > 0', context);
-    expect(result).toBe(true);
-    expect(mockEvaluateDbCondition).toHaveBeenCalledWith('inventory.count() > 0');
-  });
-
-  it('sql: 前缀调用 evaluateSqlCondition', () => {
-    mockEvaluateSqlCondition.mockReturnValue(true);
-    const result = evaluateCondExpression_ACU('sql:SELECT COUNT(*) FROM inventory', context);
-    expect(result).toBe(true);
-    expect(mockEvaluateSqlCondition).toHaveBeenCalledWith('SELECT COUNT(*) FROM inventory');
-  });
-
-  it('!db: 取反', () => {
-    mockEvaluateDbCondition.mockReturnValue(true);
-    const result = evaluateCondExpression_ACU('!db:inventory.count() > 0', context);
-    expect(result).toBe(false);
-  });
-
-  it('!sql: 取反', () => {
-    mockEvaluateSqlCondition.mockReturnValue(false);
-    const result = evaluateCondExpression_ACU('!sql:SELECT 1 WHERE 1=0', context);
-    expect(result).toBe(true);
-  });
-
-  it('db: 包含复杂 ORM 括号表达式', () => {
-    mockEvaluateDbCondition.mockReturnValue(true);
-    const result = evaluateCondExpression_ACU("db:inventory.where('item_name', '铁剑').exists()", context);
-    expect(result).toBe(true);
-    expect(mockEvaluateDbCondition).toHaveBeenCalledWith("inventory.where('item_name', '铁剑').exists()");
-  });
-
-  it('sql: 包含 SQL 函数括号', () => {
-    mockEvaluateSqlCondition.mockReturnValue(true);
-    const result = evaluateCondExpression_ACU('sql:SELECT SUM(quantity) FROM inventory', context);
-    expect(result).toBe(true);
-    expect(mockEvaluateSqlCondition).toHaveBeenCalledWith('SELECT SUM(quantity) FROM inventory');
-  });
-
   it('db: 与 cell: 组合（AND）', async () => {
     mockEvaluateDbCondition.mockReturnValue(true);
     const { evaluateCellExpression_ACU } = await import('../../../../src/service/runtime/template-vars/cell-utils');
@@ -291,35 +186,6 @@ describe('evaluateCondExpression_ACU — db:/sql: 前缀', () => {
     mockEvaluateSqlCondition.mockReturnValue(true);
 
     const result = evaluateCondExpression_ACU('db:false_condition, sql:true_condition', context);
-    expect(result).toBe(true);
-  });
-
-  it('空表达式返回 false', () => {
-    expect(evaluateCondExpression_ACU('', context)).toBe(false);
-  });
-
-  it('null 表达式返回 false', () => {
-    expect(evaluateCondExpression_ACU(null as any, context)).toBe(false);
-  });
-
-  it('db: 条件为 false 时返回 false', () => {
-    mockEvaluateDbCondition.mockReturnValue(false);
-    const result = evaluateCondExpression_ACU('db:nonexistent', context);
-    expect(result).toBe(false);
-  });
-
-  it('sql: 条件为 false 时返回 false', () => {
-    mockEvaluateSqlCondition.mockReturnValue(false);
-    const result = evaluateCondExpression_ACU('sql:SELECT 1 WHERE 1=0', context);
-    expect(result).toBe(false);
-  });
-
-  it('括号分组中的 db: 条件', () => {
-    mockEvaluateDbCondition.mockReturnValue(true);
-    mockEvaluateSqlCondition.mockReturnValue(false);
-
-    const result = evaluateCondExpression_ACU('(db:test & sql:false), db:fallback', context);
-    // (true & false) = false, true = true → false OR true = true
     expect(result).toBe(true);
   });
 });

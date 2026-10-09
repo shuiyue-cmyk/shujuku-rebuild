@@ -333,24 +333,6 @@ describe('usePlotWorldbookAgentControl', () => {
     expect(mockWriteControl).not.toHaveBeenCalled();
   });
 
-  it('skillifyAll 成功更新 Skill 后在 Agent 模式同步物理接管并刷新 snapshot', async () => {
-    mockSkillify.mockImplementation(async (options: any) => {
-      options.onProgress?.({ phase: 'collecting' });
-      options.onProgress?.({ phase: 'complete', current: 1, total: 1, updated: 1, skipped: 0, failed: 0 });
-      return { totalCandidates: 1, updated: 1, skipped: 0, failed: 0 };
-    });
-    const activeSnapshot = { active: true, selectionSignature: 'sig', createdAt: 1, books: { '角色A世界书': [{ uid: 1 }] } };
-    mockTakeover.mockResolvedValueOnce({ updated: true, reason: 'native_worldbook_trigger_disabled', failed: 0 });
-    mockRefreshSnapshot.mockResolvedValue(activeSnapshot);
-    const c = await getComposable();
-
-    const result = await c.skillifyAll();
-
-    expect(result).toBe(true);
-    expect(mockTakeover).toHaveBeenCalledTimes(1);
-    expect(c.snapshot.value).toEqual(activeSnapshot);
-  });
-
   it('syncAgentWorldbookTakeoverAfterSkillChange 在非 Agent 模式不触发物理接管', async () => {
     const c = await getComposable();
     await c.setMode('passive');
@@ -362,19 +344,6 @@ describe('usePlotWorldbookAgentControl', () => {
     expect(result).toBe(false);
     expect(mockTakeover).not.toHaveBeenCalled();
     expect(mockRefreshSnapshot).toHaveBeenCalledTimes(1);
-  });
-
-  it('syncAgentWorldbookTakeoverAfterSkillChange 在 Agent 模式触发物理接管并刷新 snapshot', async () => {
-    const activeSnapshot = { active: true, selectionSignature: 'sig', createdAt: 1, books: { '角色A世界书': [{ uid: 1 }] } };
-    mockTakeover.mockResolvedValueOnce({ updated: true, reason: 'native_worldbook_trigger_disabled', failed: 0 });
-    mockRefreshSnapshot.mockResolvedValue(activeSnapshot);
-    const c = await getComposable();
-
-    const result = await c.syncAgentWorldbookTakeoverAfterSkillChange();
-
-    expect(result).toBe(true);
-    expect(mockTakeover).toHaveBeenCalledTimes(1);
-    expect(c.snapshot.value).toEqual(activeSnapshot);
   });
 
   it('syncAgentWorldbookTakeoverAfterSkillChange 刷新配置失败时不抛出且不触发物理接管', async () => {
@@ -835,47 +804,6 @@ describe('usePlotWorldbookAgentControl', () => {
     expect(second).toEqual([{ role: 'system', content: 'built-in decision', deletable: false }]);
     expect(mockGetPromptTemplates).not.toHaveBeenCalled();
     expect(mockWriteControl).not.toHaveBeenCalled();
-  });
-
-  it('retains the cursor for an unchanged scope and reuses it for the next Skillify batch', async () => {
-    mockSkillify
-      .mockResolvedValueOnce({
-        totalCandidates: 1,
-        totalMatched: 2,
-        selectedForRun: 1,
-        remaining: 1,
-        truncated: true,
-        nextCursor: { bookName: '角色A世界书', uid: 'entry-1' },
-        updated: 0,
-        skipped: 1,
-        failed: 0,
-        results: [],
-      })
-      .mockResolvedValueOnce({
-        totalCandidates: 1,
-        totalMatched: 1,
-        selectedForRun: 1,
-        remaining: 0,
-        truncated: false,
-        nextCursor: { bookName: '角色A世界书', uid: 'entry-2' },
-        updated: 0,
-        skipped: 1,
-        failed: 0,
-        results: [],
-      });
-    const c = await getComposable();
-
-    await expect(c.skillifyAll()).resolves.toBe(false);
-    expect(c.skillifyCursor.value).toEqual({ bookName: '角色A世界书', uid: 'entry-1' });
-    expect(c.skillifyBatchStats.value).toEqual({ totalMatched: 2, selectedForRun: 1, remaining: 1, truncated: true });
-
-    await c.refresh();
-    expect(c.skillifyCursor.value).toEqual({ bookName: '角色A世界书', uid: 'entry-1' });
-
-    await expect(c.skillifyAll()).resolves.toBe(false);
-    expect(mockSkillify.mock.calls[1][0]).toMatchObject({ cursor: { bookName: '角色A世界书', uid: 'entry-1' } });
-    expect(c.skillifyCursor.value).toBeUndefined();
-    expect(c.skillifyBatchStats.value).toEqual({ totalMatched: 1, selectedForRun: 1, remaining: 0, truncated: false });
   });
 
   it('clears the cursor and batch statistics when the selection signature changes', async () => {

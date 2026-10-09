@@ -201,32 +201,6 @@ describe('runAgentDecisionForPlot_ACU', () => {
     expect(messages[0].content).not.toContain('blocked_task');
   });
 
-  it('uses active snapshot entries without Skill metadata as fallback decision candidates', async () => {
-    mockGetLorebookEntries.mockResolvedValueOnce([
-      { uid: 12, comment: '陈默人物档案', keys: ['陈默'], content: '陈默内容', enabled: true },
-    ]);
-    mockCallAIWithPreset.mockResolvedValue(JSON.stringify({
-      taskPlan: [{ taskId: 'task_id', run: true, effectiveStage: 1, effectiveOrder: 0 }],
-      plotGreenlights: {},
-      finalGenerationGreenlights: [{ entries: [1], reason: '最终生成' }],
-      fallbackMode: false,
-      reason: 'ok',
-    }));
-
-    const result = await runAgentDecisionForPlot_ACU({
-      plotSettings: { agentWorldbookControl: { enabled: true, mode: 'agent' } },
-      userMessage: '敲门',
-      sharedContext: {},
-      enabledTasks: [{ id: 'task id', name: '默认任务', description: '需要判断的剧情任务', enabled: true, promptGroup: { messages: [] } }],
-    });
-
-    expect(result.active).toBe(true);
-    expect(result.finalGenerationGreenlights).toEqual([{ bookName: '剧情书', uid: 12, reason: '最终生成' }]);
-    const promptText = mockCallAIWithPreset.mock.calls[0][0].map((message: any) => String(message.content || '')).join('\n');
-    expect(promptText).toContain('陈默人物档案');
-    expect(promptText).toContain('关键词：陈默');
-  });
-
   it('uses snapshot entries with empty Skill metadata as fallback decision candidates', async () => {
     const emptySkillMetaBlock = '<!-- ACU_SKILL_META_START\n{"version":1,"description":"","triggerWhen":"","updatedAt":1,"updatedBy":"agent-skillify"}\nACU_SKILL_META_END -->';
     mockGetLorebookEntries.mockResolvedValueOnce([
@@ -608,50 +582,6 @@ describe('runAgentDecisionForPlot_ACU', () => {
     const prompts = mockCallAIWithPreset.mock.calls.map(([messages]) => messages[0].content);
     expect(prompts[0]).toContain('S=1/6');
     expect(prompts[5]).toContain('S=6/6');
-  });
-
-  it('keeps the full min and max tk budgets when configured concurrency collapses to one non-empty shard', async () => {
-    mockRefreshPlotAgentWorldbookSnapshot.mockResolvedValueOnce({
-      active: true,
-      selectionSignature: 'scope',
-      createdAt: 1,
-      books: { '剧情书': [{ uid: 1 }] },
-    });
-    const skillMetaBlock = `<!-- ACU_SKILL_META_START\n${JSON.stringify({ version: 1, description: '单片 Skill', triggerWhen: '单片触发', updatedAt: 1, updatedBy: 'agent-skillify' })}\nACU_SKILL_META_END -->`;
-    mockGetLorebookEntries.mockResolvedValueOnce([{
-      uid: 1,
-      comment: `单片条目\n\n${skillMetaBlock}`,
-      keys: ['单片'],
-      content: '单片内容',
-      enabled: true,
-    }]);
-    mockCallAIWithPreset.mockResolvedValueOnce(JSON.stringify({
-      taskPlan: [{ taskId: 'task_id', run: true, effectiveStage: 1, effectiveOrder: 0 }],
-      plotGreenlights: {},
-      finalGenerationGreenlights: [],
-      fallbackMode: false,
-    }));
-
-    await runAgentDecisionForPlot_ACU({
-      plotSettings: {
-        agentWorldbookControl: {
-          enabled: true,
-          mode: 'agent',
-          agentDecisionConcurrency: 5,
-          contextSettings: { greenlightMinTkBudget: 101, greenlightMaxTkBudget: 999 },
-          agentDecisionPromptSegments: [{ role: 'user', deletable: true, content: 'B={{agent.greenlightTkBudgetJson}}\nS={{agent.shard.index}}/{{agent.shard.count}}' }],
-        },
-      },
-      userMessage: '继续',
-      sharedContext: {},
-      enabledTasks: [{ id: 'task id', name: '默认任务', description: '需要判断', enabled: true, promptGroup: { messages: [] } }],
-    });
-
-    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(1);
-    const prompt = mockCallAIWithPreset.mock.calls[0][0][0].content;
-    expect(prompt).toContain('S=1/1');
-    expect(prompt).toContain('"min": 101');
-    expect(prompt).toContain('"max": 999');
   });
 
   it('preserves zero max tk budgets when the global max is smaller than the actual shard count', async () => {

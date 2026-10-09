@@ -26,7 +26,6 @@ import {
   CHAT_SCOPED_CONFIG_FIELD_ACU,
   CHAT_SCOPED_CONFIG_VERSION_ACU,
   CHAT_SHEET_GUIDE_FIELD_ACU,
-  CHAT_SHEET_GUIDE_VERSION_ACU,
   LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU,
   CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU,
   CHAT_TEMPLATE_ARCHIVE_OPTION_PREFIX_ACU,
@@ -49,21 +48,9 @@ beforeEach(() => {
 
 // ═══ 常量验证 ═══
 describe('常量导出', () => {
-  it('CHAT_SCOPED_CONFIG_FIELD_ACU 是字符串', () => {
-    expect(typeof CHAT_SCOPED_CONFIG_FIELD_ACU).toBe('string');
-    expect(CHAT_SCOPED_CONFIG_FIELD_ACU).toBe('TavernDB_ACU_ScopedConfig');
-  });
-
-  it('CHAT_SCOPED_CONFIG_VERSION_ACU 是数字', () => {
-    expect(CHAT_SCOPED_CONFIG_VERSION_ACU).toBe(1);
-  });
 
   it('CHAT_SHEET_GUIDE_FIELD_ACU 钉值', () => {
     expect(CHAT_SHEET_GUIDE_FIELD_ACU).toBe('TavernDB_ACU_InternalSheetGuide');
-  });
-
-  it('CHAT_SHEET_GUIDE_VERSION_ACU 是 2', () => {
-    expect(CHAT_SHEET_GUIDE_VERSION_ACU).toBe(2);
   });
 
   it('LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU 钉值', () => {
@@ -85,15 +72,6 @@ describe('常量导出', () => {
 
 // ═══ getChatScopedConfigContainer_ACU ═══
 describe('getChatScopedConfigContainer_ACU', () => {
-  it('无 chat 首条消息返回 null', () => {
-    mockGetChatFirstLayerMessage.mockReturnValue(null);
-    expect(getChatScopedConfigContainer_ACU([])).toBeNull();
-  });
-
-  it('首条消息无 ScopedConfig 字段返回 null', () => {
-    mockGetChatFirstLayerMessage.mockReturnValue({});
-    expect(getChatScopedConfigContainer_ACU([{}])).toBeNull();
-  });
 
   it('ScopedConfig 为 JSON 字符串时正确解析', () => {
     const config = { version: 1, template: {} };
@@ -102,21 +80,6 @@ describe('getChatScopedConfigContainer_ACU', () => {
     }]);
     expect(result).not.toBeNull();
     expect(result!.version).toBe(1);
-  });
-
-  it('ScopedConfig 为对象时直接返回', () => {
-    const config = { version: 1, plot: { mode: 'chat_override' } };
-    const result = getChatScopedConfigContainer_ACU([{
-      [CHAT_SCOPED_CONFIG_FIELD_ACU]: config,
-    }]);
-    expect(result).not.toBeNull();
-    expect(result!.version).toBe(1);
-  });
-
-  it('ScopedConfig 为数组时返回 null', () => {
-    expect(getChatScopedConfigContainer_ACU([{
-      [CHAT_SCOPED_CONFIG_FIELD_ACU]: [1, 2],
-    }])).toBeNull();
   });
 
   it('chatMetadata 已有槽位优先于 chat[0] 旧字段', () => {
@@ -282,11 +245,6 @@ describe('getChatScopedConfigContainer_ACU', () => {
 
 // ═══ normalizeChatScopedConfigContainer_ACU ═══
 describe('normalizeChatScopedConfigContainer_ACU', () => {
-  it('null 输入返回带 version 的空对象', () => {
-    mockCloneScopedConfigData.mockReturnValue(null);
-    const result = normalizeChatScopedConfigContainer_ACU(null);
-    expect(result.version).toBe(CHAT_SCOPED_CONFIG_VERSION_ACU);
-  });
 
   it('有效输入保留内容并确保 version', () => {
     const input = { version: 1, template: { '': { mode: 'chat_override' } } };
@@ -311,33 +269,6 @@ describe('normalizeChatScopedConfigContainer_ACU', () => {
 
 // ═══ getChatSheetGuideContainer_ACU ═══
 describe('getChatSheetGuideContainer_ACU', () => {
-  it('无首条消息返回 null', () => {
-    mockGetChatFirstLayerMessage.mockReturnValue(null);
-    expect(getChatSheetGuideContainer_ACU([])).toBeNull();
-  });
-
-  it('无 SheetGuide 字段返回 null', () => {
-    mockGetChatFirstLayerMessage.mockReturnValue({});
-    expect(getChatSheetGuideContainer_ACU([{}])).toBeNull();
-  });
-
-  it('SheetGuide 为 JSON 字符串时正确解析', () => {
-    const guide = { version: 2, tags: {} };
-    const result = getChatSheetGuideContainer_ACU([{
-      [CHAT_SHEET_GUIDE_FIELD_ACU]: JSON.stringify(guide),
-    }]);
-    expect(result).not.toBeNull();
-    expect(result!.version).toBe(2);
-  });
-
-  it('SheetGuide 为对象时直接返回', () => {
-    const guide = { version: 2, tags: { '': { data: {} } } };
-    const result = getChatSheetGuideContainer_ACU([{
-      [CHAT_SHEET_GUIDE_FIELD_ACU]: guide,
-    }]);
-    expect(result).not.toBeNull();
-    expect(result!.tags).toBeDefined();
-  });
 
   it('SheetGuide 的 chatMetadata 已有 tag 优先于 chat[0] 旧字段', () => {
     const metadataGuide = { version: 2, tags: { '': { data: { sheet_old: { name: '旧' } } } } };

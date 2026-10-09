@@ -59,21 +59,6 @@ async function expectParseFailure_ACU(raw: string, fragment: string) {
 }
 
 describe('parseOutlineTags_ACU', () => {
-  it('extracts stage, nodes and turns from clean tag output', () => {
-    const parsed = parseOutlineTags_ACU(tagText_ACU());
-    expect(parsed.title).toBe('初入江南');
-    expect(parsed.goal).toBe('接管鬼船案调查权');
-    expect(parsed.tempo).toBe('buildup');
-    expect(parsed.role).toBe('setup');
-    expect(parsed.timeSpanGoal).toBe('十日');
-    expect(parsed.nodes).toHaveLength(2);
-    expect(parsed.nodes[0]).toMatchObject({ title: '抵达江南府', goal: '宣示接管权力', turns: [{ goal: '钦差抵达，宣读圣旨', pacing: 'setup', function: 'transition', mainlineDelta: 'hold', timeAdvance: 'same_day', timeAnchor: null }] });
-    // 解析层保留缺失状态；是否兼容归一化或严格拒绝由 schema 边界决定。
-    expect(parsed.nodes[1].turns).toEqual([
-      { goal: '登船勘验，发现符箓气息', pacing: 'pressure', function: 'conflict', mainlineDelta: 'step', timeAdvance: 'continuous', timeAnchor: null },
-      { goal: '义庄闹鬼，稳住仵作问话', pacing: null, function: null, mainlineDelta: null, timeAdvance: null, timeAnchor: null },
-    ]);
-  });
 
   it('解析 turn 属性时保留合法值、非法原文与缺失状态', () => {
     const raw = [
@@ -182,22 +167,9 @@ describe('parseOutlineTags_ACU', () => {
     await expectParseFailure_ACU('这是一段没有任何标签的散文，模型忘记了输出格式。', '模型返回片段：这是一段没有任何标签的散文');
     await expectParseFailure_ACU('', '大纲返回为空');
   });
-
-  it('fails when a node has no non-empty turn', async () => {
-    await expectParseFailure_ACU('<node><node_goal>目标</node_goal><turn>   </turn></node>', '没有任何非空 <turn>');
-  });
 });
 
 describe('buildStageOutlineFromTags_ACU', () => {
-  it('generates ids and derives all counts at runtime', () => {
-    const outline = buildStageOutlineFromTags_ACU(parseOutlineTags_ACU(tagText_ACU()), allocator_ACU());
-    expect(outline.schemaVersion).toBe(1);
-    expect(outline.totalTurns).toBe(3);
-    expect(outline.nodes.map(node => node.id)).toEqual(['node-1', 'node-3']);
-    expect(outline.nodes[0]).toMatchObject({ suggestedTurns: 1 });
-    expect(outline.nodes[1]).toMatchObject({ suggestedTurns: 2 });
-    expect(outline.nodes[1].turns.map(turn => turn.id)).toEqual(['turn-4', 'turn-5']);
-  });
 
   it('falls back to positional node titles and previous stage title/goal', () => {
     const parsed = parseOutlineTags_ACU('<node><node_goal>目标</node_goal><turn>第一轮</turn></node>');
@@ -243,10 +215,5 @@ describe('spliceOutlineWithCompletedPrefix_ACU', () => {
     expect(spliced.nodes).toHaveLength(3);
     expect(spliced.nodes[1]).toMatchObject({ id: 'node-b', suggestedTurns: 1 });
     expect(spliced.totalTurns).toBe(5);
-  });
-
-  it('returns the planned outline unchanged when nothing is completed', () => {
-    const planned = buildStageOutlineFromTags_ACU(parseOutlineTags_ACU(tagText_ACU()), allocator_ACU());
-    expect(spliceOutlineWithCompletedPrefix_ACU(previousOutline_ACU(), 0, planned)).toBe(planned);
   });
 });

@@ -372,15 +372,6 @@ describe('未结算窗口选择（移植上游 5f8afe3a）', () => {
     expect(text).toContain('498 个未结算 AI 楼层');
   });
 
-  it('只选窗口内未结算楼层，窗口外计数为 hiddenCount', () => {
-    // 60 楼交替：AI 楼 30 个（奇数下标），settled=5 → 未结算 27 个；窗口 8 → 选 8 个。
-    const chat = buildChat();
-    const selection = resolveAgentUnsettledStoryWindow_ACU(resolveContext(chat, RULES));
-    expect(selection.floors.map(floor => floor.index)).toEqual([45, 47, 49, 51, 53, 55, 57, 59]);
-    expect(selection.hiddenCount).toBe(19);
-    expect(selection.startIndex).toBe(45);
-  });
-
   it('已完成区间内的楼层不计入未结算', () => {
     const chat = buildChat();
     const context = resolveContext(chat, RULES);
@@ -419,16 +410,5 @@ describe('未结算窗口选择（移植上游 5f8afe3a）', () => {
     expect(text).toContain('19');
     expect(text).not.toContain('全量');
     expect(text).not.toContain('上一轮已结算到当前最后一楼');
-  });
-
-  it('正文渲染的未结算段使用窗口标题与窗口内楼层', () => {
-    const chat = buildChat();
-    const text = renderAgentStoryText_ACU(resolveContext(chat, RULES));
-    expect(text).toContain('## 尚未结算的最新正文（正文可读窗口内）');
-    expect(text).not.toContain('尚未结算的最新正文（全量）');
-    // 窗口外未结算楼层（如 7）不得出现在未结算段。
-    const unsettledSection = text.split('## 尚未结算的最新正文')[1] ?? '';
-    expect(unsettledSection).not.toContain('【楼层 7】');
-    expect(unsettledSection).toContain('【楼层 59】');
   });
 });

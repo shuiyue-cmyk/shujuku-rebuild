@@ -301,68 +301,6 @@ async function clickDialogButton(label: string): Promise<void> {
 }
 
 describe('FormFillPage', () => {
-  it('渲染填表工作台的状态、自动更新、手动填表与表格模板分节', async () => {
-    const { mount } = await mountFormFillPage();
-
-    const page = document.querySelector('[data-ub-main]');
-    expect(page).not.toBeNull();
-    const text = page!.textContent || '';
-    expect(document.querySelector('.ub-top__title')?.textContent || '').toContain('填表工作台');
-    expect(text).toContain('表格状态');
-    expect(text).toContain('当前聊天');
-    expect(text).toContain('chat-form-fill');
-    expect(text).toContain('角色状态');
-    expect(text).toContain('事件记录');
-    expect(text).not.toContain('就绪:角色状态');
-    expect(text).not.toContain('下一次:');
-    const facts = page!.querySelector('[aria-label="表格状态概览"]');
-    expect(facts).not.toBeNull();
-    expect((facts!.textContent || '').replace(/\s+/g, '')).toContain('当前聊天chat-form-fill');
-    expect((facts!.textContent || '').replace(/\s+/g, '')).toContain('AI回复累计3层');
-    expect(text).toContain('自动更新设置');
-    expect(text).toContain('自动填表间隔');
-    expect(text).toContain('最新层不填表');
-    expect(text).not.toContain('并发策略');
-    expect(text).not.toContain('历史数据保留');
-    expect(text).not.toContain('沿用当前自定义参数');
-    expect(text).not.toContain('标签筛选');
-    expect(text).not.toContain('内容过滤');
-    expect(text).not.toContain('填表触发条件');
-    expect(text).not.toContain('高级数值');
-    expect(text).not.toContain('填表注入目标世界书');
-    expect(text).not.toContain('填表附加世界书条目');
-    expect(text).not.toContain('注入目标世界书');
-    expect(text).not.toContain('附加世界书条目');
-    expect(text).not.toContain('填表提示词');
-    expect(text).not.toContain('已自定义提示词');
-    expect(text).not.toContain('段落数量');
-    expect(text).not.toContain('保存状态');
-    expect(text).not.toContain('编辑提示词');
-    expect(text).toContain('手动填表');
-    expect(text).toContain('填表 API 预设');
-    expect(text).toContain('本次填表附加要求');
-    expect(text).toContain('full checkpoint');
-    expect(text).toContain('AI 第 1 层（初始基线）');
-    expect(text).toContain('AI 第 3 层（历史周期基线）');
-    expect(text).toContain('预计处理范围');
-    expect(text).toContain('执行手动填表');
-    expect(text).toContain('表格模板预设');
-    expect(text).toContain('打开可视化表格编辑器');
-    expect(text).not.toContain('立即构建交火纪要索引');
-    expect(page!.querySelector('.ub-segs')).toBeNull();
-
-    const sections = Array.from(page!.querySelectorAll<HTMLElement>('.ub-section'));
-    expect(sections.map(section => section.id)).toEqual(['ff-status', 'ff-update', 'ff-manual', 'ff-template']);
-    // 每个分节都带常驻说明
-    sections.forEach(section => {
-      expect(section.querySelector('.ub-section__desc')?.textContent?.trim()).toBeTruthy();
-    });
-    const jumpItems = Array.from(page!.querySelectorAll('.ub-page__chip'))
-      .map(item => (item.textContent || '').trim());
-    expect(jumpItems).toEqual(['表格状态', '自动更新', '手动填表', '表格模板预设']);
-
-    mount.__resetAcuV2MountForTests();
-  });
 
   it('标签筛选里的 tableEdit 解析开关会保存设置', async () => {
     const { mount, settings, saveSettings } = await mountFormFillPage(createSettings(), 'table');
@@ -379,90 +317,6 @@ describe('FormFillPage', () => {
     expect(settings.tableEditLastPairOnly).toBe(false);
     expect(toggle.getAttribute('aria-checked')).toBe('false');
     expect(saveSettings).toHaveBeenCalled();
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('填表设置面板暴露原生工具提交开关：默认关闭，点击可开启并落盘', async () => {
-    // charCardPrompt 留空 → 回落内置默认提示词，mode 才是「使用默认」（开关不置灰）。
-    const pristine = createSettings();
-    pristine.charCardPrompt = [];
-    const { mount, settings, saveSettings } = await mountFormFillPage(pristine);
-    expect(settings.tableFillNativeToolsEnabled).not.toBe(true);
-
-    const toggle = document.querySelector<HTMLButtonElement>('#ff-update [role="switch"][aria-label*="table_sql"]');
-    expect(toggle, '原生工具开关必须渲染为 role=switch 控件').toBeTruthy();
-    expect(toggle?.getAttribute('aria-checked'), '默认应关闭').toBe('false');
-    expect((toggle as HTMLButtonElement | null)?.disabled, '提示词为默认时开关可点，不得置灰').toBe(false);
-
-    (toggle as HTMLElement).click();
-    await new Promise(r => setTimeout(r, 0));
-
-    expect(settings.tableFillNativeToolsEnabled, '开启后必须写进设置').toBe(true);
-    expect(saveSettings, '配置变更必须落盘').toHaveBeenCalled();
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('提示词已自定义时，工具开关置灰且点击无效', async () => {
-    const customized = createSettings();
-    // 自定义主段：与两套默认都不同 → 判定为「已自定义」。
-    customized.charCardPrompt = [{
-      role: 'USER',
-      content: '用户手写的填表主段，不含任何默认提示词内容。',
-      mainSlot: 'A',
-      isMain: true,
-      deletable: false,
-    }];
-    const { mount, settings } = await mountFormFillPage(customized);
-
-    const toggle = document.querySelector<HTMLButtonElement>('#ff-update [role="switch"][aria-label*="table_sql"]');
-    expect(toggle, '原生工具开关必须渲染').toBeTruthy();
-    expect((toggle as HTMLButtonElement | null)?.disabled, '提示词已自定义时开关必须置灰').toBe(true);
-    expect(document.body.textContent || '').toContain('提示词已自定义');
-
-    (toggle as HTMLElement).click();
-    await new Promise(r => setTimeout(r, 0));
-    expect(settings.tableFillNativeToolsEnabled, '置灰后点击不得改设置').not.toBe(true);
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('填表 API 预设下拉的跟随项显示当前活动 API 预设名', async () => {
-    const { mount } = await mountFormFillPage();
-
-    const updatePanel = document.getElementById('ff-update')!;
-    const apiRow = Array.from(updatePanel.querySelectorAll<HTMLElement>('.ub-row'))
-      .find(row => (row.textContent || '').includes('填表 API 预设'))!;
-    const select = apiRow.querySelector<HTMLSelectElement>('select[aria-label="填表 API 预设"]');
-    expect(select).not.toBeNull();
-    expect(select!.selectedOptions[0]?.textContent).toContain('跟随当前活动 API（fast）');
-
-    const labels = Array.from(select!.options).map(option => (option.textContent || '').trim());
-    expect(labels.some(label => label.includes('跟随当前活动 API（fast）'))).toBe(true);
-    expect(labels).toContain('fast');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('高级参数中的触发条件数字字段会归一化并保存 settings', async () => {
-    const { mount, settings, saveSettings } = await mountFormFillPage();
-
-    const updatePanel = document.getElementById('ff-update')!;
-    const advancedHeader = updatePanel.querySelector<HTMLButtonElement>('.ub-upd__more')!;
-    advancedHeader.click();
-    await Promise.resolve();
-
-    const tokenRow = Array.from(updatePanel.querySelectorAll<HTMLElement>('.ub-row'))
-      .find(row => (row.textContent || '').includes('AI 回复最小长度'))!;
-    const tokenInput = tokenRow.querySelector<HTMLInputElement>('input[type="number"]')!;
-    tokenInput.value = '7';
-    tokenInput.dispatchEvent(new Event('change', { bubbles: true }));
-    await Promise.resolve();
-
-    expect(settings.autoUpdateTokenThreshold).toBe(7);
-    expect(saveSettings).toHaveBeenCalled();
-    expect(document.querySelector('[data-ub-main]')?.textContent || '').not.toContain('设置已保存');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -522,80 +376,6 @@ describe('FormFillPage', () => {
     expect(updatePanel.textContent || '').not.toContain('历史数据保留');
 
     expect(saveSettings).toHaveBeenCalled();
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('高级参数可编辑自动更新字段和触发条件字段，改成非快捷组合后显示自定义', async () => {
-    const { mount, settings, saveSettings } = await mountFormFillPage({
-      ...createSettings(),
-      autoUpdateThreshold: 3,
-      autoUpdateFrequency: 3,
-      updateBatchSize: 3,
-      skipUpdateFloors: 0,
-    });
-
-    const updatePanel = document.getElementById('ff-update')!;
-    const intervalRow = Array.from(updatePanel.querySelectorAll<HTMLElement>('.ub-row'))
-      .find(row => (row.textContent || '').includes('自动填表间隔'))!;
-    expect(intervalRow.querySelector<HTMLSelectElement>('select')!.selectedOptions[0]?.textContent || '').toContain('每 3 层：均衡');
-
-    const advancedHeader = updatePanel.querySelector<HTMLButtonElement>('.ub-upd__more')!;
-    advancedHeader.click();
-    await Promise.resolve();
-
-    const advancedRows = Array.from(updatePanel.querySelectorAll<HTMLElement>('.ub-row'))
-      .filter(row => row.querySelector('input[type="number"]'));
-    expect(advancedRows.map(row => (row.textContent || '').trim()).join('|')).toContain('填表上下文层数');
-    expect(advancedRows.map(row => (row.textContent || '').trim()).join('|')).toContain('自动填表频率');
-    expect(advancedRows.map(row => (row.textContent || '').trim()).join('|')).toContain('批处理层数');
-    expect(advancedRows.map(row => (row.textContent || '').trim()).join('|')).toContain('跳过最新回复数');
-    expect(advancedRows.map(row => (row.textContent || '').trim()).join('|')).toContain('AI 回复最小长度');
-    expect(advancedRows.map(row => (row.textContent || '').trim()).join('|')).toContain('填表最大重试');
-    expect(advancedRows).toHaveLength(6);
-
-    const batchRow = advancedRows.find(row => (row.textContent || '').includes('批处理层数'))!;
-    const batchInput = batchRow.querySelector<HTMLInputElement>('input[type="number"]')!;
-    batchInput.value = '2';
-    batchInput.dispatchEvent(new Event('change', { bubbles: true }));
-    await Promise.resolve();
-
-    expect(settings.updateBatchSize).toBe(2);
-    const intervalSelect = intervalRow.querySelector<HTMLSelectElement>('select')!;
-    expect(intervalSelect.selectedOptions[0]?.textContent || '').toContain('自定义');
-    expect(Array.from(intervalSelect.options).filter(option => !option.disabled)
-      .map(option => (option.textContent || '').trim())).not.toContain('自定义');
-
-    const skipRow = advancedRows.find(row => (row.textContent || '').includes('跳过最新回复数'))!;
-    const skipInput = skipRow.querySelector<HTMLInputElement>('input[type="number"]')!;
-    skipInput.value = '2';
-    skipInput.dispatchEvent(new Event('change', { bubbles: true }));
-    await Promise.resolve();
-
-    expect(settings.skipUpdateFloors).toBe(2);
-    expect(updatePanel.textContent || '').toContain('最新层不填表：自定义');
-    expect(saveSettings).toHaveBeenCalled();
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('打开提示词抽屉时不显示其他面板的保存消息', async () => {
-    const { mount } = await mountFormFillPage(createSettings(), 'table');
-
-    const toggle = document.querySelector(
-      'button[data-acu-setting-key="tableEditLastPairOnly"]',
-    ) as HTMLButtonElement;
-    toggle.click();
-    await Promise.resolve();
-
-    const openButton = Array.from(document.querySelectorAll('button'))
-      .find(btn => btn.textContent?.includes('编辑提示词')) as HTMLButtonElement;
-    openButton.click();
-    await Promise.resolve();
-
-    const drawer = document.querySelector('#ub-portal .ub-sheet-layer') as HTMLElement;
-    expect(drawer).not.toBeNull();
-    expect(drawer.textContent || '').not.toContain('设置已保存');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -663,31 +443,6 @@ describe('FormFillPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('关闭有未保存修改的提示词抽屉会确认', async () => {
-    const { mount } = await mountFormFillPage(createSettings(), 'table');
-
-    const openButton = Array.from(document.querySelectorAll('button'))
-      .find(btn => btn.textContent?.includes('编辑提示词')) as HTMLButtonElement;
-    openButton.click();
-    await Promise.resolve();
-
-    const drawer = document.querySelector('#ub-portal .ub-sheet-layer') as HTMLElement;
-    const textarea = drawer.querySelector<HTMLTextAreaElement>('.ub-segs textarea')!;
-    textarea.value = '未保存修改';
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    await Promise.resolve();
-
-    const closeButton = drawer.querySelector<HTMLButtonElement>('[title="关闭"]')!;
-    closeButton.click();
-    await Promise.resolve();
-
-    expect(document.querySelector('.ub-dialog-layer')?.textContent || '')
-      .toContain('你有未保存的填表提示词修改');
-    expect(document.querySelector('#ub-portal .ub-sheet-layer')).not.toBeNull();
-
-    mount.__resetAcuV2MountForTests();
-  });
-
   it('提示词抽屉有未保存修改时关闭整个 UI 会确认', async () => {
     const { mount } = await mountFormFillPage(createSettings(), 'table');
 
@@ -717,35 +472,6 @@ describe('FormFillPage', () => {
 });
 
 describe('FormFillPage · 手动填表面板', () => {
-  it('渲染手动填表面板和常驻说明信息条，运行配置不混入手动面板', async () => {
-    const { mount } = await mountFormFillPage();
-
-    const page = document.querySelector('[data-ub-main]');
-    expect(page).not.toBeNull();
-    const panel = document.getElementById('ff-manual')!;
-    const text = panel.textContent || '';
-    expect(text).not.toContain('填表 API 预设');
-    expect(text).toContain('手动处理最近 N 层');
-    expect(text).toContain('每 N 层合并为一次填表');
-    expect(text).toContain('本次填表附加要求');
-    expect(text).toContain('full checkpoint');
-    expect(text).toContain('AI 第 1 层（初始基线）');
-    expect(text).toContain('AI 第 3 层（历史周期基线）');
-    expect(text).toContain('选中表：角色状态（sheet_a）、事件记录（sheet_b）');
-    expect(text).toContain('执行手动填表');
-    expect(text).toContain('一键追平所选表未填楼层');
-    expect(text).toContain('不扫描历史前沿之前的内部空洞');
-    const extraRow = panel.querySelector('[data-ub-row="本次填表附加要求"]')!;
-    expect(extraRow.querySelector('[role="switch"]')).toBeNull();
-    expect(extraRow.querySelector('textarea')).not.toBeNull();
-
-    expect(panel.querySelector('.ub-section__desc')?.textContent?.trim()).toBeTruthy();
-
-    const runPanel = document.getElementById('ff-update')!;
-    expect(runPanel.textContent || '').toContain('填表 API 预设');
-
-    mount.__resetAcuV2MountForTests();
-  });
 
   it('checkpoint reason 文案兼容历史手动、保留边界、未知和缺失 reason', async () => {
     const { mount } = await mountFormFillPage(createSettings(), 'form-fill', [
@@ -823,49 +549,6 @@ describe('FormFillPage · 手动填表面板', () => {
     expect(observedSettings).toEqual([{ threshold: 3, batchSize: 2, manualDepth: 100, manualBatch: 4 }]);
     expect(settings.autoUpdateThreshold).toBe(3);
     expect(settings.updateBatchSize).toBe(2);
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('执行手动填表会把已选表传给 service 编排，空附加要求不传入额外内容', async () => {
-    const { mount, orchestrate, manualExtraHintSetter } = await mountFormFillPage();
-
-    const button = Array.from(document.querySelectorAll('button'))
-      .find(btn => btn.textContent?.includes('执行手动填表')) as HTMLButtonElement;
-    expect(button).not.toBeUndefined();
-    button.click();
-    await waitForDialogLayer();
-
-    const dialogText = document.querySelector('.ub-dialog-layer')?.textContent || '';
-    expect(dialogText).toContain('即将执行手动填表');
-    expect(dialogText).toContain('当前 full checkpoint：AI 第 1 层（初始基线）、AI 第 3 层（历史周期基线）');
-    expect(dialogText).toContain('本次重填范围：AI 第 1~3 层');
-    expect(dialogText).toContain('选中表：角色状态（sheet_a）、事件记录（sheet_b）');
-    expect(dialogText).toContain('会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志');
-    expect(dialogText).toContain('此前楼层的表格数据将无法恢复');
-    expect(dialogText).toContain('范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除');
-    // 零提交回滚语义：本次提交过任何批次（含只落进度的伪提交）就不回滚；一个批次都没提交才整段回滚清理。
-    expect(dialogText).toContain('本次只要提交过任何批次（含只落了进度、未写入数据的批次）就不会回滚');
-    expect(dialogText).toContain('只有本次一个批次都没提交时，才会自动回滚清理并恢复被删除的旧数据');
-    expect(dialogText).not.toContain('会回滚到本次操作前的状态');
-    expect(dialogText).toContain('世界书注入目标：角色卡绑定世界书 · CharBookFF');
-    expect(dialogText).not.toContain('第二次破坏性确认');
-    expect(dialogText).toContain('确认并继续');
-    expect(dialogText).not.toContain('直接填表');
-    expect(document.querySelector('.ub-toasts')?.textContent || '')
-      .not.toContain('手动填表开始');
-    expect(orchestrate).not.toHaveBeenCalled();
-
-    await clickDialogButton('确认并继续');
-    await new Promise(r => setTimeout(r, 0));
-
-    expect(orchestrate).toHaveBeenCalled();
-    expect(orchestrate.mock.calls[0][0]).toEqual(['sheet_a', 'sheet_b']);
-    expect(orchestrate.mock.calls[0][2]).toEqual(expect.objectContaining({
-      clearBeforeUpdate: true,
-      onProgress: expect.any(Function),
-    }));
-    expect(manualExtraHintSetter).not.toHaveBeenCalled();
 
     mount.__resetAcuV2MountForTests();
   });

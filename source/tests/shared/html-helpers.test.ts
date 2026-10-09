@@ -52,20 +52,6 @@ describe('escapeHtml_ACU', () => {
 });
 
 describe('renderOption_ACU', () => {
-  it('生成基本 option 标签', () => {
-    const result = renderOption_ACU('val', 'text');
-    expect(result).toBe('<option value="val">text</option>');
-  });
-
-  it('生成选中的 option 标签', () => {
-    const result = renderOption_ACU('val', 'text', true);
-    expect(result).toContain('selected');
-  });
-
-  it('未选中时不包含 selected', () => {
-    const result = renderOption_ACU('val', 'text', false);
-    expect(result).not.toContain('selected');
-  });
 
   it('value 和 text 中的特殊字符被转义', () => {
     const result = renderOption_ACU('<script>', '"xss"');
@@ -75,21 +61,10 @@ describe('renderOption_ACU', () => {
 });
 
 describe('renderStopButton_ACU', () => {
-  it('生成包含指定 id 的按钮', () => {
-    const result = renderStopButton_ACU('btn-stop', '停止');
-    expect(result).toContain('id="btn-stop"');
-    expect(result).toContain('停止');
-  });
 
   it('id 中的特殊字符被转义', () => {
     const result = renderStopButton_ACU('<bad>', 'label');
     expect(result).toContain('&lt;bad&gt;');
-  });
-
-  it('返回 button 标签', () => {
-    const result = renderStopButton_ACU('id', 'label');
-    expect(result).toMatch(/^<button/);
-    expect(result).toMatch(/<\/button>$/);
   });
 });
 

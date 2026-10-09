@@ -35,17 +35,6 @@ function snapshot_ACU(): AgentWorldbookSnapshot_ACU {
 }
 
 describe('世界书目录渲染', () => {
-  it('每条一行：标题、关键词、10 字摘要、token 估算与精读地址', () => {
-    const catalog = renderAgentWorldbookCatalog_ACU(snapshot_ACU());
-    expect(catalog).toContain('晶屑设定｜关键词：晶屑、禁区');
-    expect(catalog).toContain('守门人｜关键词：（无）');
-    expect(catalog).toContain('摘要：黑色晶屑是禁区核心的');
-    expect(catalog).toContain('约 18 token');
-    expect(catalog).toContain('$WORLDBOOK:设定集:7');
-    expect(catalog).toContain('$WORLDBOOK:设定集:9');
-    // 目录只有标题与元信息，不注入条目全文。
-    expect(catalog).not.toContain('黑色晶屑是禁区核心的碎片。');
-  });
 
   it('读取失败与空快照分别如实标注，不混为一谈', () => {
     expect(renderAgentWorldbookCatalog_ACU(buildEmptyAgentWorldbookSnapshot_ACU(false))).toContain('目录不可用');

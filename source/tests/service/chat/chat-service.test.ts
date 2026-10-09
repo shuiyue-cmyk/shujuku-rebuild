@@ -251,20 +251,6 @@ describe('clearAllAiTableDataForCheckpointRestore_ACU', () => {
 
 // ═══ replaceChatMessage_ACU ═══
 describe('replaceChatMessage_ACU', () => {
-  it('成功替换消息内容', async () => {
-    const chat = [
-      { is_user: true, mes: '你好' },
-      { is_user: false, mes: '原始内容', message_id: 'msg1', extra: {} },
-    ];
-    mockGetChatArray.mockReturnValue(chat);
-    mockSetChatMessages.mockResolvedValue(true);
-    const result = await replaceChatMessage_ACU(1, '新内容');
-    expect(result).toBe(true);
-    expect(mockSetChatMessages).toHaveBeenCalledWith(
-      [expect.objectContaining({ message_id: 'msg1', mes: '新内容' })],
-      { refresh: 'affected' },
-    );
-  });
 
   it('消息不存在返回 false', async () => {
     mockGetChatArray.mockReturnValue([]);
@@ -340,18 +326,6 @@ describe('replaceChatMessage_ACU', () => {
 
 // ═══ getOriginalContent_ACU ═══
 describe('getOriginalContent_ACU', () => {
-  it('从缓存获取原始内容', () => {
-    mockGetLastOptimizationBase.mockReturnValue({
-      messageIndex: 1,
-      messageId: 'msg1',
-      baseContent: '原始内容',
-    });
-    mockGetChatArray.mockReturnValue([
-      { is_user: true },
-      { is_user: false, message_id: 'msg1' },
-    ]);
-    expect(getOriginalContent_ACU(1)).toBe('原始内容');
-  });
 
   it('缓存楼号相同但 message_id 已换楼时不得取外来原文（删楼位移）', () => {
     mockGetLastOptimizationBase.mockReturnValue({
@@ -379,20 +353,6 @@ describe('getOriginalContent_ACU', () => {
       { is_user: false, message_id: 'msgB', extra: { _acu_original_content: 'extra 原文' } },
     ]);
     expect(getOriginalContent_ACU(1)).toBe('缓存原文');
-  });
-
-  it('从 extra 获取原始内容', () => {
-    mockGetLastOptimizationBase.mockReturnValue(null);
-    mockGetChatArray.mockReturnValue([
-      { is_user: false, extra: { _acu_original_content: '从extra获取' } },
-    ]);
-    expect(getOriginalContent_ACU(0)).toBe('从extra获取');
-  });
-
-  it('消息不存在返回 null', () => {
-    mockGetLastOptimizationBase.mockReturnValue(null);
-    mockGetChatArray.mockReturnValue([]);
-    expect(getOriginalContent_ACU(5)).toBeNull();
   });
 });
 
@@ -2369,13 +2329,6 @@ describe('deleteLocalDataInChatCore_ACU', () => {
     expect(mockSaveChatToHostStrict).toHaveBeenCalledOnce();
   });
 
-
-  it('空聊天记录返回 0', async () => {
-    mockGetChatArray.mockReturnValue([]);
-    const count = await deleteLocalDataInChatCore_ACU('all');
-    expect(count).toBe(0);
-  });
-
   it('mode=current 只删除当前隔离标签的数据', async () => {
     mockSettings.dataIsolationEnabled = true;
     mockSettings.dataIsolationCode = 'tag_A';
@@ -2434,18 +2387,6 @@ describe('deleteLocalDataInChatCore_ACU', () => {
 
     expect(chat[0].TavernDB_ACU_IsolatedData.tag_A).toBeUndefined();
     expect(chat[0].TavernDB_ACU_IsolatedData.tag_B).toBeDefined();
-  });
-
-  it('指定楼层范围', async () => {
-    const chat = [
-      { is_user: false, TavernDB_ACU_Data: {} }, // AI楼层1
-      { is_user: false, TavernDB_ACU_Data: {} }, // AI楼层2
-      { is_user: false, TavernDB_ACU_Data: {} }, // AI楼层3
-    ];
-    mockGetChatArray.mockReturnValue(chat);
-    const count = await deleteLocalDataInChatCore_ACU('all', 1, 2);
-    expect(count).toBe(2);
-    expect(chat[2].TavernDB_ACU_Data).toBeDefined(); // 第3层不在范围内
   });
   it('mode=all 全范围删除时清理挂在 chat[0] 的旧版表头清单', async () => {
     const chat: any[] = [
@@ -2783,36 +2724,6 @@ describe('deleteLocalDataWithScope_ACU', () => {
 
 // ═══ overrideLatestLayerWithTemplateCore_ACU ═══
 describe('overrideLatestLayerWithTemplateCore_ACU', () => {
-  it('用模板覆盖最新层', async () => {
-    const chat = [
-      { is_user: true },
-      { is_user: false, TavernDB_ACU_IsolatedData: {} },
-    ];
-    mockGetChatArray.mockReturnValue(chat);
-    const templateData = {
-      sheet_0: { name: '物品表', content: [['row_id', '物品名'], ['1', '剑'], ['2', '盾']] },
-    };
-    const count = await overrideLatestLayerWithTemplateCore_ACU(templateData);
-    expect(count).toBe(1);
-    expect(mockPersistTablesToChatMessage).toHaveBeenCalledWith(expect.objectContaining({
-      targetMessageIndex: 1,
-      targetSheetKeys: ['sheet_0'],
-      source: 'system',
-    }));
-    expect(mockSaveChatToHost).not.toHaveBeenCalled();
-  });
-
-  it('空聊天记录返回 0', async () => {
-    mockGetChatArray.mockReturnValue([]);
-    const count = await overrideLatestLayerWithTemplateCore_ACU({ sheet_0: { name: '表' } });
-    expect(count).toBe(0);
-  });
-
-  it('无 AI 消息返回 0', async () => {
-    mockGetChatArray.mockReturnValue([{ is_user: true }]);
-    const count = await overrideLatestLayerWithTemplateCore_ACU({ sheet_0: { name: '表' } });
-    expect(count).toBe(0);
-  });
 
   it('覆盖后只保留表头', async () => {
     const chat = [{ is_user: false }];

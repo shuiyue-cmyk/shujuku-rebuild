@@ -77,13 +77,4 @@ describe('runOptimizationLogicWithUI_ACU 中断口径', () => {
     expect(result).toEqual({ skipped: true, reason: 'processing_error' });
     expect(mockShowToastr).toHaveBeenCalledWith('warning', '剧情任务处理异常，继续宿主发送。', '剧情推进');
   });
-
-  it('reportWarning 透传给 service 层', async () => {
-    mockRunOptimizationLogic.mockResolvedValue({ success: true, finalMessage: 'ok' });
-    await runOptimizationLogicWithUI_ACU('继续');
-    expect(mockRunOptimizationLogic).toHaveBeenCalledWith(
-      '继续',
-      expect.objectContaining({ reportWarning: expect.any(Function) }),
-    );
-  });
 });

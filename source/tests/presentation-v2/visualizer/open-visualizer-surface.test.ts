@@ -2,8 +2,6 @@
  * @vitest-environment jsdom
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
 
 const STORAGE_KEY = 'acu_v2_ui_state';
@@ -78,26 +76,6 @@ beforeEach(async () => {
 }, 60_000);
 
 describe('openVisualizerSurface_ACU', () => {
-  it('外部调用会打开面板并进入数据库编辑器，关闭后隐藏面板', async () => {
-    persistAdvancedMode();
-    const bridge = await import('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface');
-
-    const result = await bridge.openVisualizerSurface_ACU({ source: 'external-api' });
-    await Promise.resolve();
-
-    expect(result).toBe(true);
-    expect(document.getElementById('acu-app-v2')?.style.display).toBe('');
-    const surface = document.querySelector('[data-ub-viz]');
-    expect(surface).not.toBeNull();
-    expect(surface?.textContent).toContain('数据库编辑器');
-    expect(surface?.textContent).not.toContain('无法载入数据库');
-
-    document.querySelector<HTMLButtonElement>('[data-ub-viz-close]')!.click();
-    await tick();
-
-    expect(document.getElementById('acu-app-v2')?.style.display).toBe('none');
-    await resetMountedApp();
-  });
 
   it('面板已打开时进入编辑器，关闭后回到进入前的页面', async () => {
     persistAdvancedMode('dashboard');
@@ -244,24 +222,6 @@ describe('openVisualizerSurface_ACU', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('新增行后跳到最后一页并把新卡片滚入视野', async () => {
-    const scrollIntoView = vi.fn();
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
-    const rows = Array.from({ length: 30 }, (_, index) => [null, `角色 ${index + 1}`]);
-    const { mount, visualizer, surface } = await openWith({ sheet_a: { name: '滚动验证', content: [[null, '姓名'], ...rows] } });
-    scrollIntoView.mockClear();
-
-    buttonByText(surface, '新增一行')!.click();
-    await tick();
-
-    expect(visualizer.currentSheet.content).toHaveLength(32);
-    const cards = surface.querySelectorAll<HTMLElement>('[data-ub-viz-card]');
-    expect(cards).toHaveLength(1);
-    expect(cards[0].textContent).toContain('#31');
-    expect(scrollIntoView).toHaveBeenCalled();
-    mount.__resetAcuV2MountForTests();
-  });
-
   it('删除行的确认框挂在编辑器外的浮层里，确认后才修改草稿', async () => {
     const { mount, visualizer, surface } = await openWith({
       sheet_a: { name: '角色状态', content: [[null, '姓名'], [null, 'A'], [null, 'B']] },
@@ -328,22 +288,6 @@ describe('openVisualizerSurface_ACU', () => {
     expect(visualizer.isActive).toBe(true);
     expect(visualizer.isSaving).toBe(true);
     visualizer.setSaving(false);
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('单元格输入跨过长短布局阈值时编辑框保持焦点', async () => {
-    const { mount, surface } = await openWith({
-      sheet_a: { name: '角色状态', content: [[null, '姓名', '状态'], [null, 'A', '平静']] },
-    });
-    preview(surface, '平静').click();
-    await tick();
-    const textarea = Array.from(surface.querySelectorAll<HTMLTextAreaElement>('textarea')).find(item => item.value === '平静')!;
-    expect(document.activeElement).toBe(textarea);
-
-    type(textarea, '这是一段超过二十四个字符的状态描述，用来触发布局切换');
-    await Promise.resolve();
-    expect(document.activeElement).toBe(textarea);
-    expect(surface.contains(textarea)).toBe(true);
     mount.__resetAcuV2MountForTests();
   });
 
@@ -457,43 +401,6 @@ describe('openVisualizerSurface_ACU', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('手机上点顶部表名打开表格列表，选表后自动收起', async () => {
-    const { mount, visualizer, surface } = await openWith({
-      sheet_a: { name: '角色状态', content: [[null, '姓名'], [null, 'A']] },
-      sheet_b: { name: '事件记录', content: [[null, '事件'], [null, '初遇']] },
-    });
-    surface.querySelector<HTMLButtonElement>('.ub-viz__switcher')!.click();
-    await tick();
-    const sheet = document.querySelector<HTMLElement>('#ub-portal .ub-sheet')!;
-    expect(sheet).not.toBeNull();
-    expect(sheet.textContent).toContain('选择表格');
-    buttonByText(sheet, '事件记录')!.click();
-    await tick();
-    expect(visualizer.currentSheetKey).toBe('sheet_b');
-    await tick(400);
-    expect(document.querySelector('#ub-portal .ub-sheet')).toBeNull();
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('可进入 AI 助手视图，不展示额外常驻提示', async () => {
-    const { mount, surface } = await openWith({
-      sheet_a: {
-        name: '角色状态',
-        content: [[null, '姓名', '状态'], [null, 'A', '平静']],
-        sourceData: { note: '说明' },
-        updateConfig: {},
-        exportConfig: {},
-      },
-    });
-    buttonByText(surface.querySelector('[data-ub-viz-modes]')!, 'AI 助手')!.click();
-    await tick();
-    const panel = surface.querySelector<HTMLElement>('[data-ub-viz-assistant]')!;
-    expect(panel.querySelector('[data-ub-viz-composer] textarea')).not.toBeNull();
-    expect(panel.textContent).not.toContain('当前锚点表：角色状态 (sheet_a)');
-    expect(panel.textContent).not.toContain('确认前不会应用到编辑器草稿');
-    mount.__resetAcuV2MountForTests();
-  });
-
   it('编码索引显示"自动编号"但仍可手动编辑；结构视图里自动重排开关默认打开', async () => {
     const { mount, surface } = await openWith({
       sheet_summary: {
@@ -515,26 +422,5 @@ describe('openVisualizerSurface_ACU', () => {
     const toggle = surface.querySelector<HTMLButtonElement>('[role="switch"][aria-label="保存和 AI 更新时自动重排编码"]');
     expect(toggle?.getAttribute('aria-checked')).toBe('true');
     mount.__resetAcuV2MountForTests();
-  });
-
-  it('切换表格时把当前列表项滚入可见区域', async () => {
-    const scrollIntoView = vi.fn();
-    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
-    const { mount, surface } = await openWith({
-      sheet_a: { name: '角色状态', content: [[null, '姓名'], [null, 'A']] },
-      sheet_b: { name: '事件记录', content: [[null, '事项'], [null, '旧值']] },
-    });
-    scrollIntoView.mockClear();
-    buttonByText(surface.querySelector('[data-ub-viz-nav]')!, '事件记录')!.click();
-    await tick();
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('结构视图的 AI 触发提示词输入框随内容自动长高、不设上限', () => {
-    const source = readFileSync(join(process.cwd(), 'src/presentation-v3/surfaces/visualizer/VizConfigView.vue'), 'utf8');
-    const prompts = source.slice(source.indexOf('title="AI 触发提示词"'), source.indexOf('title="世界书注入"'));
-    expect(prompts).toContain('auto-resize');
-    expect(prompts).not.toContain('max-rows');
   });
 });

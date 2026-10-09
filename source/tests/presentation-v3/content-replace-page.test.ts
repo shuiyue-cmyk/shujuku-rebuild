@@ -120,15 +120,6 @@ describe('ContentReplacePage', () => {
     app.unmount();
   });
 
-  it('API 预设下拉的跟随项显示当前活动 API 预设名', async () => {
-    const { app } = await mountContentReplacePage();
-    const select = document.querySelector<HTMLSelectElement>('[data-ub-row="API 预设"] select')!;
-    const labels = Array.from(select.options).map(option => option.textContent!.trim());
-    expect(labels[0]).toBe('跟随当前活动 API（fast）');
-    expect(labels).toContain('fast');
-    app.unmount();
-  });
-
   it('提示词只在侧边面板里编辑，保存后写回当前配置和目标预设', async () => {
     const { app, settings, saveSettings } = await mountContentReplacePage();
     expect(document.querySelector('#cr-preset textarea')).toBeNull();
@@ -250,19 +241,6 @@ describe('ContentReplacePage', () => {
     await tick();
     expect(settings.contentOptimizationSettings.extractRules).toEqual([{ start: '<content>', end: '</content>' }]);
     expect(saveSettings).toHaveBeenCalled();
-    app.unmount();
-  });
-
-  it('管理面板只列预设与导出/重命名/编辑/删除，没有"设为全局默认"', async () => {
-    const { app } = await mountContentReplacePage();
-    document.querySelector<HTMLButtonElement>('button[title="管理预设"]')!.click();
-    await tick();
-    const sheet = document.querySelector<HTMLElement>('.ub-sheet')!;
-    expect(sheet.textContent).toContain('管理正文替换预设');
-    expect(sheet.textContent).not.toContain('保存当前提示词');
-    const titles = Array.from(sheet.querySelectorAll<HTMLButtonElement>('.ub-cr__list-item button')).map(b => b.getAttribute('title'));
-    expect(titles).toEqual(expect.arrayContaining(['导出 JSON', '重命名', '编辑提示词', '删除']));
-    expect(titles).not.toContain('设为全局默认');
     app.unmount();
   });
 

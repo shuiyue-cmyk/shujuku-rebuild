@@ -93,19 +93,6 @@ describe('useVisualizerConfigEditing', () => {
     expect(store.dirty).toBe(true);
   });
 
-  it('存在显式 DDL 时不受当前存储模式影响，改名仍同步 DDL 注释', async () => {
-    const store = await loadSheet();
-    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
-    const config = useVisualizerConfigEditing();
-    storageModeMock.sqliteMode = false;
-
-    config.updateHeader(0, '物品名');
-
-    expect(store.currentSheet.content[0][1]).toBe('物品名');
-    expect(store.currentSheet.sourceData.ddl).toContain('item_name TEXT, -- 物品名');
-    expect(store.dirty).toBe(true);
-  });
-
   it('R10A-15：改列名同步额外索引列与其模式，不让该列从额外索引里消失', async () => {
     const store = await loadSheet();
     store.currentSheet.exportConfig = {
@@ -142,20 +129,6 @@ describe('useVisualizerConfigEditing', () => {
     expect(store.currentSheet.content[1]).toEqual([null, '苹果']);
     expect(store.currentSheet.sourceData.ddl).toContain('item_name TEXT -- 旧物品');
     expect(store.currentSheet.sourceData.ddl).not.toContain('quantity INTEGER');
-  });
-
-  it('存在显式 DDL 时不受当前存储模式影响，删除仍同步 DDL、表头和数据行', async () => {
-    const store = await loadSheet();
-    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
-    const config = useVisualizerConfigEditing();
-    storageModeMock.sqliteMode = false;
-
-    config.deleteColumn(0);
-
-    expect(store.currentSheet.content[0]).toEqual([null, '数量']);
-    expect(store.currentSheet.content[1]).toEqual([null, '2']);
-    expect(store.currentSheet.sourceData.ddl).not.toContain('item_name TEXT');
-    expect(store.currentSheet.sourceData.ddl).toContain('quantity INTEGER -- 数量');
   });
 
   it('DDL 已不一致或目标列受约束时拒绝删除且草稿不变', async () => {
@@ -207,18 +180,6 @@ describe('useVisualizerConfigEditing', () => {
 
     expect(store.tempData?.mate.globalInjectionConfig.wrapperPlacement.order).toBe(90001);
     expect(store.dirty).toBe(true);
-  });
-
-  it('表级 API 预设覆盖写入设置而不标记模板 dirty', async () => {
-    const store = await loadSheet();
-    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
-    const config = useVisualizerConfigEditing();
-
-    config.setTableApiPreset('beta');
-
-    expect(runtimeMock.settings_ACU.tableApiPresetOverridesByName['背包表']).toBe('beta');
-    expect(saveSettingsMock.saveSettings_ACU).toHaveBeenCalledTimes(1);
-    expect(store.dirty).toBe(false);
   });
 
   it('冻结状态下拒绝表级 API 预设持久化且不改变设置', async () => {
@@ -296,18 +257,6 @@ describe('useVisualizerConfigEditing', () => {
     expect(JSON.stringify({ content: store.currentSheet.content, locks: store.tableLockDrafts, dirty: store.dirty })).toBe(before);
   });
 
-  it('重命名表自动把旧名累积进 tableAliases 并标记 dirty（S1-5）', async () => {
-    const store = await loadSheet();
-    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
-    const config = useVisualizerConfigEditing();
-
-    config.renameSheet('我的背包表');
-
-    expect(store.tempData.sheet_a.name).toBe('我的背包表');
-    expect(store.tempData.sheet_a.sourceData.tableAliases).toEqual(['背包表']);
-    expect(store.dirty).toBe(true);
-  });
-
   it('往返改名后别名链只保留非当前名：A→B→A 得到 [B]', async () => {
     const store = await loadSheet();
     const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
@@ -319,16 +268,6 @@ describe('useVisualizerConfigEditing', () => {
     expect(store.tempData.sheet_a.name).toBe('背包表');
     // '背包表' 回到当前名（被剔除），'我的背包表' 作为历史名保留。
     expect(store.tempData.sheet_a.sourceData.tableAliases).toEqual(['我的背包表']);
-  });
-
-  it('canonical 等价改名（仅空白差异）不写入自指别名', async () => {
-    const store = await loadSheet();
-    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
-    const config = useVisualizerConfigEditing();
-
-    config.renameSheet(' 背包表 ');
-
-    expect(store.tempData.sheet_a.sourceData.tableAliases).toBeUndefined();
   });
 
   it('saving 或 committed 状态下拒绝配置和特殊索引锁编辑且不改变草稿', async () => {

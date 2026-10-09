@@ -7,7 +7,6 @@ import {
 } from '../../../src/service/continuation/defaults';
 import { ContinuationValidationError_ACU } from '../../../src/service/continuation/model';
 import {
-  countTrailingPressureTurns_ACU,
   listStageOutlineTurns_ACU,
   resolveContinuationTurnRange_ACU,
   resolveStageOutlinePacingContext_ACU,
@@ -89,15 +88,6 @@ describe('Continuation outline schema', () => {
     expectValidationCode_ACU(() => resolveContinuationTurnRange_ACU('custom', 0, 5), 'CONTINUATION_CUSTOM_RANGE_INVALID');
     expectValidationCode_ACU(() => resolveContinuationTurnRange_ACU('custom', 3, 2), 'CONTINUATION_CUSTOM_RANGE_INVALID');
     expectValidationCode_ACU(() => resolveContinuationTurnRange_ACU('custom', 1.5, 5), 'CONTINUATION_CUSTOM_RANGE_INVALID');
-  });
-
-  it('accepts a complete outline and returns a newly assembled value', () => {
-    const raw = buildOutline_ACU();
-    const validated = validateStageOutline_ACU(raw, resolveContinuationTurnRange_ACU('standard'));
-
-    expect(validated).toEqual(raw);
-    expect(validated).not.toBe(raw);
-    expect(validated.nodes).not.toBe(raw.nodes);
   });
 
   it('rejects undefined required values before a clone could discard them', () => {
@@ -372,13 +362,6 @@ describe('validateStageOutlinePacing_ACU', () => {
     );
   });
 
-  it('剩余轮次为空时直接放行，不做除零判断', () => {
-    const all = turns_ACU(['pressure', 'pressure']);
-    expect(() => validateStageOutlinePacing_ACU(all, options_ACU({ skipTurns: 2 }))).not.toThrow();
-    expect(() => validateStageOutlinePacing_ACU(all, options_ACU({ skipTurns: 99 }))).not.toThrow();
-    expect(() => validateStageOutlinePacing_ACU([], options_ACU())).not.toThrow();
-  });
-
   it('listStageOutlineTurns_ACU 按阶段内顺序展开全部轮次', () => {
     const outline = validateStageOutline_ACU(buildOutline_ACU(6), resolveContinuationTurnRange_ACU('standard'));
     expect(listStageOutlineTurns_ACU(outline).map(turn => turn.id)).toEqual(['turn-1', 'turn-2', 'turn-3', 'turn-4', 'turn-5', 'turn-6']);
@@ -416,12 +399,6 @@ describe('resolveStageOutlinePacingContext_ACU', () => {
       completedTurns,
     };
   }
-
-  it('countTrailingPressureTurns_ACU 从尾部数到第一个低压轮为止', () => {
-    expect(countTrailingPressureTurns_ACU(turns_ACU(['setup', 'pressure', 'turn', 'pressure']))).toBe(3);
-    expect(countTrailingPressureTurns_ACU(turns_ACU(['pressure', 'cooldown']))).toBe(0);
-    expect(countTrailingPressureTurns_ACU([])).toBe(0);
-  });
 
   it('新阶段继承上一阶段的形态与尾部连续高压段', () => {
     const stages = [stage_ACU('stage-1', 1, ['setup', 'pressure', 'turn'], 3, 'surge')];

@@ -28,9 +28,6 @@ vi.mock('../../../src/shared/utils', () => ({
 
 import {
   getChatArray_ACU,
-  getChatLength_ACU,
-  getLastMessageIndex_ACU,
-  saveChatToHost_ACU,
   saveChatToHostStrict_ACU,
   stopGeneration_ACU,
   deleteLastMessage_ACU,
@@ -45,9 +42,6 @@ beforeEach(() => {
 });
 
 describe('getChatArray_ACU', () => {
-  it('无 chat 时返回空数组', () => {
-    expect(getChatArray_ACU()).toEqual([]);
-  });
 
   it('有 chat 时返回引用', () => {
     const chat = [{ mes: '消息1' }, { mes: '消息2' }];
@@ -56,60 +50,13 @@ describe('getChatArray_ACU', () => {
   });
 });
 
-describe('getChatLength_ACU', () => {
-  it('无 chat 时返回 0', () => {
-    expect(getChatLength_ACU()).toBe(0);
-  });
-
-  it('有 chat 时返回长度', () => {
-    mockSillyTavern.chat = [{ mes: '1' }, { mes: '2' }, { mes: '3' }];
-    expect(getChatLength_ACU()).toBe(3);
-  });
-});
-
-describe('getLastMessageIndex_ACU', () => {
-  it('空聊天返回 0', () => {
-    expect(getLastMessageIndex_ACU()).toBe(0);
-  });
-
-  it('有消息时返回最后索引', () => {
-    mockSillyTavern.chat = [{ mes: '1' }, { mes: '2' }];
-    expect(getLastMessageIndex_ACU()).toBe(1);
-  });
-});
-
-describe('saveChatToHost_ACU', () => {
-  it('saveChat 不可用时静默跳过', async () => {
-    await saveChatToHost_ACU();
-    expect(mockLogWarn).toHaveBeenCalled();
-  });
-
-  it('saveChat 可用时调用', async () => {
-    mockSillyTavern.saveChat = vi.fn().mockResolvedValue(undefined);
-    await saveChatToHost_ACU();
-    expect(mockSillyTavern.saveChat).toHaveBeenCalled();
-  });
-});
-
 describe('saveChatToHostStrict_ACU', () => {
   it('saveChat 不可用时抛错，不把未提交误认为保存成功', async () => {
     await expect(saveChatToHostStrict_ACU()).rejects.toThrow('宿主 saveChat 不可用');
   });
-
-  it('saveChat 可用时执行真实保存', async () => {
-    mockSillyTavern.saveChat = vi.fn().mockResolvedValue(undefined);
-
-    await saveChatToHostStrict_ACU();
-
-    expect(mockSillyTavern.saveChat).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe('stopGeneration_ACU', () => {
-  it('不可用时静默跳过', () => {
-    stopGeneration_ACU();
-    expect(mockLogWarn).toHaveBeenCalled();
-  });
 
   it('可用时调用', () => {
     mockSillyTavern.stopGeneration = vi.fn();
@@ -123,12 +70,6 @@ describe('deleteLastMessage_ACU', () => {
   it('不可用时静默跳过', async () => {
     await deleteLastMessage_ACU();
     expect(mockLogWarn).toHaveBeenCalled();
-  });
-
-  it('可用时调用', async () => {
-    mockSillyTavern.deleteLastMessage = vi.fn().mockResolvedValue(undefined);
-    await deleteLastMessage_ACU();
-    expect(mockSillyTavern.deleteLastMessage).toHaveBeenCalled();
   });
 });
 

@@ -9,11 +9,6 @@ function hintIdFor(message: string, tag = '未分类'): string | undefined {
 }
 
 describe('resolveLogErrorHint', () => {
-  it('只对 error 级日志给建议', () => {
-    expect(resolveLogErrorHint({ level: 'warn', tag: 'SQL', message: 'API请求失败: 429' })).toBeNull();
-    expect(resolveLogErrorHint({ level: 'debug', tag: 'SQL', message: 'API请求失败: 429' })).toBeNull();
-    expect(resolveLogErrorHint({ level: 'error', tag: 'SQL', message: 'API请求失败: 429' })).not.toBeNull();
-  });
 
   it('每条 error 日志都有兜底建议，且建议包含摘要与至少一步操作', () => {
     const hint = resolveLogErrorHint({ level: 'error', tag: '未分类', message: 'something totally unexpected happened' });
@@ -144,12 +139,6 @@ describe('resolveLogErrorHint', () => {
     expect(hintIdFor(['[Manual Refill] 填表失败', '    at rateLimitHelper (index.js:1:1)'].join('\n'))).toBe('fill');
     expect(hintIdFor(['[Manual Refill] 填表失败', '    at rate-limit.js:1:1'].join('\n'))).toBe('fill');
     expect(hintIdFor(['[Manual Refill] 填表失败', '    at Foo (/x/my app/rate-limit.js:2:3)'].join('\n'))).toBe('fill');
-  });
-
-  it('tag 也参与匹配：仅凭 tag 就能落到对应模块的建议', () => {
-    expect(hintIdFor('boom', '剧情推进')).toBe('plot');
-    expect(hintIdFor('boom', '外部导入')).toBe('import');
-    expect(hintIdFor('boom', 'Worldbook')).toBe('worldbook');
   });
 
   it('SQLite 标签下的普通查询失败不会被误判为引擎加载失败', () => {

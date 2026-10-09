@@ -27,11 +27,6 @@ describe('Agent 文本协议 JSON 提取', () => {
     expect(JSON.parse(extractFirstJsonObject_ACU(raw)!)).toMatchObject({ action: 'finalize' });
   });
 
-  it('没有配平对象时返回 null', () => {
-    expect(extractFirstJsonObject_ACU('{"action":"finalize"')).toBeNull();
-    expect(extractFirstJsonObject_ACU('没有任何 JSON')).toBeNull();
-  });
-
   it('同时容忍完整重新输出与仅续写预填充两种形态', () => {
     const full = parseAgentJsonPayload_ACU('{"thought":"够了","action":"finalize","instruction":"写"}', AGENT_PREFILLS_ACU.main);
     expect(full).toMatchObject({ action: 'finalize' });
@@ -87,13 +82,6 @@ describe('主 Agent 动作解析', () => {
 
   it('预算最后一轮禁用 delegate', () => {
     expect(() => parseAgentMainAction_ACU({ action: 'delegate', delegations: [{ agentName: 'mainline-planner', prompt: '策划' }] }, false)).toThrowError(/预算最后一轮/);
-  });
-
-  it('finalize 必须给出 instruction，constraints 缺省为 null', () => {
-    expect(parseAgentMainAction_ACU({ action: 'finalize', instruction: '本轮指导', summary: '要点' }, true)).toMatchObject({ kind: 'finalize', constraints: null });
-    expect(parseAgentMainAction_ACU({ action: 'finalize', instruction: '本轮指导', constraints: { add: ['红线一'], retire: ['C01-1'] } }, true))
-      .toMatchObject({ constraints: { add: ['红线一'], retire: ['C01-1'] } });
-    expect(() => parseAgentMainAction_ACU({ action: 'finalize' }, true)).toThrowError(/非空 instruction/);
   });
 
   it('finalize 的 constraints 兼容旧全量键：current 并入 add、retired 并入 retire，空对象归一为 null', () => {

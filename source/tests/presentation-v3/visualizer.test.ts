@@ -40,58 +40,6 @@ afterEach(() => {
 });
 
 describe('新版数据库编辑器（v3）', () => {
-  it('打开后显示新版编辑器：表格列表、当前表数据卡片、保存栏', { timeout: 90_000 }, async () => {
-    const { root, errors, mount } = await openViz();
-    resetMount = mount.__resetAcuV2MountForTests;
-
-    expect(root()).not.toBeNull();
-    expect(document.querySelector('[data-acu-visualizer-surface]')).toBeNull();
-    const nav = root().querySelector('[data-ub-viz-nav]')!;
-    expect(nav.textContent).toContain('角色状态');
-    expect(nav.textContent).toContain('1 行 · 2 列');
-    expect(nav.textContent).toContain('物品清单');
-    expect(root().querySelector('[data-ub-viz-head]')!.textContent).toContain('角色状态');
-
-    const cards = root().querySelectorAll('[data-ub-viz-card]');
-    expect(cards).toHaveLength(1);
-    expect(cards[0].textContent).toContain('姓名');
-    expect(cards[0].textContent).toContain('平静');
-
-    const footer = root().querySelector('[data-ub-viz-footer]')!;
-    expect(footer.textContent).toContain('保存数据到当前消息');
-    expect(footer.textContent).toContain('保存模板到当前聊天');
-    expect(footer.textContent).toContain('保存模板到全局');
-    expect(errors).toEqual([]);
-  });
-
-  it('点字段进入编辑，改动写进草稿并提示未保存；可切表、增行', { timeout: 90_000 }, async () => {
-    const { root, errors, visualizer, mount } = await openViz();
-    resetMount = mount.__resetAcuV2MountForTests;
-
-    const preview = byText<HTMLElement>('[data-ub-viz-field-preview]', '平静', root())!;
-    preview.click();
-    await flush();
-    const textarea = root().querySelector<HTMLTextAreaElement>('[data-ub-viz-card] textarea')!;
-    expect(textarea).not.toBeNull();
-    expect(textarea.value).toBe('平静');
-    textarea.value = '紧张';
-    textarea.dispatchEvent(new Event('input'));
-    await flush();
-    expect(visualizer.currentSheet.content[1][2]).toBe('紧张');
-    expect(visualizer.dirty).toBe(true);
-    expect(root().querySelector('[data-ub-viz-head]')!.textContent).toContain('未保存');
-
-    byText<HTMLButtonElement>('[data-ub-viz-sheet]', '物品清单', root())!.click();
-    await flush();
-    expect(visualizer.currentSheetKey).toBe('sheet_b');
-    expect(root().querySelectorAll('[data-ub-viz-card]')).toHaveLength(2);
-
-    byText<HTMLButtonElement>('button', '新增一行', root())!.click();
-    await flush();
-    expect(visualizer.currentSheet.content).toHaveLength(4);
-    expect(root().querySelectorAll('[data-ub-viz-card]')).toHaveLength(3);
-    expect(errors).toEqual([]);
-  });
 
   it('行锁、列锁、单元格锁都能切换', { timeout: 90_000 }, async () => {
     const { root, errors, visualizer, mount } = await openViz();

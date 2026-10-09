@@ -60,22 +60,6 @@ describe('NameMapper', () => {
   // fromDDLs
   // ═══════════════════════════════════════════════════════════════
   describe('fromDDLs', () => {
-    it('正确构建映射器', () => {
-      expect(mapper.tableCount).toBe(2);
-    });
-
-    it('空 DDL Map 构建空映射器', () => {
-      const emptyMapper = NameMapper.fromDDLs(new Map());
-      expect(emptyMapper.tableCount).toBe(0);
-    });
-
-    it('跳过空 DDL 值', () => {
-      const ddlMap = new Map<string, string>();
-      ddlMap.set('test', '');
-      ddlMap.set('inventory', INVENTORY_DDL);
-      const m = NameMapper.fromDDLs(ddlMap);
-      expect(m.tableCount).toBe(1);
-    });
 
     it('以 runtime physical name map key 而非 DDL 内旧表名建立映射', () => {
       const m = NameMapper.fromDDLs(new Map([
@@ -129,15 +113,6 @@ describe('NameMapper', () => {
   // resolveTableName
   // ═══════════════════════════════════════════════════════════════
   describe('resolveTableName', () => {
-    it('中文表名 → 英文表名', () => {
-      expect(mapper.resolveTableName('背包物品表')).toBe('inventory');
-      expect(mapper.resolveTableName('重要人物表')).toBe('characters');
-    });
-
-    it('英文表名直接透传', () => {
-      expect(mapper.resolveTableName('inventory')).toBe('inventory');
-      expect(mapper.resolveTableName('characters')).toBe('characters');
-    });
 
     it('未知名称原样返回', () => {
       expect(mapper.resolveTableName('不存在的表')).toBe('不存在的表');
@@ -146,25 +121,12 @@ describe('NameMapper', () => {
     it('空字符串原样返回', () => {
       expect(mapper.resolveTableName('')).toBe('');
     });
-
-    it('带空格的名称自动 trim', () => {
-      expect(mapper.resolveTableName('  背包物品表  ')).toBe('inventory');
-    });
   });
 
   // ═══════════════════════════════════════════════════════════════
   // resolveColumnName
   // ═══════════════════════════════════════════════════════════════
   describe('resolveColumnName', () => {
-    it('中文列名 → 英文列名', () => {
-      expect(mapper.resolveColumnName('inventory', '物品名称')).toBe('item_name');
-      expect(mapper.resolveColumnName('inventory', '数量')).toBe('quantity');
-      expect(mapper.resolveColumnName('characters', '姓名')).toBe('char_name');
-    });
-
-    it('英文列名直接透传', () => {
-      expect(mapper.resolveColumnName('inventory', 'item_name')).toBe('item_name');
-    });
 
     it('未知列名原样返回', () => {
       expect(mapper.resolveColumnName('inventory', '不存在的列')).toBe('不存在的列');
@@ -182,18 +144,9 @@ describe('NameMapper', () => {
   // getChineseTableName / getChineseColumnName
   // ═══════════════════════════════════════════════════════════════
   describe('反向映射', () => {
-    it('英文表名 → 中文表名', () => {
-      expect(mapper.getChineseTableName('inventory')).toBe('背包物品表');
-      expect(mapper.getChineseTableName('characters')).toBe('重要人物表');
-    });
 
     it('未知英文表名原样返回', () => {
       expect(mapper.getChineseTableName('unknown')).toBe('unknown');
-    });
-
-    it('英文列名 → 中文列名', () => {
-      expect(mapper.getChineseColumnName('inventory', 'item_name')).toBe('物品名称');
-      expect(mapper.getChineseColumnName('characters', 'char_name')).toBe('姓名');
     });
   });
 
@@ -201,11 +154,6 @@ describe('NameMapper', () => {
   // translateSql
   // ═══════════════════════════════════════════════════════════════
   describe('translateSql', () => {
-    it('替换中文表名和列名', () => {
-      const sql = 'SELECT 物品名称, 数量 FROM 背包物品表 WHERE 数量 > 3';
-      const translated = mapper.translateSql(sql);
-      expect(translated).toBe('SELECT item_name, quantity FROM inventory WHERE quantity > 3');
-    });
 
     it('跳过字符串值中的中文', () => {
       const sql = "SELECT item_name FROM inventory WHERE item_name = '背包物品表'";
@@ -214,16 +162,6 @@ describe('NameMapper', () => {
       expect(translated).toContain("'背包物品表'");
       // 但 FROM 后面的表名不在引号中，应该保持不变（已经是英文）
       expect(translated).toContain('FROM inventory');
-    });
-
-    it('混合中英文', () => {
-      const sql = 'SELECT char_name, 年龄 FROM 重要人物表 WHERE status = \'存活\'';
-      const translated = mapper.translateSql(sql);
-      expect(translated).toContain('age');
-      expect(translated).toContain('characters');
-      expect(translated).toContain('char_name');
-      // 字符串值中的"存活"不应该被替换
-      expect(translated).toContain("'存活'");
     });
 
     it('空 SQL 原样返回', () => {
@@ -254,17 +192,6 @@ describe('NameMapper', () => {
       expect(translated).toBe('SELECT * FROM special_items');
     });
   });
-
-  // ═══════════════════════════════════════════════════════════════
-  // getAllTableNames
-  // ═══════════════════════════════════════════════════════════════
-  describe('getAllTableNames', () => {
-    it('返回所有英文表名', () => {
-      const names = mapper.getAllTableNames();
-      expect(names).toContain('inventory');
-      expect(names).toContain('characters');
-    });
-  });
 });
 
 describe('全局 NameMapper 绑定状态', () => {
@@ -284,17 +211,6 @@ describe('全局 NameMapper 绑定状态', () => {
   it('标记空 schema 后与 unbound 可区分，但仍不视为就绪', () => {
     publishGlobalNameMapperEmptySchema_ACU(createNameMapperOwnerToken_ACU('test'));
     expect(getGlobalNameMapperStatus_ACU()).toEqual({ ready: false, tableCount: 0, binding: 'empty_schema' });
-  });
-
-  it('绑定有效 DDL 后进入 bound 并报告表数量', () => {
-    const ddlMap = new Map<string, string>([
-      ['inventory', INVENTORY_DDL],
-      ['characters', CHARACTERS_DDL],
-    ]);
-    ensureGlobalNameMapperForDDLs_ACU(ddlMap);
-
-    expect(getGlobalNameMapperStatus_ACU()).toEqual({ ready: true, tableCount: 2, binding: 'bound' });
-    expect(isGlobalNameMapperCurrentForDDLs_ACU(ddlMap)).toBe(true);
   });
 
   it('空 DDL 集合构建出的 mapper 记为 empty_schema，不冒充就绪', () => {

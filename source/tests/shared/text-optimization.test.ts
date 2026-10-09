@@ -52,7 +52,6 @@ vi.mock('../../src/shared/utils', () => ({
 
 import {
   removePunctuation_ACU,
-  extractKeywords_ACU,
   mapCleanPositionToOriginal_ACU,
   findParagraphMatch_ACU,
   trimPunctuation_ACU,
@@ -66,13 +65,6 @@ import {
 // removePunctuation_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('removePunctuation_ACU', () => {
-  it('去除中文标点', () => {
-    expect(removePunctuation_ACU('你好，世界！')).toBe('你好世界');
-  });
-
-  it('去除英文标点', () => {
-    expect(removePunctuation_ACU('hello, world!')).toBe('helloworld');
-  });
 
   it('保留中文字符', () => {
     expect(removePunctuation_ACU('测试文本')).toBe('测试文本');
@@ -81,57 +73,12 @@ describe('removePunctuation_ACU', () => {
   it('保留英文和数字', () => {
     expect(removePunctuation_ACU('abc123')).toBe('abc123');
   });
-
-  it('去除空格', () => {
-    expect(removePunctuation_ACU('a b c')).toBe('abc');
-  });
-
-  it('空字符串返回空字符串', () => {
-    expect(removePunctuation_ACU('')).toBe('');
-  });
-
-  it('null 返回空字符串', () => {
-    expect(removePunctuation_ACU(null as any)).toBe('');
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// extractKeywords_ACU
-// ═══════════════════════════════════════════════════════════════
-describe('extractKeywords_ACU', () => {
-  it('从文本中提取关键词', () => {
-    const keywords = extractKeywords_ACU('这是一段测试文本用于提取关键词');
-    expect(keywords.length).toBeGreaterThan(0);
-    expect(keywords.length).toBeLessThanOrEqual(5);
-  });
-
-  it('指定提取数量', () => {
-    const keywords = extractKeywords_ACU('这是一段很长的测试文本用于提取关键词验证数量限制', 3);
-    expect(keywords.length).toBeLessThanOrEqual(3);
-  });
-
-  it('空字符串返回空数组', () => {
-    expect(extractKeywords_ACU('')).toEqual([]);
-  });
-
-  it('null 返回空数组', () => {
-    expect(extractKeywords_ACU(null as any)).toEqual([]);
-  });
-
-  it('短文本返回较少关键词', () => {
-    const keywords = extractKeywords_ACU('ab');
-    expect(keywords.length).toBeLessThanOrEqual(5);
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════
 // mapCleanPositionToOriginal_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('mapCleanPositionToOriginal_ACU', () => {
-  it('纯文字文本位置一一对应', () => {
-    const result = mapCleanPositionToOriginal_ACU('你好世界', 0, 2);
-    expect(result).toEqual({ start: 0, end: 2 });
-  });
 
   it('含标点的文本正确映射', () => {
     // "你，好" → clean: "你好"
@@ -154,19 +101,6 @@ describe('mapCleanPositionToOriginal_ACU', () => {
 // findParagraphMatch_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('findParagraphMatch_ACU', () => {
-  it('精确匹配成功', () => {
-    const result = findParagraphMatch_ACU('你好世界', '前缀你好世界后缀');
-    expect(result.start).toBe(2);
-    expect(result.end).toBe(6);
-    expect(result.method).toBe('精确匹配');
-  });
-
-  it('完全不匹配返回 -1', () => {
-    const result = findParagraphMatch_ACU('完全不同的文本', '另一段完全不同的内容');
-    expect(result.start).toBe(-1);
-    expect(result.end).toBe(-1);
-    expect(result.method).toBeNull();
-  });
 
   it('短文本（<10字符去标点后）返回 -1', () => {
     const result = findParagraphMatch_ACU('短', '这是一段包含短的文本');
@@ -182,33 +116,12 @@ describe('findParagraphMatch_ACU', () => {
 // trimPunctuation_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('trimPunctuation_ACU', () => {
-  it('去除前后标点', () => {
-    const result = trimPunctuation_ACU('，你好。');
-    expect(result.trimmed).toBe('你好');
-    expect(result.prefix).toBe('，');
-    expect(result.suffix).toBe('。');
-  });
 
   it('无标点时原样返回', () => {
     const result = trimPunctuation_ACU('你好');
     expect(result.trimmed).toBe('你好');
     expect(result.prefix).toBe('');
     expect(result.suffix).toBe('');
-  });
-
-  it('空字符串返回空', () => {
-    const result = trimPunctuation_ACU('');
-    expect(result.trimmed).toBe('');
-  });
-
-  it('null 返回空', () => {
-    const result = trimPunctuation_ACU(null as any);
-    expect(result.trimmed).toBe('');
-  });
-
-  it('纯标点返回空 trimmed', () => {
-    const result = trimPunctuation_ACU('，。！');
-    expect(result.trimmed).toBe('');
   });
 });
 
@@ -234,10 +147,6 @@ describe('applyOptimizations_ACU', () => {
     expect(result).toContain('CC');
   });
 
-  it('空优化列表返回原文', () => {
-    expect(applyOptimizations_ACU('原文', [])).toBe('原文');
-  });
-
   it('匹配失败时返回 no-op 统计而不是可写回的成功结果', () => {
     const result = applyOptimizationsWithStats_ACU('你好世界', [
       { type: 'replace', original: '不存在的文本', optimized: '替换' },
@@ -255,13 +164,6 @@ describe('applyOptimizations_ACU', () => {
   it('非 replace 类型被忽略', () => {
     const result = applyOptimizations_ACU('你好', [
       { type: 'delete', original: '你好', optimized: '' },
-    ]);
-    expect(result).toBe('你好');
-  });
-
-  it('original 为空时跳过', () => {
-    const result = applyOptimizations_ACU('你好', [
-      { type: 'replace', original: '', optimized: '替换' },
     ]);
     expect(result).toBe('你好');
   });

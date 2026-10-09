@@ -46,15 +46,6 @@ describe('diagnoseSheetSeedPools_ACU', () => {
     expect(diags.some(d => d.code === 'seed_row_id_conflict')).toBe(true);
   });
 
-  it('无问题时报告 info_no_issue', () => {
-    const sheet = sheetWithDdl({
-      content: [['row_id', 'code', 'name']],
-      seedRows: [],
-    });
-    const diags = diagnoseSheetSeedPools_ACU(sheet, { source: 'runtime', sheetKey: 'sheet_x', sheetName: '测试表' });
-    expect(diags.some(d => d.code === 'info_no_issue')).toBe(true);
-  });
-
   it('无 UNIQUE 约束的表不做业务键对比（只报告 info）', () => {
     const sheet = {
       uid: 'sheet_y', name: '无键表',

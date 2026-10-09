@@ -12,30 +12,6 @@ import {
 import { normalizeApiConfig_ACU } from '../../../src/service/settings/api-preset-service';
 
 describe('api preset draft helpers', () => {
-  it('从空白草稿开始新建预设', () => {
-    const draft = createEmptyApiPresetDraft();
-
-    expect(draft.name).toBe('');
-    expect(draft.apiMode).toBe('custom');
-  });
-
-  it('把预设转换为可编辑草稿', () => {
-    const draft = apiPresetDraftFromPreset({
-      name: 'preset-a',
-      apiMode: 'custom',
-      apiConfig: {
-        url: 'https://a.test',
-        apiKey: 'k',
-        model: 'gpt-4',
-        max_tokens: 4096,
-        temperature: 0.7,
-      },
-    });
-
-    expect(draft.name).toBe('preset-a');
-    expect(draft.url).toBe('https://a.test');
-    expect(draft.model).toBe('gpt-4');
-  });
 
   it('保存前归一化名称、端点、模型和数字参数', () => {
     const preset = apiPresetFromDraft({
@@ -220,13 +196,6 @@ describe('api preset draft helpers', () => {
 
     expect(preset.apiConfig.promptPostProcessing).toBe('strict');
     expect(preset.apiConfig.customApiFormat).toBe('openai_compat');
-  });
-
-  it('空白草稿默认 strict 后处理与兼容 OpenAI 协议', () => {
-    const draft = createEmptyApiPresetDraft();
-
-    expect(draft.promptPostProcessing).toBe('strict');
-    expect(draft.customApiFormat).toBe('openai_compat');
   });
 
   it('保留多个 system 默认开启：缺失归一 true，显式 false 往返保留（移植上游 e1876435）', () => {

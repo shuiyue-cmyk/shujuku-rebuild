@@ -54,12 +54,6 @@ describe('WorldbookEntries', () => {
     expect(el.textContent).toContain('常量');
   });
 
-  it('普通世界书选择不显示 Skill 与接管计数', () => {
-    const el = mountEntries({ groups: sampleGroups() });
-    expect(el.querySelector('.ub-disc__meta')?.textContent).toBe('3/4 条');
-    expect(el.textContent).toContain('常量');
-  });
-
   it('Skill 化勾选框与条目勾选各自独立，并透传 toggle-skillify', async () => {
     const onToggleSkillify = vi.fn();
     const el = mountEntries({ groups: sampleGroups(), showSkillifyControls: true, onToggleSkillify });

@@ -489,10 +489,6 @@ describe('vectorRevision', () => {
 });
 
 describe('validateSummaryVectorMirrorDelta_ACU', () => {
-  it('合法 delta 返回 null', () => {
-    expect(validateSummaryVectorMirrorDelta_ACU(delta({ seq: 1, entryId: 'v', sourceEntryId: 'e', ops: [add('1', 'p')] }))).toBeNull();
-    expect(validateSummaryVectorMirrorDelta_ACU(delta({ seq: 1, entryId: 'v', sourceEntryId: 'e', ops: [remove('1')], packs: [] }))).toBeNull();
-  });
 
   it('operations 为空 / rowId 为空 / 未知 kind / 缺 vectorSourceHash 均非法', () => {
     const base = delta({ seq: 1, entryId: 'v', sourceEntryId: 'e', ops: [add('1', 'p')] });

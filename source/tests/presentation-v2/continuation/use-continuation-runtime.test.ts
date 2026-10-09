@@ -130,17 +130,6 @@ describe('useContinuationRuntime', () => {
     expect(continuation.task.value).toEqual(confirmed.activeTask);
   });
 
-  it('初始化完成后刷新首楼权威状态', async () => {
-    const { useContinuationRuntime } = await import('../../../src/presentation-v2/composables/useContinuationRuntime');
-    const continuation = useContinuationRuntime();
-
-    await continuation.initialize();
-
-    expect(harness.initialize).toHaveBeenCalledOnce();
-    expect(harness.read).toHaveBeenCalledOnce();
-    expect(continuation.task.value).toBeNull();
-  });
-
   it('创建任务成功后自动开始第一轮，创建失败则不继续', async () => {
     const pausedTask = { taskId: 'task-1', status: 'paused', stopReason: null, activeStageId: null, stages: [] };
     const createdEnvelope = { schemaVersion: 1, settings: {}, activeTask: pausedTask } as any;

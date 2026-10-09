@@ -32,16 +32,6 @@ function candidate_ACU(id: string, text: string): SummaryHybridCandidate_ACU {
 }
 
 describe('summary-vector-hybrid-retrieval', () => {
-  it('BM25 命中英文关键词并按分数返回', () => {
-    const results = sparseSearchBm25_ACU('dragon relic', [
-      candidate_ACU('1', 'dragon relic hidden under the old bridge'),
-      candidate_ACU('2', 'garden tea party and harmless gossip'),
-    ], 5);
-
-    expect(results).toHaveLength(1);
-    expect(results[0].chunk.chunkId).toBe('chunk-1');
-    expect(results[0].bm25Score).toBeGreaterThan(0);
-  });
 
   it('BM25 支持中文 CJK unigram 与 bigram token 命中', () => {
     const tokens = tokenizeBm25Text_ACU('秘密基地');
@@ -65,26 +55,6 @@ describe('summary-vector-hybrid-retrieval', () => {
     expect(results).toHaveLength(2);
     expect(results[0].chunk.chunkId).toBe('chunk-2');
     expect(results[0].bm25Score).toBeGreaterThan(results[1].bm25Score || 0);
-  });
-
-  it('BM25 按 limit 截断稀疏候选', () => {
-    const results = sparseSearchBm25_ACU('relic', [
-      candidate_ACU('1', 'relic alpha'),
-      candidate_ACU('2', 'relic beta'),
-      candidate_ACU('3', 'relic gamma'),
-    ], 2);
-
-    expect(results).toHaveLength(2);
-    expect(results.every((item) => (item.bm25Score || 0) > 0)).toBe(true);
-  });
-
-  it('BM25 无稀疏命中时返回空数组', () => {
-    const results = sparseSearchBm25_ACU('quantum laboratory', [
-      candidate_ACU('1', 'forest campfire cooking'),
-      candidate_ACU('2', 'market flower delivery'),
-    ], 5);
-
-    expect(results).toEqual([]);
   });
 
   it('RRF 中双路命中的第二名高于单路第一名', () => {

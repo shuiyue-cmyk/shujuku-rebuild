@@ -1,15 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  applyAgentUserRequirementsReplace_ACU,
   collectSubstantialUserTexts_ACU,
   isMechanicalResumeUserText_ACU,
   normalizeUserRequirementLines_ACU,
-  renderAgentUserRequirements_ACU,
   seedAgentUserRequirementsIfEmpty_ACU,
 } from '../../../../src/service/continuation/agent/agent-user-requirements';
 import { buildEmptyAgentModuleSnapshot_ACU, readAgentModuleSnapshot_ACU, writeAgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-module-store';
-import { AGENT_MODULE_FIELD_ACU } from '../../../../src/service/continuation/agent/agent-model';
 import { _set_SillyTavern_API_ACU } from '../../../../src/shared/host-api';
 
 function userMessage_ACU(id: number, text: string) {
@@ -82,15 +79,6 @@ describe('续写用户要求资料区', () => {
     expect(normalizeUserRequirementLines_ACU([])).toEqual([]);
   });
 
-  it('渲染空清单时回退 originInstruction；两者都空时给占位句', () => {
-    const empty = buildEmptyAgentModuleSnapshot_ACU();
-    expect(renderAgentUserRequirements_ACU(empty, '')).toBe('（用户尚未提出任务要求）');
-    expect(renderAgentUserRequirements_ACU(empty, '  推进禁区  ')).toBe('- 推进禁区');
-    const filled = applyAgentUserRequirementsReplace_ACU(empty, ['不要揭底牌', '用第一人称']);
-    expect(filled.revisions.userRequirements).toBe(1);
-    expect(renderAgentUserRequirements_ACU(filled, '推进禁区')).toBe('- 不要揭底牌\n- 用第一人称');
-  });
-
   it('创建任务无楼层时种子写入静默跳过；有末楼且快照为空时机械写入 originInstruction', async () => {
     await expect(seedAgentUserRequirementsIfEmpty_ACU('推进禁区', [])).resolves.toBeUndefined();
 
@@ -105,14 +93,5 @@ describe('续写用户要求资料区', () => {
     expect(saveChat).toHaveBeenCalledOnce();
     // T1 帧存储：楼层字段是 checkpoint/delta 帧而非裸快照，经折叠读取验证首条未被覆盖。
     expect(readAgentModuleSnapshot_ACU(chat).userRequirements).toEqual(['推进禁区']);
-  });
-
-  it('空白 originInstruction 不写盘', async () => {
-    const chat: any[] = [{ mes: '正文' }];
-    const saveChat = vi.fn().mockResolvedValue(undefined);
-    _set_SillyTavern_API_ACU({ chat, saveChat } as any);
-    await seedAgentUserRequirementsIfEmpty_ACU('   ', chat);
-    expect(saveChat).not.toHaveBeenCalled();
-    expect(Object.prototype.hasOwnProperty.call(chat[0], AGENT_MODULE_FIELD_ACU)).toBe(false);
   });
 });

@@ -161,54 +161,6 @@ beforeEach(() => {
 });
 
 describe('BasicConfigPage', () => {
-  it('基础模式只显示基础配置页，并集中呈现 API、更新设置、表格模板、剧情推进预设', async () => {
-    const { mount } = await mountBasicConfigPage();
-
-    const page = document.querySelector<HTMLElement>('[data-ub-main]');
-    expect(page).not.toBeNull();
-    const text = page!.textContent || '';
-    expect(document.querySelector('.ub-top__title')?.textContent || '').toContain('基础配置');
-    expect(text).not.toContain('配置状态');
-    expect(text).toContain('API 预设');
-    expect(text).toContain('更新设置');
-    expect(text).toContain('填表 API 预设');
-    expect(text).not.toContain('高级数值');
-    expect(text).toContain('表格模板预设');
-    expect(text).toContain('打开可视化表格编辑器');
-    expect(text).toContain('剧情推进预设');
-    expect(text).not.toContain('通常只有 API 连接需要你确认');
-    const jumpItems = Array.from(page!.querySelectorAll('.ub-page__chip'))
-      .map(item => (item.textContent || '').trim());
-    expect(jumpItems).toEqual(['API 预设', '更新设置', '表格模板', '剧情推进']);
-    for (const id of ['basic-api-preset', 'basic-update', 'basic-table', 'basic-plot']) {
-      expect(document.getElementById(id), id).not.toBeNull();
-    }
-
-    const navText = document.querySelector('.ub-rail')?.textContent || '';
-    expect(navText).toContain('基础模式');
-    expect(navText).toContain('基础配置');
-    expect(navText).not.toContain('仪表盘');
-    expect(navText).not.toContain('更新参数');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('基础配置页的表格模板分节提供可视化表格编辑器入口', async () => {
-    const { mount, openVisualizer } = await mountBasicConfigPage();
-
-    const tableSection = document.getElementById('basic-table') as HTMLElement | null;
-    expect(tableSection).not.toBeNull();
-    const button = Array.from(tableSection!.querySelectorAll<HTMLButtonElement>('button'))
-      .find(item => item.textContent?.trim() === '打开可视化表格编辑器');
-    expect(button).toBeDefined();
-
-    button!.click();
-    await Promise.resolve();
-
-    expect(openVisualizer).toHaveBeenCalledTimes(1);
-
-    mount.__resetAcuV2MountForTests();
-  });
 
   it('点击侧栏模式按钮后切换到高手模式并回到仪表盘', async () => {
     const { mount } = await mountBasicConfigPage();

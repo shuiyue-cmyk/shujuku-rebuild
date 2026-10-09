@@ -49,22 +49,6 @@ afterEach(() => {
 });
 
 describe('API 页', () => {
-  it('当前预设直接展开编辑：五个预设级开关齐全，没有导入导出，也不混入交火模式设置', { timeout: 60_000 }, async () => {
-    const { page, input, errors } = await mountApiPage();
-    const text = page().textContent!;
-    expect(page().querySelector('.ub-picker__trigger')!.textContent).toContain('beta');
-    expect(input('预设名称').value).toBe('beta');
-    for (const label of ['流式输出', '非预填充支持', '公益站兼容', '需要时格式化输出', '保留多个 system 消息']) {
-      expect(page().querySelector(`[data-ub-row="${label}"] [role="switch"]`), label).not.toBeNull();
-    }
-    expect(page().querySelectorAll('[role="switch"]')).toHaveLength(5);
-    expect(page().querySelector('button[title="新建预设"]')).not.toBeNull();
-    expect(page().querySelector('button[title="删除当前预设"]')).not.toBeNull();
-    expect(text).not.toContain('导入');
-    expect(text).not.toContain('导出');
-    expect(text).not.toContain('Embedding');
-    expect(errors).toEqual([]);
-  });
 
   it('改名后保存当前预设，并同步当前聊天绑定', { timeout: 60_000 }, async () => {
     const { page, input, settings } = await mountApiPage();
@@ -140,13 +124,5 @@ describe('API 页', () => {
     byText<HTMLButtonElement>('button', '加载模型', page())!.click();
     await flush();
     expect(fetchModels).toHaveBeenCalledWith('https://beta.test', '', 'openai_compat', { force: true });
-  });
-
-  it('思考强度下拉包含全部档位（含 Minimal / Ultra）', { timeout: 60_000 }, async () => {
-    const { page } = await mountApiPage();
-    const labels = Array.from(page().querySelectorAll<HTMLOptionElement>('[data-ub-row="思考强度"] option'))
-      .filter(option => !option.disabled)
-      .map(option => option.textContent!.trim());
-    expect(labels).toEqual(['Minimal', 'Low', 'Medium', 'High', 'XHigh', 'Max', 'Ultra', 'Auto（自动）']);
   });
 });

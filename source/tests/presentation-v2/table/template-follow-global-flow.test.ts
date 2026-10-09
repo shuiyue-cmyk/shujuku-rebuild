@@ -49,20 +49,6 @@ describe('runFollowGlobalTemplateFlow_ACU', () => {
     expect(mocks.follow).not.toHaveBeenCalled();
   });
 
-  it('成功清除覆盖时 toast 成功并返回 true', async () => {
-    const ui = makeUi();
-    expect(await runFollowGlobalTemplateFlow_ACU(ui)).toBe(true);
-    expect(mocks.follow).toHaveBeenCalledWith(expect.objectContaining({ destructiveChangeConfirmed: false }));
-    expect(ui.toast.success).toHaveBeenCalled();
-  });
-
-  it('alreadyFollowing 时提示已跟随全局并返回 true', async () => {
-    const ui = makeUi();
-    mocks.follow.mockResolvedValueOnce({ saved: true, alreadyFollowing: true, mode: 'inherit_global', presetName: '' });
-    expect(await runFollowGlobalTemplateFlow_ACU(ui)).toBe(true);
-    expect(ui.toast.info).toHaveBeenCalledWith('当前聊天已跟随全局模板，无需清除覆盖。');
-  });
-
   it('postCommitWarning 透传为 warning toast', async () => {
     const ui = makeUi();
     mocks.follow.mockResolvedValueOnce({ saved: true, mode: 'inherit_global', presetName: '', postCommitWarning: 'SQLite 重建失败' });

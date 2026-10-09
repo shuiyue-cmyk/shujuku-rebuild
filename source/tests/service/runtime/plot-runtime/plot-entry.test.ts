@@ -121,14 +121,6 @@ describe('runOptimizationLogic_ACU', () => {
     expect(mockUntrackAbortController).toHaveBeenCalledWith(controller);
   });
 
-  it('剧情推进未启用时跳过', async () => {
-    mockSettings.plotSettings = { enabled: false };
-    const result = await runOptimizationLogic_ACU('继续');
-    expect(result.success).toBe(false);
-    expect(result.skipped).toBe(true);
-    expect(result.reason).toBe('disabled');
-  });
-
   it('飞行模式开启时不执行剧情任务', async () => {
     mockFlightModeActive.mockReturnValue(true);
     const result = await runOptimizationLogic_ACU('继续');

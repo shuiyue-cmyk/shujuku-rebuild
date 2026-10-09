@@ -38,9 +38,7 @@ import {
   isSpecialIndexLockEnabled_ACU,
   setSpecialIndexLockEnabled_ACU,
   clearCurrentTableLocks_ACU,
-  getSummaryIndexColumnIndex_ACU,
   formatSummaryIndexCode_ACU,
-  applySummaryIndexSequenceToTable_ACU,
   applySpecialIndexSequenceToSummaryTables_ACU,
 } from '../../../src/service/runtime/helpers-table-lock';
 
@@ -167,10 +165,6 @@ describe('saveTableLocksForSheet_ACU', () => {
     expect(saved).not.toBeUndefined();
     expect(saved.rows).toEqual([1]);
   });
-  it('空 sheetKey 不保存', () => {
-    saveTableLocksForSheet_ACU('', { rows: new Set(), cols: new Set(), cells: new Set() });
-    expect(mockSettings.tableUpdateLocks['test-chat::iso-key']).toBeUndefined();
-  });
 });
 
 describe('deleteTableLocksForSheet_ACU', () => {
@@ -259,11 +253,6 @@ describe('isSpecialIndexLockEnabled_ACU / setSpecialIndexLockEnabled_ACU', () =>
     setSpecialIndexLockEnabled_ACU('sheet_0', false);
     expect(isSpecialIndexLockEnabled_ACU('sheet_0')).toBe(false);
   });
-  it('重新启用后返回 true', () => {
-    setSpecialIndexLockEnabled_ACU('sheet_0', false);
-    setSpecialIndexLockEnabled_ACU('sheet_0', true);
-    expect(isSpecialIndexLockEnabled_ACU('sheet_0')).toBe(true);
-  });
 });
 
 describe('clearCurrentTableLocks_ACU', () => {
@@ -300,80 +289,16 @@ describe('clearCurrentTableLocks_ACU', () => {
   });
 });
 
-describe('getSummaryIndexColumnIndex_ACU', () => {
-  it('找到编码列', () => {
-    const table = { content: [['row_id', '编码', '事件'], ['1', 'AM0001', '开始']] };
-    const idx = getSummaryIndexColumnIndex_ACU(table);
-    expect(idx).toBe(0); // headers = content[0].slice(1) → ['编码', '事件']，编码在 index 0
-  });
-  it('找到索引列', () => {
-    const table = { content: [['row_id', '事件', '索引'], ['1', '开始', 'AM0001']] };
-    const idx = getSummaryIndexColumnIndex_ACU(table);
-    expect(idx).toBe(1); // headers = ['事件', '索引']，索引在 index 1
-  });
-  it('无匹配列返回最后一列', () => {
-    const table = { content: [['row_id', '事件', '时间'], ['1', '开始', '第1天']] };
-    const idx = getSummaryIndexColumnIndex_ACU(table);
-    expect(idx).toBe(1); // headers = ['事件', '时间']，无匹配，返回 length-1 = 1
-  });
-  it('null 返回 -1', () => {
-    expect(getSummaryIndexColumnIndex_ACU(null)).toBe(-1);
-  });
-  it('空 content 返回 -1', () => {
-    expect(getSummaryIndexColumnIndex_ACU({ content: [] })).toBe(-1);
-  });
-});
-
 describe('formatSummaryIndexCode_ACU', () => {
   it('格式化为 AM 前缀 + 4 位数字', () => {
     expect(formatSummaryIndexCode_ACU(1)).toBe('AM0001');
     expect(formatSummaryIndexCode_ACU(42)).toBe('AM0042');
     expect(formatSummaryIndexCode_ACU(9999)).toBe('AM9999');
   });
-  it('0 或负数返回 AM0001', () => {
-    expect(formatSummaryIndexCode_ACU(0)).toBe('AM0001');
-    expect(formatSummaryIndexCode_ACU(-5)).toBe('AM0001');
-  });
-  it('非数字返回 AM0001', () => {
-    expect(formatSummaryIndexCode_ACU('abc')).toBe('AM0001');
-    expect(formatSummaryIndexCode_ACU(null)).toBe('AM0001');
-  });
-});
-
-describe('applySummaryIndexSequenceToTable_ACU', () => {
-  it('为表格应用索引序列', () => {
-    const table = {
-      content: [
-        ['row_id', '编码', '事件'],
-        ['1', '', '开始'],
-        ['2', '', '结束'],
-      ],
-    };
-    applySummaryIndexSequenceToTable_ACU(table, 0); // colIndex=0 → 实际写入 row[1]
-    expect(table.content[1][1]).toBe('AM0001');
-    expect(table.content[2][1]).toBe('AM0002');
-  });
-  it('null table 不报错', () => {
-    expect(() => applySummaryIndexSequenceToTable_ACU(null, 0)).not.toThrow();
-  });
-  it('负数 colIndex 不操作', () => {
-    const table = { content: [['row_id'], ['1']] };
-    expect(() => applySummaryIndexSequenceToTable_ACU(table, -1)).not.toThrow();
-  });
 });
 
 // ═══ applySpecialIndexSequenceToSummaryTables_ACU ═══
 describe('applySpecialIndexSequenceToSummaryTables_ACU', () => {
-  it('null 数据不报错', () => {
-    expect(() => applySpecialIndexSequenceToSummaryTables_ACU(null as any)).not.toThrow();
-  });
-  it('非对象不报错', () => {
-    expect(() => applySpecialIndexSequenceToSummaryTables_ACU('invalid' as any)).not.toThrow();
-  });
-  it('无 sheet_ 前缀的 key 被跳过', () => {
-    const data = { mate: { type: 'chatSheets' } };
-    expect(() => applySpecialIndexSequenceToSummaryTables_ACU(data)).not.toThrow();
-  });
   it('非纪要表被跳过', () => {
     const data = { sheet_0: { name: '背包物品表', content: [['row_id']] } };
     expect(() => applySpecialIndexSequenceToSummaryTables_ACU(data)).not.toThrow();

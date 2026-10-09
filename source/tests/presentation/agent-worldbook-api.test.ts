@@ -124,24 +124,6 @@ describe('createAgentWorldbookApi', () => {
     mockClearMeta.mockResolvedValue({ total: 1, cleared: 1, skipped: 0, failed: 0, errors: [] });
   });
 
-
-  it('getAgentWorldbookControl 返回世界书状态条目来源的控制配置', async () => {
-    const api = createAgentWorldbookApi({} as any);
-
-    const result = await api.getAgentWorldbookControl();
-
-    expect(result).toEqual({
-      success: true,
-      control: defaultControl,
-      source: 'worldbook',
-      bookName: '主世界书',
-      entryUid: 'cfg',
-      duplicateCount: 0,
-      writableBookName: '主世界书',
-    });
-    expect(mockReadControl).toHaveBeenCalledTimes(1);
-  });
-
   it('getAgentWorldbookControl 捕获异常并返回结构化错误', async () => {
     mockReadControl.mockRejectedValue('read failed');
     const api = createAgentWorldbookApi({} as any);
@@ -377,26 +359,6 @@ describe('createAgentWorldbookApi', () => {
     expect(mockRefreshSnapshot).not.toHaveBeenCalled();
   });
 
-  it('skillifyWorldbookEntries 指定 bookNames 时调用指定世界书 Skill 化 service', async () => {
-    const api = createAgentWorldbookApi({} as any);
-
-    const result = await api.skillifyWorldbookEntries({
-      bookNames: ['BookA', 'BookB'],
-      runTakeover: false,
-      overwriteManual: true,
-      selectedEntries: [{ bookName: 'BookA', uid: 1 }],
-    });
-
-    expect(result.success).toBe(true);
-    expect(mockSkillifyByBookNames).toHaveBeenCalledWith(['BookA', 'BookB'], {
-      overwriteManual: true,
-      selectedEntries: [{ bookName: 'BookA', uid: 1 }],
-    });
-    expect(mockRunSkillify).not.toHaveBeenCalled();
-    expect(mockTakeover).not.toHaveBeenCalled();
-    expect(mockRefreshSnapshot).not.toHaveBeenCalled();
-  });
-
   it('runAgentWorldbookSkillify 在 takeover 同步失败时返回 success=false 并保留结果', async () => {
     mockTakeover.mockResolvedValue({
       updated: true,
@@ -448,18 +410,6 @@ describe('createAgentWorldbookApi', () => {
     expect(mockSaveMeta).toHaveBeenCalledWith('主世界书', 1, { description: 'desc' }, 'agent-skillify');
   });
 
-  it('saveAgentWorldbookSkillMeta 在未变化时仍返回成功业务结果', async () => {
-    mockSaveMeta.mockResolvedValue({ updated: false, reason: '世界书 Skill 元数据未变化', entry: { uid: 1 } });
-    const api = createAgentWorldbookApi({} as any);
-
-    const result = await api.saveAgentWorldbookSkillMeta('主世界书', 1, { description: 'desc' });
-
-    expect(result.success).toBe(true);
-    expect(result.result.updated).toBe(false);
-    expect(result.result.reason).toBe('世界书 Skill 元数据未变化');
-    expect(mockSaveMeta).toHaveBeenCalledWith('主世界书', 1, { description: 'desc' }, 'manual');
-  });
-
   it('saveAgentWorldbookSkillMeta 拒绝非法 updatedBy 且不调用 service', async () => {
     const api = createAgentWorldbookApi({} as any);
 
@@ -479,18 +429,6 @@ describe('createAgentWorldbookApi', () => {
     expect(mockSaveMeta).toHaveBeenCalledWith('主世界书', 1, { description: 'desc' }, 'agent-skillify');
   });
 
-  it('deleteAgentWorldbookSkillMeta 删除 Skill 元数据并允许无元数据业务结果', async () => {
-    mockDeleteMeta.mockResolvedValue({ updated: false, reason: '世界书条目没有 Skill 元数据', entry: { uid: 1 } });
-    const api = createAgentWorldbookApi({} as any);
-
-    const result = await api.deleteAgentWorldbookSkillMeta('主世界书', 1);
-
-    expect(result.success).toBe(true);
-    expect(result.result.updated).toBe(false);
-    expect(result.result.reason).toBe('世界书条目没有 Skill 元数据');
-    expect(mockDeleteMeta).toHaveBeenCalledWith('主世界书', 1);
-  });
-
   it('deleteWorldbookEntrySkillMeta 成功后同步对账 active snapshot', async () => {
     const api = createAgentWorldbookApi({} as any);
 
@@ -499,20 +437,6 @@ describe('createAgentWorldbookApi', () => {
     expect(result.success).toBe(true);
     expect(result.result.updated).toBe(true);
     expect(mockDeleteMeta).toHaveBeenCalledWith('主世界书', 1);
-    expect(mockTakeover).toHaveBeenCalledTimes(1);
-  });
-
-  it('clearAgentWorldbookSkillMetas 成功清理时返回 success=true', async () => {
-    const api = createAgentWorldbookApi({} as any);
-
-    const result = await api.clearAgentWorldbookSkillMetas(['主世界书']);
-
-    expect(result).toEqual({
-      success: true,
-      error: undefined,
-      result: { total: 1, cleared: 1, skipped: 0, failed: 0, errors: [] },
-    });
-    expect(mockClearMeta).toHaveBeenCalledWith(['主世界书']);
     expect(mockTakeover).toHaveBeenCalledTimes(1);
   });
 

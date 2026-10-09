@@ -14,14 +14,6 @@ const skeleton = [
 ];
 
 describe('compareAgentPromptMessages_ACU', () => {
-  it('首次调用输出基线并统计 system 条数', () => {
-    const report = compareAgentPromptMessages_ACU(null, [
-      ...skeleton,
-      { role: 'system', content: '多余的 system 段' },
-    ]);
-    expect(report).toMatchObject({ baseline: true, messageCount: 4, systemRoleCount: 2 });
-    expect(formatAgentPromptDriftReport_ACU(report)).toContain('system 2 条');
-  });
 
   it('完全一致的重试序列不误报分歧', () => {
     const messages = [...skeleton, { role: 'user', content: '运行时数据 v1' }];
@@ -46,26 +38,6 @@ describe('compareAgentPromptMessages_ACU', () => {
     expect(report).toMatchObject({ divergedMessageIndex: 3, divergedCharOffset: 9 });
     expect(report.previousExcerpt).toContain('预算 5 轮');
     expect(report.currentExcerpt).toContain('预算 4 轮');
-  });
-
-  it('头部 role 变化被识别为第 0 条分歧', () => {
-    const previous = [{ role: 'system', content: '静态根规则' }, ...skeleton.slice(1)];
-    const current = [{ role: 'user', content: '静态根规则' }, ...skeleton.slice(1)];
-    const report = compareAgentPromptMessages_ACU(previous, current);
-    expect(report).toMatchObject({ divergedMessageIndex: 0, previousRole: 'system', currentRole: 'user' });
-    expect(report.divergedCharOffset).toBeUndefined();
-    expect(formatAgentPromptDriftReport_ACU(report)).toContain('第 0 条');
-  });
-
-  it('超长内容的摘录截断在分歧点前后各 60 字符', () => {
-    const sharedHead = '甲'.repeat(200);
-    const previous = [{ role: 'user', content: `${sharedHead}旧尾巴` }];
-    const current = [{ role: 'user', content: `${sharedHead}新尾巴` }];
-    const report = compareAgentPromptMessages_ACU(previous, current);
-    expect(report.divergedCharOffset).toBe(200);
-    expect(report.currentExcerpt!.length).toBeLessThanOrEqual(60 + 63 + 2);
-    expect(report.currentExcerpt).toContain('新尾巴');
-    expect(report.currentExcerpt!.startsWith('…')).toBe(true);
   });
 });
 

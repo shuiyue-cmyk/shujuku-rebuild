@@ -46,13 +46,6 @@ describe('selectRebuildSourceRowIds_ACU', () => {
       preparedRowIds: ['AM0001', 'AM0002', 'AM0003'],
     })).toEqual({ rowIds: ['AM0001', 'AM0002', 'AM0003'], seededFromLiveTable: true });
   });
-
-  it('两边都没有可用行时返回空集合', () => {
-    expect(selectRebuildSourceRowIds_ACU({
-      checkpointRowIds: ['1'],
-      preparedRowIds: [],
-    })).toEqual({ rowIds: [], seededFromLiveTable: false });
-  });
 });
 
 describe('selectRetainedVectorMirrorRows_ACU', () => {

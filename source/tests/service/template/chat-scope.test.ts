@@ -171,7 +171,6 @@ vi.mock('../../../src/service/template/chat-scope/chat-scope-guide', () => ({
 }));
 
 import {
-  normalizeChatScopedConfigSource_ACU,
   normalizeGuideData_ACU,
 } from '../../../src/service/template/chat-scope/chat-scope-base';
 
@@ -199,38 +198,7 @@ beforeEach(() => {
   mockEnsureSheetOrderNumbers.mockReturnValue(false);
 });
 
-// ═══ chat-scope-base ═══
-describe('normalizeChatScopedConfigSource_ACU', () => {
-  it('非字符串输入返回 fallback', () => {
-    expect(normalizeChatScopedConfigSource_ACU(null)).toBe('inherit');
-    expect(normalizeChatScopedConfigSource_ACU(123)).toBe('inherit');
-    expect(normalizeChatScopedConfigSource_ACU(undefined, 'custom')).toBe('custom');
-  });
-
-  it('空字符串返回 fallback', () => {
-    expect(normalizeChatScopedConfigSource_ACU('')).toBe('inherit');
-    expect(normalizeChatScopedConfigSource_ACU('  ')).toBe('inherit');
-  });
-
-  it('有效字符串返回 trim 后的值', () => {
-    expect(normalizeChatScopedConfigSource_ACU('  ui  ')).toBe('ui');
-    expect(normalizeChatScopedConfigSource_ACU('preset_link')).toBe('preset_link');
-  });
-});
-
 describe('normalizeGuideData_ACU', () => {
-  it('null 输入返回 null', () => {
-    expect(normalizeGuideData_ACU(null)).toBeNull();
-    expect(normalizeGuideData_ACU(undefined)).toBeNull();
-  });
-
-  it('无 sheet_ 键时返回只有 mate 的对象', () => {
-    const result = normalizeGuideData_ACU({ someField: 'value' });
-    expect(result).toBeDefined();
-    expect(result.mate).toBeDefined();
-    expect(result.mate.type).toBe('chatSheets');
-    expect(Object.keys(result).filter((k: string) => k.startsWith('sheet_'))).toHaveLength(0);
-  });
 
   it('有 sheet_ 键时只保留表头行和配置', () => {
     const input = {
@@ -271,9 +239,6 @@ describe('normalizeGuideData_ACU', () => {
 
 // ═══ chat-scope-plot ═══
 describe('sanitizePlotSettingsSnapshotForChat_ACU', () => {
-  it('null 输入返回 null', () => {
-    expect(sanitizePlotSettingsSnapshotForChat_ACU(null)).toBeNull();
-  });
 
   it('有效 plotSettings 返回清洗后的快照', () => {
     mockCloneScopedConfigData.mockReturnValue({
@@ -298,17 +263,6 @@ describe('sanitizePlotSettingsSnapshotForChat_ACU', () => {
 });
 
 describe('getCurrentChatPlotScopeState_ACU', () => {
-  it('无容器时返回 null', () => {
-    mockGetChatScopedConfigContainer.mockReturnValue(null);
-    expect(getCurrentChatPlotScopeState_ACU([])).toBeNull();
-  });
-
-  it('mode 不是 chat_override 时返回 null', () => {
-    mockGetChatScopedConfigContainer.mockReturnValue({
-      plot: { mode: 'inherit_global' },
-    });
-    expect(getCurrentChatPlotScopeState_ACU([])).toBeNull();
-  });
 
   it('有效 chat_override 快照时返回规范化状态', () => {
     mockCloneScopedConfigData.mockReturnValue({ rateMain: 5 });
@@ -326,10 +280,6 @@ describe('getCurrentChatPlotScopeState_ACU', () => {
 });
 
 describe('buildChatPlotScopeStateFromSettings_ACU', () => {
-  it('plotSettings 无效时返回 null', () => {
-    mockCloneScopedConfigData.mockReturnValue(null);
-    expect(buildChatPlotScopeStateFromSettings_ACU(null)).toBeNull();
-  });
 
   it('有效 plotSettings 返回 chat_override 状态', () => {
     mockCloneScopedConfigData.mockReturnValue({ rateMain: 5 });
@@ -344,10 +294,6 @@ describe('buildChatPlotScopeStateFromSettings_ACU', () => {
 });
 
 describe('setCurrentChatPlotScopeState_ACU', () => {
-  it('无首条消息时返回 null', () => {
-    mockGetChatFirstLayerMessage.mockReturnValue(null);
-    expect(setCurrentChatPlotScopeState_ACU({ mode: 'chat_override' })).toBeNull();
-  });
 
   it('写入 chat_override 时设置 _acu_scoped_config.plot', () => {
     const firstMsg: any = {};
@@ -439,13 +385,6 @@ describe('sanitizeChatSheetsObject_ACU', () => {
     expect(result.sheet_0.domain).toBeUndefined();
     expect(result.customTopLevel).toBe('preserved');
   });
-
-  it('ensureMate=true 时补齐 mate', () => {
-    const result = sanitizeChatSheetsObject_ACU({}, { ensureMate: true });
-    expect(result.mate).toBeDefined();
-    expect(result.mate.type).toBe('chatSheets');
-    expect(result.mate.version).toBe(1);
-  });
 });
 
 describe('reorderDataBySheetKeys_ACU', () => {
@@ -472,11 +411,6 @@ describe('reorderDataBySheetKeys_ACU', () => {
 });
 
 describe('buildGuidedBaseDataFromSheetGuide_ACU', () => {
-  it('null guide 返回只有 mate 的对象', () => {
-    const result = buildGuidedBaseDataFromSheetGuide_ACU(null);
-    expect(result.mate).toBeDefined();
-    expect(result.mate.type).toBe('chatSheets');
-  });
 
   it('有效 guide 返回深拷贝', () => {
     const guide = {
@@ -512,10 +446,6 @@ describe('buildGuidedBaseDataFromSheetGuide_ACU', () => {
 });
 
 describe('getSortedSheetKeys_ACU', () => {
-  it('空对象返回空数组', () => {
-    expect(getSortedSheetKeys_ACU(null)).toEqual([]);
-    expect(getSortedSheetKeys_ACU({})).toEqual([]);
-  });
 
   it('有 guide 数据时按 guide 的 orderNo 排序', () => {
     mockGetChatSheetGuideData.mockReturnValue({

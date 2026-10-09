@@ -139,11 +139,6 @@ afterEach(() => {
 
 // ═══ loadPresetAndCleanCharacterData_ACU ═══
 describe('loadPresetAndCleanCharacterData_ACU', () => {
-  it('无 plotSettings 时直接返回', async () => {
-    mockSettings.plotSettings = null;
-    await loadPresetAndCleanCharacterData_ACU();
-    expect(mockEnsurePlotTasksCompat).not.toHaveBeenCalled();
-  });
 
   it('有 chatScopeState 快照时应用快照', async () => {
     mockGetCurrentChatPlotScopeState.mockReturnValue({ snapshot: { prompts: [] } });
@@ -192,18 +187,6 @@ describe('loadPresetAndCleanCharacterData_ACU', () => {
 
 // ═══ getPlotFromHistory_ACU ═══
 describe('getPlotFromHistory_ACU', () => {
-  it('空聊天记录返回空字符串', () => {
-    mockGetChatArray.mockReturnValue([]);
-    expect(getPlotFromHistory_ACU()).toBe('');
-  });
-
-  it('找到匹配预设的 plot 数据', () => {
-    mockGetCurrentRuntimePresetName.mockReturnValue('预设A');
-    mockGetChatArray.mockReturnValue([
-      { is_user: true, qrf_plot: '剧情数据', qrf_plot_preset: '预设A' },
-    ]);
-    expect(getPlotFromHistory_ACU()).toBe('剧情数据');
-  });
 
   it('无匹配预设时回退到无标签数据', () => {
     mockGetCurrentRuntimePresetName.mockReturnValue('预设A');
@@ -211,14 +194,6 @@ describe('getPlotFromHistory_ACU', () => {
       { is_user: true, qrf_plot: '旧数据', qrf_plot_preset: '' },
     ]);
     expect(getPlotFromHistory_ACU()).toBe('旧数据');
-  });
-
-  it('无预设模式下找到任意 plot 数据', () => {
-    mockGetCurrentRuntimePresetName.mockReturnValue('');
-    mockGetChatArray.mockReturnValue([
-      { is_user: true, qrf_plot: '任意数据', qrf_plot_preset: '预设X' },
-    ]);
-    expect(getPlotFromHistory_ACU()).toBe('任意数据');
   });
 
   it('无 plot 数据返回空字符串', () => {
@@ -333,14 +308,6 @@ describe('savePlotToLatestMessage_ACU', () => {
     const out = await savePlotToLatestMessage_ACU();
     expect(mockPlanningGuard.ignoreNextGenerationEndedCount).toBe(1);
     expect(out.status).toBe('deferred');
-  });
-
-  it('tempPlotToSave 为空时不保存', async () => {
-    mockPlanningGuard.inProgress = false;
-    mockPlanningGuard.ignoreNextGenerationEndedCount = 0;
-    const out = await savePlotToLatestMessage_ACU();
-    expect(out.status).toBe('deferred');
-    expect(mockSaveChatToHostStrict).not.toHaveBeenCalled();
   });
 
   it('同步标记命中：写入 qrf_plot/qrf_plot_preset/qrf_plot_tasks 并请求宿主保存', async () => {

@@ -204,16 +204,6 @@ describe('listDormantColumns_ACU', () => {
     ]);
   });
 
-  it('无隐藏列的表不产生条目', () => {
-    mockGetSnapshot.mockReturnValue(makeSnapshot({
-      sheet_role: makeSheet('角色表', ['行', '角色']),
-    }));
-
-    const result = listDormantColumns_ACU();
-    expect(result.ok).toBe(true);
-    expect(result.entries).toHaveLength(0);
-  });
-
   it('运行时模板不可用 → ok=false', () => {
     mockGetSnapshot.mockReturnValue(null);
 

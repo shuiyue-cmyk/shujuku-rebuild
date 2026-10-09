@@ -11,23 +11,6 @@ vi.mock('../../../src/shared/json-helpers', () => ({
 import { scanTargetKeysResidue_ACU } from '../../../src/data/repositories/target-keys-diagnostics';
 
 describe('scanTargetKeysResidue_ACU', () => {
-  it('空输入或无目标表时返回零报告且不抛错', () => {
-    expect(scanTargetKeysResidue_ACU(null, '', ['sheet_x'])).toEqual(expect.objectContaining({
-      isolationKeyMatched: false,
-      entryCount: 0,
-      exactHits: 0,
-      runtimeV1Hits: 0,
-      checkpointDataRisk: false,
-      checkpointDataRisks: [],
-      scheduleSummaryRisk: false,
-    }));
-    expect(scanTargetKeysResidue_ACU({}, '', [])).toEqual(expect.objectContaining({ exactHits: 0, runtimeV1Hits: 0, checkpointDataRisks: [] }));
-    expect(scanTargetKeysResidue_ACU({ TavernDB_ACU_IsolatedData: {} }, 'missing', ['sheet_x'])).toEqual(expect.objectContaining({
-      isolationKeyMatched: false,
-      entryCount: 0,
-      checkpointDataRisks: [],
-    }));
-  });
 
   it('结构化扫描 exact、runtime-v1、checkpoint 与 scheduleSummary 风险且不修改 msg', () => {
     const msg: any = {

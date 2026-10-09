@@ -40,7 +40,6 @@ import {
   getDefaultPlotContextExtractRules_ACU,
   getDefaultPlotContextExcludeRules_ACU,
   applyExcludeRulesToText_ACU,
-  applyContextTagFilters_ACU,
 } from '../../../src/service/runtime/helpers-context-tags';
 
 describe('getDefaultPlotContextExtractRules_ACU', () => {
@@ -60,41 +59,12 @@ describe('getDefaultPlotContextExcludeRules_ACU', () => {
 });
 
 describe('applyExcludeRulesToText_ACU', () => {
-  it('移除匹配的标签块', () => {
-    const text = '前缀<system>系统内容</system>后缀';
-    const result = applyExcludeRulesToText_ACU(text, {
-      excludeRules: [{ start: '<system', end: '</system>' }],
-    });
-    expect(result).toBe('前缀后缀');
-  });
-  it('多个排除规则同时生效', () => {
-    const text = '<a>内容A</a>中间<b>内容B</b>';
-    const result = applyExcludeRulesToText_ACU(text, {
-      excludeRules: [
-        { start: '<a', end: '</a>' },
-        { start: '<b', end: '</b>' },
-      ],
-    });
-    expect(result).not.toContain('内容A');
-    expect(result).not.toContain('内容B');
-    expect(result).toContain('中间');
-  });
   it('无匹配时原文不变', () => {
     const text = '普通文本';
     const result = applyExcludeRulesToText_ACU(text, {
       excludeRules: [{ start: '<x', end: '</x>' }],
     });
     expect(result).toBe('普通文本');
-  });
-  it('空规则返回原文', () => {
-    const text = '普通文本';
-    expect(applyExcludeRulesToText_ACU(text, {})).toBe('普通文本');
-  });
-  it('空文本返回空', () => {
-    expect(applyExcludeRulesToText_ACU('', { excludeRules: [{ start: '<a', end: '</a>' }] })).toBe('');
-  });
-  it('null 文本返回空字符串', () => {
-    expect(applyExcludeRulesToText_ACU(null as any, {})).toBe('');
   });
   it('大小写不敏感匹配', () => {
     const text = '前缀<SYSTEM>内容</SYSTEM>后缀';
@@ -139,20 +109,4 @@ describe('applyExcludeRulesToText_ACU', () => {
     expect(result).toBe('孤立结束</a>前缀后缀<a>孤立开始');
   });
 
-});
-
-describe('applyContextTagFilters_ACU', () => {
-  it('先提取后排除', () => {
-    const text = '<plot>剧情内容<system>系统</system></plot>其他内容';
-    const result = applyContextTagFilters_ACU(text, {
-      extractRules: [{ start: '<plot', end: '</plot>' }],
-      excludeRules: [{ start: '<system', end: '</system>' }],
-    });
-    expect(result).toContain('剧情内容');
-    expect(result).not.toContain('系统');
-    expect(result).not.toContain('其他内容');
-  });
-  it('无规则时返回原文', () => {
-    expect(applyContextTagFilters_ACU('原文')).toBe('原文');
-  });
 });

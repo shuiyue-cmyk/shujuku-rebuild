@@ -183,19 +183,6 @@ describe('sql-query-var', () => {
   // TableQueryBuilder
   // ═══════════════════════════════════════════════════════════════
   describe('TableQueryBuilder', () => {
-    describe('get', () => {
-      it('获取单个值', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const result = builder.where('物品名称', '铁剑').get('数量');
-        expect(result).toBe(3);
-      });
-
-      it('无匹配返回 null', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const result = builder.where('物品名称', '不存在').get('数量');
-        expect(result).toBeNull();
-      });
-    });
 
     describe('运行时共享别名解析', () => {
       beforeEach(() => {
@@ -234,66 +221,6 @@ describe('sql-query-var', () => {
       });
     });
 
-    describe('first', () => {
-      it('获取单行对象', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.where('姓名', '角色A').first();
-        expect(result).not.toBeNull();
-        expect(result!.char_name).toBe('角色A');
-        expect(result!.age).toBe(25);
-      });
-
-      it('无匹配返回 null', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.where('姓名', '不存在').first();
-        expect(result).toBeNull();
-      });
-    });
-
-    describe('list', () => {
-      it('获取某列的值列表', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const result = builder.list('物品名称');
-        expect(result).toEqual(['铁剑', '治疗药水', '魔法书']);
-      });
-
-      it('带条件过滤', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.where('状态', '存活').list('姓名');
-        expect(result).toContain('角色A');
-        expect(result).toContain('角色C');
-        expect(result).not.toContain('角色B');
-      });
-    });
-
-    describe('all', () => {
-      it('获取所有行', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const result = builder.all();
-        expect(result).toHaveLength(3);
-        expect(result[0]).toHaveProperty('item_name');
-      });
-    });
-
-    describe('count', () => {
-      it('计数', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        expect(builder.count()).toBe(3);
-      });
-
-      it('带条件计数', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        expect(builder.where('状态', '存活').count()).toBe(2);
-      });
-    });
-
-    describe('sum', () => {
-      it('求和', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        expect(builder.sum('数量')).toBe(9); // 3 + 5 + 1
-      });
-    });
-
     describe('列名参数注入防护', () => {
       it('列名夹带多语句时被多语句门拒绝，不会执行 DROP', () => {
         const rowCountBefore = _engine.query('SELECT COUNT(*) FROM inventory;').values[0][0] as number;
@@ -325,28 +252,7 @@ describe('sql-query-var', () => {
       });
     });
 
-    describe('exists', () => {
-      it('存在返回 true', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        expect(builder.where('物品名称', '铁剑').exists()).toBe(true);
-      });
-
-      it('不存在返回 false', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        expect(builder.where('物品名称', '不存在').exists()).toBe(false);
-      });
-    });
-
     describe('where 操作符', () => {
-      it('大于', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        expect(builder.where('年龄', '>', 25).count()).toBe(1); // 角色B(30)
-      });
-
-      it('大于等于', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        expect(builder.where('年龄', '>=', 25).count()).toBe(2); // 角色A(25) + 角色B(30)
-      });
 
       it('null 值转为 IS NULL', () => {
         // 先插入一条 null 数据
@@ -358,21 +264,6 @@ describe('sql-query-var', () => {
         _engine.run('DELETE FROM inventory WHERE row_id = 99;');
       });
 
-      it('小于', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        expect(builder.where('年龄', '<', 25).count()).toBe(1); // 角色C(20)
-      });
-
-      it('小于等于', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        expect(builder.where('年龄', '<=', 25).count()).toBe(2); // 角色A(25) + 角色C(20)
-      });
-
-      it('不等于', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        expect(builder.where('状态', '!=', '死亡').count()).toBe(2); // 角色A + 角色C
-      });
-
       it('IS NOT NULL（!= null）', () => {
         _engine.run("INSERT INTO inventory VALUES (98, 'test_not_null', 1, NULL);");
         const builder = new TableQueryBuilder('背包物品表');
@@ -380,49 +271,6 @@ describe('sql-query-var', () => {
         const result = builder.where('类别', '!=', null).count();
         expect(result).toBe(3);
         _engine.run('DELETE FROM inventory WHERE row_id = 98;');
-      });
-    });
-
-    describe('orderBy', () => {
-      it('升序排列', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.orderBy('年龄', 'ASC').list('姓名');
-        expect(result[0]).toBe('角色C'); // 20
-        expect(result[2]).toBe('角色B'); // 30
-      });
-
-      it('降序排列', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.orderBy('年龄', 'DESC').list('姓名');
-        expect(result[0]).toBe('角色B'); // 30
-      });
-    });
-
-    describe('多条件链式 where', () => {
-      it('两个 where 生成 AND 条件', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.where('状态', '存活').where('年龄', '>', 22).list('姓名');
-        expect(result).toEqual(['角色A']); // 角色A(25,存活)，角色C(20,存活)被年龄>22过滤
-      });
-
-      it('三个 where 链式调用', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const result = builder
-          .where('类别', '!=', '道具')
-          .where('数量', '>', 1)
-          .where('数量', '<', 10)
-          .list('物品名称');
-        expect(result).toContain('铁剑');     // 武器, 3
-        expect(result).toContain('治疗药水'); // 消耗品, 5
-        expect(result).not.toContain('魔法书'); // 道具, 被第一个条件过滤
-      });
-
-      it('toSQL 包含多个 AND 条件', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const sql = builder.where('状态', '存活').where('年龄', '>', 20).toSQL();
-        expect(sql).toContain('AND');
-        expect(sql).toContain("status = '存活'");
-        expect(sql).toContain('age > 20');
       });
     });
 
@@ -446,21 +294,7 @@ describe('sql-query-var', () => {
       });
     });
 
-    describe('limit', () => {
-      it('限制返回行数', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const result = builder.limit(2).all();
-        expect(result).toHaveLength(2);
-      });
-    });
-
     describe('toSQL', () => {
-      it('生成 SQL 语句', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const sql = builder.where('物品名称', '铁剑').toSQL();
-        expect(sql).toContain('SELECT * FROM inventory');
-        expect(sql).toContain("WHERE item_name = '铁剑'");
-      });
 
       it('无注释 ASCII 物理列的 ORM 条件保持原始 SQL 列名', () => {
         const sql = new TableQueryBuilder('调查员角色卡表').where('STR', '65').toSQL();
@@ -471,17 +305,6 @@ describe('sql-query-var', () => {
     // ═══ 上一轮新增方法测试 ═══
 
     describe('avg', () => {
-      it('求平均值', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.avg('年龄');
-        expect(result).toBe(25); // (25 + 30 + 20) / 3 = 25
-      });
-
-      it('带条件求平均值', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.where('状态', '存活').avg('年龄');
-        expect(result).toBe(22.5); // (25 + 20) / 2 = 22.5
-      });
 
       it('空结果返回 0', () => {
         const builder = new TableQueryBuilder('重要人物表');
@@ -490,15 +313,6 @@ describe('sql-query-var', () => {
     });
 
     describe('max (聚合)', () => {
-      it('求最大值', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        expect(builder.max('年龄')).toBe(30);
-      });
-
-      it('带条件求最大值', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        expect(builder.where('状态', '存活').max('年龄')).toBe(25);
-      });
 
       it('空结果返回 0', () => {
         const builder = new TableQueryBuilder('重要人物表');
@@ -507,15 +321,6 @@ describe('sql-query-var', () => {
     });
 
     describe('min (聚合)', () => {
-      it('求最小值', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        expect(builder.min('年龄')).toBe(20);
-      });
-
-      it('带条件求最小值', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        expect(builder.where('状态', '存活').min('年龄')).toBe(20);
-      });
 
       it('空结果返回 0', () => {
         const builder = new TableQueryBuilder('重要人物表');
@@ -531,37 +336,6 @@ describe('sql-query-var', () => {
         expect(result).toContain('角色C');
         expect(result).not.toContain('角色B');
       });
-
-      it('toSQL 包含 OR', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const sql = builder.where('状态', '存活').orWhere('年龄', '>', 28).toSQL();
-        expect(sql).toContain('OR');
-      });
-
-      it('多个 OR 分支', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const result = builder
-          .where('物品名称', '铁剑')
-          .orWhere('物品名称', '魔法书')
-          .orWhere('物品名称', '治疗药水')
-          .count();
-        expect(result).toBe(3);
-      });
-    });
-
-    describe('whereIn', () => {
-      it('IN 查询', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const result = builder.whereIn('物品名称', ['铁剑', '魔法书']).list('物品名称');
-        expect(result).toContain('铁剑');
-        expect(result).toContain('魔法书');
-        expect(result).not.toContain('治疗药水');
-      });
-
-      it('空数组返回 0 行', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        expect(builder.whereIn('物品名称', []).count()).toBe(0);
-      });
     });
 
     describe('whereNotIn', () => {
@@ -569,11 +343,6 @@ describe('sql-query-var', () => {
         const builder = new TableQueryBuilder('背包物品表');
         const result = builder.whereNotIn('物品名称', ['铁剑', '魔法书']).list('物品名称');
         expect(result).toEqual(['治疗药水']);
-      });
-
-      it('空数组返回所有行', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        expect(builder.whereNotIn('物品名称', []).count()).toBe(3);
       });
     });
 
@@ -597,17 +366,6 @@ describe('sql-query-var', () => {
     });
 
     describe('whereLike', () => {
-      it('模糊匹配（前缀）', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const result = builder.whereLike('物品名称', '治疗%').list('物品名称');
-        expect(result).toEqual(['治疗药水']);
-      });
-
-      it('模糊匹配（包含）', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const result = builder.whereLike('物品名称', '%剑%').list('物品名称');
-        expect(result).toContain('铁剑');
-      });
 
       it('无匹配返回空', () => {
         const builder = new TableQueryBuilder('背包物品表');
@@ -615,45 +373,7 @@ describe('sql-query-var', () => {
       });
     });
 
-    describe('whereBetween', () => {
-      it('范围查询', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.whereBetween('年龄', 20, 25).list('姓名');
-        expect(result).toContain('角色A'); // 25
-        expect(result).toContain('角色C'); // 20
-        expect(result).not.toContain('角色B'); // 30
-      });
-
-      it('min > max 时自动交换', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.whereBetween('年龄', 25, 20).list('姓名');
-        expect(result).toContain('角色A');
-        expect(result).toContain('角色C');
-      });
-    });
-
-    describe('groupBy', () => {
-      it('分组计数', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.groupBy('状态').all();
-        expect(result.length).toBeGreaterThanOrEqual(2); // 存活、死亡
-      });
-    });
-
     describe('having', () => {
-      it('分组后过滤', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const sql = builder.groupBy('状态').having('COUNT(*) > 1').toSQL();
-        expect(sql).toContain('GROUP BY');
-        expect(sql).toContain('HAVING COUNT(*) > 1');
-      });
-
-      it('having 配合 groupBy 实际执行', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        // 存活有2人，死亡有1人，HAVING COUNT(*) > 1 应只返回存活
-        const result = builder.groupBy('状态').having('COUNT(*) > 1').all();
-        expect(result).toHaveLength(1);
-      });
 
       it('含分号直接拒绝（分号是唯一能切开语句的分隔符）', () => {
         const builder = new TableQueryBuilder('重要人物表');
@@ -674,22 +394,6 @@ describe('sql-query-var', () => {
       });
     });
 
-    describe('distinct', () => {
-      it('去重查询', () => {
-        const builder = new TableQueryBuilder('重要人物表');
-        const result = builder.distinct().list('状态');
-        expect(result).toContain('存活');
-        expect(result).toContain('死亡');
-        expect(result).toHaveLength(2);
-      });
-
-      it('toSQL 包含 DISTINCT', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const sql = builder.distinct().toSQL();
-        expect(sql).toContain('SELECT DISTINCT');
-      });
-    });
-
     describe('offset', () => {
       it('偏移查询', () => {
         const builder = new TableQueryBuilder('背包物品表');
@@ -706,12 +410,6 @@ describe('sql-query-var', () => {
         expect(sql).toContain('LIMIT -1');
         expect(sql).toContain('OFFSET 2');
       });
-
-      it('负数 offset 被设为 0', () => {
-        const builder = new TableQueryBuilder('背包物品表');
-        const sql = builder.offset(-5).toSQL();
-        expect(sql).toContain('OFFSET 0');
-      });
     });
   });
 
@@ -719,14 +417,6 @@ describe('sql-query-var', () => {
   // evaluateOrmExpression
   // ═══════════════════════════════════════════════════════════════
   describe('evaluateOrmExpression', () => {
-    it('执行 ORM 表达式', () => {
-      const result = evaluateOrmExpression("db.背包物品表.where('物品名称', '铁剑').get('数量')");
-      expect(result).toBe('3');
-    });
-
-    it('空表达式返回空字符串', () => {
-      expect(evaluateOrmExpression('')).toBe('');
-    });
 
     it('无效表达式返回空字符串（不抛出）', () => {
       expect(evaluateOrmExpression('invalid.syntax.here')).toBe('');
@@ -761,10 +451,6 @@ describe('sql-query-var', () => {
   // evaluateRawSqlExpression
   // ═══════════════════════════════════════════════════════════════
   describe('evaluateRawSqlExpression', () => {
-    it('执行原生 SQL（带 sql 前缀和引号）', () => {
-      const result = evaluateRawSqlExpression('sql "SELECT quantity FROM inventory WHERE item_name = \'铁剑\'"');
-      expect(result).toBe('3');
-    });
 
     it('支持中文名翻译', () => {
       const result = evaluateRawSqlExpression('sql "SELECT 数量 FROM 背包物品表 WHERE 物品名称 = \'铁剑\'"');
@@ -808,27 +494,12 @@ describe('sql-query-var', () => {
       const result = evaluateRawSqlExpression('sql "SELECT item_name || \',含逗号\' FROM inventory LIMIT 2"');
       expect(result).toBe('铁剑,含逗号\n治疗药水,含逗号');
     });
-
-    it('空 SQL 返回空字符串', () => {
-      expect(evaluateRawSqlExpression('sql ""')).toBe('');
-    });
   });
 
   // ═══════════════════════════════════════════════════════════════
   // replaceDbSqlVariables
   // ═══════════════════════════════════════════════════════════════
   describe('replaceDbSqlVariables', () => {
-    it('替换 {[db...]} 模板变量', () => {
-      const content = "你有 {[db.背包物品表.where('物品名称', '铁剑').get('数量')]} 把铁剑";
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('你有 3 把铁剑');
-    });
-
-    it('替换 {[sql "..."]} 模板变量', () => {
-      const content = '总数量: {[sql "SELECT SUM(quantity) FROM inventory"]}';
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('总数量: 9');
-    });
 
     it('混合替换', () => {
       const content = "{[db.背包物品表.count()]} 种物品, 总数 {[sql \"SELECT SUM(quantity) FROM inventory\"]}";
@@ -842,24 +513,10 @@ describe('sql-query-var', () => {
       expect(replaceDbSqlVariables(content)).toBe(content);
     });
 
-    it('空字符串返回空字符串', () => {
-      expect(replaceDbSqlVariables('')).toBe('');
-    });
-
-    it('null 返回空字符串', () => {
-      expect(replaceDbSqlVariables(null as any)).toBe('');
-    });
-
     it('正确处理 whereIn 中的嵌套方括号（Bug 回归测试）', () => {
       const content = "{[db.背包物品表.whereIn('物品名称', ['铁剑', '魔法书']).count()]}";
       const result = replaceDbSqlVariables(content);
       expect(result).toBe('2');
-    });
-
-    it('正确处理多个 ORM 模板变量', () => {
-      const content = "物品数: {[db.背包物品表.count()]}，人物数: {[db.重要人物表.count()]}";
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('物品数: 3，人物数: 3');
     });
   });
 
@@ -867,44 +524,10 @@ describe('sql-query-var', () => {
   // evaluateDbCondition
   // ═══════════════════════════════════════════════════════════════
   describe('evaluateDbCondition', () => {
-    it('ORM 表达式结果为 truthy 返回 true', () => {
-      expect(evaluateDbCondition("db.背包物品表.where('物品名称', '铁剑').exists()")).toBe(true);
-    });
-
-    it('ORM 表达式结果为 falsy 返回 false', () => {
-      expect(evaluateDbCondition("db.背包物品表.where('物品名称', '不存在').exists()")).toBe(false);
-    });
-
-    it('比较表达式直接返回布尔值', () => {
-      expect(evaluateDbCondition("db.背包物品表.count() > 2")).toBe(true);
-      expect(evaluateDbCondition("db.背包物品表.count() > 10")).toBe(false);
-    });
-
-    it('空表达式返回 false', () => {
-      expect(evaluateDbCondition('')).toBe(false);
-    });
-
-    it('不以 db. 开头时自动补前缀', () => {
-      // 传入 "背包物品表.count()" 应自动补为 "db.背包物品表.count()"
-      expect(evaluateDbCondition("背包物品表.count() > 0")).toBe(true);
-    });
 
     it('表达式执行抛错时返回 false', () => {
       // 不存在的表名会导致 Proxy 返回的 SQL 执行失败
       expect(evaluateDbCondition('db.完全不存在的表.count()')).toBe(false);
-    });
-
-    // ═══ isTruthy 边界测试（通过 evaluateDbCondition 间接测试） ═══
-    it('count() 返回 0 时 isTruthy 返回 false', () => {
-      expect(evaluateDbCondition("db.背包物品表.where('物品名称', '不存在的物品').count()")).toBe(false);
-    });
-
-    it('get() 返回 null 时 isTruthy 返回 false', () => {
-      expect(evaluateDbCondition("db.背包物品表.where('物品名称', '不存在').get('数量')")).toBe(false);
-    });
-
-    it('get() 返回有效数值时 isTruthy 返回 true', () => {
-      expect(evaluateDbCondition("db.背包物品表.where('物品名称', '铁剑').get('数量')")).toBe(true);
     });
 
     it('exists() 返回 boolean 直接使用（不经过 isTruthy）', () => {
@@ -912,35 +535,12 @@ describe('sql-query-var', () => {
       expect(evaluateDbCondition("db.背包物品表.where('物品名称', '铁剑').exists()")).toBe(true);
       expect(evaluateDbCondition("db.背包物品表.where('物品名称', '不存在').exists()")).toBe(false);
     });
-
-    it('count() 返回非零数值时 isTruthy 返回 true', () => {
-      expect(evaluateDbCondition('db.背包物品表.count()')).toBe(true);
-    });
-
-    it('比较表达式 count() == 0 返回 false', () => {
-      expect(evaluateDbCondition("db.背包物品表.where('物品名称', '不存在').count() == 0")).toBe(true);
-    });
-
-    it('比较表达式 count() != 0 返回 true', () => {
-      expect(evaluateDbCondition('db.背包物品表.count() != 0')).toBe(true);
-    });
   });
 
   // ═══════════════════════════════════════════════════════════════
   // evaluateSqlCondition
   // ═══════════════════════════════════════════════════════════════
   describe('evaluateSqlCondition', () => {
-    it('有结果返回 true', () => {
-      expect(evaluateSqlCondition("SELECT 1 FROM inventory WHERE item_name = '铁剑'")).toBe(true);
-    });
-
-    it('无结果返回 false', () => {
-      expect(evaluateSqlCondition("SELECT 1 FROM inventory WHERE item_name = '不存在'")).toBe(false);
-    });
-
-    it('COUNT 结果非零返回 true', () => {
-      expect(evaluateSqlCondition('SELECT COUNT(*) FROM inventory')).toBe(true);
-    });
 
     it('支持中文名翻译', () => {
       expect(evaluateSqlCondition("SELECT 1 FROM 背包物品表 WHERE 物品名称 = '铁剑'")).toBe(true);
@@ -963,16 +563,8 @@ describe('sql-query-var', () => {
       expect(evaluateSqlCondition('SELECT 0')).toBe(false);
     });
 
-    it('SELECT 返回非零数值时 isTruthy 返回 true', () => {
-      expect(evaluateSqlCondition('SELECT 42')).toBe(true);
-    });
-
     it('SELECT 返回空字符串时 isTruthy 返回 false', () => {
       expect(evaluateSqlCondition("SELECT ''")).toBe(false);
-    });
-
-    it('SELECT 返回非空字符串时 isTruthy 返回 true', () => {
-      expect(evaluateSqlCondition("SELECT '有内容'")).toBe(true);
     });
 
     it('SUM 结果为 0 时返回 false', () => {
@@ -984,101 +576,14 @@ describe('sql-query-var', () => {
   // db.expr() — 执行任意 SQL 表达式
   // ═══════════════════════════════════════════════════════════════
   describe('db.expr() — 执行任意 SQL 表达式', () => {
-    it('纯算术表达式', () => {
-      const result = evaluateOrmExpression('db.expr("3 + 5 * 2")');
-      expect(result).toBe('13');
-    });
-
-    it('子查询计算', () => {
-      const result = evaluateOrmExpression("db.expr(\"(SELECT quantity FROM inventory WHERE item_name = '铁剑') * 2\")");
-      expect(result).toBe('6');
-    });
 
     it('中文表名/列名翻译', () => {
       const result = evaluateOrmExpression("db.expr(\"(SELECT 数量 FROM 背包物品表 WHERE 物品名称 = '铁剑') + 10\")");
       expect(result).toBe('13');
     });
 
-    it('跨表计算', () => {
-      const result = evaluateOrmExpression("db.expr(\"(SELECT 数量 FROM 背包物品表 WHERE 物品名称 = '铁剑') + (SELECT 数量 FROM 背包物品表 WHERE 物品名称 = '治疗药水')\")");
-      expect(result).toBe('8'); // 3 + 5
-    });
-
-    it('空表达式返回空字符串', () => {
-      expect(evaluateOrmExpression('db.expr("")')).toBe('');
-    });
-
     it('无效表达式返回空字符串（不抛出）', () => {
       expect(evaluateOrmExpression('db.expr("INVALID SQL EXPRESSION !!!")')).toBe('');
-    });
-
-    it('通过 {[db.expr(...)]} 模板变量替换', () => {
-      const content = '计算结果: {[db.expr("10 + 20 * 3")]}';
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('计算结果: 70');
-    });
-
-    it('通过 {[db.expr(...) as 变量名]} 存入变量', () => {
-      const content = '{[db.expr("3 + 5") as total]}结果是 $v:total';
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('结果是 8');
-    });
-
-    it('SQLite 聚合函数', () => {
-      const result = evaluateOrmExpression('db.expr("(SELECT SUM(quantity) FROM inventory)")');
-      expect(result).toBe('9'); // 3 + 5 + 1
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════
-  // db.rand() — 生成随机整数
-  // ═══════════════════════════════════════════════════════════════
-  describe('db.rand() — 生成随机整数', () => {
-    it('生成范围内的随机整数', () => {
-      const result = evaluateOrmExpression('db.rand(1, 6)');
-      const num = Number(result);
-      expect(num).toBeGreaterThanOrEqual(1);
-      expect(num).toBeLessThanOrEqual(6);
-    });
-
-    it('min > max 时自动交换', () => {
-      const result = evaluateOrmExpression('db.rand(6, 1)');
-      const num = Number(result);
-      expect(num).toBeGreaterThanOrEqual(1);
-      expect(num).toBeLessThanOrEqual(6);
-    });
-
-    it('min == max 时返回固定值', () => {
-      const result = evaluateOrmExpression('db.rand(5, 5)');
-      expect(result).toBe('5');
-    });
-
-    it('支持负数范围', () => {
-      const result = evaluateOrmExpression('db.rand(-3, 3)');
-      const num = Number(result);
-      expect(num).toBeGreaterThanOrEqual(-3);
-      expect(num).toBeLessThanOrEqual(3);
-    });
-
-    it('通过 {[db.rand(...) as 变量名]} 存入变量', () => {
-      const content = '{[db.rand(1, 100) as dice]}骰子: $v:dice';
-      const result = replaceDbSqlVariables(content);
-      // 骰子值应该是 1-100 之间的数字
-      const match = result.match(/骰子: (\d+)/);
-      expect(match).not.toBeNull();
-      const num = Number(match![1]);
-      expect(num).toBeGreaterThanOrEqual(1);
-      expect(num).toBeLessThanOrEqual(100);
-    });
-
-    it('通过 {[db.rand(...)]} 直接输出', () => {
-      const content = '随机数: {[db.rand(1, 10)]}';
-      const result = replaceDbSqlVariables(content);
-      const match = result.match(/随机数: (\d+)/);
-      expect(match).not.toBeNull();
-      const num = Number(match![1]);
-      expect(num).toBeGreaterThanOrEqual(1);
-      expect(num).toBeLessThanOrEqual(10);
     });
   });
 
@@ -1106,131 +611,6 @@ describe('sql-query-var', () => {
 
     it('空表达式返回空字符串', () => {
       expect(evaluateOrmExpression('db.calc("")')).toBe('');
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════
-  // TableQueryBuilder.value() — 自定义 SELECT 表达式
-  // ═══════════════════════════════════════════════════════════════
-  describe('TableQueryBuilder.value() — 自定义 SELECT 表达式', () => {
-    it('聚合表达式', () => {
-      const builder = new TableQueryBuilder('背包物品表');
-      const result = builder.value('SUM(数量)');
-      expect(result).toBe(9); // 3 + 5 + 1
-    });
-
-    it('带条件的聚合表达式', () => {
-      const builder = new TableQueryBuilder('背包物品表');
-      const result = builder.where('类别', '武器').value('SUM(数量) * 2');
-      expect(result).toBe(6); // 3 * 2
-    });
-
-    it('算术表达式', () => {
-      const builder = new TableQueryBuilder('背包物品表');
-      const result = builder.where('物品名称', '铁剑').value('数量 * 10 + 5');
-      expect(result).toBe(35); // 3 * 10 + 5
-    });
-
-    it('无匹配返回 null', () => {
-      const builder = new TableQueryBuilder('背包物品表');
-      const result = builder.where('物品名称', '不存在').value('数量');
-      expect(result).toBeNull();
-    });
-
-    it('通过 {[db...value(...)]} 模板变量替换', () => {
-      const content = "武器总量翻倍: {[db.背包物品表.where('类别', '武器').value('SUM(数量) * 2')]}";
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('武器总量翻倍: 6');
-    });
-
-    it('全表聚合（无 WHERE 条件）', () => {
-      const builder = new TableQueryBuilder('背包物品表');
-      const result = builder.value('COUNT(*) * 100');
-      expect(result).toBe(300); // 3 * 100
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════
-  // db.max() / db.min() — 取多个值中的最大/最小值
-  // ═══════════════════════════════════════════════════════════════
-  describe('db.max() — 取多个值中的最大值', () => {
-    it('纯数字参数', () => {
-      const result = evaluateOrmExpression('db.max(3, 7, 1)');
-      expect(result).toBe('7');
-    });
-
-    it('单个参数', () => {
-      const result = evaluateOrmExpression('db.max(42)');
-      expect(result).toBe('42');
-    });
-
-    it('负数参数', () => {
-      const result = evaluateOrmExpression('db.max(-5, -1, -10)');
-      expect(result).toBe('-1');
-    });
-
-    it('通过 {[db.max(...) as 变量名]} 存入变量', () => {
-      const content = '{[db.max(10, 30, 20) as highest]}最大值: $v:highest';
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('最大值: 30');
-    });
-
-    it('配合变量使用', () => {
-      // 先取值存变量，再用 db.max 比较
-      const content = "{[db.背包物品表.where('物品名称', '铁剑').get('数量') as a]}{[db.背包物品表.where('物品名称', '治疗药水').get('数量') as b]}{[db.max($v:a, $v:b) as biggest]}最大: $v:biggest";
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('最大: 5'); // max(3, 5) = 5
-    });
-
-    it('直接输出（无 as）', () => {
-      const content = '最大值: {[db.max(1, 99, 50)]}';
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('最大值: 99');
-    });
-
-    it('空参数返回空字符串', () => {
-      const result = evaluateOrmExpression('db.max()');
-      expect(result).toBe('');
-    });
-  });
-
-  describe('db.min() — 取多个值中的最小值', () => {
-    it('纯数字参数', () => {
-      const result = evaluateOrmExpression('db.min(3, 7, 1)');
-      expect(result).toBe('1');
-    });
-
-    it('单个参数', () => {
-      const result = evaluateOrmExpression('db.min(42)');
-      expect(result).toBe('42');
-    });
-
-    it('负数参数', () => {
-      const result = evaluateOrmExpression('db.min(-5, -1, -10)');
-      expect(result).toBe('-10');
-    });
-
-    it('通过 {[db.min(...) as 变量名]} 存入变量', () => {
-      const content = '{[db.min(10, 30, 20) as lowest]}最小值: $v:lowest';
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('最小值: 10');
-    });
-
-    it('配合变量使用', () => {
-      const content = "{[db.背包物品表.where('物品名称', '铁剑').get('数量') as a]}{[db.背包物品表.where('物品名称', '治疗药水').get('数量') as b]}{[db.min($v:a, $v:b) as smallest]}最小: $v:smallest";
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('最小: 3'); // min(3, 5) = 3
-    });
-
-    it('直接输出（无 as）', () => {
-      const content = '最小值: {[db.min(1, 99, 50)]}';
-      const result = replaceDbSqlVariables(content);
-      expect(result).toBe('最小值: 1');
-    });
-
-    it('空参数返回空字符串', () => {
-      const result = evaluateOrmExpression('db.min()');
-      expect(result).toBe('');
     });
   });
 

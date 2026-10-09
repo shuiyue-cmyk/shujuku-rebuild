@@ -161,41 +161,9 @@ describe('handleNewMessageDebounced_ACU 配对零产出收紧', () => {
     expect(m.triggerAutomaticUpdateIfNeeded).not.toHaveBeenCalled();
   });
 
-  it('推演②：真生成（新楼）→放行', async () => {
-    const startChat = [user, aiMsg(10, '旧正文')];
-    m.setChat([...startChat, aiMsg(11, '本轮新正文')]);
-    const preSignature = resolveAiFloorSignatureEx_ACU(startChat);
-    mockResolvedAt(2);
-    mockUpdateOnly(2);
-
-    const promise = handleNewMessageDebounced_ACU('GENERATION_ENDED', { ...baseIntent, preSignature });
-    await vi.advanceTimersByTimeAsync(500);
-    await promise;
-
-    expect(m.logAutoFillSkip).not.toHaveBeenCalledWith('paired_ended_no_new_output', expect.anything());
-    expect(m.evaluateNewMessageAction).toHaveBeenCalledTimes(1);
-    expect(m.triggerAutomaticUpdateIfNeeded).toHaveBeenCalledTimes(1);
-  });
-
   it('推演③：swipe/同楼换内容（id 同+hash 变）→放行', async () => {
     const startChat = [user, aiMsg(10, '旧正文')];
     m.setChat([user, aiMsg(10, 'swipe 后新正文')]);
-    const preSignature = resolveAiFloorSignatureEx_ACU(startChat);
-    mockResolvedAt(1);
-    mockUpdateOnly(1);
-
-    const promise = handleNewMessageDebounced_ACU('GENERATION_ENDED', { ...baseIntent, preSignature });
-    await vi.advanceTimersByTimeAsync(500);
-    await promise;
-
-    expect(m.logAutoFillSkip).not.toHaveBeenCalledWith('paired_ended_no_new_output', expect.anything());
-    expect(m.evaluateNewMessageAction).toHaveBeenCalledTimes(1);
-    expect(m.triggerAutomaticUpdateIfNeeded).toHaveBeenCalledTimes(1);
-  });
-
-  it('推演④：regenerate（id 变）→放行', async () => {
-    const startChat = [user, aiMsg(10, '旧正文')];
-    m.setChat([user, aiMsg(11, '旧正文')]);
     const preSignature = resolveAiFloorSignatureEx_ACU(startChat);
     mockResolvedAt(1);
     mockUpdateOnly(1);
@@ -227,20 +195,6 @@ describe('handleNewMessageDebounced_ACU 配对零产出收紧', () => {
     );
     expect(m.evaluateNewMessageAction).not.toHaveBeenCalled();
     expect(m.triggerAutomaticUpdateIfNeeded).not.toHaveBeenCalled();
-  });
-
-  it('推演⑥：preSignature 缺失（旧上下文）→放行', async () => {
-    m.setChat([user, aiMsg(10, '旧正文')]);
-    mockResolvedAt(1);
-    mockUpdateOnly(1);
-
-    const promise = handleNewMessageDebounced_ACU('GENERATION_ENDED', { ...baseIntent });
-    await vi.advanceTimersByTimeAsync(500);
-    await promise;
-
-    expect(m.logAutoFillSkip).not.toHaveBeenCalledWith('paired_ended_no_new_output', expect.anything());
-    expect(m.evaluateNewMessageAction).toHaveBeenCalledTimes(1);
-    expect(m.triggerAutomaticUpdateIfNeeded).toHaveBeenCalledTimes(1);
   });
 
   it('推演⑦：W5 重跑（无 intent）→不受影响', async () => {

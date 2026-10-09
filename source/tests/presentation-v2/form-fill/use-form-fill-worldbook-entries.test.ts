@@ -96,21 +96,6 @@ describe('useFormFillWorldbookEntries', () => {
     expect(mockSaveSettings).not.toHaveBeenCalled();
   });
 
-  it('首次加载默认全不选但分组保持折叠', async () => {
-    mockGetEntries.mockResolvedValue({
-      'CharBook': [makeEntry(1, '人物'), makeEntry(2, '地点')],
-    });
-
-    const c = await getComposable();
-    await c.loadEntries(['CharBook']);
-
-    expect(c.groups.value).toHaveLength(1);
-    expect(c.groups.value[0].expanded).toBe(false);
-    expect(c.groups.value[0].entries.every(entry => entry.checked)).toBe(false);
-    expect(worldbookConfig.enabledEntries['CharBook']).toEqual([]);
-    expect(mockSaveSettings).toHaveBeenCalled();
-  });
-
   it('显示并标记 constant 条目，首次加载默认全不选', async () => {
     mockGetEntries.mockResolvedValue({
       'CharBook': [

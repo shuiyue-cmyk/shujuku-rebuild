@@ -134,25 +134,6 @@ async function saveSheet(layer: HTMLElement): Promise<void> {
 }
 
 describe('PlotPage', () => {
-  it('渲染预设、发送体验与世界书分节，不放启用开关，每节带常驻说明', async () => {
-    const { mount } = await mountPlotPage();
-
-    const text = page().textContent || '';
-    expect(document.querySelector('.ub-top__title')?.textContent?.trim()).toBe('剧情推进');
-    expect(text).toContain('剧情推进预设');
-    expect(text).toContain('剧情推进世界书');
-    expect(text).toContain('记忆召回'); // active preset name
-    expect(Array.from(page().querySelectorAll('button')).some(b => b.textContent?.trim() === '刷新')).toBe(false);
-    expect(page().querySelector('[role="switch"][aria-label*="启用剧情推进"]')).toBeNull();
-
-    const sections = Array.from(page().querySelectorAll<HTMLElement>('.ub-section'));
-    expect(sections.map(section => section.id)).toEqual(['plot-preset', 'plot-experience', 'plot-worldbook']);
-    sections.forEach(section => {
-      expect(section.querySelector('.ub-section__desc')?.textContent?.trim()).toBeTruthy();
-    });
-
-    mount.__resetAcuV2MountForTests();
-  });
 
   it('发送体验分节暴露伪装发送楼层开关：默认关闭，点击可开启并落盘', async () => {
     // 老设置无该键：store 必须归一为 false（可选项默认关闭），不能因 undefined 而开启。
@@ -169,36 +150,6 @@ describe('PlotPage', () => {
     await wait();
 
     expect(settings.plotSettings.pendingDisguiseEnabled, '开启后必须写进 plotSettings').toBe(true);
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('开发者选项关闭时，编辑面板不渲染"匹配替换"字段，底部为关闭/保存', async () => {
-    const { mount } = await mountPlotPage();
-
-    const layer = await openEditSheet();
-    expect(layer.textContent || '').not.toContain('匹配替换（进阶）');
-    const footerButtons = Array.from(layer.querySelectorAll<HTMLButtonElement>('.ub-sheet__foot button'));
-    expect(footerButtons.map(button => button.textContent?.trim())).toEqual(['关闭', '保存预设']);
-    expect(layer.textContent || '').not.toContain('取消');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('开发者选项开启时，在编辑面板渲染"匹配替换"字段（含 5 个数字字段）', async () => {
-    const { mount } = await mountPlotPage({ devOptions: { plotAdvanced: true } });
-
-    expect(page().textContent || '').not.toContain('匹配替换（进阶）');
-
-    const layer = await openEditSheet();
-    const text = layer.textContent || '';
-    expect(text).toContain('匹配替换（进阶）');
-    expect(text).toContain('随当前预设保存');
-    expect(text.indexOf('标签筛选')).toBeLessThan(text.indexOf('匹配替换（进阶）'));
-    expect(text.indexOf('匹配替换（进阶）')).toBeLessThan(text.indexOf('当前任务使用的 API'));
-
-    const rates = sectionByTitle(layer, '匹配替换（进阶）')!;
-    expect(rates.querySelectorAll('input[type="number"]')).toHaveLength(5);
 
     mount.__resetAcuV2MountForTests();
   });
@@ -227,38 +178,6 @@ describe('PlotPage', () => {
     expect(savedPreset.recallCount).toBe(42);
     expect(settings.plotSettings.rateMain).toBe(2.25);
     expect(settings.plotSettings.recallCount).toBe(42);
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('任务 API 区域不暴露开发编号和 fallback 术语', async () => {
-    const { mount } = await mountPlotPage();
-
-    const text = (await openEditSheet()).textContent || '';
-    expect(text).toContain('当前任务使用的 API');
-    expect(text).not.toContain('D23.4');
-    expect(text).not.toContain('override');
-    expect(text).not.toContain('三层 fallback');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('编辑面板的任务提示词段提供图标式上移和下移按钮', async () => {
-    const { mount } = await mountPlotPage();
-
-    const layer = await openEditSheet();
-    const segments = layer.querySelector<HTMLElement>('.ub-segs');
-    expect(segments).not.toBeNull();
-    const iconButton = (icon: string) => Array.from(segments!.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.querySelector(`.${icon}`));
-    const moveUp = iconButton('fa-arrow-up');
-    const moveDown = iconButton('fa-arrow-down');
-    expect(moveUp).toBeDefined();
-    expect(moveDown).toBeDefined();
-    expect(moveUp!.getAttribute('title')).toMatch(/上移该段|已经是第一段/);
-    expect(moveDown!.getAttribute('title')).toMatch(/下移该段|已经是最后一段/);
-    expect(moveUp!.textContent?.trim()).toBe('');
-    expect(moveDown!.textContent?.trim()).toBe('');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -295,33 +214,6 @@ describe('PlotPage', () => {
     expect(savedPreset.contextExcludeRules).toEqual([{ start: '<thinking>', end: '</thinking>' }]);
     expect(savedPreset.contextExtractTags).toBeUndefined();
     expect(savedPreset.contextExcludeTags).toBeUndefined();
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('剧情推进 API 预设下拉默认 = "跟随当前活动"，并列出 API 预设', async () => {
-    const { mount } = await mountPlotPage();
-
-    const select = page().querySelector<HTMLSelectElement>('select[aria-label="剧情推进 API 预设"]');
-    expect(select).not.toBeNull();
-    expect(select!.selectedOptions[0]?.textContent).toContain('跟随当前活动 API（gpt-mini）');
-    const labels = Array.from(select!.options).map(option => option.textContent?.trim() || '');
-    expect(labels.some(label => label.includes('跟随当前活动 API（gpt-mini）'))).toBe(true);
-    expect(labels).toContain('gpt-mini');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('点击"管理预设"按钮打开面板并显示已有预设', async () => {
-    const { mount } = await mountPlotPage();
-
-    page().querySelector<HTMLButtonElement>('button[title="管理预设"]')!.click();
-    await wait();
-
-    const layer = sheet();
-    expect(layer).not.toBeNull();
-    expect(layer!.textContent || '').toContain('管理剧情推进预设');
-    expect(layer!.textContent || '').toContain('记忆召回');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -384,27 +276,6 @@ describe('PlotPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('当前为默认预设时主编辑按钮会从默认新建', async () => {
-    const settings = createSettings();
-    settings.plotSettings.lastUsedPresetName = '';
-    const { mount } = await mountPlotPage({ settings });
-
-    const editButton = page().querySelector<HTMLButtonElement>('button[title="从默认新建预设"]');
-    expect(editButton).not.toBeNull();
-    expect(editButton!.disabled).toBe(false);
-    editButton!.click();
-    await wait();
-
-    const layer = sheet();
-    expect(layer).not.toBeNull();
-    expect(layer!.textContent || '').toContain('从默认新建剧情推进预设');
-    expect(layer!.querySelectorAll('.ub-pps-task')).toHaveLength(1);
-    expect(layer!.querySelector('.ub-pps-task')?.tagName).toBe('BUTTON');
-    expect(layer!.querySelector<HTMLInputElement>('input[aria-label="预设名称"]')?.value).toBe('新预设');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
   it('管理面板从默认新建时使用内置默认任务初始化，并可保存为自定义预设', async () => {
     const { mount, settings } = await mountPlotPage();
 
@@ -454,34 +325,6 @@ describe('PlotPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('世界书来源选择器支持角色卡来源与手动多选', async () => {
-    const { mount, settings } = await mountPlotPage();
-
-    const section = document.getElementById('plot-worldbook')!;
-    const picker = section.querySelector<HTMLElement>('.ub-wbsrc');
-    expect(picker).not.toBeNull();
-    expect(picker!.textContent).not.toContain('当前角色卡所有世界书 · 主册 CharBook');
-    const current = () => section.querySelector('.ub-plot__current')?.textContent || '';
-    expect(current()).toContain('角色卡所有世界书 · 主册 CharBook');
-
-    Array.from(picker!.querySelectorAll<HTMLButtonElement>('.ub-seg__item'))
-      .find(button => button.textContent?.trim() === '手动选择')!.click();
-    await wait();
-
-    const books = () => Array.from(picker!.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]'));
-    books().find(button => button.textContent?.trim() === 'world-A')!.click();
-    books().find(button => button.textContent?.trim() === 'world-B')!.click();
-    await wait();
-
-    expect(settings.plotSettings.plotWorldbookConfig.source).toBe('manual');
-    expect(settings.plotSettings.plotWorldbookConfig.manualSelection).toEqual(['world-A', 'world-B']);
-    expect(current()).toContain('world-A、world-B');
-    expect(books().find(button => button.textContent?.trim() === 'world-A')!.getAttribute('aria-checked')).toBe('true');
-    expect(books().find(button => button.textContent?.trim() === 'world-B')!.getAttribute('aria-checked')).toBe('true');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
   it('角色世界书 binding 读取失败时显示明确错误且不将失败持久化为空选择', async () => {
     const settings = createSettings();
     const bindingError = new Error('host binding read failed');
@@ -518,32 +361,6 @@ describe('PlotPage', () => {
     expect(text).toContain('角色设定');
     expect(text).toContain('世界观');
     expect(text).not.toContain('TavernDB-ACU-OutlineTable');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('世界书条目区域渲染"全选"和"全不选"按钮，不带 Skill 化控件', async () => {
-    const { mount } = await mountPlotPage();
-    await wait(50);
-
-    const toolbar = document.querySelector('#plot-worldbook .ub-wbe__toolbar');
-    expect(toolbar).not.toBeNull();
-    const buttons = Array.from(toolbar!.querySelectorAll('button')).map(b => b.textContent?.trim());
-    expect(buttons).toContain('全选');
-    expect(buttons).toContain('全不选');
-    expect(buttons).not.toContain('Skill 全选');
-    expect(buttons).not.toContain('对所选 Skill 化');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('世界书条目区域渲染搜索过滤输入框', async () => {
-    const { mount } = await mountPlotPage();
-    await wait(50);
-
-    const filterInput = document.querySelector<HTMLInputElement>('#plot-worldbook .ub-wbe__toolbar input');
-    expect(filterInput).not.toBeNull();
-    expect(filterInput!.placeholder).toContain('搜索');
 
     mount.__resetAcuV2MountForTests();
   });

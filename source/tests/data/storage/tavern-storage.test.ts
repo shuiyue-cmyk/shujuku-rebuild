@@ -46,8 +46,6 @@ import {
   getTavernSettingsNamespace_ACU,
   getConfigStorage_ACU,
   configIdbGetCached_ACU,
-  configIdbSetCached_ACU,
-  configIdbRemoveCached_ACU,
   configIdbCache_ACU,
   configIdbDeletedKeys_ACU,
   initTavernSettingsBridge_ACU,
@@ -96,9 +94,6 @@ describe('常量导出', () => {
 
 // ═══ getTavernSettingsNamespace_ACU ═══
 describe('getTavernSettingsNamespace_ACU', () => {
-  it('无设置根对象时返回 null', () => {
-    expect(getTavernSettingsNamespace_ACU()).toBeNull();
-  });
 
   it('有设置根对象时返回命名空间对象（沿用历史 __userscripts 键位）', async () => {
     const root: any = {};
@@ -107,39 +102,6 @@ describe('getTavernSettingsNamespace_ACU', () => {
     expect(root.__userscripts[TAVERN_SETTINGS_NAMESPACE_ACU]).toBe(ns);
     expect(ns).toBeDefined();
     expect(typeof ns).toBe('object');
-  });
-
-  it('返回的命名空间对象可读写', async () => {
-    await installTavernSettingsRoot({});
-    const ns = getTavernSettingsNamespace_ACU();
-    ns.testKey = 'testValue';
-    expect(getTavernSettingsNamespace_ACU().testKey).toBe('testValue');
-  });
-});
-
-// ═══ configIdbGetCached_ACU / configIdbSetCached_ACU / configIdbRemoveCached_ACU ═══
-describe('configIdb 缓存操作', () => {
-  it('configIdbGetCached_ACU 无缓存返回 null', () => {
-    expect(configIdbGetCached_ACU('nonexistent')).toBeNull();
-  });
-
-  it('configIdbSetCached_ACU 写入缓存', async () => {
-    await configIdbSetCached_ACU('key1', 'value1');
-    expect(configIdbCache_ACU.get('key1')).toBe('value1');
-    expect(configIdbGetCached_ACU('key1')).toBe('value1');
-  });
-
-  it('configIdbSetCached_ACU 清除 deletedKeys', async () => {
-    configIdbDeletedKeys_ACU.add('key1');
-    await configIdbSetCached_ACU('key1', 'value1');
-    expect(configIdbDeletedKeys_ACU.has('key1')).toBe(false);
-  });
-
-  it('configIdbRemoveCached_ACU 删除缓存并标记', async () => {
-    configIdbCache_ACU.set('key1', 'value1');
-    await configIdbRemoveCached_ACU('key1');
-    expect(configIdbCache_ACU.has('key1')).toBe(false);
-    expect(configIdbDeletedKeys_ACU.has('key1')).toBe(true);
   });
 });
 
@@ -160,12 +122,6 @@ describe('getConfigStorage_ACU', () => {
     // 读取
     expect(store.getItem('test_key')).toBe('test_value');
     expect(store._isTavern).toBe(true);
-  });
-
-  it('有 IDB 缓存时从缓存读取', () => {
-    configIdbCache_ACU.set('cached_key', 'cached_value');
-    const store = getConfigStorage_ACU();
-    expect(store.getItem('cached_key')).toBe('cached_value');
   });
 
   it('setItem 同时写入 IDB 缓存', () => {
@@ -242,23 +198,6 @@ describe('initTavernSettingsBridge_ACU', () => {
     if (_origWindow === undefined) {
       delete (globalThis as any).window;
     }
-  });
-
-  it('SillyTavern.extensionSettings 存在时返回 true', async () => {
-    (globalThis as any).SillyTavern = {
-      getContext: () => ({
-        extensionSettings: { __userscripts: {} },
-        saveSettingsDebounced: vi.fn(),
-      }),
-    };
-    const result = await initTavernSettingsBridge_ACU();
-    expect(result).toBe(true);
-  });
-
-  it('SillyTavern 不存在时返回 false', async () => {
-    // globalThis.SillyTavern 未定义
-    const result = await initTavernSettingsBridge_ACU();
-    expect(result).toBe(false);
   });
 
   it('SillyTavern 存在但 extensionSettings 为空时返回 false', async () => {

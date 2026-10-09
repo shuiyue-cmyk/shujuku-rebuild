@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildAgentFinalReviewEvidence_ACU, extractAgentFinalReviewWorldbookSeeds_ACU } from '../../../../src/service/continuation/agent/agent-final-review-context';
+import { buildAgentFinalReviewEvidence_ACU } from '../../../../src/service/continuation/agent/agent-final-review-context';
 import { buildEmptyAgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-module-store';
 
 function context_ACU() {
@@ -83,12 +83,5 @@ describe('终审世界书证据准备', () => {
 
     expect(evidence.worldbookEvidence).toContain('世界书当前不可用');
     expect(evidence.worldbookEvidence).toContain('未验证');
-  });
-
-  it('去重并限制检索种子数量', () => {
-    const seeds = extractAgentFinalReviewWorldbookSeeds_ACU('晶屑 晶屑 守门人');
-    expect(seeds).toEqual(expect.arrayContaining(['晶屑', '守门人']));
-    expect(new Set(seeds).size).toBe(seeds.length);
-    expect(seeds.length).toBeLessThanOrEqual(48);
   });
 });

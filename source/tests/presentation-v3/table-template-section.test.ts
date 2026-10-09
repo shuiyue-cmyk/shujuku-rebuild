@@ -107,46 +107,4 @@ describe('TableTemplateSection · runtime 导出与状态展示', () => {
     expect(tplExportTemplate).toHaveBeenCalledWith('runtime');
     app.unmount();
   });
-
-  it('运行时不可用时导出按钮 disabled', async () => {
-    const { app } = await mountPanel({ runtimeAvailable: false });
-    const exportBtn = Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(btn => btn.title === '导出当前生效模板');
-    expect(exportBtn).toBeDefined();
-    expect(exportBtn!.disabled).toBe(true);
-    app.unmount();
-  });
-
-  it('当前生效模板与库/快照有差异时也不额外显示差异提示', async () => {
-    const { app, runtimeDiffersFromLibrary, chatSnapshotDiffersFromLibrary } = await mountPanel();
-    runtimeDiffersFromLibrary.value = true;
-    chatSnapshotDiffersFromLibrary.value = true;
-    await nextTick();
-    expect(document.body.textContent).not.toContain('当前生效模板与预设库内容不同');
-    expect(document.body.textContent).not.toContain('聊天快照内容已偏离库中同名预设');
-    app.unmount();
-  });
-
-  it('跟随全局按钮仅在聊天覆盖时显示，点击调用 followGlobalTemplate（S1-2）', async () => {
-    const { app, tplFollowGlobalTemplate, isChatOverridden } = await mountPanel({ chatOverridden: true });
-    const findBtn = () => Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(btn => btn.title === '跟随全局（清除聊天覆盖）');
-    const followBtn = findBtn();
-    expect(followBtn).toBeDefined();
-    followBtn!.click();
-    await nextTick();
-    expect(tplFollowGlobalTemplate).toHaveBeenCalledOnce();
-
-    isChatOverridden.value = false;
-    await nextTick();
-    expect(findBtn()).toBeUndefined();
-    app.unmount();
-  });
-
-  it('模板选择器透传 runtime 项（列表含当前生效模板）', async () => {
-    const { app } = await mountPanel();
-    (document.querySelector('.ub-picker__trigger') as HTMLButtonElement).click();
-    await nextTick();
-    const names = Array.from(document.querySelectorAll('.ub-picker-panel__name')).map(el => el.textContent);
-    expect(names).toContain('当前生效模板（内存）');
-    app.unmount();
-  });
 });

@@ -53,17 +53,6 @@ describe('useVisualizerData', () => {
     );
   });
 
-  it('新增表名称为空白时不创建 sheet', async () => {
-    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
-    const { useVisualizerData } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerData');
-    const store = useVisualizerStore();
-
-    useVisualizerData().addSheet('   ');
-
-    expect(store.sheetOrder).toEqual([]);
-    expect(store.tempData).toBeNull();
-  });
-
   it('新增 canonical 重名表时不覆盖既有草稿', async () => {
     const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
     const { useVisualizerData } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerData');

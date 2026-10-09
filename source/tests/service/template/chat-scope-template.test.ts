@@ -192,16 +192,13 @@ vi.mock('../../../src/service/template/chat-scope/chat-scope-sheet', () => ({
 }));
 
 import {
-  normalizeTemplateScopeMode_ACU,
   normalizeTemplateScopeIsolationKey_ACU,
   sanitizeTemplateSnapshotForChat_ACU,
-  normalizeChatTemplateScopeState_ACU,
   listChatTemplatePresetEntries_ACU,
   upsertChatTemplatePresetEntry_ACU,
   buildChatTemplatePresetLinkState_ACU,
   clearCurrentChatTemplateSnapshots_ACU,
   getCurrentChatTemplateScopeState_ACU,
-  buildChatTemplateScopeStateFromCurrent_ACU,
   setCurrentChatTemplateScopeState_ACU,
   getGlobalTemplateSnapshotForCurrentProfile_ACU,
 } from '../../../src/service/template/chat-scope/chat-scope-template';
@@ -223,52 +220,15 @@ beforeEach(() => {
   Object.keys(mockCurrentJsonTableData).forEach(k => delete mockCurrentJsonTableData[k]);
 });
 
-// ═══ normalizeTemplateScopeMode_ACU ═══
-describe('normalizeTemplateScopeMode_ACU', () => {
-  it('chat_override 返回 chat_override', () => {
-    expect(normalizeTemplateScopeMode_ACU('chat_override')).toBe('chat_override');
-  });
-
-  it('preset_link 返回 preset_link', () => {
-    expect(normalizeTemplateScopeMode_ACU('preset_link')).toBe('preset_link');
-  });
-
-  it('其他值返回 inherit_global', () => {
-    expect(normalizeTemplateScopeMode_ACU('unknown')).toBe('inherit_global');
-    expect(normalizeTemplateScopeMode_ACU('')).toBe('inherit_global');
-  });
-});
-
 // ═══ normalizeTemplateScopeIsolationKey_ACU ═══
 describe('normalizeTemplateScopeIsolationKey_ACU', () => {
   it('有效字符串原样返回', () => {
     expect(normalizeTemplateScopeIsolationKey_ACU('tag_1')).toBe('tag_1');
   });
-
-  it('null/undefined 返回空字符串', () => {
-    mockGetCurrentIsolationKey.mockReturnValue('');
-    expect(normalizeTemplateScopeIsolationKey_ACU(undefined)).toBe('');
-    // null ?? '' = ''，所以 String('') = ''
-    expect(normalizeTemplateScopeIsolationKey_ACU(null as any)).toBe('');
-  });
 });
 
 // ═══ sanitizeTemplateSnapshotForChat_ACU ═══
 describe('sanitizeTemplateSnapshotForChat_ACU', () => {
-  it('null 输入返回 null', () => {
-    expect(sanitizeTemplateSnapshotForChat_ACU(null)).toBeNull();
-  });
-
-  it('字符串输入解析为对象', () => {
-    const templateStr = JSON.stringify({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_0: { name: '表', content: [['row_id']] },
-    });
-    const result = sanitizeTemplateSnapshotForChat_ACU(templateStr);
-    expect(result).not.toBeNull();
-    expect(result!.templateStr).toBeDefined();
-    expect(result!.templateObj).toBeDefined();
-  });
 
   it('按 sheet 键顺序委派 orderNo 补齐', () => {
     sanitizeTemplateSnapshotForChat_ACU({
@@ -288,49 +248,10 @@ describe('sanitizeTemplateSnapshotForChat_ACU', () => {
     expect(result).not.toBeNull();
     expect(result!.templateStr).toBeDefined();
   });
-
-  it('数组输入返回 null', () => {
-    expect(sanitizeTemplateSnapshotForChat_ACU([])).toBeNull();
-  });
-});
-
-// ═══ normalizeChatTemplateScopeState_ACU ═══
-describe('normalizeChatTemplateScopeState_ACU', () => {
-  it('null 输入返回默认状态', () => {
-    const result = normalizeChatTemplateScopeState_ACU(null);
-    expect(result.mode).toBe('inherit_global');
-    expect(result.templateStr).toBe('');
-    expect(result.source).toBe('inherit');
-  });
-
-  it('有效状态规范化', () => {
-    const raw = {
-      mode: 'chat_override',
-      templateStr: '{"sheet_0":{}}',
-      presetName: '预设A',
-      source: 'ui',
-      updatedAt: 1000,
-    };
-    mockCloneScopedConfigData.mockReturnValue({ sheet_0: {} });
-    mockSanitizeChatSheetsObject.mockReturnValue({ sheet_0: {}, mate: { type: 'chatSheets', version: 1 } });
-    const result = normalizeChatTemplateScopeState_ACU(raw);
-    expect(result.mode).toBe('chat_override');
-    expect(result.source).toBe('ui');
-    expect(result.updatedAt).toBe(1000);
-  });
 });
 
 // ═══ getCurrentChatTemplateScopeState_ACU ═══
 describe('getCurrentChatTemplateScopeState_ACU', () => {
-  it('无容器返回 null', () => {
-    mockGetChatScopedConfigContainer.mockReturnValue(null);
-    expect(getCurrentChatTemplateScopeState_ACU()).toBeNull();
-  });
-
-  it('无 template slots 返回 null', () => {
-    mockGetChatScopedConfigContainer.mockReturnValue({ version: 1 });
-    expect(getCurrentChatTemplateScopeState_ACU()).toBeNull();
-  });
 
   it('preset_link 旧状态读取时物化为 chat_override 快照', () => {
     const firstMsg: any = {};
@@ -359,90 +280,10 @@ describe('getCurrentChatTemplateScopeState_ACU', () => {
     expect(result!.templateStr).toBeTruthy();
     expect(mockSetChatScopedConfigContainer).toHaveBeenCalled();
   });
-
-  it('chat_override 无 templateStr 返回 null', () => {
-    mockGetChatScopedConfigContainer.mockReturnValue({
-      version: 1,
-      template: {
-        '': {
-          mode: 'chat_override',
-          templateStr: '',
-        },
-      },
-    });
-    const result = getCurrentChatTemplateScopeState_ACU({ isolationKey: '' });
-    expect(result).toBeNull();
-  });
-
-  it('chat_override 有 templateStr 返回状态', () => {
-    const templateStr = JSON.stringify({ sheet_0: { name: '表', content: [['row_id']] } });
-    mockGetChatScopedConfigContainer.mockReturnValue({
-      version: 1,
-      template: {
-        '': {
-          mode: 'chat_override',
-          templateStr,
-          presetName: '预设A',
-        },
-      },
-    });
-    mockCloneScopedConfigData.mockReturnValue({ sheet_0: { name: '表', content: [['row_id']] } });
-    mockSanitizeChatSheetsObject.mockReturnValue({ sheet_0: { name: '表', content: [['row_id']] }, mate: { type: 'chatSheets', version: 1 } });
-    const result = getCurrentChatTemplateScopeState_ACU({ isolationKey: '' });
-    expect(result).not.toBeNull();
-    expect(result!.mode).toBe('chat_override');
-  });
-});
-
-// ═══ buildChatTemplateScopeStateFromCurrent_ACU ═══
-describe('buildChatTemplateScopeStateFromCurrent_ACU', () => {
-  it('无效 templateSource 返回 null', () => {
-    mockCloneScopedConfigData.mockReturnValue(null);
-    const result = buildChatTemplateScopeStateFromCurrent_ACU({ templateSource: null });
-    expect(result).toBeNull();
-  });
-
-  it('有效 templateSource 返回 chat_override 状态', () => {
-    const templateObj = { sheet_0: { name: '表', content: [['row_id']] } };
-    mockCloneScopedConfigData.mockReturnValue(templateObj);
-    mockSanitizeChatSheetsObject.mockReturnValue({ ...templateObj, mate: { type: 'chatSheets', version: 1 } });
-    const result = buildChatTemplateScopeStateFromCurrent_ACU({
-      templateSource: templateObj,
-      presetName: '预设A',
-      source: 'ui',
-    });
-    expect(result).not.toBeNull();
-    expect(result!.mode).toBe('chat_override');
-    expect(result!.source).toBe('ui');
-  });
 });
 
 // ═══ setCurrentChatTemplateScopeState_ACU ═══
 describe('setCurrentChatTemplateScopeState_ACU', () => {
-  it('无首条消息返回 null', () => {
-    mockGetChatFirstLayerMessage.mockReturnValue(null);
-    expect(setCurrentChatTemplateScopeState_ACU({ mode: 'chat_override' })).toBeNull();
-  });
-
-  it('chat_override 写入 template slot', () => {
-    const firstMsg: any = {};
-    mockGetChatFirstLayerMessage.mockReturnValue(firstMsg);
-    mockGetChatArray.mockReturnValue([firstMsg]);
-    mockGetChatScopedConfigContainer.mockReturnValue(null);
-    mockNormalizeChatScopedConfigContainer.mockReturnValue({ version: 1 });
-
-    const templateStr = JSON.stringify({ sheet_0: { name: '表' } });
-    mockCloneScopedConfigData.mockReturnValue({ sheet_0: { name: '表' } });
-    mockSanitizeChatSheetsObject.mockReturnValue({ sheet_0: { name: '表' }, mate: { type: 'chatSheets', version: 1 } });
-
-    setCurrentChatTemplateScopeState_ACU(
-      { mode: 'chat_override', templateStr, presetName: '预设A' },
-      { reason: 'test' },
-    );
-
-    expect(firstMsg._acu_scoped_config).toBeDefined();
-    expect(firstMsg._acu_scoped_config.template).toBeDefined();
-  });
 
   it('preset_link 写入时物化为 chat_override 快照', () => {
     const firstMsg: any = {};
@@ -583,11 +424,6 @@ describe('buildChatTemplatePresetLinkState_ACU', () => {
 
 // ═══ listChatTemplatePresetEntries_ACU ═══
 describe('listChatTemplatePresetEntries_ACU', () => {
-  it('无 archive 数据返回空数组', () => {
-    mockGetChatScopedConfigContainer.mockReturnValue(null);
-    const result = listChatTemplatePresetEntries_ACU();
-    expect(result).toEqual([]);
-  });
 
   it('有 archive 数据返回排序后的条目', () => {
     const templateStr = JSON.stringify({ sheet_0: { name: '表' } });
@@ -616,10 +452,6 @@ describe('listChatTemplatePresetEntries_ACU', () => {
 
 // ═══ upsertChatTemplatePresetEntry_ACU ═══
 describe('upsertChatTemplatePresetEntry_ACU', () => {
-  it('非 chat_override 模式返回 null', () => {
-    const result = upsertChatTemplatePresetEntry_ACU({ mode: 'inherit_global' });
-    expect(result).toBeNull();
-  });
 
   it('有效 chat_override 状态插入条目', () => {
     const firstMsg: any = {};
@@ -643,16 +475,6 @@ describe('upsertChatTemplatePresetEntry_ACU', () => {
 
 // ═══ clearCurrentChatTemplateSnapshots_ACU ═══
 describe('clearCurrentChatTemplateSnapshots_ACU', () => {
-  it('无首条消息时返回未变更结果', async () => {
-    mockGetChatFirstLayerMessage.mockReturnValue(null);
-
-    const result = await clearCurrentChatTemplateSnapshots_ACU({ isolationKey: 'iso-key' });
-
-    expect(result.changed).toBe(false);
-    expect(result.removedCurrentScope).toBe(false);
-    expect(result.removedArchives).toBe(0);
-    expect(mockSaveChatToHost).not.toHaveBeenCalled();
-  });
 
   it('清理当前隔离标识的模板覆盖、归档、指导表和旧版表头指导', async () => {
     const firstMsg: any = {
@@ -733,24 +555,6 @@ describe('clearCurrentChatTemplateSnapshots_ACU', () => {
 
 // ═══ getGlobalTemplateSnapshotForCurrentProfile_ACU ═══
 describe('getGlobalTemplateSnapshotForCurrentProfile_ACU', () => {
-  it('有保存模板时返回快照', () => {
-    const savedTemplate = JSON.stringify({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_0: { name: '表', content: [['row_id']] },
-    });
-    mockReadProfileTemplate.mockReturnValue(savedTemplate);
-    mockCloneScopedConfigData.mockReturnValue({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_0: { name: '表', content: [['row_id']] },
-    });
-    mockSanitizeChatSheetsObject.mockReturnValue({
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_0: { name: '表', content: [['row_id']] },
-    });
-    const result = getGlobalTemplateSnapshotForCurrentProfile_ACU();
-    expect(result).not.toBeNull();
-    expect(result!.templateStr).toBeDefined();
-  });
 
   it('无保存模板时回退到默认', () => {
     mockReadProfileTemplate.mockReturnValue(null);

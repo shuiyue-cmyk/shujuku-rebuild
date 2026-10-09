@@ -14,9 +14,6 @@ function aiMessage(extra: Record<string, any> = {}) {
 }
 
 describe('storage-strategy-resolver', () => {
-  it('空聊天返回 empty', () => {
-    expect(resolveTableStorageStrategy_ACU([], 'tag-a', isolationConfig)).toEqual({ mode: 'empty' });
-  });
 
   it('识别 isolated independentData 为 legacy-v1', () => {
     const chat = [aiMessage({

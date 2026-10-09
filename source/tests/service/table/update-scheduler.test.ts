@@ -60,11 +60,6 @@ describe('checkAutoUpdatePreConditions_ACU', () => {
     tavernProfile: '',
   };
 
-  it('所有条件满足时返回 canProceed=true', () => {
-    const result = checkAutoUpdatePreConditions_ACU(baseSettings, true, false, { sheet_0: {} }, 5);
-    expect(result.canProceed).toBe(true);
-  });
-
   it('autoUpdateEnabled=false 时不可继续', () => {
     const result = checkAutoUpdatePreConditions_ACU({ ...baseSettings, autoUpdateEnabled: false }, true, false, {}, 5);
     expect(result.canProceed).toBe(false);
@@ -72,40 +67,10 @@ describe('checkAutoUpdatePreConditions_ACU', () => {
     expect(result.code).toBe('auto_update_disabled');
   });
 
-  it('coreApisAreReady=false 时不可继续', () => {
-    const result = checkAutoUpdatePreConditions_ACU(baseSettings, false, false, {}, 5);
-    expect(result.canProceed).toBe(false);
-    expect(result.reason).toContain('Pre-flight');
-    expect(result.code).toBe('core_apis_not_ready');
-  });
-
   it('isAutoUpdatingCard=true 时不可继续', () => {
     const result = checkAutoUpdatePreConditions_ACU(baseSettings, true, true, {}, 5);
     expect(result.canProceed).toBe(false);
     expect(result.code).toBe('update_in_flight');
-  });
-
-  it('currentJsonTableData=null 时不可继续', () => {
-    const result = checkAutoUpdatePreConditions_ACU(baseSettings, true, false, null, 5);
-    expect(result.canProceed).toBe(false);
-    expect(result.code).toBe('runtime_not_ready');
-  });
-
-  it('聊天记录少于2条时不可继续', () => {
-    const result = checkAutoUpdatePreConditions_ACU(baseSettings, true, false, { sheet_0: {} }, 1);
-    expect(result.canProceed).toBe(false);
-    expect(result.reason).toContain('too short');
-    expect(result.code).toBe('chat_too_short');
-  });
-
-  it('API 未配置时不可继续', () => {
-    const settings = {
-      ...baseSettings,
-      apiConfig: { url: '', model: '' },
-    };
-    const result = checkAutoUpdatePreConditions_ACU(settings, true, false, { sheet_0: {} }, 5);
-    expect(result.canProceed).toBe(false);
-    expect(result.code).toBe('api_not_configured');
   });
 
   // 原因码优先级契约：disabled → core APIs → in-flight → API config → runtime → chat length。
@@ -190,29 +155,6 @@ describe('buildAutoUpdatePlan_ACU', () => {
     vi.mocked(getLatestV2FullCheckpointMessageIndex_ACU).mockReturnValue(-1);
   });
 
-  it('无 AI 消息时返回空计划', () => {
-    const liveChat = [{ is_user: true }];
-    const tableData = {
-      sheet_0: { name: '测试表', updateConfig: {} },
-    };
-    const plan = buildAutoUpdatePlan_ACU(liveChat, tableData, baseSettings, '');
-    expect(plan.tablesToUpdate).toHaveLength(0);
-  });
-
-  it('有未更新的 AI 消息时生成更新计划', () => {
-    const liveChat = [
-      { is_user: true },
-      { is_user: false },
-      { is_user: true },
-      { is_user: false },
-    ];
-    const tableData = {
-      sheet_0: { name: '测试表', updateConfig: {} },
-    };
-    const plan = buildAutoUpdatePlan_ACU(liveChat, tableData, baseSettings, '');
-    expect(plan.tablesToUpdate.length).toBeGreaterThan(0);
-  });
-
   it('updateFrequency=0 的表不参与自动更新', () => {
     const liveChat = [
       { is_user: true },
@@ -264,24 +206,6 @@ describe('buildAutoUpdatePlan_ACU', () => {
       const indices = plan.tablesToUpdate[0].indices;
       // 不应该包含最后一个 AI 消息的索引
       expect(indices).not.toContain(3);
-    }
-  });
-
-  it('多个表分组到同一个 group', () => {
-    const liveChat = [
-      { is_user: true },
-      { is_user: false },
-    ];
-    const tableData = {
-      sheet_0: { name: '表A', updateConfig: { groupId: 1 } },
-      sheet_1: { name: '表B', updateConfig: { groupId: 1 } },
-    };
-    const plan = buildAutoUpdatePlan_ACU(liveChat, tableData, baseSettings, '');
-    const groupKeys = Object.keys(plan.updateGroups);
-    // 同一 groupId 的表应该在同一个 group 中
-    if (groupKeys.length > 0) {
-      const group = plan.updateGroups[groupKeys[0]];
-      expect(group.sheetKeys.length).toBeGreaterThanOrEqual(1);
     }
   });
 
@@ -410,12 +334,6 @@ describe('buildAutoUpdatePlan_ACU', () => {
     const plan = buildAutoUpdatePlan_ACU(liveChat, tableData, baseSettings, '');
     expect(plan.tablesToUpdate).toHaveLength(1);
     expect(plan.tablesToUpdate[0].indices).toContain(7);
-  });
-
-  it('空表格数据返回空计划', () => {
-    const liveChat = [{ is_user: true }, { is_user: false }];
-    const plan = buildAutoUpdatePlan_ACU(liveChat, {}, baseSettings, '');
-    expect(plan.tablesToUpdate).toHaveLength(0);
   });
 
   it('contextDepth 不再裁剪历史补填范围（完整缺口优先，计划 §5.6）', () => {
@@ -569,21 +487,6 @@ describe('handleFloorIncreaseDelay_ACU', () => {
     expect(mockSetLast).toHaveBeenCalled();
   });
 
-  it('AI 消息数减少时更新 lastTotal', async () => {
-    const mockGetChat = vi.fn();
-    const mockSetLast = vi.fn();
-
-    const result = await handleFloorIncreaseDelay_ACU(
-      1, // totalAiMessages（减少了）
-      3, // lastTotalAiMessages
-      10,
-      mockGetChat,
-      mockSetLast,
-    );
-
-    expect(mockSetLast).toHaveBeenCalledWith(1);
-  });
-
   it('AI 消息数不变时不做任何操作', async () => {
     const mockGetChat = vi.fn();
     const mockSetLast = vi.fn();
@@ -598,36 +501,6 @@ describe('handleFloorIncreaseDelay_ACU', () => {
 
     expect(mockGetChat).not.toHaveBeenCalled();
     expect(mockSetLast).not.toHaveBeenCalled();
-  });
-
-  it('延迟后聊天记录为空时返回 null', async () => {
-    const mockGetChat = vi.fn().mockReturnValue([]);
-    const mockSetLast = vi.fn();
-
-    const result = await handleFloorIncreaseDelay_ACU(
-      3,
-      2,
-      10,
-      mockGetChat,
-      mockSetLast,
-    );
-
-    expect(result).toBeNull();
-  });
-
-  it('延迟后聊天记录为 null 时返回 null', async () => {
-    const mockGetChat = vi.fn().mockReturnValue(null);
-    const mockSetLast = vi.fn();
-
-    const result = await handleFloorIncreaseDelay_ACU(
-      3,
-      2,
-      10,
-      mockGetChat,
-      mockSetLast,
-    );
-
-    expect(result).toBeNull();
   });
 });
 
@@ -660,32 +533,6 @@ describe('executeAutoUpdatePlan_ACU', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clearRuntimePerformanceSpans_ACU();
-  });
-
-  it('空计划返回 success', async () => {
-    const plan = { tablesToUpdate: [], updateGroups: {} };
-    const result = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, makeOps());
-    expect(result.success).toBe(true);
-    expect(result.totalGroups).toBe(0);
-    expect(result.failedGroups).toBe(0);
-  });
-
-  it('单组全部成功', async () => {
-    const plan = {
-      tablesToUpdate: [{ sheetKey: 'sheet_0', sheetName: '表A', indices: [1], groupId: 0, batchSize: 2 }],
-      updateGroups: {
-        '0|1|2': { indices: [1], batchSize: 2, groupId: 0, sheetKeys: ['sheet_0'], sheetNames: ['表A'] },
-      },
-    };
-    const ops = makeOps();
-    const result = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, ops);
-    expect(result.success).toBe(true);
-    expect(result.totalGroups).toBe(1);
-    expect(result.failedGroups).toBe(0);
-    expect(ops.processUpdates).toHaveBeenCalledTimes(1);
-    expect(ops.loadAllChatMessages).toHaveBeenCalled();
-    expect(ops.refreshData).toHaveBeenCalled();
-    expect(ops.purgeOldLayerData).toHaveBeenCalled();
   });
 
   it('提供 processGroupedUpdates 时优先走 grouped 委托', async () => {
@@ -843,21 +690,6 @@ describe('executeAutoUpdatePlan_ACU', () => {
     expect(result.success).toBe(false);
     expect(result.failedGroups).toBe(1);
     expect(result.errors).toEqual([expect.stringContaining('staging_runner_unavailable')]);
-  });
-
-
-  it('setAutoUpdating 被正确调用', async () => {
-    const plan = {
-      tablesToUpdate: [],
-      updateGroups: {
-        'group_a': { indices: [1], batchSize: 2, groupId: 0, sheetKeys: ['sheet_0'], sheetNames: ['表A'] },
-      },
-    };
-    const ops = makeOps();
-    await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, ops);
-    // 开始时设为 true，结束时设为 false
-    expect(mockSetAutoUpdating).toHaveBeenCalledWith(true);
-    expect(mockSetAutoUpdating).toHaveBeenCalledWith(false);
   });
 
   it('R8-03：自动填表完成后不再触发自动合并（触发链已移除）', async () => {

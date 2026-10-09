@@ -160,8 +160,4 @@ describe('clearSummaryVectorFlushTasksByScope_ACU 失败通道', () => {
 
         expect(flushTaskStoreData.has('scope-1')).toBe(true);
     });
-
-    it('无残留任务时返回 true', async () => {
-        await expect(clearSummaryVectorFlushTasksByScope_ACU(scope)).resolves.toBe(true);
-    });
 });

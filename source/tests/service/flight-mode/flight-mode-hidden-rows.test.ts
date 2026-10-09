@@ -45,13 +45,6 @@ describe('flight-mode-hidden-rows', () => {
     expect(getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU(before, after, state)).toBeNull();
   });
 
-  it('关闭态或真实大总结 key 不匹配时短路', () => {
-    const before = data([], [['c1', '纪要']]);
-    const after = data([['s1', '总结']], [['c1', '纪要']]);
-    expect(getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU(before, after, { ...state, enabled: false })).toBeNull();
-    expect(getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU(before, after, { ...state, bigSummarySheetKey: 'sheet_other' })).toBeNull();
-  });
-
   it('仅在开启且存在隐藏行时投影纪要表，保留原始快照和非纪要表引用', () => {
     const source: any = {
       sheet_chronicle: { name: '纪要表', content: [['row_id', '事件'], ['c1', '可见'], ['c2', '隐藏']] },

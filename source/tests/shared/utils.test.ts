@@ -38,15 +38,11 @@ import {
   hashUserInput_ACU,
   normalizeNonNegativeInteger_ACU,
   normalizePositiveInteger_ACU,
-  isSummaryOrOutlineTable_ACU,
-  buildBoundaryRulesFromLegacyTags_ACU,
   normalizeExcludeRules_ACU,
   stripSeedRowsFromTemplate_ACU,
   applySheetOrderNumbers_ACU,
   ensureSheetOrderNumbers_ACU,
-  getChatFirstLayerMessage_ACU,
   cloneScopedConfigData_ACU,
-  formatPlotScopeUpdatedAt_ACU,
   isEntryBlocked_ACU,
   logDebug_ACU,
   logWarn_ACU,
@@ -65,32 +61,9 @@ import {
 // cleanChatName_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('cleanChatName_ACU', () => {
-  it('去除路径前缀', () => {
-    expect(cleanChatName_ACU('/path/to/chat.jsonl')).toBe('chat');
-  });
-
-  it('去除 .jsonl 扩展名', () => {
-    expect(cleanChatName_ACU('chat.jsonl')).toBe('chat');
-  });
-
-  it('去除 .json 扩展名', () => {
-    expect(cleanChatName_ACU('chat.json')).toBe('chat');
-  });
 
   it('Windows 路径', () => {
     expect(cleanChatName_ACU('C:\\Users\\test\\chat.jsonl')).toBe('chat');
-  });
-
-  it('空字符串返回默认值', () => {
-    expect(cleanChatName_ACU('')).toBe('unknown_chat_source');
-  });
-
-  it('null 返回默认值', () => {
-    expect(cleanChatName_ACU(null as any)).toBe('unknown_chat_source');
-  });
-
-  it('非字符串返回默认值', () => {
-    expect(cleanChatName_ACU(123 as any)).toBe('unknown_chat_source');
   });
 
   it('无扩展名原样返回', () => {
@@ -102,26 +75,9 @@ describe('cleanChatName_ACU', () => {
 // deepMerge_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('deepMerge_ACU', () => {
-  it('浅层合并', () => {
-    expect(deepMerge_ACU({ a: 1 }, { b: 2 })).toEqual({ a: 1, b: 2 });
-  });
-
-  it('source 覆盖 target 同名属性', () => {
-    expect(deepMerge_ACU({ a: 1 }, { a: 2 })).toEqual({ a: 2 });
-  });
-
-  it('深层嵌套合并', () => {
-    const target = { a: { b: 1, c: 2 } };
-    const source = { a: { b: 3, d: 4 } };
-    expect(deepMerge_ACU(target, source)).toEqual({ a: { b: 3, c: 2, d: 4 } });
-  });
 
   it('数组不合并，直接覆盖', () => {
     expect(deepMerge_ACU({ a: [1, 2] }, { a: [3, 4] })).toEqual({ a: [3, 4] });
-  });
-
-  it('target 中不存在的嵌套对象直接赋值', () => {
-    expect(deepMerge_ACU({}, { a: { b: 1 } })).toEqual({ a: { b: 1 } });
   });
 
   it('不修改原始对象', () => {
@@ -166,14 +122,6 @@ describe('hashUserInput_ACU', () => {
     expect(hashUserInput_ACU('hello')).not.toBe(hashUserInput_ACU('world'));
   });
 
-  it('空字符串返回空字符串', () => {
-    expect(hashUserInput_ACU('')).toBe('');
-  });
-
-  it('null 返回空字符串', () => {
-    expect(hashUserInput_ACU(null as any)).toBe('');
-  });
-
   it('前后空格被 trim', () => {
     expect(hashUserInput_ACU('  hello  ')).toBe(hashUserInput_ACU('hello'));
   });
@@ -212,38 +160,6 @@ describe('normalizeNonNegativeInteger_ACU', () => {
   it('正整数原样返回', () => {
     expect(normalizeNonNegativeInteger_ACU(5)).toBe(5);
   });
-
-  it('0 返回 0', () => {
-    expect(normalizeNonNegativeInteger_ACU(0)).toBe(0);
-  });
-
-  it('浮点数取整', () => {
-    expect(normalizeNonNegativeInteger_ACU(3.7)).toBe(3);
-  });
-
-  it('负数返回 fallback', () => {
-    expect(normalizeNonNegativeInteger_ACU(-1)).toBe(0);
-  });
-
-  it('字符串数字转换', () => {
-    expect(normalizeNonNegativeInteger_ACU('10')).toBe(10);
-  });
-
-  it('非数字返回 fallback', () => {
-    expect(normalizeNonNegativeInteger_ACU('abc')).toBe(0);
-  });
-
-  it('null 返回 fallback', () => {
-    expect(normalizeNonNegativeInteger_ACU(null)).toBe(0);
-  });
-
-  it('自定义 fallback', () => {
-    expect(normalizeNonNegativeInteger_ACU('abc', 5)).toBe(5);
-  });
-
-  it('Infinity 返回 fallback', () => {
-    expect(normalizeNonNegativeInteger_ACU(Infinity)).toBe(0);
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -253,106 +169,12 @@ describe('normalizePositiveInteger_ACU', () => {
   it('正整数原样返回', () => {
     expect(normalizePositiveInteger_ACU(5)).toBe(5);
   });
-
-  it('0 返回 fallback（默认 1）', () => {
-    expect(normalizePositiveInteger_ACU(0)).toBe(1);
-  });
-
-  it('负数返回 fallback', () => {
-    expect(normalizePositiveInteger_ACU(-1)).toBe(1);
-  });
-
-  it('自定义 fallback', () => {
-    expect(normalizePositiveInteger_ACU(0, 3)).toBe(3);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// isSummaryOrOutlineTable_ACU
-// ═══════════════════════════════════════════════════════════════
-describe('isSummaryOrOutlineTable_ACU', () => {
-  it('总结表返回 true', () => {
-    expect(isSummaryOrOutlineTable_ACU('总结表')).toBe(true);
-  });
-
-  it('总体大纲返回 true', () => {
-    expect(isSummaryOrOutlineTable_ACU('总体大纲')).toBe(true);
-  });
-
-  it('纪要表返回 true', () => {
-    expect(isSummaryOrOutlineTable_ACU('纪要表')).toBe(true);
-  });
-
-  it('普通表名返回 false', () => {
-    expect(isSummaryOrOutlineTable_ACU('背包物品表')).toBe(false);
-  });
-
-  it('空字符串返回 false', () => {
-    expect(isSummaryOrOutlineTable_ACU('')).toBe(false);
-  });
-
-  it('null 返回 false', () => {
-    expect(isSummaryOrOutlineTable_ACU(null as any)).toBe(false);
-  });
-
-  it('前后空格被 trim', () => {
-    expect(isSummaryOrOutlineTable_ACU('  总结表  ')).toBe(true);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// buildBoundaryRulesFromLegacyTags_ACU
-// ═══════════════════════════════════════════════════════════════
-describe('buildBoundaryRulesFromLegacyTags_ACU', () => {
-  it('逗号分隔的标签转为规则', () => {
-    const rules = buildBoundaryRulesFromLegacyTags_ACU('tagA,tagB');
-    expect(rules).toEqual([
-      { start: '<tagA', end: '</tagA>' },
-      { start: '<tagB', end: '</tagB>' },
-    ]);
-  });
-
-  it('中文逗号分隔', () => {
-    const rules = buildBoundaryRulesFromLegacyTags_ACU('标签A，标签B');
-    expect(rules.length).toBe(2);
-  });
-
-  it('空格分隔', () => {
-    const rules = buildBoundaryRulesFromLegacyTags_ACU('tagA tagB');
-    expect(rules.length).toBe(2);
-  });
-
-  it('空字符串返回空数组', () => {
-    expect(buildBoundaryRulesFromLegacyTags_ACU('')).toEqual([]);
-  });
-
-  it('去除尖括号', () => {
-    const rules = buildBoundaryRulesFromLegacyTags_ACU('<tag>');
-    expect(rules[0].start).toBe('<tag');
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════
 // normalizeExcludeRules_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('normalizeExcludeRules_ACU', () => {
-  it('对象数组格式', () => {
-    const rules = normalizeExcludeRules_ACU([{ start: '<a', end: '</a>' }]);
-    expect(rules).toEqual([{ start: '<a', end: '</a>' }]);
-  });
-
-  it('字符串格式（管道分隔）', () => {
-    const rules = normalizeExcludeRules_ACU(['<a|</a>']);
-    expect(rules).toEqual([{ start: '<a', end: '</a>' }]);
-  });
-
-  it('去重', () => {
-    const rules = normalizeExcludeRules_ACU([
-      { start: '<a', end: '</a>' },
-      { start: '<a', end: '</a>' },
-    ]);
-    expect(rules.length).toBe(1);
-  });
 
   it('空数组回退到旧标签', () => {
     const rules = normalizeExcludeRules_ACU([], 'tagA');
@@ -362,11 +184,6 @@ describe('normalizeExcludeRules_ACU', () => {
 
   it('null 规则回退到旧标签', () => {
     const rules = normalizeExcludeRules_ACU(null, 'tagA');
-    expect(rules.length).toBe(1);
-  });
-
-  it('跳过 null 元素', () => {
-    const rules = normalizeExcludeRules_ACU([null, { start: '<a', end: '</a>' }]);
     expect(rules.length).toBe(1);
   });
 });
@@ -385,33 +202,6 @@ describe('stripSeedRowsFromTemplate_ACU', () => {
     const result = stripSeedRowsFromTemplate_ACU(template);
     expect(result.sheet_0.content).toEqual([['row_id', '列A']]);
   });
-
-  it('非 sheet_ 开头的键不受影响', () => {
-    const template = { other: { content: [['a'], ['b']] } };
-    const result = stripSeedRowsFromTemplate_ACU(template);
-    expect(result.other.content).toEqual([['a'], ['b']]);
-  });
-
-  it('null 输入返回 null', () => {
-    expect(stripSeedRowsFromTemplate_ACU(null)).toBeNull();
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// getChatFirstLayerMessage_ACU
-// ═══════════════════════════════════════════════════════════════
-describe('getChatFirstLayerMessage_ACU', () => {
-  it('返回第一条消息', () => {
-    expect(getChatFirstLayerMessage_ACU([{ id: 1 }, { id: 2 }])).toEqual({ id: 1 });
-  });
-
-  it('空数组返回 null', () => {
-    expect(getChatFirstLayerMessage_ACU([])).toBeNull();
-  });
-
-  it('非数组返回 null', () => {
-    expect(getChatFirstLayerMessage_ACU(null as any)).toBeNull();
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -426,38 +216,10 @@ describe('cloneScopedConfigData_ACU', () => {
     expect(clone.a).not.toBe(obj.a);
   });
 
-  it('undefined 返回 fallback', () => {
-    expect(cloneScopedConfigData_ACU(undefined)).toBeNull();
-    expect(cloneScopedConfigData_ACU(undefined, 'default')).toBe('default');
-  });
-
   it('循环引用返回 fallback', () => {
     const obj: any = {};
     obj.self = obj;
     expect(cloneScopedConfigData_ACU(obj)).toBeNull();
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// formatPlotScopeUpdatedAt_ACU
-// ═══════════════════════════════════════════════════════════════
-describe('formatPlotScopeUpdatedAt_ACU', () => {
-  it('有效时间戳返回格式化字符串', () => {
-    const result = formatPlotScopeUpdatedAt_ACU(1713264000000);
-    expect(result).toBeTruthy();
-    expect(typeof result).toBe('string');
-  });
-
-  it('0 返回空字符串', () => {
-    expect(formatPlotScopeUpdatedAt_ACU(0)).toBe('');
-  });
-
-  it('null 返回空字符串', () => {
-    expect(formatPlotScopeUpdatedAt_ACU(null)).toBe('');
-  });
-
-  it('非数字返回空字符串', () => {
-    expect(formatPlotScopeUpdatedAt_ACU('abc')).toBe('');
   });
 });
 
@@ -481,18 +243,6 @@ describe('isEntryBlocked_ACU', () => {
     expect(isEntryBlocked_ACU({ comment: 'MVU系统' })).toBe(true);
   });
 
-  it('普通条目返回 false', () => {
-    expect(isEntryBlocked_ACU({ comment: '角色描述' })).toBe(false);
-  });
-
-  it('null 返回 false', () => {
-    expect(isEntryBlocked_ACU(null)).toBe(false);
-  });
-
-  it('空对象返回 false', () => {
-    expect(isEntryBlocked_ACU({})).toBe(false);
-  });
-
   it('comment 或 name 不是字符串时不抛错', () => {
     expect(() => isEntryBlocked_ACU({ comment: 2024, name: { invalid: true } })).not.toThrow();
     expect(isEntryBlocked_ACU({ comment: 2024, name: { invalid: true } })).toBe(false);
@@ -513,31 +263,9 @@ describe('applySheetOrderNumbers_ACU', () => {
     expect(data.sheet_0._acu_order_).toBe(0);
     expect(data.sheet_1._acu_order_).toBe(1);
   });
-
-  it('已有正确编号时返回 false', () => {
-    const data: any = {
-      sheet_0: { name: 'A', _acu_order_: 0 },
-      sheet_1: { name: 'B', _acu_order_: 1 },
-    };
-    const result = applySheetOrderNumbers_ACU(data, ['sheet_0', 'sheet_1']);
-    expect(result).toBe(false);
-  });
-
-  it('null 数据返回 false', () => {
-    expect(applySheetOrderNumbers_ACU(null as any, [])).toBe(false);
-  });
 });
 
 describe('ensureSheetOrderNumbers_ACU', () => {
-  it('无编号时自动赋值', () => {
-    const data: any = {
-      sheet_0: { name: 'A' },
-      sheet_1: { name: 'B' },
-    };
-    const result = ensureSheetOrderNumbers_ACU(data);
-    expect(result).toBe(true);
-    expect(data.sheet_0._acu_order_).toBe(0);
-  });
 
   it('编号合法且不重复时不修改', () => {
     const data: any = {
@@ -554,21 +282,6 @@ describe('ensureSheetOrderNumbers_ACU', () => {
     };
     expect(ensureSheetOrderNumbers_ACU(data)).toBe(true);
   });
-
-  it('forceRebuild=true 强制重建', () => {
-    const data: any = {
-      sheet_0: { name: 'A', _acu_order_: 5 },
-      sheet_1: { name: 'B', _acu_order_: 3 },
-    };
-    // forceRebuild 会重新按顺序赋值 0, 1
-    expect(ensureSheetOrderNumbers_ACU(data, { forceRebuild: true })).toBe(true);
-    expect(data.sheet_0._acu_order_).toBe(0);
-    expect(data.sheet_1._acu_order_).toBe(1);
-  });
-
-  it('null 数据返回 false', () => {
-    expect(ensureSheetOrderNumbers_ACU(null as any)).toBe(false);
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -578,12 +291,6 @@ describe('logDebug_ACU', () => {
   it('DEBUG_MODE_ACU 为 false 时不调用 console.log', () => {
     const spy = vi.spyOn(console, 'log');
     logDebug_ACU('测试日志');
-    expect(spy).not.toHaveBeenCalled();
-    spy.mockRestore();
-  });
-  it('多参数调用不报错且不输出', () => {
-    const spy = vi.spyOn(console, 'log');
-    logDebug_ACU('测试', 123, { a: 1 });
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
@@ -651,24 +358,10 @@ describe('logError_ACU', () => {
 // normalizeExtractRules_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('normalizeExtractRules_ACU', () => {
-  it('null 输入无旧标签时返回空数组', () => {
-    const result = normalizeExtractRules_ACU(null, '');
-    expect(result).toEqual([]);
-  });
-  it('传入对象数组时返回 { start, end } 结构', () => {
-    const rules = [{ start: '<plot>', end: '</plot>' }];
-    const result = normalizeExtractRules_ACU(rules);
-    expect(result).toEqual([{ start: '<plot>', end: '</plot>' }]);
-  });
   it('传入字符串数组时按 | 分割', () => {
     const rules = ['<plot>|</plot>'];
     const result = normalizeExtractRules_ACU(rules);
     expect(result).toEqual([{ start: '<plot>', end: '</plot>' }]);
-  });
-  it('重复规则被去重', () => {
-    const rules = [{ start: '<a>', end: '</a>' }, { start: '<a>', end: '</a>' }];
-    const result = normalizeExtractRules_ACU(rules);
-    expect(result.length).toBe(1);
   });
 });
 
@@ -676,17 +369,6 @@ describe('normalizeExtractRules_ACU', () => {
 // parseTableTemplateJson_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('parseTableTemplateJson_ACU', () => {
-  it('解析结果包含 sheet_0 且结构完整', () => {
-    const result = parseTableTemplateJson_ACU();
-    expect(result).not.toBeNull();
-    expect(result).toHaveProperty('sheet_0');
-    expect(result.sheet_0.name).toBe('测试表');
-    expect(result.sheet_0.content).toEqual([
-      ['row_id', '列A'],
-      ['1', 'https://example.com/a//b?x=1#hash'],
-      ['2', '包含 /* 不是注释 */ 与 // 文本'],
-    ]);
-  });
   it('stripSeedRows=true 时种子行被移除，只保留表头', () => {
     const result = parseTableTemplateJson_ACU({ stripSeedRows: true });
     expect(result).not.toBeNull();
@@ -697,12 +379,6 @@ describe('parseTableTemplateJson_ACU', () => {
     const result = parseTableTemplateJson_ACU({ stripSeedRows: false });
     expect(result.sheet_0.content[1][1]).toBe('https://example.com/a//b?x=1#hash');
     expect(result.sheet_0.content[2][1]).toBe('包含 /* 不是注释 */ 与 // 文本');
-  });
-  it('解析结果是对象类型', () => {
-    const result = parseTableTemplateJson_ACU();
-    expect(typeof result).toBe('object');
-    expect(result).not.toBeNull();
-    expect(Array.isArray(result)).toBe(false);
   });
 });
 

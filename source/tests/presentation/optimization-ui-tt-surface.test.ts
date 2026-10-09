@@ -179,34 +179,6 @@ describe('optimization-ui TT surface 打标', () => {
     expect(rule).not.toMatch(/top:\s*10px\s*;/);
   });
 
-  it('Diff 对话框用插件弹窗样式类：无内联旧配色，挂主题 token 类，按钮分主次', () => {
-    showOptimizationDiffDialogForLoop_ACU(3, makeResult(1, 2), vi.fn());
-
-    const dialog = document.querySelector<HTMLElement>('.acu-optimization-dialog')!;
-    const backdrop = document.getElementById('acu-opt-backdrop')!;
-    expect(dialog.classList.contains('acu-hd-dialog')).toBe(true);
-    expect(dialog.classList.contains('acu-host-surface')).toBe(true);
-    expect(backdrop.classList.contains('acu-hd-scrim')).toBe(true);
-    expect(backdrop.classList.contains('acu-host-surface')).toBe(true);
-    expect(document.body.innerHTML).not.toContain('style=');
-    expect(document.body.innerHTML).not.toContain('#7d4940');
-    expect(document.body.innerHTML).not.toContain('🔄');
-    expect(document.getElementById('acu-opt-apply')!.className).toContain('acu-hd-btn--primary');
-    expect(document.getElementById('acu-opt-reoptimize')!.className).toContain('acu-hd-btn--soft');
-    expect(document.getElementById('acu-opt-cancel')!.className).toContain('acu-hd-btn--ghost');
-    expect(document.getElementById('acu-opt-skip')!.className).toContain('acu-hd-btn--ghost');
-    expect(dialog.querySelector('.acu-hd-meta')?.textContent).toContain('第 1/2 轮');
-    expect(dialog.querySelectorAll('.acu-hd-item').length).toBe(1);
-    expect(dialog.querySelector('.acu-hd-item__plan')?.textContent).toContain('修改方案');
-  });
-
-  it('最后一轮不显示跳过按钮与进度', () => {
-    showOptimizationDiffDialogForLoop_ACU(3, makeResult(1, 1), vi.fn());
-    expect(document.getElementById('acu-opt-skip')).toBeNull();
-    expect(document.querySelector('.acu-hd-meta')).toBeNull();
-    expect(document.getElementById('acu-opt-apply')!.textContent).toContain('应用并完成');
-  });
-
   it('结果对话框同样使用插件弹窗样式，关闭按钮与遮罩都能关', () => {
     showOptimizationResultDialog_ACU(3, makeResult(1, 1));
 

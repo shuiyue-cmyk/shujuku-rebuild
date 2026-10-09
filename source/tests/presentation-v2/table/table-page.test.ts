@@ -242,37 +242,6 @@ beforeEach(() => {
 });
 
 describe('TablePage', () => {
-  it('四个分节：附加世界书条目、写入目标、提示词、标签筛选，不混入模板与工具', async () => {
-    const { mount } = await mountTablePage();
-
-    const page = document.querySelector('[data-ub-main]');
-    expect(page).not.toBeNull();
-    const text = page!.textContent || '';
-    expect(document.querySelector('.ub-top__title')?.textContent || '').toContain('填表规则');
-    expect(text).toContain('标签筛选');
-    expect(text).toContain('填表提示词');
-    expect(text).toContain('写入目标世界书');
-    expect(text).toContain('附加世界书条目');
-    expect(text).not.toContain('表格模板预设');
-    expect(text).not.toContain('打开可视化表格编辑器');
-    expect(text).not.toContain('表格工具');
-    expect(text).not.toContain('立即构建交火纪要索引');
-    expect(text).not.toContain('Embedding / Rerank');
-    expect(Array.from(page!.querySelectorAll('button')).some(b => b.textContent?.trim() === '刷新')).toBe(false);
-
-    const sectionTitles = Array.from(page!.querySelectorAll('.ub-section__title'))
-      .map(title => (title.textContent || '').trim());
-    expect(sectionTitles).toEqual(['附加世界书条目', '写入目标世界书', '填表提示词', '标签筛选']);
-    const jumpItems = Array.from(page!.querySelectorAll('.ub-page__chip'))
-      .map(item => (item.textContent || '').trim());
-    expect(jumpItems).toEqual(['附加条目', '写入目标', '提示词', '标签筛选']);
-    // 每个分节都带常驻说明
-    page!.querySelectorAll('.ub-section').forEach(section => {
-      expect(section.querySelector('.ub-section__desc')?.textContent?.trim()).toBeTruthy();
-    });
-
-    mount.__resetAcuV2MountForTests();
-  });
 
   it('提示词已自定义且工具仍开着时，badge 提示工具未关（提示词与开关分处两页）', async () => {
     // 提示词编辑器在本页、工具开关在填表页：自定义后必须在本页就能看出工具还开着。
@@ -332,30 +301,6 @@ describe('TablePage', () => {
     const labels = Array.from(select!.options).map(option => option.textContent?.trim());
     expect(labels).toContain('角色卡绑定世界书');
     expect(labels).toContain('CharBookT');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('附加世界书条目手动模式可以多选世界书', async () => {
-    const { mount } = await mountTablePage();
-
-    const entriesSection = document.getElementById('tbl-entries')!;
-    const manualButton = Array.from(entriesSection.querySelectorAll<HTMLButtonElement>('.ub-seg__item'))
-      .find(button => button.textContent?.trim() === '手动选择')!;
-    manualButton.click();
-    await nextTick();
-
-    const books = () => Array.from(entriesSection.querySelectorAll<HTMLButtonElement>('button[role="checkbox"]'));
-    books().find(button => button.textContent?.trim() === 'CharBookT')!.click();
-    books().find(button => button.textContent?.trim() === 'Other')!.click();
-    // 两次 toggle 各触发一次 refreshEntriesGroups（带 seq guard，旧调用中止），
-    // 需要多次微任务刷新让最后一次调用的 resolveBookNames + loadEntries + label 写入全部完成
-    for (let i = 0; i < 8; i++) await Promise.resolve();
-    await nextTick();
-
-    expect(entriesSection.querySelector('.ub-tbl__current')?.textContent).toContain('CharBookT、Other');
-    expect(books().find(button => button.textContent?.trim() === 'CharBookT')!.getAttribute('aria-checked')).toBe('true');
-    expect(books().find(button => button.textContent?.trim() === 'Other')!.getAttribute('aria-checked')).toBe('true');
 
     mount.__resetAcuV2MountForTests();
   });

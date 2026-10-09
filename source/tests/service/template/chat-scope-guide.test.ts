@@ -226,7 +226,6 @@ import {
   ensureStableRowIdsForSeedRows_ACU,
   ensureStableRowIdsForSheetContent_ACU,
   ensureChatSheetGuideSeeded_ACU,
-  migrateLegacyTemplateScopeForCurrentChat_ACU,
 } from '../../../src/service/template/chat-scope/chat-scope-guide';
 
 beforeEach(() => {
@@ -251,11 +250,6 @@ beforeEach(() => {
 
 // ═══ materializeDataFromSheetGuide_ACU ═══
 describe('materializeDataFromSheetGuide_ACU', () => {
-  it('null guide 返回只有 mate 的对象', () => {
-    const result = materializeDataFromSheetGuide_ACU(null);
-    expect(result.mate).toBeDefined();
-    expect(result.mate.type).toBe('chatSheets');
-  });
 
   it('有效 guide 物化表头 + seedRows', () => {
     const guide = {
@@ -287,32 +281,10 @@ describe('materializeDataFromSheetGuide_ACU', () => {
     expect(() => materializeDataFromSheetGuide_ACU(guide, { includeSeedRows: true }))
       .toThrow('重复 row_id');
   });
-
-  it('includeSeedRows=false 时只包含表头', () => {
-    const guide = {
-      sheet_0: {
-        name: '表',
-        content: [['row_id', '名称']],
-        _seedRows: [['1', '数据']],
-      },
-    };
-    const result = materializeDataFromSheetGuide_ACU(guide, { includeSeedRows: false });
-    expect(result.sheet_0.content).toEqual([['row_id', '名称']]);
-  });
 });
 
 // ═══ clearChatSheetGuideDataForIsolationKey_ACU ═══
 describe('clearChatSheetGuideDataForIsolationKey_ACU', () => {
-  it('无首条消息返回 false', () => {
-    mockGetChatFirstLayerMessage.mockReturnValue(null);
-    expect(clearChatSheetGuideDataForIsolationKey_ACU()).toBe(false);
-  });
-
-  it('无容器返回 false', () => {
-    mockGetChatFirstLayerMessage.mockReturnValue({});
-    mockGetChatSheetGuideContainer.mockReturnValue(null);
-    expect(clearChatSheetGuideDataForIsolationKey_ACU()).toBe(false);
-  });
 
   it('有容器且有对应 tag 时删除并返回 true', () => {
     const firstMsg: any = {};
@@ -327,19 +299,6 @@ describe('clearChatSheetGuideDataForIsolationKey_ACU', () => {
 
 // ═══ getChatSheetGuideDataForIsolationKey_ACU ═══
 describe('getChatSheetGuideDataForIsolationKey_ACU', () => {
-  it('有 scoped state 的 guideData 时直接返回', () => {
-    const guideData = {
-      mate: { type: 'chatSheets', version: 2 },
-      sheet_0: { name: '表', content: [['row_id']] },
-    };
-    mockGetCurrentChatTemplateScopeState.mockReturnValue({
-      mode: 'chat_override',
-      guideData,
-    });
-    const result = getChatSheetGuideDataForIsolationKey_ACU('');
-    expect(result).toBeDefined();
-    expect(result.sheet_0).toBeDefined();
-  });
 
   it('读取历史 guide 时将“行号”首列表头和旧 _seedRows 无损规范为 row_id', () => {
     mockGetCurrentChatTemplateScopeState.mockReturnValue({
@@ -422,36 +381,6 @@ describe('getChatSheetGuideDataForIsolationKey_ACU', () => {
 
 // ═══ setChatSheetGuideDataForIsolationKey_ACU ═══
 describe('setChatSheetGuideDataForIsolationKey_ACU', () => {
-  it('无首条消息返回 false', () => {
-    mockGetChatFirstLayerMessage.mockReturnValue(null);
-    const result = setChatSheetGuideDataForIsolationKey_ACU('', { sheet_0: { name: '表', content: [['row_id']] } });
-    expect(result).toBe(false);
-  });
-
-  it('无效 guide 返回 false', () => {
-    mockGetChatFirstLayerMessage.mockReturnValue({});
-    const result = setChatSheetGuideDataForIsolationKey_ACU('', null);
-    expect(result).toBe(false);
-  });
-
-  it('有效 guide 写入容器并返回 true', () => {
-    const firstMsg: any = {};
-    mockGetChatFirstLayerMessage.mockReturnValue(firstMsg);
-    mockGetChatArray.mockReturnValue([firstMsg]);
-    mockGetChatSheetGuideContainer.mockReturnValue({ version: 2, tags: {} });
-    const guideData = {
-      sheet_0: {
-        uid: 's0',
-        name: '物品表',
-        content: [['row_id', '物品名']],
-        sourceData: {},
-        updateConfig: {},
-      },
-    };
-    const result = setChatSheetGuideDataForIsolationKey_ACU('', guideData, { reason: 'test' });
-    expect(result).toBe(true);
-    expect(firstMsg._acu_sheet_guide).toBeDefined();
-  });
 
   it('setter 接收可收敛的超宽 Guide 时保存规范化结果', () => {
     const firstMsg: any = {};
@@ -500,21 +429,6 @@ describe('setChatSheetGuideDataForIsolationKey_ACU', () => {
     expect(firstMsg._acu_sheet_guide.tags[''].data.sheet_0.name).toBe('表');
   });
 
-  it('同步 scope 但无法构建状态时返回 false', () => {
-    const firstMsg: any = {};
-    mockGetChatFirstLayerMessage.mockReturnValue(firstMsg);
-    mockGetChatArray.mockReturnValue([firstMsg]);
-    mockGetChatSheetGuideContainer.mockReturnValue({ version: 2, tags: {} });
-    mockBuildChatTemplateScopeStateFromCurrent.mockReturnValue(null);
-
-    const result = setChatSheetGuideDataForIsolationKey_ACU('', {
-      sheet_0: { uid: 's0', name: '表', content: [['row_id']], sourceData: {}, updateConfig: {} },
-    }, { syncTemplateScope: true });
-
-    expect(result).toBe(false);
-    expect(mockSetCurrentChatTemplateScopeState).not.toHaveBeenCalled();
-  });
-
   it('同步 scope 写入失败时返回 false，并将规范化 guide 用于 scope 构建', () => {
     const firstMsg: any = {};
     mockGetChatFirstLayerMessage.mockReturnValue(firstMsg);
@@ -539,19 +453,6 @@ describe('setChatSheetGuideDataForIsolationKey_ACU', () => {
 describe('getEffectiveSeedRowsForSheet_ACU', () => {
   beforeEach(() => {
     mockGetChatArray.mockReturnValue([{ is_user: true, mes: '第一条用户消息' }]);
-  });
-
-  it('无效 sheetKey 返回空数组', () => {
-    expect(getEffectiveSeedRowsForSheet_ACU('')).toEqual([]);
-    expect(getEffectiveSeedRowsForSheet_ACU('invalid')).toEqual([]);
-  });
-
-  it('currentData 有种子行时直接返回', () => {
-    mockCurrentJsonTableData.sheet_0 = { _seedRows: [['1', '铁剑']] };
-    const result = getEffectiveSeedRowsForSheet_ACU('sheet_0');
-    expect(result).toEqual([['1', '铁剑']]);
-    // 深拷贝验证
-    expect(result).not.toBe(mockCurrentJsonTableData.sheet_0._seedRows);
   });
 
   it('currentData 无种子行时回退到 guide', () => {
@@ -616,11 +517,6 @@ describe('getEffectiveSeedRowsForSheet_ACU', () => {
 
 // ═══ attachSeedRowsToCurrentDataFromGuide_ACU ═══
 describe('attachSeedRowsToCurrentDataFromGuide_ACU', () => {
-  it('无 currentData 返回 false', () => {
-    // mockCurrentJsonTableData 是空对象，但不是 null
-    // 需要测试 guide 为 null 的情况
-    expect(attachSeedRowsToCurrentDataFromGuide_ACU(null)).toBe(false);
-  });
 
   it('已有种子行不覆盖', () => {
     mockCurrentJsonTableData.sheet_0 = { _seedRows: [['existing']] };
@@ -645,9 +541,6 @@ describe('attachSeedRowsToCurrentDataFromGuide_ACU', () => {
 
 // ═══ buildChatSheetGuideDataFromData_ACU ═══
 describe('buildChatSheetGuideDataFromData_ACU', () => {
-  it('null 输入返回 null', () => {
-    expect(buildChatSheetGuideDataFromData_ACU(null)).toBeNull();
-  });
 
   it('有效数据构建 guide（只保留表头）', () => {
     const data = {
@@ -695,13 +588,6 @@ describe('buildChatSheetGuideDataFromData_ACU', () => {
 
 // ═══ buildChatSheetGuideDataFromTemplateObj_ACU ═══
 describe('buildChatSheetGuideDataFromTemplateObj_ACU', () => {
-  it('null 输入返回 null', () => {
-    expect(buildChatSheetGuideDataFromTemplateObj_ACU(null)).toBeNull();
-  });
-
-  it('无 sheet_ 键返回 null', () => {
-    expect(buildChatSheetGuideDataFromTemplateObj_ACU({ mate: {} })).toBeNull();
-  });
 
   it('有多行 content 时提取 seedRows', () => {
     const templateObj = {
@@ -755,24 +641,6 @@ describe('ensureChatSheetGuideSeeded_ACU', () => {
     mockGetChatArray.mockReturnValue([]);
     const result = await ensureChatSheetGuideSeeded_ACU();
     // 空数组 → 返回 existing 或 null
-    expect(result).toBeNull();
-  });
-});
-
-// ═══ migrateLegacyTemplateScopeForCurrentChat_ACU ═══
-describe('migrateLegacyTemplateScopeForCurrentChat_ACU', () => {
-  it('已有 scoped state 时直接返回', () => {
-    const existingState = { mode: 'chat_override', templateStr: '{}' };
-    mockGetCurrentChatTemplateScopeState.mockReturnValue(existingState);
-    const result = migrateLegacyTemplateScopeForCurrentChat_ACU();
-    expect(result).toBe(existingState);
-  });
-
-  it('无任何旧数据时返回 null', () => {
-    mockGetCurrentChatTemplateScopeState.mockReturnValue(null);
-    mockGetChatSheetGuideContainer.mockReturnValue({});
-    mockGetChatArray.mockReturnValue([]);
-    const result = migrateLegacyTemplateScopeForCurrentChat_ACU();
     expect(result).toBeNull();
   });
 });

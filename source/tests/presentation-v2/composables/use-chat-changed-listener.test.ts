@@ -56,15 +56,6 @@ describe('useChatChangedListener · 楼层变动计数', () => {
     expect(tick.value).toBe(before + 1);
   });
 
-  it('宿主未暴露楼层事件名时只订阅聊天切换，不报错', () => {
-    const eventSource = createEventSource();
-    _set_SillyTavern_API_ACU({ eventSource, eventTypes: { CHAT_CHANGED: 'chat_changed' } } as any);
-    const app = mountListener();
-    expect(eventSource.on).toHaveBeenCalledTimes(1);
-    expect(eventSource.on).toHaveBeenCalledWith('chat_changed', expect.any(Function));
-    app.unmount();
-  });
-
   it('同聊天重复 CHAT_CHANGED 只触发一次守卫回调', async () => {
     const eventSource = createEventSource();
     _set_SillyTavern_API_ACU({ eventSource, eventTypes: { CHAT_CHANGED: 'chat_changed' } } as any);

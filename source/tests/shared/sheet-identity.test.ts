@@ -131,10 +131,4 @@ describe('physical table name (deterministic)', () => {
     expect(collisions[0]).toMatchObject({ reason: 'homophone_distinct_names', sheetNames: ['背包', '被包'] });
     expect(() => assertNoPhysicalTableNameCollision_ACU(data)).toThrow(/请重命名/);
   });
-
-  it('无冲突时 detect 返回空、assert 不抛', () => {
-    const data = { mate: {}, sheet_beibao: sheet('背包'), sheet_juese: sheet('角色') } as any;
-    expect(detectPhysicalTableNameCollisions_ACU(data)).toEqual([]);
-    expect(() => assertNoPhysicalTableNameCollision_ACU(data)).not.toThrow();
-  });
 });

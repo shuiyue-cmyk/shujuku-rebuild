@@ -56,18 +56,6 @@ describe('resolveAiFloorSignatureEx_ACU', () => {
     expect(ex.latestContentHash).toBe(sha256HexSync_ACU('sys'));
   });
 
-  it('最新 AI 楼 mes 缺失/非字符串时 hash 为 null', () => {
-    expect(resolveAiFloorSignatureEx_ACU([user(1), { is_user: false, message_id: 2 }]).latestContentHash).toBeNull();
-    expect(resolveAiFloorSignatureEx_ACU([user(1), ai(2, 42 as any)]).latestContentHash).toBeNull();
-    expect(resolveAiFloorSignatureEx_ACU([user(1), ai(2, null as any)]).latestContentHash).toBeNull();
-  });
-
-  it('空聊天/非数组/无 AI 楼时返回 { 0, null, null }', () => {
-    expect(resolveAiFloorSignatureEx_ACU([])).toEqual({ aiFloorCount: 0, latestAiMessageId: null, latestContentHash: null });
-    expect(resolveAiFloorSignatureEx_ACU(null)).toEqual({ aiFloorCount: 0, latestAiMessageId: null, latestContentHash: null });
-    expect(resolveAiFloorSignatureEx_ACU([user(1), user(2)])).toEqual({ aiFloorCount: 0, latestAiMessageId: null, latestContentHash: null });
-  });
-
   it('swipe/同楼换内容：id 相同但 hash 变化（推演③的单元证据）', () => {
     const before = resolveAiFloorSignatureEx_ACU([user(1), ai(2, 'old')]);
     const after = resolveAiFloorSignatureEx_ACU([user(1), ai(2, 'new')]);

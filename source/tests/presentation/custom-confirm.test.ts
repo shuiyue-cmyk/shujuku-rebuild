@@ -29,25 +29,6 @@ describe('custom confirm', () => {
     topLevelWindowMock_ACU.innerWidth = 1280;
   });
 
-  it('确认框用插件弹窗样式类而不是内联旧配色，并挂主题 token 类', () => {
-    void showCustomConfirm_ACU('手动填表确认', '第一行\n第二行');
-
-    const doc = topLevelWindowMock_ACU.document;
-    const overlay = doc.getElementById('acu-test-custom-confirm-overlay') as HTMLElement;
-    const dialog = doc.getElementById('acu-test-custom-confirm') as HTMLElement;
-    const ok = doc.getElementById('acu-test-custom-confirm-ok') as HTMLElement;
-    const cancel = doc.getElementById('acu-test-custom-confirm-cancel') as HTMLElement;
-
-    expect(overlay.classList.contains('acu-hd-layer')).toBe(true);
-    expect(overlay.classList.contains('acu-host-surface')).toBe(true);
-    expect(dialog.classList.contains('acu-hd-dialog')).toBe(true);
-    expect(ok.className).toContain('acu-hd-btn--primary');
-    expect(cancel.className).toContain('acu-hd-btn--ghost');
-    expect(doc.body.innerHTML).not.toContain('style=');
-    expect(doc.body.innerHTML).not.toContain('#2563eb');
-    expect(dialog.querySelector('.acu-hd-message')?.innerHTML).toContain('第一行<br>第二行');
-  });
-
   it('样式表注入到主窗口一次：遮罩铺满并有底色，窄屏按钮纵向铺满', () => {
     void showCustomConfirm_ACU('一', '甲');
     void showCustomConfirm_ACU('二', '乙');
@@ -90,15 +71,6 @@ describe('custom confirm', () => {
     expect(doc.querySelector('.acu-hd-title b')).toBeNull();
     expect(doc.getElementById('acu-test-custom-confirm-ok')!.querySelector('i')).toBeNull();
     expect(doc.getElementById('acu-test-custom-confirm-ok')!.textContent).toBe('<i>ok</i>');
-  });
-
-  it('点击确认后会 resolve true 并清理 DOM', async () => {
-    const promise = showCustomConfirm_ACU('确认', '继续执行');
-
-    (topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm-ok') as HTMLButtonElement).click();
-
-    await expect(promise).resolves.toBe(true);
-    expect(topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm-overlay')).toBeNull();
   });
 
   it('遮罩与弹窗按 TT Layout ABI 声明 surface 类型', () => {

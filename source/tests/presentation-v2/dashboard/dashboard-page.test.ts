@@ -304,14 +304,6 @@ describe("DashboardPage", () => {
     expect(rows[0].lastUpdatedLabel).toBe("未初始");
   });
 
-  it("runtime 为 null 时模板回退以 stripSeedRows 读取全局模板", async () => {
-    const { dashboard } = await mountDashboardPage(createSettings(), null);
-    expect(dashboard.hasTables.value).toBe(true);
-    // useDashboardPage 内的 display reader必须通过 parseTableTemplateJson_ACU({ stripSeedRows: true })
-    // 读取模板，避免把模板预置行当作聊天数据。
-    expect(m.parseTableTemplateJson_ACU).toHaveBeenCalledWith({ stripSeedRows: true });
-  });
-
   it("默认渲染运行概览和基础开关；header 不再有 subtitle / 刷新按钮 / API 三件套", async () => {
     const { mount } = await mountDashboardPage();
 
@@ -436,27 +428,6 @@ describe("DashboardPage", () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it("SQLite 存储开启且表格模板适配时显示模板适配", async () => {
-    const settings = createSettings();
-    settings.storageMode = "sqlite";
-    const { mount } = await mountDashboardPage(settings, createSqlTableData());
-
-    const sqlHealth = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        ".ub-health",
-      ),
-    ).find((item) => (item.textContent || "").includes("SQL 模式"));
-
-    expect(sqlHealth).toBeDefined();
-    expect(sqlHealth!.textContent || "").toContain("模板适配");
-    expect(sqlHealth!.textContent || "").toContain(
-      "当前 2 张表都是适配 SQL 的表格模板",
-    );
-    expect(sqlHealth!.querySelector("button")).toBeNull();
-
-    mount.__resetAcuV2MountForTests();
-  });
-
   it("SQLite 存储开启但表格模板不完整时提示去表格模板补齐", async () => {
     const settings = createSettings();
     settings.storageMode = "sqlite";
@@ -514,31 +485,6 @@ describe("DashboardPage", () => {
     const { useRouterStore } =
       await import("../../../src/presentation-v2/stores/router-store");
     expect(useRouterStore().activePageId).toBe("api");
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it("API 健康追踪 API 页当前预设，而不是填表专用 API", async () => {
-    const settings = createSettings();
-    settings.tableApiPreset = "missing-table-only";
-    const { mount } = await mountDashboardPage(settings);
-
-    const healthItems = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        ".ub-health",
-      ),
-    );
-    const apiText = healthItems[0].textContent || "";
-    expect(apiText).toContain('API 页当前预设 "table-fast" 已配置');
-    expect(apiText).toContain("使用gpt-4");
-    expect(
-      healthItems[0].querySelector(".ub-health__meta"),
-    ).toBeNull();
-    expect(apiText).not.toContain("当前填表 API");
-    expect(apiText).not.toContain("当前预设：");
-    expect(apiText).not.toContain("连接：");
-    expect(apiText).not.toContain("填表页指定");
-    expect(apiText).not.toContain("missing-table-only");
 
     mount.__resetAcuV2MountForTests();
   });

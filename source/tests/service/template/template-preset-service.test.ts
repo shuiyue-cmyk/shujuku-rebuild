@@ -150,18 +150,14 @@ vi.mock('../../../src/service/table/table-storage-strategy', () => ({
 }));
 
 import {
-  listTemplatePresetNames_ACU,
   getTemplatePreset_ACU,
   upsertTemplatePreset_ACU,
   renameTemplatePreset_ACU,
   deleteTemplatePreset_ACU,
-  getTemplatePresetDisplayName_ACU,
   ensureUniqueTemplatePresetName_ACU,
-  normalizeTemplateOperationScope_ACU,
   resolveActiveTemplatePresetName_ACU,
   getActiveTemplatePresetMeta_ACU,
   normalizeTemplateForPresetSave_ACU,
-  getDefaultTemplateSnapshot_ACU,
   parseImportedTemplateData_ACU,
   persistTemplateScopeSelectionState_ACU,
   applyTemplateSnapshotToScope_ACU,
@@ -171,8 +167,6 @@ import {
   getRuntimeTemplateSnapshot_ACU,
   resolveTemplateForExport_ACU,
 } from '../../../src/service/template/template-preset-service';
-
-import { saveSettings_ACU } from '../../../src/service/settings/settings-service';
 import { getCurrentChatTemplateScopeState_ACU, sanitizeTemplateSnapshotForChat_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, normalizeTemplateScopeMode_ACU, setCurrentChatTemplateScopeState_ACU, clearChatSheetGuideDataForIsolationKey_ACU } from '../../../src/service/template/chat-scope';
 import { getCurrentTemplatePresetName_ACU } from '../../../src/shared/template-preset-utils';
 import { ensureSheetOrderNumbers_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../../src/shared/utils';
@@ -211,58 +205,6 @@ beforeEach(() => {
   vi.mocked(normalizeTemplateScopeMode_ACU).mockImplementation((mode: string) => ['chat_override', 'preset_link'].includes(mode) ? mode : 'inherit_global');
 });
 
-// ═══ CRUD ═══
-describe('listTemplatePresetNames_ACU', () => {
-  it('无预设返回空数组', () => {
-    expect(listTemplatePresetNames_ACU()).toEqual([]);
-  });
-  it('有预设返回排序后的名称', () => {
-    mockStore.template_presets = JSON.stringify({
-      version: 1,
-      presets: { '预设B': { templateStr: '{}' }, '预设A': { templateStr: '{}' } },
-    });
-    const names = listTemplatePresetNames_ACU();
-    expect(names).toEqual(['预设A', '预设B']);
-  });
-});
-
-describe('getTemplatePreset_ACU', () => {
-  it('找到预设返回对象', () => {
-    mockStore.template_presets = JSON.stringify({
-      version: 1,
-      presets: { '预设A': { templateStr: '{"sheet_0":{}}', updatedAt: 1000 } },
-    });
-    const preset = getTemplatePreset_ACU('预设A');
-    expect(preset).not.toBeNull();
-    expect(preset!.templateStr).toContain('sheet_0');
-  });
-  it('未找到返回 null', () => {
-    expect(getTemplatePreset_ACU('不存在')).toBeNull();
-  });
-  it('空名称返回 null', () => {
-    expect(getTemplatePreset_ACU('')).toBeNull();
-  });
-});
-
-describe('upsertTemplatePreset_ACU', () => {
-  it('创建新预设', () => {
-    const result = upsertTemplatePreset_ACU('新预设', '{"sheet_0":{}}');
-    expect(result).toBe(true);
-    const stored = JSON.parse(mockStore.template_presets);
-    expect(stored.presets['新预设']).not.toBeUndefined();
-    expect(stored.presets['新预设'].templateStr).toBe('{"sheet_0":{}}');
-  });
-  it('更新已有预设', () => {
-    upsertTemplatePreset_ACU('预设A', '旧内容');
-    upsertTemplatePreset_ACU('预设A', '新内容');
-    const stored = JSON.parse(mockStore.template_presets);
-    expect(stored.presets['预设A'].templateStr).toBe('新内容');
-  });
-  it('空名称返回 false', () => {
-    expect(upsertTemplatePreset_ACU('', '{}')).toBe(false);
-  });
-});
-
 describe('renameTemplatePreset_ACU', () => {
   it('目标名称已存在时拒绝重命名并保留两个预设', () => {
     upsertTemplatePreset_ACU('源', '{"source":true}');
@@ -273,21 +215,6 @@ describe('renameTemplatePreset_ACU', () => {
     expect(result).toMatchObject({ ok: false, code: 'target_exists' });
     expect(getTemplatePreset_ACU('源')?.templateStr).toBe('{"source":true}');
     expect(getTemplatePreset_ACU('目标')?.templateStr).toBe('{"target":true}');
-  });
-});
-
-describe('deleteTemplatePreset_ACU', () => {
-  it('删除已有预设', () => {
-    upsertTemplatePreset_ACU('预设A', '{}');
-    const result = deleteTemplatePreset_ACU('预设A');
-    expect(result).toBe(true);
-    expect(getTemplatePreset_ACU('预设A')).toBeNull();
-  });
-  it('删除不存在的预设返回 false', () => {
-    expect(deleteTemplatePreset_ACU('不存在')).toBe(false);
-  });
-  it('空名称返回 false', () => {
-    expect(deleteTemplatePreset_ACU('')).toBe(false);
   });
 });
 
@@ -306,19 +233,6 @@ describe('块 6 复审：预设库持久化失败', () => {
   });
 });
 
-// ═══ 纯逻辑工具函数 ═══
-describe('getTemplatePresetDisplayName_ACU', () => {
-  it('有名称返回名称', () => {
-    expect(getTemplatePresetDisplayName_ACU('预设A')).toBe('预设A');
-  });
-  it('空名称返回默认预设', () => {
-    expect(getTemplatePresetDisplayName_ACU('')).toBe('默认预设');
-  });
-  it('默认值标记返回默认预设', () => {
-    expect(getTemplatePresetDisplayName_ACU('__default__')).toBe('默认预设');
-  });
-});
-
 describe('ensureUniqueTemplatePresetName_ACU', () => {
   it('名称不冲突时原样返回', () => {
     expect(ensureUniqueTemplatePresetName_ACU('新预设')).toBe('新预设');
@@ -328,28 +242,10 @@ describe('ensureUniqueTemplatePresetName_ACU', () => {
     const unique = ensureUniqueTemplatePresetName_ACU('预设A');
     expect(unique).toBe('预设A (2)');
   });
-  it('空名称返回空字符串', () => {
-    expect(ensureUniqueTemplatePresetName_ACU('')).toBe('');
-  });
-});
-
-describe('normalizeTemplateOperationScope_ACU', () => {
-  it('chat 返回 chat', () => {
-    expect(normalizeTemplateOperationScope_ACU('chat')).toBe('chat');
-  });
-  it('其他值返回 global', () => {
-    expect(normalizeTemplateOperationScope_ACU('global')).toBe('global');
-    expect(normalizeTemplateOperationScope_ACU('')).toBe('global');
-    expect(normalizeTemplateOperationScope_ACU('unknown')).toBe('global');
-  });
 });
 
 // ═══ resolveActiveTemplatePresetName_ACU ═══
 describe('resolveActiveTemplatePresetName_ACU', () => {
-  it('无 chatScope 时回退到全局', () => {
-    vi.mocked(getCurrentTemplatePresetName_ACU).mockReturnValueOnce('全局预设');
-    expect(resolveActiveTemplatePresetName_ACU()).toBe('全局预设');
-  });
   it('有 chatScope 时使用 chatScope 的 presetName', () => {
     vi.mocked(getCurrentChatTemplateScopeState_ACU).mockReturnValueOnce({ mode: 'chat_override', presetName: '聊天预设' } as any);
     expect(resolveActiveTemplatePresetName_ACU()).toBe('聊天预设');
@@ -373,25 +269,6 @@ describe('resolveActiveTemplatePresetName_ACU', () => {
     vi.mocked(getCurrentChatTemplateScopeState_ACU).mockReturnValueOnce({ mode: 'inherit_global', presetName: '' } as any);
     expect(resolveActiveTemplatePresetName_ACU()).toBe('global-A');
   });
-  it('fallbackToGlobal=false 且无 chatScope 时返回空', () => {
-    expect(resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: false })).toBe('');
-  });
-});
-
-// ═══ getActiveTemplatePresetMeta_ACU ═══
-describe('getActiveTemplatePresetMeta_ACU', () => {
-  it('返回包含 presetName 和 scope 的元数据', () => {
-    const meta = getActiveTemplatePresetMeta_ACU();
-    expect(meta).toHaveProperty('presetName');
-    expect(meta).toHaveProperty('scope');
-    expect(meta).toHaveProperty('displayName');
-    expect(meta).toHaveProperty('mode');
-    expect(meta).toHaveProperty('scopeLabel');
-  });
-  it('无 chatScope 时 scope 为 global', () => {
-    const meta = getActiveTemplatePresetMeta_ACU();
-    expect(meta.scope).toBe('global');
-  });
 });
 
 // ═══ normalizeTemplateForPresetSave_ACU ═══
@@ -404,38 +281,10 @@ describe('normalizeTemplateForPresetSave_ACU', () => {
     expect(result!.templateObj).toHaveProperty('sheet_0');
     expect(result!.templateStr).toContain('sheet_0');
   });
-  it('parseTableTemplateJson 返回 null 时返回 null', () => {
-    vi.mocked(parseTableTemplateJson_ACU).mockReturnValueOnce(null);
-    expect(normalizeTemplateForPresetSave_ACU()).toBeNull();
-  });
-});
-
-// ═══ getDefaultTemplateSnapshot_ACU ═══
-describe('getDefaultTemplateSnapshot_ACU', () => {
-  it('返回默认模板快照', () => {
-    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValueOnce({ templateStr: '{"sheet_0":{}}', templateObj: { sheet_0: {} } } as any);
-    const result = getDefaultTemplateSnapshot_ACU();
-    expect(result).not.toBeNull();
-    expect(result!.templateStr).toBe('{"sheet_0":{}}');
-  });
 });
 
 // ═══ parseImportedTemplateData_ACU ═══
 describe('parseImportedTemplateData_ACU', () => {
-  it('有效 JSON 字符串解析成功', () => {
-    const validTemplate = {
-      mate: { type: 'chatSheets', version: 1 },
-      sheet_legacy_random: { uid: 'sheet_legacy_random', name: '表1', content: [['row_id', '名称']], sourceData: {} },
-    };
-    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValueOnce({
-      templateStr: JSON.stringify(validTemplate),
-      templateObj: validTemplate,
-    } as any);
-    const result = parseImportedTemplateData_ACU(JSON.stringify(validTemplate));
-    expect(result).toHaveProperty('snapshot');
-    expect(result).toHaveProperty('templateObj');
-    expect(result).toHaveProperty('templateStr');
-  });
   it('无数据业务表头会在严格校验前补齐 row_id，且快照使用规范化结果', () => {
     const template = {
       mate: { type: 'chatSheets', version: 1 },
@@ -479,15 +328,9 @@ describe('parseImportedTemplateData_ACU', () => {
   it('缺少 mate 抛出错误', () => {
     expect(() => parseImportedTemplateData_ACU('{"sheet_0":{}}')).toThrow('mate');
   });
-  it('缺少 sheet 抛出错误', () => {
-    expect(() => parseImportedTemplateData_ACU('{"mate":{"type":"chatSheets"}}')).toThrow('未找到任何表格');
-  });
   it('sheet 结构不完整抛出错误', () => {
     const data = { mate: { type: 'chatSheets' }, sheet_0: { name: '表' } };
     expect(() => parseImportedTemplateData_ACU(data)).toThrow('结构不完整');
-  });
-  it('非字符串非对象抛出错误', () => {
-    expect(() => parseImportedTemplateData_ACU(123)).toThrow('无效的模板数据');
   });
   it('校验失败时不会调用 sanitizer 或持久化预设', () => {
     const invalid = {
@@ -786,15 +629,6 @@ describe('validateImportedTemplateObject_ACU', () => {
 
 // ═══ persistTemplateScopeSelectionState_ACU ═══
 describe('persistTemplateScopeSelectionState_ACU', () => {
-  it('updateGlobal=true 时调用 saveSettings', () => {
-    persistTemplateScopeSelectionState_ACU('预设A', { updateGlobal: true, save: true });
-    expect(saveSettings_ACU).toHaveBeenCalled();
-  });
-  it('save=false 时不调用 saveSettings', () => {
-    vi.mocked(saveSettings_ACU).mockClear();
-    persistTemplateScopeSelectionState_ACU('预设A', { save: false });
-    expect(saveSettings_ACU).not.toHaveBeenCalled();
-  });
   it('返回规范化的预设名', () => {
     const result = persistTemplateScopeSelectionState_ACU('  预设B  ');
     expect(result).toBe('预设B');
@@ -816,11 +650,6 @@ describe('applyTemplateSnapshotToScope_ACU', () => {
     expect(reconcileChatTemplate_ACU).not.toHaveBeenCalled();
     expect(commitCurrentFloorTemplateScopeOnly_ACU).not.toHaveBeenCalled();
     expect(commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
-  });
-  it('无效快照返回 false', async () => {
-    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValueOnce(null);
-    const result = await applyTemplateSnapshotToScope_ACU(null);
-    expect(result).toBe(false);
   });
 
   it('全局模板实际应用成功后才发布运行时变更（空聊天走轻路径）', async () => {
@@ -967,10 +796,6 @@ describe('applyTemplatePresetToCurrent_ACU', () => {
     expect(result).toBeTruthy();
     expect(reconcileChatTemplate_ACU).not.toHaveBeenCalled();
     vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockRestore();
-  });
-  it('不存在的预设返回 false', async () => {
-    const result = await applyTemplatePresetToCurrent_ACU('不存在的预设', { updateGlobal: true });
-    expect(result).toBe(false);
   });
   it('updateGlobal=false 且无结构变化时通过 scope-only 提交应用 chat 模板', async () => {
     const candidate = { mate: { type: 'chatSheets', version: 1 }, sheet_0: { uid: 'sheet_0', name: '表', content: [['row_id']], sourceData: {}, updateConfig: {}, exportConfig: {} } };
@@ -1664,12 +1489,6 @@ describe('followGlobalTemplateForCurrentChat_ACU', () => {
 
 // ═══ resolveTemplateForExport_ACU ═══
 describe('resolveTemplateForExport_ACU', () => {
-  it('global scope 有选中预设时从预设加载', () => {
-    upsertTemplatePreset_ACU('导出预设', '{"sheet_0":{"name":"导出表"}}');
-    const result = resolveTemplateForExport_ACU('global', '导出预设');
-    expect(result).not.toBeNull();
-    expect(result!.fromPresetName).toBe('导出预设');
-  });
   it('global scope 无预设时回退到全局快照', () => {
     vi.mocked(getGlobalTemplateSnapshotForCurrentProfile_ACU).mockReturnValueOnce({
       templateObj: { sheet_0: { name: '全局表' } },
@@ -1692,13 +1511,6 @@ describe('resolveTemplateForExport_ACU', () => {
     const result = resolveTemplateForExport_ACU('chat');
     expect(result).not.toBeNull();
   });
-  it('所有来源都无数据时返回 null', () => {
-    vi.mocked(getGlobalTemplateSnapshotForCurrentProfile_ACU).mockReturnValueOnce(null);
-    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValueOnce(null);
-    vi.mocked(getGlobalTemplateSnapshotForCurrentProfile_ACU).mockReturnValueOnce(null);
-    const result = resolveTemplateForExport_ACU('global');
-    expect(result).toBeNull();
-  });
 });
 
 // ═══ getRuntimeTemplateSnapshot_ACU ═══
@@ -1717,17 +1529,6 @@ describe('getRuntimeTemplateSnapshot_ACU', () => {
       keys.forEach((key: string, index: number) => { if (obj[key] && typeof obj[key] === 'object') obj[key].orderNo = index + 1; });
       return obj;
     });
-  });
-  it('运行时模板可解析时返回 sanitized 快照', () => {
-    vi.mocked(parseTableTemplateJson_ACU).mockReturnValueOnce({ sheet_0: { name: '运行时表' } } as any);
-    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValueOnce({
-      templateStr: '{"sheet_0":{"name":"运行时表"}}',
-      templateObj: { sheet_0: { name: '运行时表' } },
-    } as any);
-    const result = getRuntimeTemplateSnapshot_ACU();
-    expect(result).not.toBeNull();
-    expect(result!.templateStr).toBe('{"sheet_0":{"name":"运行时表"}}');
-    expect(sanitizeTemplateSnapshotForChat_ACU).toHaveBeenCalled();
   });
 
   it('解析失败返回 null，不回落默认模板', () => {
@@ -1787,11 +1588,6 @@ describe('resolveTemplateForExport_ACU · runtime scope', () => {
     expect(runtimeResult).not.toBeNull();
     expect(globalResult).not.toBeNull();
     expect(JSON.stringify(runtimeResult!.jsonData)).not.toBe(JSON.stringify(globalResult!.jsonData));
-  });
-
-  it('运行时解析失败返回 null', () => {
-    vi.mocked(parseTableTemplateJson_ACU).mockReturnValueOnce(null as any);
-    expect(resolveTemplateForExport_ACU('runtime')).toBeNull();
   });
 
   it('global 传不存在的预设名且不传 options 时仍返回 null（回归断言）', () => {

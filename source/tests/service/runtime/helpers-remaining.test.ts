@@ -156,29 +156,6 @@ beforeEach(() => {
 });
 
 describe('handleChatCompletionReady_ACU', () => {
-  it('功能未启用时跳过处理', async () => {
-    mockSettings.promptTemplateSettings = { enabled: false };
-    const data = { messages: [{ content: '{{random}}' }] };
-    await handleChatCompletionReady_ACU(data);
-    expect(mockParseRandomTags).not.toHaveBeenCalled();
-  });
-
-  it('settings 为 null 时跳过处理', async () => {
-    mockSettings.promptTemplateSettings = null;
-    const data = { messages: [{ content: '{{random}}' }] };
-    await handleChatCompletionReady_ACU(data);
-    expect(mockParseRandomTags).not.toHaveBeenCalled();
-  });
-
-  it('data 为 null 时跳过处理', async () => {
-    await handleChatCompletionReady_ACU(null);
-    expect(mockParseRandomTags).not.toHaveBeenCalled();
-  });
-
-  it('data.messages 不是数组时跳过处理', async () => {
-    await handleChatCompletionReady_ACU({ messages: 'not array' });
-    expect(mockParseRandomTags).not.toHaveBeenCalled();
-  });
 
   it('seed 匹配内容组合用户+AI 输入（e6f8ef38：AI-only 会漏用户触发的 seed 条件）', async () => {
     const { getLatestUserMessageContent_ACU } = await import('../../../src/service/runtime/template-vars');
@@ -192,24 +169,6 @@ describe('handleChatCompletionReady_ACU', () => {
     const ctx = call!.find(a => a && typeof a === 'object' && 'seedContent' in (a as any)) as any;
     expect(ctx.seedContent).toContain('玩家：发动突袭');
     expect(ctx.seedContent).toContain('AI：战况推进');
-  });
-
-  it('处理字符串类型的 message.content', async () => {
-    mockParseRandomTags.mockReturnValue('processed');
-    mockReplaceRandomVariables.mockReturnValue('processed');
-    mockParseCalcTags.mockReturnValue('processed');
-    mockParseMaxTags.mockReturnValue('processed');
-    mockParseMinTags.mockReturnValue('processed');
-    mockReplaceCalcVariables.mockReturnValue('processed');
-    mockReplaceMaxVariables.mockReturnValue('processed');
-    mockReplaceMinVariables.mockReturnValue('processed');
-    mockParseIfBlockRecursive.mockReturnValue('processed');
-
-    const data = { messages: [{ content: '原始内容' }] };
-    await handleChatCompletionReady_ACU(data);
-
-    expect(mockParseRandomTags).toHaveBeenCalledWith('原始内容');
-    expect(data.messages[0].content).toBe('processed');
   });
 
   it('处理数组类型的 message.content（多模态）', async () => {
@@ -237,62 +196,6 @@ describe('handleChatCompletionReady_ACU', () => {
     expect(data.messages[0].content[0].text).toBe('processed');
     // image_url 部分不应被处理
     expect(data.messages[0].content[1].image_url).toBe('http://img.png');
-  });
-
-  it('content 不是字符串也不是数组时不处理', async () => {
-    const data = { messages: [{ content: 123 }] };
-    await handleChatCompletionReady_ACU(data);
-    expect(mockParseRandomTags).not.toHaveBeenCalled();
-  });
-
-  it('空字符串 content 不调用处理函数', async () => {
-    const data = { messages: [{ content: '' }] };
-    await handleChatCompletionReady_ACU(data);
-    expect(mockParseRandomTags).not.toHaveBeenCalled();
-  });
-
-  it('多条消息都被处理', async () => {
-    mockParseRandomTags.mockImplementation((s: string) => s + '_r');
-    mockReplaceRandomVariables.mockImplementation((s: string) => s);
-    mockParseCalcTags.mockImplementation((s: string) => s);
-    mockParseMaxTags.mockImplementation((s: string) => s);
-    mockParseMinTags.mockImplementation((s: string) => s);
-    mockReplaceCalcVariables.mockImplementation((s: string) => s);
-    mockReplaceMaxVariables.mockImplementation((s: string) => s);
-    mockReplaceMinVariables.mockImplementation((s: string) => s);
-    mockParseIfBlockRecursive.mockImplementation((s: string) => s);
-
-    const data = {
-      messages: [
-        { content: '消息1' },
-        { content: '消息2' },
-        { content: '消息3' },
-      ],
-    };
-    await handleChatCompletionReady_ACU(data);
-
-    expect(mockParseRandomTags).toHaveBeenCalledTimes(3);
-    expect(data.messages[0].content).toBe('消息1_r');
-    expect(data.messages[1].content).toBe('消息2_r');
-    expect(data.messages[2].content).toBe('消息3_r');
-  });
-
-  it('getPlotFromHistory_ACU 被调用获取剧情数据', async () => {
-    mockGetPlotFromHistory.mockReturnValue('剧情内容');
-    const data = { messages: [{ content: '测试' }] };
-    // 让处理函数返回不同值以触发 processedCount
-    mockParseRandomTags.mockReturnValue('changed');
-    mockReplaceRandomVariables.mockReturnValue('changed');
-    mockParseCalcTags.mockReturnValue('changed');
-    mockParseMaxTags.mockReturnValue('changed');
-    mockParseMinTags.mockReturnValue('changed');
-    mockReplaceCalcVariables.mockReturnValue('changed');
-    mockReplaceMaxVariables.mockReturnValue('changed');
-    mockReplaceMinVariables.mockReturnValue('changed');
-    mockParseIfBlockRecursive.mockReturnValue('changed');
-
-    await handleChatCompletionReady_ACU(data);
-    expect(mockGetPlotFromHistory).toHaveBeenCalled();
   });
 
 

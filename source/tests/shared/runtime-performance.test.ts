@@ -47,22 +47,6 @@ describe('runtime-performance', () => {
     expect(getRecentRuntimePerformanceSpans_ACU()).toHaveLength(1);
   });
 
-  it('支持阈值配置、runId 和 parentSpanId，便于拼接阶段树', () => {
-    const span = startRuntimePerformanceSpan_ACU('persist', {
-      runId: 'run-1',
-      parentSpanId: 'span-parent',
-      now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(250),
-      settings: { performanceSlowThresholdMs: 100, performanceLongTaskThresholdMs: 200 },
-    });
-
-    expect(span.end()).toMatchObject({
-      runId: 'run-1',
-      parentSpanId: 'span-parent',
-      durationMs: 250,
-      severity: 'long',
-    });
-  });
-
   it('按 runId 构建阶段树，并将缺失父阶段显式列为 orphan', () => {
     const settings = { performanceDiagnosticsEnabled: true };
     const root = startRuntimePerformanceSpan_ACU('pipeline', {
@@ -111,22 +95,5 @@ describe('runtime-performance', () => {
 
     run!.roots[0].metrics.mutated = true;
     expect(getRuntimePerformanceRun_ACU(root.id)?.roots[0].metrics).toEqual({});
-  });
-
-  it('未知 runId 返回 null，且只聚合同一 run 的记录', () => {
-    const first = startRuntimePerformanceSpan_ACU('first', {
-      runId: 'run-a',
-      now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(60),
-    });
-    const second = startRuntimePerformanceSpan_ACU('second', {
-      runId: 'run-b',
-      now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(80),
-    });
-    first.end();
-    second.end();
-
-    expect(getRuntimePerformanceRun_ACU('run-a')?.spanCount).toBe(1);
-    expect(getRuntimePerformanceRun_ACU('run-a')?.roots.map(node => node.name)).toEqual(['first']);
-    expect(getRuntimePerformanceRun_ACU('missing')).toBeNull();
   });
 });

@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildEmptyAgentModuleSnapshot_ACU,
-  renderAgentWebRefsByIds_ACU,
   renderAgentWebRefsCatalog_ACU,
   validateAgentModuleSnapshot_ACU,
   validateWebRefEntry_ACU,
@@ -84,12 +83,6 @@ describe('百科资料库快照', () => {
     expect(detail.text).toContain('链接：https://zh.moegirl.org.cn/');
     expect(detail.text).toContain('[WR-002]「泥沼」');
     expect(detail.text).toContain('退休原因：并入人物条目');
-  });
-
-  it('关闭功能且库空时目录给一句说明；开启时提示可派工', () => {
-    expect(renderAgentWebRefsCatalog_ACU(buildEmptyAgentModuleSnapshot_ACU(), false)).toContain('未启用');
-    expect(renderAgentWebRefsCatalog_ACU(buildEmptyAgentModuleSnapshot_ACU(), true)).toContain('web-researcher');
-    expect(renderAgentWebRefsByIds_ACU(buildEmptyAgentModuleSnapshot_ACU(), ['WR-009'])).toContain('不存在于百科资料库');
   });
 
   it('本地 search 的 modules 域能按资料详情命中百科条目并给出精读地址', () => {

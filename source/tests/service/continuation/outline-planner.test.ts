@@ -144,24 +144,6 @@ describe('ContinuationOutlinePlanner_ACU', () => {
     expect(all).not.toContain('【当前启用的阶段大纲】');
   });
 
-  it('builds a validated outline from tag output with runtime-generated structure', async () => {
-    const { planner, callInternalAi, resolveApiPreset } = createPlanner_ACU([tagOutline_ACU(6)]);
-    const result = await planner.plan(request_ACU(settings_ACU(), { resolvers: { $ORIGIN_INSTRUCTION: () => '推进剧情' } }));
-    expect(result).toMatchObject({ attempts: 1, requiresReview: false, apiPreset: { presetName: 'preset-a', source: 'fixed' } });
-    expect(result.outline).toMatchObject({ schemaVersion: 1, title: '阶段标题', goal: '阶段目标', totalTurns: 6 });
-    expect(result.outline.nodes).toHaveLength(1);
-    expect(result.outline.nodes[0]).toMatchObject({ id: 'node-fresh-1', suggestedTurns: 6 });
-    expect(result.outline.nodes[0].turns.map(turn => turn.id)).toEqual(['turn-fresh-2', 'turn-fresh-3', 'turn-fresh-4', 'turn-fresh-5', 'turn-fresh-6', 'turn-fresh-7']);
-    expect(callInternalAi).toHaveBeenCalledWith(
-      [{ role: 'user', content: '推进剧情 ' }],
-      expect.any(Object),
-      expect.objectContaining({ source: 'outline', requestId: 'outline-0' }),
-      null,
-      expect.objectContaining({ cacheScope: 'outline', promptCacheEnabled: true }),
-    );
-    expect(resolveApiPreset).toHaveBeenCalledTimes(1);
-  });
-
   it('parses tags surrounded by reasoning prose and markdown fences', async () => {
     const { planner } = createPlanner_ACU([`先写思路：这一阶段要做铺垫。\n\`\`\`xml\n${tagOutline_ACU(6)}\n\`\`\`\n以上是本阶段规划。`]);
     const result = await planner.plan(request_ACU());

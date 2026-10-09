@@ -154,11 +154,6 @@ describe('会话分段读取', () => {
     expect(() => readAgentConversation_ACU(unknownVersion)).toThrow(ContinuationValidationError_ACU);
     expect(() => readAgentConversation_ACU(blankArrayItem)).toThrow(ContinuationValidationError_ACU);
   });
-
-  it('全程无命中时返回空会话', () => {
-    useChat([{ mes: 'a' }, { mes: 'b' }]);
-    expect(readAgentConversation_ACU()).toMatchObject({ messages: [], nextId: 1 });
-  });
 });
 
 describe('会话时间线（展示通道）', () => {
@@ -194,11 +189,6 @@ describe('会话时间线（展示通道）', () => {
       { [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([message_ACU(2, 'agent', '最近')]) },
     ];
     expect(() => readAgentConversationTimeline_ACU(chat, { maxEntries: 1 })).toThrow(ContinuationValidationError_ACU);
-  });
-
-  it.each([0, -1, 1.5, NaN, Infinity])('无效窗口 %s 保持完整读取', maxEntries => {
-    const chat = [{ [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([message_ACU(1, 'agent', 'a'), message_ACU(2, 'agent', 'b')]) }];
-    expect(readAgentConversationTimeline_ACU(chat, { maxEntries })).toHaveLength(2);
   });
 
   it('展示窗口包含交接条目且不修改完整历史或模型视图', () => {

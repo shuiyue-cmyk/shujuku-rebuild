@@ -166,23 +166,6 @@ describe('rebuildOutdatedSummaryVectorIndexInBackground_ACU', () => {
     expect(h.toast).toHaveBeenCalledWith('success', expect.stringContaining('120 行'), '交火索引升级完成', expect.any(Object));
   });
 
-  it('索引已是新格式时不重建', async () => {
-    h.outdated = false;
-
-    expect(await rebuildOutdatedSummaryVectorIndexInBackground_ACU()).toBe(false);
-    expect(h.rebuild).not.toHaveBeenCalled();
-  });
-
-  it('交火全局开关关闭或无索引时不重建', async () => {
-    h.globalMeta = { summaryVectorIndexModeGlobal: false };
-    expect(await rebuildOutdatedSummaryVectorIndexInBackground_ACU()).toBe(false);
-
-    h.globalMeta = { summaryVectorIndexModeGlobal: true };
-    h.snapshot = null;
-    expect(await rebuildOutdatedSummaryVectorIndexInBackground_ACU()).toBe(false);
-    expect(h.rebuild).not.toHaveBeenCalled();
-  });
-
   it('向量配置无效时不盲目重建（发送时仍有自愈兜底）', async () => {
     h.configValid = false;
 

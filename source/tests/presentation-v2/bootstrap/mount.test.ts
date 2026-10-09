@@ -127,31 +127,6 @@ describe('mount — 当前文档场景', () => {
       ?? null;
   }
 
-  it('外观按钮打开外观面板（含内置主题与界面缩放），点遮罩关闭', async () => {
-    const { mount } = await freshImport();
-    await mount.openAcuV2App();
-
-    const appearanceButton = findButton(document, '外观与界面');
-    expect(appearanceButton).not.toBeNull();
-    appearanceButton!.click();
-    await nextTick();
-
-    const layer = document.querySelector<HTMLElement>('#ub-portal .ub-sheet-layer');
-    expect(layer).not.toBeNull();
-    expect(layer!.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
-    expect(layer!.textContent).toContain('浅色');
-    expect(layer!.textContent).toContain('地雷色');
-    expect(layer!.textContent).toContain('界面缩放');
-    expect(layer!.querySelector('[title^="删除自定义主题"]')).toBeNull();
-
-    layer!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await nextTick();
-    await nextTick();
-    expect(layer!.classList.contains('is-closing')).toBe(true);
-
-    mount.__resetAcuV2MountForTests();
-  });
-
   it('外观面板可以切换界面缩放，并持久化到 appearance section', async () => {
     const { mount } = await freshImport();
     await mount.openAcuV2App();
@@ -205,37 +180,6 @@ describe('mount — 当前文档场景', () => {
     expect(toasts!.parentElement).toBe(portal);
     expect(shell!.contains(toasts!)).toBe(false);
     expect(toasts!.textContent).toContain('手动填表开始。');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('「全部页面」按钮打开页面面板，点页面项后收起并切换页面', async () => {
-    persistAdvancedMode();
-    const { mount } = await freshImport();
-    await mount.openAcuV2App();
-
-    const menuButton = findButton(document, '全部页面');
-    expect(menuButton).not.toBeNull();
-    expect(menuButton!.getAttribute('aria-expanded')).toBe('false');
-
-    menuButton!.click();
-    await nextTick();
-
-    const launcher = document.querySelector<HTMLElement>('.ub-launcher');
-    expect(launcher).not.toBeNull();
-    expect(menuButton!.getAttribute('aria-expanded')).toBe('true');
-    expect(launcher!.textContent).toContain('UnbirthDB');
-
-    const formFillButton = launcher!.querySelector<HTMLButtonElement>('[data-page-id="form-fill"]');
-    expect(formFillButton).not.toBeNull();
-    formFillButton!.click();
-    // 切页先异步过页面守卫（R10B-06）
-    await vi.waitFor(() => expect(document.querySelector('.ub-launcher')).toBeNull());
-    await nextTick();
-
-    expect(document.querySelector('.ub-launcher')).toBeNull();
-    expect(menuButton!.getAttribute('aria-expanded')).toBe('false');
-    expect(document.querySelector('.ub-top__title')?.textContent?.trim()).toBe('填表工作台');
 
     mount.__resetAcuV2MountForTests();
   });

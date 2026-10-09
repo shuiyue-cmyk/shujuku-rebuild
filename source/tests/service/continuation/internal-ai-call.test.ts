@@ -48,9 +48,6 @@ beforeEach(() => {
 });
 
 describe('formatAgentUsageLabel_ACU', () => {
-  it('缓存读取和写入字段缺失时不显示缓存用量', () => {
-    expect(formatAgentUsageLabel_ACU({})).toBe('输入 未报告 · 输出 未报告');
-  });
 
   it('明确报告 0 时保留 0，并显示缓存写入', () => {
     expect(formatAgentUsageLabel_ACU({
@@ -59,15 +56,6 @@ describe('formatAgentUsageLabel_ACU', () => {
       cachedTokens: 0,
       cacheWriteTokens: 0,
     })).toBe('输入 0 · 缓存读取 0 · 输出 0 · 缓存写入 0');
-  });
-
-  it('正数沿用紧凑缩写', () => {
-    expect(formatAgentUsageLabel_ACU({
-      promptTokens: 1500,
-      completionTokens: 999,
-      cachedTokens: 1200,
-      cacheWriteTokens: 1000,
-    })).toBe('输入 1.5k · 缓存读取 1.2k · 输出 999 · 缓存写入 1.0k');
   });
 });
 

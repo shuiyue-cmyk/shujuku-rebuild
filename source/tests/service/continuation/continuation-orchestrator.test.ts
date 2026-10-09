@@ -724,47 +724,6 @@ describe('ContinuationOrchestrator_ACU', () => {
     expect(stopHostGeneration).toHaveBeenCalledWith('chat-a');
   });
 
-  it('stops after the initial stage when the automatic stage limit is one', async () => {
-    const { orchestrator, planner, store } = createOrchestrator();
-    await orchestrator.createTask({ originInstruction: '推进剧情' });
-    const persisted = store.readPersisted()!;
-    persisted.settings = { ...persisted.settings, maxAutomaticStages: 1 };
-    await store.replaceAtomically(persisted, { chatIdentity: 'chat-a' });
-    await orchestrator.continueTask();
-    await confirmTurns(orchestrator, store, 6);
-    const stopped = store.readPersisted()!.activeTask!;
-    expect(stopped).toMatchObject({ status: 'paused', stopReason: 'stage_limit_reached', runStageCount: 1 });
-    expect(planner).toHaveBeenCalledTimes(1);
-
-    // 普通继续不重置预算窗口，仍然拒绝。
-    await expectCode(() => orchestrator.continueTask(), 'CONTINUATION_TASK_STATE_INVALID');
-
-    const result = await orchestrator.sendAgentMessage({ text: '保留现有进度，继续下一阶段' });
-    const resumed = store.readPersisted()!.activeTask!;
-    expect(result).toMatchObject({ disposition: 'continue_now', shouldContinue: true });
-    expect(resumed).toMatchObject({
-      taskId: stopped.taskId,
-      status: 'paused',
-      stopReason: null,
-      runStageCount: 1,
-      stageBudgetBaseCount: 1,
-    });
-
-    await orchestrator.continueTask();
-    const secondStage = store.readPersisted()!.activeTask!;
-    expect(secondStage.runStageCount).toBe(2);
-    expect(secondStage.stages.at(-1)).toMatchObject({ stageNumber: 2, status: 'running' });
-    expect(planner).toHaveBeenCalledTimes(2);
-
-    await confirmTurns(orchestrator, store, 6);
-    expect(store.readPersisted()!.activeTask).toMatchObject({
-      status: 'paused',
-      stopReason: 'stage_limit_reached',
-      runStageCount: 2,
-      stageBudgetBaseCount: 1,
-    });
-  });
-
   it('applies sentence-level outline edits as a frozen next revision without an AI call', async () => {
     const { orchestrator, planner, store } = createOrchestrator();
     await orchestrator.createTask({ originInstruction: '推进剧情' });

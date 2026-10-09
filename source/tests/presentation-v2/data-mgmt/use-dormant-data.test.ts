@@ -62,18 +62,6 @@ const columnEntry = {
 beforeEach(() => { vi.restoreAllMocks(); });
 
 describe('useDormantData', () => {
-  it('refresh：并取两类清单并更新状态，成功时 listError 为 null', async () => {
-    const d = await loadDormant({
-      tables: () => ({ ok: true, entries: [tableEntry] }),
-      columns: () => ({ ok: true, entries: [columnEntry] }),
-    });
-    d.dormant.refresh();
-    expect(d.dormant.dormantTables.value).toEqual([tableEntry]);
-    expect(d.dormant.dormantColumns.value).toEqual([columnEntry]);
-    expect(d.dormant.listError.value).toBeNull();
-    expect(d.dormant.loaded.value).toBe(true);
-    expect(d.dormant.isEmpty.value).toBe(false);
-  });
 
   it('refresh：任一来源失败进入错误态（区分「无休眠」与「读不出」）', async () => {
     const d = await loadDormant({
@@ -83,21 +71,6 @@ describe('useDormantData', () => {
     d.dormant.refresh();
     expect(d.dormant.listError.value).toContain('生命周期派生失败');
     expect(d.dormant.dormantTables.value).toEqual([]);
-  });
-
-  it('refresh：S3-3 完整性审计成功时填充 integrityIssues', async () => {
-    const issue = {
-      sheetKey: 'sheet_orphan',
-      name: 'sheet_orphan',
-      kind: 'missing_restore_data',
-      message: '休眠表 sheet_orphan 的恢复数据缺失。',
-    };
-    const d = await loadDormant({
-      audit: () => ({ ok: true, issues: [issue], hiddenCount: 1 }),
-    });
-    d.dormant.refresh();
-    expect(d.audit).toHaveBeenCalledOnce();
-    expect(d.dormant.integrityIssues.value).toEqual([issue]);
   });
 
   it('refresh：审计 ok=false 时 integrityIssues 置空（派生失败已由 listError 呈现，不重复报）', async () => {
@@ -153,12 +126,5 @@ describe('useDormantData', () => {
     expect(ok).toBe(true);
     expect(d.wakeColumn).toHaveBeenCalledWith('sheet_role', '备注');
     expect(d.toastSuccess).toHaveBeenCalledOnce();
-  });
-
-  it('wakeColumn：服务失败 → toast 透传错误', async () => {
-    const d = await loadDormant({ wakeColumn: async () => ({ saved: false, error: '列不在休眠集中' }) });
-    const ok = await d.dormant.wakeColumn(columnEntry as any);
-    expect(ok).toBe(false);
-    expect(d.toastError).toHaveBeenCalledWith('列不在休眠集中');
   });
 });

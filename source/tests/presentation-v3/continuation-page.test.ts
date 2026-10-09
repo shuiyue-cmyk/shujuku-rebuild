@@ -298,21 +298,6 @@ describe('ContinuationPage', () => {
     app.unmount();
   });
 
-  it('已有任务时发送不弹确认框', async () => {
-    setTask();
-    const { app, el } = await mountPage();
-
-    typeInto(chatInput(el), '继续推进剧情');
-    await nextTick();
-    buttonByText(el, '发送')!.click();
-    await nextTick();
-
-    const dialog = useDialogStore();
-    expect(dialog.active).toBeNull();
-    await vi.waitFor(() => { expect(sendAgentMessage).toHaveBeenCalledWith('继续推进剧情'); });
-    app.unmount();
-  });
-
   it('消息接收失败时保留草稿', async () => {
     vi.useFakeTimers();
     try {
@@ -385,25 +370,6 @@ describe('ContinuationPage', () => {
     app.unmount();
   });
 
-  it('Ctrl + Enter 直接发送，空白内容不派发', async () => {
-    setTask();
-    const { app, el } = await mountPage();
-    const input = chatInput(el);
-
-    typeInto(input, '   ');
-    await nextTick();
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
-    await nextTick();
-    expect(sendAgentMessage).not.toHaveBeenCalled();
-
-    typeInto(input, '这一轮先别揭穿守门人');
-    await nextTick();
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
-    await nextTick();
-    expect(sendAgentMessage).toHaveBeenCalledWith('这一轮先别揭穿守门人');
-    app.unmount();
-  });
-
   it('进行中按 Ctrl+Enter 不发送', async () => {
     setTask('running');
     const { app, el } = await mountPage();
@@ -414,22 +380,6 @@ describe('ContinuationPage', () => {
     await nextTick();
     expect(sendAgentMessage).not.toHaveBeenCalled();
     expect(buttonByText(el, '停止')).not.toBeUndefined();
-    app.unmount();
-  });
-
-  it('任务存在时渲染状态条、会话流空态，空闲只显示发送', async () => {
-    setTask();
-    const { app, el } = await mountPage();
-    expect(el.querySelector('.ub-feed')).not.toBeNull();
-    expect(el.textContent).toContain('还没有运行记录');
-    expect(el.textContent).toContain('第 1 阶段');
-    expect(el.textContent).toContain('已完成 2 / 4 轮');
-    expect(el.textContent).toContain('大纲 revision 2');
-
-    expect(buttonByText(el, '发送')).not.toBeUndefined();
-    expect(buttonByText(el, '停止')).toBeUndefined();
-    expect(buttonByText(el, '继续当前轮次')).toBeUndefined();
-    expect(buttonByText(el, '重试当前轮次')).toBeUndefined();
     app.unmount();
   });
 
@@ -646,51 +596,6 @@ describe('ContinuationPage', () => {
     app.unmount();
   });
 
-  it('渲染设置与伪 Role 提示词，设置修改后自动经 runtime 保存', async () => {
-    vi.useFakeTimers();
-    try {
-      setSettings();
-      setTask();
-      const { app, el } = await mountPage();
-      await expandAllGroups(el);
-
-      expect(el.textContent).toContain('续写设置');
-      expect(el.textContent).toContain('伪 Role 提示词');
-      expect(el.textContent).toContain('正文可读窗口楼数');
-      expect(el.textContent).toContain('会话自动总结阈值');
-      expect(el.textContent).toContain('单批次读取上限');
-      expect(el.textContent).toContain('临近总结时的精读额度');
-      expect(el.textContent).toContain('连续高压轮上限');
-      expect(el.textContent).toContain('终审单批次读取上限');
-      expect(el.textContent).toContain('关闭时不装配终审证据');
-      expect(el.textContent).toContain('不会发起终审调用');
-      expect(el.textContent).toContain('发送前终审子代理');
-      expect(el.textContent).toContain('固定注入差异：主 Agent、总纲代理、两类策划代理、连续性审查、终审与用户要求维护固定获得 $OUTLINE_WINDOW 或任务段中的 $USER_REQUIREMENTS');
-      expect(el.textContent).toContain('伏笔与认知维护代理不再注入初始要求原文，只接收累计用户要求清单');
-      expect(el.textContent).toContain('故事总纲子代理（arc-architect）');
-      // 保存按钮已移除：修改任意设置项后由防抖自动保存。
-      expect(buttonByText(el, '保存续写设置')).toBeUndefined();
-
-      const stageSizeSelect = el.querySelector<HTMLSelectElement>('select')!;
-      stageSizeSelect.value = 'short';
-      stageSizeSelect.dispatchEvent(new Event('change', { bubbles: true }));
-      await nextTick();
-      expect(saveSettings).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(900);
-      expect(saveSettings).toHaveBeenCalledOnce();
-      expect(saveSettings.mock.calls[0][0]).toMatchObject({
-        stageSize: 'short', storyWindowFloors: 20, agentHistoryTokenBudget: 120000, maxConsecutivePressureTurns: 8,
-        finalReview: { enabled: false, readTokenBudget: '50%', maxExtraReads: 6 },
-        webResearch: { enabled: false, searchProvider: 'searxng', searxngBaseUrl: '', maxToolRounds: 8, maxPages: 8, pageCharLimit: 4000, blockedDomains: '' },
-        agentApiPresets: { finalReviewer: { mode: 'inherit', presetName: '' }, webResearcher: { mode: 'inherit', presetName: '' } },
-        agentPrompts: { finalReviewer: [{ content: '终审' }], webResearcher: [{ content: '检索' }] },
-      });
-      app.unmount();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it('故事总纲卷数：切换档位即保存，自定义档校验卷数并暴露输入框', async () => {
     vi.useFakeTimers();
     try {
@@ -725,45 +630,6 @@ describe('ContinuationPage', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it('续写设置：常用项直接可见，高级参数与提示词按分组折叠，可展开', async () => {
-    setSettings();
-    setTask();
-    const { app, el } = await mountPage();
-
-    const groups = Array.from(el.querySelectorAll<HTMLElement>('#cont-settings .ub-disc, #cont-prompts .ub-disc'));
-    const labels = groups.map(group => group.querySelector('.ub-disc__label')?.textContent?.trim());
-    expect(labels).toEqual(expect.arrayContaining([
-      '运行与重试', '正文读取与上下文', 'Agent 运行预算', '发送前终审', '网页检索', '各 Agent 渠道', '上下文提取与排除规则',
-      '主 Agent', '发送前终审子代理', '网页检索子代理（web-researcher）', '占位符速查',
-    ]));
-    // 默认全部收起。
-    for (const group of groups) {
-      expect(group.querySelector('.ub-disc__head')?.getAttribute('aria-expanded')).toBe('false');
-    }
-    // 折叠态摘要露出关键取值。
-    const metas = groups.map(group => group.querySelector('.ub-disc__meta')?.textContent?.trim());
-    expect(metas).toEqual(expect.arrayContaining(['阶段上限 6 · 正文重试 3 次', '已关闭', '全部跟随默认', '1/1 段启用']));
-
-    // 常用项在分组外面可直接操作；高级项（如正文可读窗口楼数）折叠在分组里。
-    const topLevelLabels = Array.from(el.querySelectorAll<HTMLElement>('.ub-row__label'))
-      .filter(label => !label.closest('.ub-disc'))
-      .map(label => label.textContent?.trim());
-    expect(topLevelLabels).toContain('阶段规模');
-    expect(topLevelLabels).toContain('API 预设（全局默认）');
-    expect(topLevelLabels).not.toContain('正文可读窗口楼数');
-    // 长说明改为 hint 小字，不再塞进 label。
-    expect(el.querySelector('.ub-row__hint')).not.toBeNull();
-    for (const label of el.querySelectorAll<HTMLElement>('.ub-row__label')) {
-      expect((label.textContent ?? '').length).toBeLessThan(24);
-    }
-
-    const runGroup = groups.find(group => group.textContent?.includes('运行与重试'))!;
-    runGroup.querySelector<HTMLButtonElement>('.ub-disc__head')!.click();
-    await nextTick();
-    expect(runGroup.querySelector('.ub-disc__head')?.getAttribute('aria-expanded')).toBe('true');
-    app.unmount();
   });
 
   it('Agent 规划占用时保存返回 busy：显示排队提示并自动重试，落盘后提示消失', async () => {

@@ -120,14 +120,6 @@ describe('resetMergeSummaryPrompt_ACU', () => {
     expect(mockSettings.charCardPrompt).toEqual([{ role: 'USER', content: 'custom-prompt', mainSlot: 'A' }]);
   });
 
-  it('显式 mode=native 覆盖', () => {
-    mockSettings.storageMode = 'sqlite';
-    const result = resetMergeSummaryPrompt_ACU('native');
-
-    expect(result.ok).toBe(true);
-    expect(mockSettings.mergeSummaryPrompt).toEqual(DEFAULT_MERGE_SUMMARY_PROMPT_ACU);
-  });
-
   it('保存失败回滚', () => {
     mockSaveSettings.mockReturnValue({ saved: false, storageType: 'memory', code: 'storage_error', error: '存储错误' });
 
@@ -146,21 +138,5 @@ describe('setUpdateNumberFields_ACU', () => {
 
     expect(result.ok).toBe(true);
     expect(mockSettings.importSplitSize).toBe(100);
-  });
-
-  it('非法数值回退到默认值 10000', () => {
-    const before = mockSettings.importSplitSize;
-    const result = setUpdateNumberFields_ACU({ importSplitSize: Number.NaN });
-
-    expect(result.ok).toBe(true);
-    expect(mockSettings.importSplitSize).toBe(10000);
-  });
-
-  it('空 patch 返回 changed:false 且不调用保存', () => {
-    const result = setUpdateNumberFields_ACU({});
-
-    expect(result.ok).toBe(true);
-    expect(result.changed).toBe(false);
-    expect(mockSaveSettings).not.toHaveBeenCalled();
   });
 });

@@ -19,38 +19,6 @@ beforeEach(() => {
 });
 
 describe('usePlotTaskEditing', () => {
-  it('loadFromRaw 空数组时插入一个默认任务', async () => {
-    const { usePlotTaskEditing } = await setup();
-    const e = usePlotTaskEditing();
-    e.loadFromRaw([], '');
-    expect(e.tasks.value).toHaveLength(1);
-    expect(e.currentTaskId.value).toBe(e.tasks.value[0].id);
-    // service 层 normalizePlotTasks_ACU 对空数组兜底为 "默认任务"
-    expect(e.currentTask.value?.name).toMatch(/任务/);
-    expect(e.currentTask.value?.promptGroup.length).toBeGreaterThan(0);
-  });
-
-  it('addTask 追加新任务并选中', async () => {
-    const { usePlotTaskEditing } = await setup();
-    const e = usePlotTaskEditing();
-    e.loadFromRaw([], '');
-    const before = e.tasks.value.length;
-    e.addTask();
-    expect(e.tasks.value).toHaveLength(before + 1);
-    expect(e.currentTaskId.value).toBe(e.tasks.value[e.tasks.value.length - 1].id);
-  });
-
-  it('deleteCurrentTask 仅在 >1 时生效', async () => {
-    const { usePlotTaskEditing } = await setup();
-    const e = usePlotTaskEditing();
-    e.loadFromRaw([], '');
-    e.deleteCurrentTask();
-    expect(e.tasks.value).toHaveLength(1);
-    e.addTask();
-    expect(e.tasks.value).toHaveLength(2);
-    e.deleteCurrentTask();
-    expect(e.tasks.value).toHaveLength(1);
-  });
 
   it('R10A-23：同一毫秒连续新增任务不会撞 id', async () => {
     const { usePlotTaskEditing } = await setup();

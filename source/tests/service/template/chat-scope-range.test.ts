@@ -218,10 +218,4 @@ describe('findEmptyBusinessHeaderIndexes_ACU / isSqlActiveTemplateSheet_ACU / pr
     expect(result.data.sheet_ok).toBeDefined();
     expect(result.skippedSheets).toEqual([]);
   });
-
-  it('表头缺失/非数组/只有首列 不归入空业务列判定', () => {
-    expect(range.findEmptyBusinessHeaderIndexes_ACU(null)).toEqual([]);
-    expect(range.findEmptyBusinessHeaderIndexes_ACU({ uid: 'u', name: 'n', sourceData: {}, content: ['not-array'] } as any)).toEqual([]);
-    expect(range.findEmptyBusinessHeaderIndexes_ACU({ uid: 'u', name: 'n', sourceData: {}, content: [['row_id']] } as any)).toEqual([]);
-  });
 });

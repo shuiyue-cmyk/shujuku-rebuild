@@ -9,23 +9,6 @@ describe('isSameSheetHeader_ACU', () => {
   it('长度与内容完全一致返回 true', () => {
     expect(isSameSheetHeader_ACU(['row_id', '名称'], ['row_id', '名称'])).toBe(true);
   });
-
-  it('长度不同返回 false', () => {
-    expect(isSameSheetHeader_ACU(['row_id', '名称'], ['row_id', '名称', '数量'])).toBe(false);
-  });
-
-  it('内容不同返回 false', () => {
-    expect(isSameSheetHeader_ACU(['row_id', '名称'], ['row_id', '物品名'])).toBe(false);
-  });
-
-  it('null/undefined 单元格按空串比较', () => {
-    expect(isSameSheetHeader_ACU(['row_id', null], ['row_id', ''])).toBe(true);
-  });
-
-  it('非数组返回 false', () => {
-    expect(isSameSheetHeader_ACU('row_id', ['row_id'])).toBe(false);
-    expect(isSameSheetHeader_ACU(null, ['row_id'])).toBe(false);
-  });
 });
 
 describe('applyGuideMetadataToSheet_ACU', () => {

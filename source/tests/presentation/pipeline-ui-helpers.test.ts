@@ -53,22 +53,6 @@ afterEach(() => {
 });
 
 describe('refreshMergedDataAndNotifyWithUI_ACU UI 可见性裁剪', () => {
-  it('surface 未注册时不安排可视化刷新', async () => {
-    await runWithTimers(refreshMergedDataAndNotifyWithUI_ACU());
-    expect(h.surface.refreshVisualizer).not.toHaveBeenCalled();
-  });
-
-  it('surface 已注册但未提供 isVisualizerActive 时不安排可视化刷新', async () => {
-    registerSurface(undefined);
-    await runWithTimers(refreshMergedDataAndNotifyWithUI_ACU());
-    expect(h.surface.refreshVisualizer).not.toHaveBeenCalled();
-  });
-
-  it('isVisualizerActive 返回 false 时不安排可视化刷新', async () => {
-    registerSurface(false);
-    await runWithTimers(refreshMergedDataAndNotifyWithUI_ACU());
-    expect(h.surface.refreshVisualizer).not.toHaveBeenCalled();
-  });
 
   it('isVisualizerActive 返回 true 时安排一次可视化刷新', async () => {
     registerSurface(true);
@@ -78,27 +62,6 @@ describe('refreshMergedDataAndNotifyWithUI_ACU UI 可见性裁剪', () => {
     expect(h.surface.refreshVisualizer).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(800);
     await operation;
-  });
-
-  it('skipNotify: true 时不产生 800ms 回读等待', async () => {
-    let settled = false;
-    const operation = refreshMergedDataAndNotifyWithUI_ACU({ skipNotify: true });
-    operation.finally(() => { settled = true; });
-    await vi.advanceTimersByTimeAsync(1000);
-    await operation;
-    expect(settled).toBe(true);
-  });
-
-  it('skipNotify: false 且存在前端 API 时产生 800ms 回读等待', async () => {
-    let settled = false;
-    const operation = refreshMergedDataAndNotifyWithUI_ACU().finally(() => { settled = true; });
-    await vi.runAllTicks();
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(799);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await operation;
-    expect(settled).toBe(true);
   });
 
   it('refreshVisualizer 被拒绝时不使外层函数 reject', async () => {

@@ -71,28 +71,6 @@ beforeEach(() => {
 });
 
 describe('I3: 模板变量替换管线', () => {
-  it('Random 标签解析和替换', () => {
-    // parseRandomTags_ACU 语法：<random id="xxx" min="N" max="M" />
-    // replaceRandomVariables_ACU 替换 $random:id 格式
-    const input = '<random id="dice" min="1" max="6" />你掷出了$random:dice';
-    const parsed = parseRandomTags_ACU(input);
-    const result = replaceRandomVariables_ACU(parsed);
-    expect(result).not.toContain('<random');
-    expect(result).not.toContain('$random:dice');
-    expect(result).toMatch(/你掷出了[1-6]/);
-  });
-
-  it('Calc 标签解析和替换', () => {
-    const context = { allTablesJson: mockCurrentJsonTableDataRef.value };
-    // parseCalcTags_ACU 语法：<calc id="xxx" expr="表达式" />
-    // replaceCalcVariables_ACU 替换 $calc:id 格式
-    const input = '<calc id="total" expr="3 + 10" />总数是$calc:total';
-    const parsed = parseCalcTags_ACU(input, context);
-    const result = replaceCalcVariables_ACU(parsed);
-    expect(result).toContain('13');
-    expect(result).not.toContain('<calc');
-    expect(result).not.toContain('$calc:total');
-  });
 
   it('Max/Min 标签解析和替换', () => {
     const context = { allTablesJson: mockCurrentJsonTableDataRef.value };

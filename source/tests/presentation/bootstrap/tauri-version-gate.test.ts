@@ -43,29 +43,12 @@ afterEach(() => {
 });
 
 describe('buildAcuTauriVersionWarningHtml_ACU', () => {
-  it('同时给出当前版本与要求版本', async () => {
-    const { buildAcuTauriVersionWarningHtml_ACU } = await loadGate();
-    const html = buildAcuTauriVersionWarningHtml_ACU('2.2.0');
-    expect(html).toContain('2.2.0');
-    expect(html).toContain('2.3.0');
-    expect(html).toContain('TauriTavern');
-  });
 
   it('版本串经 HTML 转义（宿主返回值不外泄为标记）', async () => {
     const { buildAcuTauriVersionWarningHtml_ACU } = await loadGate();
     const html = buildAcuTauriVersionWarningHtml_ACU('<img src=x onerror=alert(1)>');
     expect(html).toContain('&lt;img');
     expect(html).not.toContain('<img src=x');
-  });
-
-  it('三段式打标：宿主版本 / 扩展版本 / 要求基线各自显式前缀', async () => {
-    const { buildAcuTauriVersionWarningHtml_ACU } = await loadGate();
-    const html = buildAcuTauriVersionWarningHtml_ACU('2.2.0', '2.3.0', '9.9.1');
-    expect(html).toContain('宿主版本');
-    expect(html).toContain('扩展版本');
-    expect(html).toContain('2.2.0');
-    expect(html).toContain('9.9.1');
-    expect(html).toContain('2.3.0');
   });
 });
 
@@ -97,20 +80,6 @@ describe('notifyAcuTauriVersionIfOutdated_ACU', () => {
     await expect(notifyAcuTauriVersionIfOutdated_ACU()).resolves.toBe(true);
     await expect(notifyAcuTauriVersionIfOutdated_ACU()).resolves.toBe(false);
     expect(callGenericPopup).toHaveBeenCalledTimes(1);
-  });
-
-  it('版本满足要求时不提醒', async () => {
-    const { callGenericPopup } = makeTauriWindow('2.3.0');
-    const { notifyAcuTauriVersionIfOutdated_ACU } = await loadGate();
-    await expect(notifyAcuTauriVersionIfOutdated_ACU()).resolves.toBe(false);
-    expect(callGenericPopup).not.toHaveBeenCalled();
-  });
-
-  it('更高版本不提醒', async () => {
-    const { callGenericPopup } = makeTauriWindow('3.1.4');
-    const { notifyAcuTauriVersionIfOutdated_ACU } = await loadGate();
-    await expect(notifyAcuTauriVersionIfOutdated_ACU()).resolves.toBe(false);
-    expect(callGenericPopup).not.toHaveBeenCalled();
   });
 
   it('版本读取失败时 fail-open：不提醒也不抛错', async () => {

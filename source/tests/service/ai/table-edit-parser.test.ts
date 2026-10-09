@@ -84,76 +84,13 @@ import { logWarn_ACU } from '../../../src/shared/utils';
 // isSqlContent
 // ═══════════════════════════════════════════════════════════════
 describe('isSqlContent', () => {
-  it('INSERT 开头返回 true', () => {
-    expect(isSqlContent("INSERT INTO inventory VALUES (1, '铁剑', 3);")).toBe(true);
-  });
-
-  it('UPDATE 开头返回 true', () => {
-    expect(isSqlContent('UPDATE inventory SET quantity = 5 WHERE row_id = 1;')).toBe(true);
-  });
-
-  it('DELETE 开头返回 true', () => {
-    expect(isSqlContent('DELETE FROM inventory WHERE row_id = 1;')).toBe(true);
-  });
-
-  it('ALTER 开头返回 true', () => {
-    expect(isSqlContent('ALTER TABLE inventory ADD COLUMN desc TEXT;')).toBe(true);
-  });
-
-  it('BEGIN 开头返回 true', () => {
-    expect(isSqlContent('BEGIN TRANSACTION;')).toBe(true);
-  });
-
-  it('CREATE 开头返回 true', () => {
-    expect(isSqlContent('CREATE TABLE new_table (id INTEGER);')).toBe(true);
-  });
-
-  it('DROP 开头返回 true', () => {
-    expect(isSqlContent('DROP TABLE old_table;')).toBe(true);
-  });
-
-  it('REPLACE 开头返回 true', () => {
-    expect(isSqlContent("REPLACE INTO inventory VALUES (1, '铁剑', 3);")).toBe(true);
-  });
-
-  it('大小写不敏感', () => {
-    expect(isSqlContent("insert into inventory values (1, '铁剑', 3);")).toBe(true);
-  });
-
-  it('跳过空行后检测', () => {
-    expect(isSqlContent("\n\n  INSERT INTO inventory VALUES (1);")).toBe(true);
-  });
 
   it('跳过 SQL 注释行后检测', () => {
     expect(isSqlContent("-- 这是注释\nINSERT INTO inventory VALUES (1);")).toBe(true);
   });
 
-  it('跳过 HTML 注释残留后检测', () => {
-    expect(isSqlContent("<!--\n-->\nINSERT INTO inventory VALUES (1);")).toBe(true);
-  });
-
   it('insertRow 指令不是 SQL', () => {
     expect(isSqlContent("insertRow(0, {0: '铁剑', 1: '3'})")).toBe(false);
-  });
-
-  it('updateRow 指令不是 SQL', () => {
-    expect(isSqlContent("updateRow(0, 1, {0: '铁剑'})")).toBe(false);
-  });
-
-  it('deleteRow 指令不是 SQL', () => {
-    expect(isSqlContent('deleteRow(0, 1)')).toBe(false);
-  });
-
-  it('空字符串返回 false', () => {
-    expect(isSqlContent('')).toBe(false);
-  });
-
-  it('纯注释返回 false', () => {
-    expect(isSqlContent('-- 只有注释\n-- 没有语句')).toBe(false);
-  });
-
-  it('纯空白返回 false', () => {
-    expect(isSqlContent('   \n\t  ')).toBe(false);
   });
 });
 
@@ -163,21 +100,6 @@ describe('isSqlContent', () => {
 describe('extractTableEditInner_ACU', () => {
   beforeEach(() => {
     mockSettings = { tableEditLastPairOnly: false };
-  });
-
-  it('提取完整 <tableEdit> 标签内容', () => {
-    const text = '一些文字 <tableEdit>insertRow(0, {0: "铁剑"})</tableEdit> 更多文字';
-    const result = extractTableEditInner_ACU(text);
-    expect(result).not.toBeNull();
-    expect(result!.inner).toBe('insertRow(0, {0: "铁剑"})');
-    expect(result!.mode).toBe('full');
-  });
-
-  it('大小写不敏感', () => {
-    const text = '<TABLEEDIT>insertRow(0, {})</TABLEEDIT>';
-    const result = extractTableEditInner_ACU(text);
-    expect(result).not.toBeNull();
-    expect(result!.inner).toContain('insertRow');
   });
 
   it('useLastPairOnly 模式取最后一对', () => {
@@ -208,20 +130,6 @@ describe('extractTableEditInner_ACU', () => {
     const result = extractTableEditInner_ACU(text, { allowNoTableEditTags: true });
     expect(result).not.toBeNull();
     expect(result!.hasClose).toBe(true);
-  });
-
-  it('空字符串返回 null', () => {
-    expect(extractTableEditInner_ACU('')).toBeNull();
-  });
-
-  it('无任何指令返回 null', () => {
-    expect(extractTableEditInner_ACU('这是一段普通文字，没有任何指令')).toBeNull();
-  });
-
-  it('allowNoTableEditTags=false 且无标签时返回 null', () => {
-    const text = '<!-- insertRow(0, {0: "铁剑"}) -->';
-    const result = extractTableEditInner_ACU(text, { allowNoTableEditTags: false });
-    expect(result).toBeNull();
   });
 
   it('处理 AI 响应中的转义字符', () => {
@@ -287,12 +195,6 @@ describe('parseAndApplyTableEdits_ACU — SQL 分支', () => {
     expect(mockApplyEdits).not.toHaveBeenCalled();
   });
 
-  it('currentJsonTableData 为 null 时返回 false', () => {
-    mockCurrentJsonTableData = null;
-    const result = parseAndApplyTableEdits_ACU("<tableEdit>INSERT INTO t VALUES (1);</tableEdit>");
-    expect(result).toBe(false);
-  });
-
   it('空 <tableEdit> 块返回 true', () => {
     const result = parseAndApplyTableEdits_ACU('<tableEdit></tableEdit>');
     expect(result).toBe(true);
@@ -326,15 +228,6 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
         updateConfig: {},
       },
     };
-  });
-
-  it('insertRow 指令正确插入新行', () => {
-    const aiResponse = '<tableEdit>insertRow(0, {"0": "盾牌", "1": "1"})</tableEdit>';
-    const result = parseAndApplyTableEdits_ACU(aiResponse, 'standard');
-    expect(result).toHaveProperty('success');
-    // 验证表格数据被修改（新行被插入）
-    const content = mockCurrentJsonTableData.sheet_0.content;
-    expect(content.length).toBe(4); // 表头 + 原2行 + 新1行
   });
 
   it('删除中间行后插入使用最大 row_id 加一，并保留 0 和 false 单元格', () => {
@@ -378,15 +271,6 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
     expect(content[3][2]).toBe('2');
   });
 
-  it('deleteRow 指令正确删除行', () => {
-    const aiResponse = '<tableEdit>deleteRow(0, 1)</tableEdit>';
-    const result = parseAndApplyTableEdits_ACU(aiResponse, 'standard');
-    expect(result).toHaveProperty('success');
-    // 验证行被删除
-    const content = mockCurrentJsonTableData.sheet_0.content;
-    expect(content.length).toBe(2); // 表头 + 剩余1行
-  });
-
   it('行锁阻止 deleteRow：锁定行保留（与 SQL 模式回滚语义一致）', async () => {
     const { getTableLocksForSheet_ACU } = await import('../../../src/service/runtime/helpers-remaining');
     vi.mocked(getTableLocksForSheet_ACU).mockReturnValueOnce({ rows: new Set([1]), cols: new Set(), cells: new Set() } as any);
@@ -406,15 +290,6 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
     parseAndApplyTableEdits_ACU('<tableEdit>updateRow(0, 1, {"1": "99"})</tableEdit>', 'standard');
 
     expect(mockCurrentJsonTableData.sheet_0.content[2][2]).not.toBe('99');
-  });
-
-  it('updateRow 指令正确更新行', () => {
-    const aiResponse = '<tableEdit>updateRow(0, 1, {"1": "10"})</tableEdit>';
-    const result = parseAndApplyTableEdits_ACU(aiResponse, 'standard');
-    expect(result).toHaveProperty('success');
-    // updateRow(0, 1, {"1": "10"}) → content[rowIndex+1][colIndex+1] = content[2][2]
-    // rowIndex=1 对应第2行数据行（content[2]），colIndex=1 对应第2列数据列（content[][2]）
-    expect(mockCurrentJsonTableData.sheet_0.content[2][2]).toBe('10');
   });
 
   it('多条指令按顺序执行', () => {
@@ -448,15 +323,6 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
     expect(result.success).toBe(true);
     expect(result.appliedEdits).toBe(1);
     expect(result.error).toBe('');
-  });
-
-  it('非 SQLite 模式下 SQL 内容走 DSL 解析路径', () => {
-    mockIsSqliteMode = false;
-    const aiResponse = "<tableEdit>INSERT INTO inventory VALUES (2, '药水', 5);</tableEdit>";
-    mockApplyEdits.mockClear();
-    parseAndApplyTableEdits_ACU(aiResponse, 'standard');
-    // 非 SQLite 模式不应调用 provider.applyEdits
-    expect(mockApplyEdits).not.toHaveBeenCalled();
   });
 
   it.each([

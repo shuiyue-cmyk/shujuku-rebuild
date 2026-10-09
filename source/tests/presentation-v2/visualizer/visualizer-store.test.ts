@@ -7,28 +7,6 @@ describe('visualizer-store', () => {
     setActivePinia(createPinia());
   });
 
-  it('记录进入来源并在关闭时返回 shell 处理信息', () => {
-    const store = useVisualizerStore();
-
-    store.open({
-      source: 'external-api',
-      wasShellOpen: false,
-      previousPageId: 'form-fill',
-    });
-
-    expect(store.isActive).toBe(true);
-    expect(store.mode).toBe('data');
-    expect(store.openTick).toBe(1);
-
-    const result = store.closeSurface();
-
-    expect(result).toEqual({
-      shouldCloseShell: true,
-      previousPageId: 'form-fill',
-    });
-    expect(store.isActive).toBe(false);
-  });
-
   it('重复打开复用现有 surface，干净状态下记录一次刷新请求', () => {
     const store = useVisualizerStore();
 

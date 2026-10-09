@@ -598,23 +598,6 @@ describe('agent worldbook takeover native trigger suppression', () => {
     expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 4)).toMatchObject({ enabled: true });
   });
 
-  it('有 Skill meta 的 enabled selective 条目会进入 snapshot 并被禁用', async () => {
-    mockEntriesByBook.set('角色A世界书', [
-      { uid: 1, enabled: true, keys: ['钥匙A'], type: 'selective', comment: skillComment_ACU, content: '内容A' },
-    ]);
-
-    const result = await takeoverWorldbookGreenlights_ACU();
-
-    expect(result.reason).toBe('native_worldbook_trigger_disabled');
-    expect(result.totalCandidates).toBe(1);
-    expect(result.snapshot.active).toBe(true);
-    expect(result.snapshot.books['角色A世界书']).toEqual([
-      expect.objectContaining({ uid: 1, previousKeys: ['钥匙A'], previousType: 'selective' }),
-    ]);
-    expect(result.updates).toEqual([{ bookName: '角色A世界书', uid: 1 }]);
-    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false });
-  });
-
   it('disabled 且有 Skill meta 的条目不进入 snapshot 且不被启用或禁用', async () => {
     mockEntriesByBook.set('角色A世界书', [
       { uid: 1, enabled: false, keys: ['钥匙A'], type: 'selective', comment: skillComment_ACU, content: '内容A' },

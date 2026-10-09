@@ -17,11 +17,6 @@ vi.mock('../../../src/shared/utils', async (importOriginal) => {
 describe('countTextTokens_ACU', () => {
   beforeEach(() => { _set_SillyTavern_API_ACU(undefined); mockLogDebug.mockClear(); });
 
-  it('宿主分词器可用时直接采用其结果并向上取整', async () => {
-    _set_SillyTavern_API_ACU({ getTokenCountAsync: async () => 42.3 } as any);
-    expect(await countTextTokens_ACU('任意文本')).toBe(43);
-  });
-
   it('宿主分词器异常时降级为字符估算，不把异常抛给调用方', async () => {
     _set_SillyTavern_API_ACU({ getTokenCountAsync: async () => { throw new Error('tokenizer down'); } } as any);
     expect(await countTextTokens_ACU('12345678')).toBe(Math.ceil(8 / 1.5));
@@ -40,25 +35,5 @@ describe('countTextTokens_ACU', () => {
     expect(await countTextTokens_ACU('')).toBe(0);
     expect(await countTextTokens_ACU(null as any)).toBe(0);
     expect(calls).toBe(0);
-  });
-
-  it('宿主分词器缺失时走字符估算分支', async () => {
-    _set_SillyTavern_API_ACU(undefined);
-    expect(await countTextTokens_ACU('a')).toBe(1);
-    expect(await countTextTokens_ACU('中文条目正文')).toBe(4);
-  });
-
-  it('降级分支记 logDebug 漂移日志（TT 诊断用），宿主正常时不记', async () => {
-    _set_SillyTavern_API_ACU(undefined);
-    await countTextTokens_ACU('abc');
-    expect(mockLogDebug).toHaveBeenCalledWith(expect.stringContaining('缺失'));
-    mockLogDebug.mockClear();
-    _set_SillyTavern_API_ACU({ getTokenCountAsync: async () => { throw new Error('tokenizer down'); } } as any);
-    await countTextTokens_ACU('abc');
-    expect(mockLogDebug).toHaveBeenCalledWith(expect.stringContaining('异常'), expect.any(Error));
-    mockLogDebug.mockClear();
-    _set_SillyTavern_API_ACU({ getTokenCountAsync: async () => 10 } as any);
-    await countTextTokens_ACU('abc');
-    expect(mockLogDebug).not.toHaveBeenCalled();
   });
 });

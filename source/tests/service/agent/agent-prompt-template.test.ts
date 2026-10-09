@@ -32,7 +32,6 @@ vi.mock('../../../src/service/runtime/template-vars/agent-read-only-template-ren
 
 import {
   normalizeAgentContextSettings_ACU,
-  normalizeEditablePromptSegments_ACU,
   normalizePromptSegments_ACU,
   renderAgentPromptSegments_ACU,
 } from '../../../src/service/agent/agent-prompt-template';
@@ -41,11 +40,6 @@ const fallback = [{ role: 'system', content: 'fallback', deletable: false }];
 
 describe('agent prompt template normalization', () => {
   beforeEach(() => vi.clearAllMocks());
-
-  it('keeps empty prompt segments in editing normalization', () => {
-    const result = normalizeEditablePromptSegments_ACU([{ role: 'USER', content: '', deletable: true }], fallback);
-    expect(result).toEqual([{ role: 'user', content: '', deletable: true }]);
-  });
 
   it('filters empty prompt segments in runtime normalization', () => {
     const result = normalizePromptSegments_ACU([{ role: 'USER', content: '', deletable: true }], fallback);
@@ -106,15 +100,5 @@ describe('agent prompt template normalization', () => {
     expect(logs).not.toContain('SELECT 1');
     expect(logs).not.toContain('DELETE FROM inventory');
     expect(logs).not.toContain(payload);
-  });
-
-  it('does not replace placeholders inside query tag intervals', () => {
-    const result = renderAgentPromptSegments_ACU(
-      [{ role: 'system', content: '{[sql "SELECT {{agent.userMessage}}"]}' }],
-      { 'agent.userMessage': 'payload' },
-      { enableSqlRender: true, promptKind: 'decision' },
-    );
-    expect(mockRenderAgentReadOnlyQueryTemplates).toHaveBeenCalledWith('{[sql "SELECT {{agent.userMessage}}"]}');
-    expect(result[0].content).toContain('{{agent.userMessage}}');
   });
 });

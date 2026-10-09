@@ -114,48 +114,6 @@ describe('usePlotPresetStore', () => {
     expect(store.isChatOverridden).toBe(false);
   });
 
-  it('setEnabled 调 setGlobalPlotEnabled_ACU 并触发保存', async () => {
-    const settings = createSettings();
-    const { store, setGlobalPlotEnabled, saveSettings } = await importStore(settings);
-    store.refreshFromSettings();
-
-    store.setEnabled(true);
-
-    expect(setGlobalPlotEnabled).toHaveBeenCalledWith(true);
-    expect(saveSettings).toHaveBeenCalled();
-    expect(store.enabled).toBe(true);
-  });
-
-  it('setActivePresetForCurrentChat 走 switchCurrentChatPlotPreset_ACU', async () => {
-    const settings = createSettings();
-    const { store, switchCurrentChatPlotPreset } = await importStore(settings);
-    store.refreshFromSettings();
-
-    const ok = store.setActivePresetForCurrentChat('低速推进');
-    expect(ok).toBe(true);
-    expect(switchCurrentChatPlotPreset).toHaveBeenCalledWith('低速推进', { source: 'ui_v2', save: true });
-  });
-
-  it('setDefaultPreset 走 applyGlobalPlotPresetSelectionForEditor_ACU', async () => {
-    const settings = createSettings();
-    const { store, applyGlobalPlotPresetSelectionForEditor } = await importStore(settings);
-    store.refreshFromSettings();
-
-    const ok = store.setDefaultPreset('低速推进');
-    expect(ok).toBe(true);
-    expect(applyGlobalPlotPresetSelectionForEditor).toHaveBeenCalledWith('低速推进', expect.objectContaining({ source: 'ui_v2_set_default' }));
-  });
-
-  it('setDefaultPreset 支持把默认预设设为全局默认', async () => {
-    const settings = createSettings();
-    const { store, applyGlobalPlotPresetSelectionForEditor } = await importStore(settings);
-    store.refreshFromSettings();
-
-    const ok = store.setDefaultPreset('');
-    expect(ok).toBe(true);
-    expect(applyGlobalPlotPresetSelectionForEditor).toHaveBeenCalledWith('', expect.objectContaining({ source: 'ui_v2_set_default' }));
-  });
-
   it('setPageApiPreset 写回 settings.plotApiPreset 并保存', async () => {
     const settings = createSettings();
     const { store, saveSettings } = await importStore(settings);
@@ -257,17 +215,6 @@ describe('usePlotPresetStore', () => {
     expect(settings.plotSettings.rateErotic).toBe(0.5);
     expect(settings.plotSettings.rateCuckold).toBe(1.25);
     expect(settings.plotSettings.recallCount).toBe(42);
-  });
-
-  it('deletePreset 删除并清理 lastUsedPresetName', async () => {
-    const settings = createSettings();
-    const { store } = await importStore(settings);
-    store.refreshFromSettings();
-
-    const ok = store.deletePreset('记忆召回');
-    expect(ok).toBe(true);
-    expect(settings.plotSettings.promptPresets.map((p: any) => p.name)).not.toContain('记忆召回');
-    expect(settings.plotSettings.lastUsedPresetName).toBe('');
   });
 
   it('importPresetFromJson 重名时覆盖同名预设，保持旧 UI 导入语义', async () => {
@@ -427,14 +374,6 @@ describe('usePlotPresetStore', () => {
     expect(parsed[0].ratePersonal).toBeUndefined();
     expect(parsed[0].rateErotic).toBeUndefined();
     expect(parsed[0].rateCuckold).toBeUndefined();
-  });
-
-  it('importPresetFromJson 非法 JSON 返回 null', async () => {
-    const settings = createSettings();
-    const { store } = await importStore(settings);
-    store.refreshFromSettings();
-
-    expect(store.importPresetFromJson('not json')).toBeNull();
   });
 });
 

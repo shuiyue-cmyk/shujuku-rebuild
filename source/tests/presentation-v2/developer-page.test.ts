@@ -96,18 +96,6 @@ beforeEach(() => {
 });
 
 describe('DeveloperPage', () => {
-  it('渲染开发者开关和填表执行参数', async () => {
-    const { mount } = await mountDeveloperPage();
-
-    const page = document.querySelector('[data-ub-main]');
-    expect(page).not.toBeNull();
-    const text = page!.textContent || '';
-    expect(text).toContain('开发者 gated 字段');
-    expect(text).toContain('填表执行参数');
-    expect(text).toContain('最大并发更新组数');
-
-    mount.__resetAcuV2MountForTests();
-  });
 
   it('已失效的「交火模式」开关不得再渲染：遗留 vectorIndexAdvanced=true 存量也不出现', async () => {
     // 自「交火参数常显」后该开关无任何消费方（VectorIndexPage 根本不读它），

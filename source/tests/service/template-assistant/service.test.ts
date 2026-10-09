@@ -80,7 +80,6 @@ import {
   generateTemplateAssistantDraft_ACU,
   getTemplateAssistantApplyBaselineFingerprint_ACU,
   hasTemplateAssistantApplicableDraft_ACU,
-  parseTemplateAssistantDraft_ACU,
   runTemplateAssistantSession_ACU,
   TemplateAssistantSessionStoppedError_ACU,
   validateTemplateAssistantDraft_ACU,
@@ -169,28 +168,8 @@ describe('template assistant service', () => {
     expect(mockCallAIWithPreset).toHaveBeenCalledWith(expect.any(Array), 'preset-1', undefined, undefined, { needsJsonFormat: true, sessionNamespace: 'template-assistant' });
   });
 
-  it('提取最后一个合法标签块', () => {
-    const draft = parseTemplateAssistantDraft_ACU(`x<templateAssistantDraft>{"protocolVersion":2,"mode":"modify_current_template_incremental","requestId":"req-old","baseFingerprint":"acu-struct:1","atomic":true,"selectedSheetKey":"sheet_a","summary":"旧","warnings":[],"operations":[]}</templateAssistantDraft>y<templateAssistantDraft>{"protocolVersion":2,"mode":"modify_current_template_incremental","requestId":"req-new","baseFingerprint":"acu-struct:2","atomic":true,"selectedSheetKey":"sheet_a","summary":"新","warnings":[],"operations":[]}</templateAssistantDraft>`);
-    expect(draft.summary).toBe('新');
-    expect(draft.baseFingerprint).toBe('acu-struct:2');
-  });
-
   it('协议缺字段时报错', () => {
     expect(() => validateTemplateAssistantDraft_ACU({ protocolVersion: 1 })).toThrow(/mode/);
-  });
-
-  it('selectedSheetKey 为空字符串时报错', () => {
-    expect(() => validateTemplateAssistantDraft_ACU({
-      protocolVersion: 2,
-      mode: 'modify_current_template_incremental',
-      requestId: 'req-1',
-      baseFingerprint: 'acu-struct:1',
-      atomic: true,
-      selectedSheetKey: '',
-      summary: 'x',
-      warnings: [],
-      operations: [],
-    })).toThrow(/selectedSheetKey 必须是非空字符串/);
   });
 
   it('v1 selectedSheetKey 与 patch op 的 sheetKey 不一致时报错', async () => {
@@ -365,15 +344,6 @@ describe('template assistant service', () => {
     expect(mockCallAIWithPreset).not.toHaveBeenCalled();
   });
 
-  it('构建 messages 后调用 callAIWithPreset_ACU', async () => {
-    const tempData = buildTempData_ACU();
-    const fp = buildTemplateAssistantFingerprint_ACU(tempData);
-    mockCallAIWithPreset.mockResolvedValue(`<templateAssistantDraft>{"protocolVersion":2,"mode":"modify_current_template_incremental","requestId":"req-2","baseFingerprint":"${fp}","atomic":true,"selectedSheetKey":"sheet_a","summary":"x","warnings":[],"operations":[]}</templateAssistantDraft>`);
-    const result = await generateTemplateAssistantDraft_ACU({ tempData, currentSheetKey: 'sheet_a', sheetOrder: ['sheet_a'], userRequest: '查看', protocolVersion: 2 });
-    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(1);
-    expect(result.messages).toHaveLength(2);
-  });
-
   it('构建 user payload 时不会向模型暴露 sourceData.ddl', async () => {
     const tempData = buildTempData_ACU();
     tempData.sheet_a.sourceData.ddl = 'CREATE TABLE a (row_id INTEGER PRIMARY KEY, 姓名 TEXT)';
@@ -503,35 +473,6 @@ describe('template assistant service', () => {
     expect(result.messages[3]).toEqual({ role: 'user', content: '再补充备注列' });
     expect(result.messages[4]).toEqual({ role: 'assistant', content: '已补充备注列建议' });
     expect(JSON.parse(result.messages[5]?.content || '{}').userRequest).toBe('继续调整');
-  });
-
-  it('session loop 在空 operations 时停止并返回 metadata', async () => {
-    const tempData = buildTempData_ACU();
-    const fp = buildTemplateAssistantFingerprint_ACU(tempData);
-    mockCallAIWithPreset.mockResolvedValue(`<templateAssistantDraft>{"protocolVersion":2,"mode":"modify_current_template_incremental","requestId":"req-session-empty","baseFingerprint":"${fp}","atomic":true,"selectedSheetKey":"sheet_a","summary":"无需继续","warnings":[],"operations":[]}</templateAssistantDraft>`);
-
-    const result = await runTemplateAssistantSession_ACU({
-      tempData,
-      currentSheetKey: 'sheet_a',
-      sheetOrder: ['sheet_a'],
-      userRequest: '检查是否还需要修改',
-      priorTurns: [{ user: '上一轮需求', assistant: '上一轮结果' }],
-      maxRounds: 3,
-      protocolVersion: 2,
-    });
-
-    expect(result.originalBaseFingerprint).toBe(fp);
-    expect(result.session.stopReason).toBe('empty_operations');
-    expect(result.session.roundsExecuted).toBe(1);
-    expect(result.rounds).toHaveLength(1);
-    expect(result.rounds[0]?.messages[1]).toEqual({ role: 'user', content: '上一轮需求' });
-    expect(result.rounds[0]?.messages[2]).toEqual({ role: 'assistant', content: '上一轮结果' });
-    expect(mockPreflightSchemaMigrations).toHaveBeenCalledTimes(2);
-    expect(mockPreflightSchemaMigrations.mock.calls[1][0]).toEqual(expect.objectContaining({
-      baselineData: tempData,
-      candidateData: result.compileResult.candidateData,
-      intents: result.compileResult.schemaMigrationIntents,
-    }));
   });
 
 

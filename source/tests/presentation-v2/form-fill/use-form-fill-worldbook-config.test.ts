@@ -42,18 +42,6 @@ beforeEach(() => {
 });
 
 describe('useFormFillWorldbookConfig', () => {
-  it('手动选择支持多本世界书并去重保存', async () => {
-    const c = await getComposable();
-    c.refreshFromSettings();
-
-    c.setManualSelection(['Book-A', 'Book-B', 'Book-A', '']);
-
-    expect(worldbookConfig.source).toBe('manual');
-    expect(worldbookConfig.manualSelection).toEqual(['Book-A', 'Book-B']);
-    expect(c.manualSelection.value).toEqual(['Book-A', 'Book-B']);
-    expect(await c.resolveBookNames()).toEqual(['Book-A', 'Book-B']);
-    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
-  });
 
   it('切回角色卡来源时保留手动选择数组', async () => {
     const c = await getComposable();

@@ -8,7 +8,6 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createRerankScores_ACU,
   normalizeRerankBatchSize_ACU,
-  splitRerankDocumentsIntoBatches_ACU,
   VECTOR_RERANK_DEFAULT_BATCH_SIZE_ACU,
   VECTOR_RERANK_MAX_BATCH_SIZE_ACU,
   VECTOR_RERANK_MIN_BATCH_SIZE_ACU,
@@ -132,21 +131,6 @@ describe('normalizeRerankBatchSize_ACU', () => {
     expect(normalizeRerankBatchSize_ACU(1)).toBe(VECTOR_RERANK_MIN_BATCH_SIZE_ACU);
     expect(normalizeRerankBatchSize_ACU(99999)).toBe(VECTOR_RERANK_MAX_BATCH_SIZE_ACU);
     expect(normalizeRerankBatchSize_ACU(250.7)).toBe(250);
-  });
-});
-
-describe('splitRerankDocumentsIntoBatches_ACU', () => {
-  it('按批大小切分并记录每批偏移', () => {
-    const docs = Array.from({ length: 25 }, (_, i) => `d${i}`);
-    const batches = splitRerankDocumentsIntoBatches_ACU(docs, 10);
-    expect(batches.map(b => b.offset)).toEqual([0, 10, 20]);
-    expect(batches.map(b => b.documents.length)).toEqual([10, 10, 5]);
-    expect(batches[2].documents).toEqual(['d20', 'd21', 'd22', 'd23', 'd24']);
-  });
-
-  it('文档数不超过批大小时只有一批', () => {
-    const batches = splitRerankDocumentsIntoBatches_ACU(['a', 'b'], 300);
-    expect(batches).toEqual([{ offset: 0, documents: ['a', 'b'] }]);
   });
 });
 

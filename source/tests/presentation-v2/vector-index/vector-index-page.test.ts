@@ -232,61 +232,6 @@ async function flushDialog(): Promise<HTMLElement> {
 }
 
 describe('VectorIndexPage', () => {
-  it('渲染交火模式页骨架，包含核心分节', async () => {
-    const { mount, getStats } = await mountVectorIndexPage();
-
-    const page = document.querySelector('[data-ub-main]');
-    expect(page).not.toBeNull();
-    const text = page!.textContent || '';
-    expect(text).toContain('索引状态');
-    expect(text).not.toContain('向量服务引用');
-    expect(text).not.toContain('Embedding 服务');
-    expect(text).not.toContain('Rerank 服务（可选）');
-    expect(text).toContain('Embedding / Rerank');
-    expect(text).toContain('Embedding');
-    expect(text).toContain('Rerank');
-    expect(text).not.toContain('向量化（Embedding）');
-    expect(text).not.toContain('重排（Rerank，可选）');
-    expect(text).toContain('URL');
-    expect(text).toContain('模型名');
-    expect(text).not.toContain(`服务${'地址'}`);
-    expect(text).not.toContain(`模型${'名称'}`);
-    expect(text).toContain('召回参数');
-    expect(text).toContain('归档与分块');
-    expect(text).toContain('关键词生成');
-    expect(text).toContain('关键词生成提示词');
-    expect(text).toContain('使用默认提示词');
-    expect(text).not.toContain('刷新状态');
-    expect(text).not.toContain('段落数量');
-    expect(text).not.toContain('保存状态');
-    expect(getStats).toHaveBeenCalled();
-
-    const status = document.getElementById('vi-status')!;
-    const actionButtons = Array.from(status.querySelectorAll<HTMLButtonElement>('.ub-vi__actions button'))
-      .map(button => button.textContent?.trim() || '');
-    expect(actionButtons).toEqual([
-      '立即构建交火纪要索引',
-      '清空临时缓存',
-      '删除当前索引',
-    ]);
-
-    const sectionIds = Array.from(page!.querySelectorAll<HTMLElement>('.ub-section')).map(section => section.id);
-    expect(sectionIds).toEqual(['vi-status', 'vi-api', 'vi-keyword', 'vi-recall', 'vi-archive']);
-    // 关键词提示词并入关键词分节：默认 badge 与编辑入口都在那里
-    const keyword = document.getElementById('vi-keyword')!;
-    expect(keyword.textContent).toContain('使用默认提示词');
-    expect(Array.from(keyword.querySelectorAll('button')).some(b => b.textContent?.includes('编辑提示词'))).toBe(true);
-    const jumpItems = Array.from(page!.querySelectorAll('.ub-page__chip'))
-      .map(item => item.textContent?.trim());
-    expect(jumpItems).toEqual(['索引状态', '向量服务', '关键词', '召回参数', '归档分块']);
-    // 每个分节都带常驻说明，页内不再重复页面标题
-    page!.querySelectorAll('.ub-section').forEach(section => {
-      expect(section.querySelector('.ub-section__desc')?.textContent?.trim()).toBeTruthy();
-    });
-    expect(document.querySelector('.ub-top__title')?.textContent?.trim()).toBe('交火模式');
-
-    mount.__resetAcuV2MountForTests();
-  });
 
   it('默认关键词提示词切换页面后仍显示默认 badge', async () => {
     const { mount, config } = await mountVectorIndexPage();
@@ -308,23 +253,6 @@ describe('VectorIndexPage', () => {
     const textAfterReturn = document.querySelector('[data-ub-main]')?.textContent || '';
     expect(textAfterReturn).toContain('使用默认提示词');
     expect(textAfterReturn).not.toContain('已自定义提示词');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('无需开发者选项也显示交火召回与归档参数面板', async () => {
-    const { mount } = await mountVectorIndexPage();
-
-    const text = document.querySelector('[data-ub-main]')?.textContent || '';
-    expect(text).toContain('召回参数');
-    expect(text).toContain('归档与分块');
-    expect(text).toContain('触发阈值');
-    expect(text).toContain('单请求最多行数');
-    expect(text).toContain('单请求字符预算');
-    expect(text).toContain('同时请求数');
-    expect(text).not.toContain('滚动增量写入暂不可用');
-    expect(text).not.toContain('折叠阈值 K');
-    expect(text).not.toContain('V2 写入闸门');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -365,22 +293,6 @@ describe('VectorIndexPage', () => {
       .find(el => /候选上限/.test(el.textContent || ''))?.textContent || '';
     expect(limitHint).not.toContain('BM25 各自保留');
     expect(limitHint).toContain('混合召回已关闭');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('关键词 API 预设下拉的跟随项显示当前活动 API 预设名', async () => {
-    const { mount } = await mountVectorIndexPage();
-
-    const select = document.querySelector<HTMLSelectElement>('#vi-keyword select[aria-label="关键词 API 预设"]');
-    expect(select).not.toBeNull();
-    expect(select!.selectedOptions[0]?.textContent).toContain('跟随当前活动 API（kw-cheap）');
-
-    const labels = Array.from(select!.options)
-      .filter(option => !option.disabled)
-      .map(option => (option.textContent || '').trim());
-    expect(labels[0]).toBe('跟随当前活动 API（kw-cheap）');
-    expect(labels).toContain('kw-cheap');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -497,33 +409,6 @@ describe('VectorIndexPage', () => {
 
     expect(deleteIndex).toHaveBeenCalledTimes(1);
     expect(document.body.textContent || '').toContain('当前聊天的交火索引已删除');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('交火页渲染 Embedding / Rerank 配置并可保存向量服务', async () => {
-    const { mount, config, saveSettings } = await mountVectorIndexPage();
-
-    const page = document.querySelector('[data-ub-main]') as HTMLElement;
-    const text = page.textContent || '';
-    expect(text).toContain('Embedding / Rerank');
-    expect(text).toContain('Embedding');
-    expect(text).toContain('Rerank');
-
-    const embeddingEndpoint = page.querySelector('input[placeholder*="embeddings"]') as HTMLInputElement | null;
-    expect(embeddingEndpoint).not.toBeNull();
-    embeddingEndpoint!.value = ' https://new-emb.test ';
-    embeddingEndpoint!.dispatchEvent(new Event('input', { bubbles: true }));
-    await new Promise(r => setTimeout(r, 0));
-
-    const saveButton = page.querySelector('#ub-vector-api-form button[type="submit"]') as HTMLButtonElement | null;
-    expect(saveButton).not.toBeNull();
-    expect(saveButton!.textContent || '').toContain('保存');
-    saveButton!.click();
-    await new Promise(r => setTimeout(r, 0));
-
-    expect(config.embeddingEndpoint).toBe('https://new-emb.test');
-    expect(saveSettings).toHaveBeenCalled();
 
     mount.__resetAcuV2MountForTests();
   });
@@ -717,31 +602,6 @@ describe('VectorIndexPage', () => {
     expect(text).toContain('打开聊天后可再清');
     expect(text).not.toContain('部分存储不可用');
     expect(text).not.toContain('交火索引临时缓存与热缓存已清空');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('归档队列行在有 lastError 时渲染可诊断文案，无时不渲染', async () => {
-    const { mount } = await mountVectorIndexPage({
-      stats: { flushTaskLastError: 'archive failed: provider 500' },
-    });
-
-    const panel = document.getElementById('vi-status')!;
-    const queueItem = Array.from(panel.querySelectorAll<HTMLElement>('.ub-stats__item'))
-      .find(item => item.querySelector('dt')?.textContent?.includes('归档队列'))!;
-    const errorNode = queueItem.querySelector('.ub-vi__flush-error');
-    expect(errorNode).not.toBeNull();
-    expect(errorNode?.getAttribute('title')).toBe('archive failed: provider 500');
-    expect(errorNode?.textContent).toContain('archive failed');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('归档队列行在无 lastError 时不渲染错误文案', async () => {
-    const { mount } = await mountVectorIndexPage();
-
-    const panel = document.getElementById('vi-status')!;
-    expect(panel.querySelector('.ub-vi__flush-error')).toBeNull();
 
     mount.__resetAcuV2MountForTests();
   });

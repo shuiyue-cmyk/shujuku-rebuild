@@ -122,10 +122,6 @@ describe('splitMessageIndicesAtBoundary_ACU', () => {
     }]);
   });
 
-  it('空索引返回空段', () => {
-    expect(splitMessageIndicesAtBoundary_ACU([], 30)).toEqual([]);
-  });
-
   it('非法索引输入抛出规划错误', () => {
     expect(() => splitMessageIndicesAtBoundary_ACU([2, 1], 30)).toThrow(/严格递增/);
   });

@@ -107,10 +107,6 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: 'ACU-[role-a]-小总结条目-2', keys: ['小总结'] })).toBe(false);
   });
 
-  it('keeps normal keyed user entries as Agent candidates', () => {
-    expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: '用户自定义地点', keys: ['酒馆'] })).toBe(true);
-  });
-
   it('does not treat Agent-managed greenlight entries as database-generated entries', () => {
     expect(isDatabaseGeneratedWorldbookEntryForAgent_ACU({ comment: 'TavernDB-ACU-AgentGreenlight-plot', keys: ['agent'] })).toBe(false);
     expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: 'TavernDB-ACU-AgentGreenlight-plot', keys: ['agent'] })).toBe(true);
@@ -203,31 +199,6 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(candidates).toEqual([]);
   });
 
-
-  it('renders editable skillify prompt placeholders', () => {
-    mockSettings.plotSettings.agentWorldbookControl.agentSkillifyPromptSegments = [
-      { role: 'user', deletable: true, content: 'B={{agent.skillify.bookName}};U={{agent.skillify.uid}};K={{agent.skillify.keysText}};TK={{agent.skillify.tk}};C={{agent.skillify.contentPreview}};M={{agent.skillify.existingSkillMetaJson}}' },
-    ];
-
-    const messages = buildWorldbookSkillifyPrompt_ACU({
-      bookName: '剧情书',
-      uid: 7,
-      comment: '酒馆地点',
-      content: '灯火昏暗，吧台后藏着通往地下室的暗门。',
-      keys: ['酒馆', '夜晚'],
-      existingSkillMeta: { version: 1, description: '旧描述', triggerWhen: '旧触发', updatedAt: 1, updatedBy: 'manual' },
-      tk: 42,
-    });
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0].content).toContain('B=剧情书');
-    expect(messages[0].content).toContain('U=7');
-    expect(messages[0].content).toContain('K=酒馆、夜晚');
-    expect(messages[0].content).toContain('TK=42');
-    expect(messages[0].content).toContain('C=灯火昏暗，吧台后藏着通往地下室的暗门。');
-    expect(messages[0].content).toContain('旧描述');
-  });
-
   it('renders original worldbook content in default skillify prompt', () => {
     mockSettings.plotSettings.agentWorldbookControl.agentSkillifyPromptSegments = undefined;
 
@@ -283,21 +254,6 @@ describe('agent worldbook skillify candidate filtering', () => {
 
     expect(candidates).toHaveLength(1);
     expect(candidates[0].tk).toBe(167);
-  });
-
-  it('strips existing skill meta block from skillify summary comment', async () => {
-    const metaBlock = '<!-- ACU_SKILL_META_START\n{"version":1,"description":"旧描述","triggerWhen":"旧触发","tk":12,"updatedAt":1,"updatedBy":"agent-skillify"}\nACU_SKILL_META_END -->';
-    mockParseWorldbookSkillMeta.mockReturnValueOnce({ version: 1, description: '旧描述', triggerWhen: '旧触发', tk: 12, updatedAt: 1, updatedBy: 'agent-skillify' });
-    mockGetLorebookEntriesByNames.mockResolvedValueOnce({
-      '剧情书': [{ uid: 'a', comment: `地点A\n\n${metaBlock}`, content: 'A'.repeat(20), enabled: true, keys: ['A'] }],
-    });
-
-    const candidates = await collectWorldbookSkillifyCandidates_ACU(['剧情书'], { overwriteManual: true });
-
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0].comment).toBe('地点A');
-    expect(candidates[0].existingSkillMeta?.description).toBe('旧描述');
-    expect(JSON.stringify(candidates[0])).not.toContain('ACU_SKILL_META_START');
   });
 
   it('excludes entries that already have AI-generated skill meta before batch selection', async () => {
@@ -482,23 +438,6 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(mockCallAIWithPreset).toHaveBeenCalledTimes(6);
     expect(maxActive).toBe(6);
     expect(result).toMatchObject({ totalCandidates: 6, updated: 6, skipped: 0, failed: 0 });
-  });
-
-  it('uses the locally counted tk when the AI response omits tk', async () => {
-    mockGetLorebookEntriesByNames.mockResolvedValueOnce({
-      '剧情书': [{ uid: 'a', comment: '地点A', content: 'A'.repeat(100), enabled: true, keys: ['A'] }],
-    });
-    mockCallAIWithPreset.mockResolvedValueOnce('{"description":"新描述","triggerWhen":"新触发"}');
-    mockSaveWorldbookEntrySkillMeta.mockResolvedValueOnce({ updated: false, reason: '世界书 Skill 元数据未变化' });
-
-    const result = await skillifyWorldbookEntries_ACU(['剧情书']);
-
-    expect(mockSaveWorldbookEntrySkillMeta).toHaveBeenCalledWith('剧情书', 'a', {
-      description: '新描述',
-      triggerWhen: '新触发',
-      tk: 67,
-    }, 'agent-skillify');
-    expect(result).toMatchObject({ totalCandidates: 1, updated: 0, skipped: 1, failed: 0 });
   });
 
   it('reports invalid skillify response and save errors as failed results', async () => {

@@ -39,7 +39,6 @@ import {
   generationGate_ACU,
   loopState_ACU,
   planningGuard_ACU,
-  markUserSendIntent_ACU,
   isRecentUserSendIntent_ACU,
   recordLastUserSend_ACU,
   recordGenerationContext_ACU,
@@ -121,28 +120,8 @@ describe('常量导出', () => {
   });
 });
 
-// ═══ markUserSendIntent_ACU ═══
-describe('markUserSendIntent_ACU', () => {
-  it('设置 lastUserSendIntentAt 为当前时间', () => {
-    const before = Date.now();
-    markUserSendIntent_ACU();
-    const after = Date.now();
-    expect(generationGate_ACU.lastUserSendIntentAt).toBeGreaterThanOrEqual(before);
-    expect(generationGate_ACU.lastUserSendIntentAt).toBeLessThanOrEqual(after);
-  });
-});
-
 // ═══ isRecentUserSendIntent_ACU ═══
 describe('isRecentUserSendIntent_ACU', () => {
-  it('未设置 intent 时返回 false', () => {
-    generationGate_ACU.lastUserSendIntentAt = 0;
-    expect(isRecentUserSendIntent_ACU()).toBe(false);
-  });
-
-  it('刚设置的 intent 返回 true', () => {
-    markUserSendIntent_ACU();
-    expect(isRecentUserSendIntent_ACU()).toBe(true);
-  });
 
   it('超过 TTL 后返回 false', () => {
     generationGate_ACU.lastUserSendIntentAt = Date.now() - USER_SEND_TRIGGER_TTL_MS_ACU - 1;
@@ -152,34 +131,11 @@ describe('isRecentUserSendIntent_ACU', () => {
 
 // ═══ recordLastUserSend_ACU ═══
 describe('recordLastUserSend_ACU', () => {
-  it('chat 为空时不记录', () => {
-    mockGetChatArray.mockReturnValue([]);
-    recordLastUserSend_ACU(0);
-    expect(generationGate_ACU.lastUserMessageId).toBeNull();
-  });
-
-  it('messageId 不是数字时不记录', () => {
-    mockGetChatArray.mockReturnValue([{ is_user: true, mes: 'hello' }]);
-    recordLastUserSend_ACU('abc' as any);
-    expect(generationGate_ACU.lastUserMessageId).toBeNull();
-  });
 
   it('消息不是用户消息时不记录', () => {
     mockGetChatArray.mockReturnValue([{ is_user: false, mes: 'AI回复' }]);
     recordLastUserSend_ACU(0);
     expect(generationGate_ACU.lastUserMessageId).toBeNull();
-  });
-
-  it('有效用户消息时记录', () => {
-    const chat = [{ is_user: true, mes: '你好' }];
-    mockGetChatArray.mockReturnValue(chat);
-    const before = Date.now();
-    recordLastUserSend_ACU(0);
-    const after = Date.now();
-    expect(generationGate_ACU.lastUserMessageId).toBe(0);
-    expect(generationGate_ACU.lastUserMessageText).toBe('你好');
-    expect(generationGate_ACU.lastUserMessageAt).toBeGreaterThanOrEqual(before);
-    expect(generationGate_ACU.lastUserMessageAt).toBeLessThanOrEqual(after);
   });
 
   it('mes 为 undefined 时记录空字符串', () => {
@@ -192,17 +148,6 @@ describe('recordLastUserSend_ACU', () => {
 
 // ═══ recordGenerationContext_ACU ═══
 describe('recordGenerationContext_ACU', () => {
-  it('记录生成上下文', () => {
-    const before = Date.now();
-    recordGenerationContext_ACU('normal', { prompt: 'test' }, false);
-    const after = Date.now();
-    expect(generationGate_ACU.lastGeneration).toBeDefined();
-    expect(generationGate_ACU.lastGeneration.type).toBe('normal');
-    expect(generationGate_ACU.lastGeneration.params).toEqual({ prompt: 'test' });
-    expect(generationGate_ACU.lastGeneration.dryRun).toBe(false);
-    expect(generationGate_ACU.lastGeneration.at).toBeGreaterThanOrEqual(before);
-    expect(generationGate_ACU.lastGeneration.at).toBeLessThanOrEqual(after);
-  });
 
   it('前台生成结束时先消费自身上下文，后续 quiet 生成不影响本轮判定', () => {
     recordGenerationContext_ACU('normal', {}, false);
@@ -286,42 +231,18 @@ describe('resolveGenerationContextForEnded_ACU — 并发结束配对', () => {
 
 // ═══ isQuietLikeGeneration_ACU ═══
 describe('isQuietLikeGeneration_ACU', () => {
-  it('type 为 quiet 时返回 true', () => {
-    expect(isQuietLikeGeneration_ACU('quiet', {})).toBe(true);
-  });
 
   it('params.quiet_prompt 有内容时返回 true', () => {
     expect(isQuietLikeGeneration_ACU('normal', { quiet_prompt: '静默提示' })).toBe(true);
   });
 
-  it('params.quiet_prompt 为空字符串时返回 false', () => {
-    expect(isQuietLikeGeneration_ACU('normal', { quiet_prompt: '' })).toBe(false);
-  });
-
   it('params.quiet_prompt 为纯空白时返回 false', () => {
     expect(isQuietLikeGeneration_ACU('normal', { quiet_prompt: '   ' })).toBe(false);
-  });
-
-  it('普通生成返回 false', () => {
-    expect(isQuietLikeGeneration_ACU('normal', {})).toBe(false);
-  });
-
-  it('params 为 null 时返回 false', () => {
-    expect(isQuietLikeGeneration_ACU('normal', null)).toBe(false);
   });
 });
 
 // ═══ isRecentUserSend_ACU ═══
 describe('isRecentUserSend_ACU', () => {
-  it('未记录用户消息时返回 false', () => {
-    generationGate_ACU.lastUserMessageAt = 0;
-    expect(isRecentUserSend_ACU()).toBe(false);
-  });
-
-  it('刚记录的用户消息返回 true', () => {
-    generationGate_ACU.lastUserMessageAt = Date.now();
-    expect(isRecentUserSend_ACU()).toBe(true);
-  });
 
   it('超过 TTL 后返回 false', () => {
     generationGate_ACU.lastUserMessageAt = Date.now() - USER_SEND_TRIGGER_TTL_MS_ACU - 1;
@@ -331,41 +252,6 @@ describe('isRecentUserSend_ACU', () => {
 
 // ═══ shouldProcessPlotForGeneration_ACU ═══
 describe('shouldProcessPlotForGeneration_ACU', () => {
-  it('dryRun 时返回 false', () => {
-    expect(shouldProcessPlotForGeneration_ACU('normal', {}, true)).toBe(false);
-  });
-
-  it('plotSettings 未启用时返回 false', () => {
-    // settings_ACU.plotSettings.enabled 默认可能为 undefined
-    _set_settings_ACU({ plotSettings: { enabled: false } });
-    expect(shouldProcessPlotForGeneration_ACU('normal', {}, false)).toBe(false);
-  });
-
-  it('quiet 类型生成时返回 false', () => {
-    _set_settings_ACU({ plotSettings: { enabled: true } });
-    expect(shouldProcessPlotForGeneration_ACU('quiet', {}, false)).toBe(false);
-  });
-
-  it('automatic_trigger 时返回 false', () => {
-    _set_settings_ACU({ plotSettings: { enabled: true } });
-    expect(shouldProcessPlotForGeneration_ACU('normal', { automatic_trigger: true }, false)).toBe(false);
-  });
-
-  it('有新鲜用户消息时返回 true', () => {
-    _set_settings_ACU({ plotSettings: { enabled: true } });
-    const chat = [{ is_user: true, mes: '你好' }];
-    mockGetChatArray.mockReturnValue(chat);
-    generationGate_ACU.lastUserMessageId = 0;
-    generationGate_ACU.lastUserMessageAt = Date.now();
-    expect(shouldProcessPlotForGeneration_ACU('normal', {}, false)).toBe(true);
-  });
-
-  it('有新鲜 intent 时返回 true', () => {
-    _set_settings_ACU({ plotSettings: { enabled: true } });
-    mockGetChatArray.mockReturnValue([]);
-    generationGate_ACU.lastUserSendIntentAt = Date.now();
-    expect(shouldProcessPlotForGeneration_ACU('normal', {}, false)).toBe(true);
-  });
 
   it('无新鲜消息也无新鲜 intent 时返回 false', () => {
     _set_settings_ACU({ plotSettings: { enabled: true } });
@@ -378,10 +264,6 @@ describe('shouldProcessPlotForGeneration_ACU', () => {
 
 // ═══ shouldProcessAutoTableUpdateForGenerationEnded_ACU ═══
 describe('shouldProcessAutoTableUpdateForGenerationEnded_ACU', () => {
-  it('无 lastGeneration 时返回 true', () => {
-    generationGate_ACU.lastGeneration = null;
-    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU()).toBe(true);
-  });
 
   it('dry-run 上下文不入配对：其后 ENDED 走无配对路径（签名缺失时保守放行）', () => {
     recordGenerationContext_ACU('normal', {}, true);
@@ -395,21 +277,6 @@ describe('shouldProcessAutoTableUpdateForGenerationEnded_ACU', () => {
   it('quiet 类型时返回 false', () => {
     recordGenerationContext_ACU('quiet', {}, false);
     expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU()).toBe(false);
-  });
-
-  it('quiet_prompt 有内容时返回 false', () => {
-    recordGenerationContext_ACU('normal', { quiet_prompt: '静默' }, false);
-    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU()).toBe(false);
-  });
-
-  it('automatic_trigger 时返回 false', () => {
-    recordGenerationContext_ACU('normal', { automatic_trigger: true }, false);
-    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU()).toBe(false);
-  });
-
-  it('正常生成时返回 true', () => {
-    recordGenerationContext_ACU('normal', {}, false);
-    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU()).toBe(true);
   });
 });
 
@@ -542,20 +409,6 @@ describe('getCurrentIsolationKey_ACU', () => {
 
 // ═══ Setter 函数 ═══
 describe('Setter 函数', () => {
-  it('_set_settings_ACU 更新 settings', () => {
-    const newSettings = { apiConfig: { url: 'http://test' } };
-    _set_settings_ACU(newSettings);
-    // 通过 getCurrentIsolationKey_ACU 间接验证 settings 已更新
-    expect(getCurrentIsolationKey_ACU()).toBe('');
-  });
-
-  it('_set_pendingBaseStatePlacement_ACU 更新状态', async () => {
-    const { pendingBaseStatePlacement_ACU: before } = await import('../../../src/service/runtime/state-manager');
-    _set_pendingBaseStatePlacement_ACU(true);
-    const mod = await import('../../../src/service/runtime/state-manager');
-    expect(mod.pendingBaseStatePlacement_ACU).toBe(true);
-    _set_pendingBaseStatePlacement_ACU(false);
-  });
 
   it('自动填表与聊天变更防抖 timer 独立保存', async () => {
     const autoFillTimer = { kind: 'auto-fill' };

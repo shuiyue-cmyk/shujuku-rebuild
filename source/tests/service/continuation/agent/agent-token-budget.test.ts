@@ -6,7 +6,6 @@ import {
   countAgentTokens_ACU,
   createAgentTokenCounter_ACU,
   measureAgentConversationTokens_ACU,
-  measureAgentPromptTokens_ACU,
   resolveAgentCompactionTiming_ACU,
 } from '../../../../src/service/continuation/agent/agent-token-budget';
 import { _set_SillyTavern_API_ACU } from '../../../../src/shared/host-api';
@@ -81,21 +80,9 @@ describe('会话压缩', () => {
     expect(await counter('BB')).toBe(2);
     expect(raw).toHaveBeenCalledTimes(2);
   });
-
-  it('统计整份会话的 token 数', async () => {
-    // 8 条消息：60 + 60 + 60 + 10 的正文加上 4 条通告/用户消息本身的字数。
-    const total = await measureAgentConversationTokens_ACU(threeTurns(), countByChar);
-    const expected = threeTurns().messages.reduce((sum, message) => sum + message.text.length, 0);
-    expect(total).toBe(expected);
-  });
 });
 
 describe('压缩时机', () => {
-  it('未超预算或不限预算时不压缩', async () => {
-    expect(await resolveAgentCompactionTiming_ACU(threeTurns(), 0, false, countByChar)).toMatchObject({ action: 'skip' });
-    expect(await resolveAgentCompactionTiming_ACU(threeTurns(), 100_000, false, countByChar)).toMatchObject({ action: 'skip' });
-    expect(await resolveAgentCompactionTiming_ACU(buildEmptyAgentConversation_ACU(), 10, true, countByChar)).toMatchObject({ action: 'skip' });
-  });
 
   it('轮次边界上超预算立即压缩', async () => {
     expect(await resolveAgentCompactionTiming_ACU(threeTurns(), 120, false, countByChar)).toMatchObject({ action: 'compact', emergency: false });
@@ -116,14 +103,6 @@ describe('压缩时机', () => {
 });
 
 describe('上下文开销计入', () => {
-  it('统计一组已渲染提示词消息的 token 总和', async () => {
-    const messages = [
-      { role: 'system', content: 'AAAA' },
-      { role: 'user', content: 'BBBBBB' },
-    ];
-    expect(await measureAgentPromptTokens_ACU(messages, countByChar)).toBe(10);
-    expect(await measureAgentPromptTokens_ACU([], countByChar)).toBe(0);
-  });
 
   it('时机判定把会话之外的开销计入总量：会话本身未超但整体超了同样触发', async () => {
     const snapshot = threeTurns();

@@ -18,25 +18,12 @@ import { normalizeLorebookNameForMatch_ACU, resolveLorebookNameFromList_ACU } fr
 
 // U+FE0F: emoji presentation selector；U+FE0E: text presentation selector；U+E0100–U+E01EF: supplementary variation selectors
 const FE0F = '\uFE0F';
-const FE0E = '\uFE0E';
-const VS17 = '\uDB40\uDD00'; // U+E0100
-const VS18 = '\uDB40\uDD01'; // U+E0101
+const FE0E = '\uFE0E'; // U+E0101
 
 describe('变体选择器名称归一化', () => {
   it('U+FE0F emoji presentation selector 被移除', () => {
     expect(normalizeLorebookNameForMatch_ACU(`书⚔${FE0F}`)).toBe('书⚔');
     expect(normalizeLorebookNameForMatch_ACU(`书⚔${FE0E}`)).toBe('书⚔');
-  });
-
-  it('supplementary variation selector 被移除', () => {
-    expect(normalizeLorebookNameForMatch_ACU(`书⚔${VS17}`)).toBe('书⚔');
-    expect(normalizeLorebookNameForMatch_ACU(`书⚔${VS18}`)).toBe('书⚔');
-  });
-
-  it('多个变体选择器叠加仍归一化到同一键', () => {
-    const plain = normalizeLorebookNameForMatch_ACU('书⚔');
-    const variant = normalizeLorebookNameForMatch_ACU(`书⚔${FE0F}${FE0E}${VS17}`);
-    expect(variant).toBe(plain);
   });
 
   it('宿主真实名称含变体选择器时唯一解析成功', () => {

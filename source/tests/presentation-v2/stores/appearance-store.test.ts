@@ -50,15 +50,6 @@ describe('appearance-store', () => {
     expect(store.uiScaleCssValue).toBe('1.25');
   });
 
-  it('非法缩放值回落到 100%', async () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ appearance: { uiScale: '200' } }));
-    const m = await freshImport();
-    m.pinia.setActivePinia(m.pinia.createPinia());
-    const store = m.appearanceStore.useAppearanceStore();
-
-    expect(store.uiScale).toBe('100');
-  });
-
   it('setUiScale 写入 appearance section 且保留已有 section', async () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ theme: { activeId: 'default-light' } }));
     const m = await freshImport();

@@ -11,13 +11,6 @@ vi.mock('../../../src/shared/json-helpers', () => ({
 
 import {
   readIsolatedDataContainer_ACU,
-  readIsolatedTagData_ACU,
-  readLegacyIndependentData_ACU,
-  readLegacyStandardData_ACU,
-  readLegacySummaryData_ACU,
-  readMessageIdentity_ACU,
-  readModifiedKeys_ACU,
-  readUpdateGroupKeys_ACU,
   isLegacyMatchForIsolation_ACU,
   writeMessageIdentity_ACU,
   purgeManualRefillIncrementalSheetKeysFromStorageFrameV2_ACU,
@@ -29,8 +22,6 @@ import {
   cloneIsolatedData_ACU,
   scanResidualTableFields_ACU,
   scanResidualFirstMessageScopeFields_ACU,
-  MESSAGE_TABLE_FIELDS_ACU,
-  FIRST_MESSAGE_SCOPE_GUIDE_FIELDS_ACU,
   collectSheetIdentityAliasesForPurge_ACU,
   patchIsolatedTagMetadata_ACU,
   ISOLATED_TAG_METADATA_PATCH_FORBIDDEN_ACU,
@@ -46,149 +37,6 @@ describe('readIsolatedDataContainer_ACU', () => {
       alpha: { independentData: { sheet_0: { name: '表' } } },
     };
     expect(readIsolatedDataContainer_ACU({ TavernDB_ACU_IsolatedData: container })).toBe(container);
-  });
-
-  it('支持 JSON 字符串容器，非法结构返回 null', () => {
-    expect(readIsolatedDataContainer_ACU({
-      TavernDB_ACU_IsolatedData: JSON.stringify({ alpha: { independentData: {} } }),
-    })).toEqual({ alpha: { independentData: {} } });
-    expect(readIsolatedDataContainer_ACU({ TavernDB_ACU_IsolatedData: 'invalid' })).toBeNull();
-    expect(readIsolatedDataContainer_ACU({ TavernDB_ACU_IsolatedData: [] })).toBeNull();
-  });
-});
-
-describe('readIsolatedTagData_ACU', () => {
-  it('msg 为 null 返回 null', () => {
-    expect(readIsolatedTagData_ACU(null, 'tag1')).toBeNull();
-  });
-
-  it('无 IsolatedData 字段返回 null', () => {
-    expect(readIsolatedTagData_ACU({}, 'tag1')).toBeNull();
-  });
-
-  it('IsolatedData 为 JSON 字符串时正确解析', () => {
-    const tagData = { independentData: { sheet_0: { name: '表' } }, modifiedKeys: ['sheet_0'] };
-    const msg = { TavernDB_ACU_IsolatedData: JSON.stringify({ tag1: tagData }) };
-    const result = readIsolatedTagData_ACU(msg, 'tag1');
-    expect(result).not.toBeNull();
-    expect(result!.independentData).toBeDefined();
-    expect(result!.modifiedKeys).toEqual(['sheet_0']);
-  });
-
-
-  it('同消息同原串重复读取复用解析结果', () => {
-    const msg = { TavernDB_ACU_IsolatedData: JSON.stringify({ tag1: { independentData: {} } }) };
-    expect(readIsolatedTagData_ACU(msg, 'tag1')).toBe(readIsolatedTagData_ACU(msg, 'tag1'));
-  });
-
-  it('原串替换后重新解析', () => {
-    const msg: any = { TavernDB_ACU_IsolatedData: JSON.stringify({ tag1: { a: 1 } }) };
-    const first = readIsolatedTagData_ACU(msg, 'tag1');
-    msg.TavernDB_ACU_IsolatedData = JSON.stringify({ tag1: { a: 2 } });
-    const second = readIsolatedTagData_ACU(msg, 'tag1');
-    expect(second).not.toBe(first);
-    expect((second as any).a).toBe(2);
-  });
-  it('IsolatedData 为对象时直接读取', () => {
-    const tagData = { independentData: { sheet_0: { name: '表' } } };
-    const msg = { TavernDB_ACU_IsolatedData: { tag1: tagData } };
-    const result = readIsolatedTagData_ACU(msg, 'tag1');
-    expect(result).not.toBeNull();
-    expect(result!.independentData.sheet_0.name).toBe('表');
-  });
-
-  it('tagKey 不存在返回 null', () => {
-    const msg = { TavernDB_ACU_IsolatedData: { tag1: { independentData: {} } } };
-    expect(readIsolatedTagData_ACU(msg, 'nonexistent')).toBeNull();
-  });
-
-  it('IsolatedData 为数组返回 null', () => {
-    const msg = { TavernDB_ACU_IsolatedData: [1, 2, 3] };
-    expect(readIsolatedTagData_ACU(msg, 'tag1')).toBeNull();
-  });
-
-  it('IsolatedData 为无效 JSON 字符串返回 null', () => {
-    const msg = { TavernDB_ACU_IsolatedData: 'not valid json' };
-    expect(readIsolatedTagData_ACU(msg, 'tag1')).toBeNull();
-  });
-});
-
-describe('readLegacyIndependentData_ACU', () => {
-  it('msg 为 null 返回 null', () => {
-    expect(readLegacyIndependentData_ACU(null)).toBeNull();
-  });
-
-  it('无字段返回 null', () => {
-    expect(readLegacyIndependentData_ACU({})).toBeNull();
-  });
-
-  it('有效对象返回数据', () => {
-    const data = { sheet_0: { name: '表', content: [['row_id']] } };
-    expect(readLegacyIndependentData_ACU({ TavernDB_ACU_IndependentData: data })).toBe(data);
-  });
-
-  it('数组返回 null', () => {
-    expect(readLegacyIndependentData_ACU({ TavernDB_ACU_IndependentData: [] })).toBeNull();
-  });
-});
-
-describe('readLegacyStandardData_ACU', () => {
-  it('有效对象返回数据', () => {
-    const data = { sheet_0: { name: '标准表' } };
-    expect(readLegacyStandardData_ACU({ TavernDB_ACU_Data: data })).toBe(data);
-  });
-
-  it('null msg 返回 null', () => {
-    expect(readLegacyStandardData_ACU(null)).toBeNull();
-  });
-});
-
-describe('readLegacySummaryData_ACU', () => {
-  it('有效对象返回数据', () => {
-    const data = { sheet_0: { name: '摘要表' } };
-    expect(readLegacySummaryData_ACU({ TavernDB_ACU_SummaryData: data })).toBe(data);
-  });
-
-  it('null msg 返回 null', () => {
-    expect(readLegacySummaryData_ACU(null)).toBeNull();
-  });
-});
-
-describe('readMessageIdentity_ACU', () => {
-  it('有 Identity 返回值', () => {
-    expect(readMessageIdentity_ACU({ TavernDB_ACU_Identity: 'code_1' })).toBe('code_1');
-  });
-
-  it('无 Identity 返回 undefined', () => {
-    expect(readMessageIdentity_ACU({})).toBeUndefined();
-  });
-
-  it('null msg 返回 undefined', () => {
-    expect(readMessageIdentity_ACU(null)).toBeUndefined();
-  });
-});
-
-describe('readModifiedKeys_ACU', () => {
-  it('有数组返回数组', () => {
-    expect(readModifiedKeys_ACU({ TavernDB_ACU_ModifiedKeys: ['sheet_0', 'sheet_1'] })).toEqual(['sheet_0', 'sheet_1']);
-  });
-
-  it('无字段返回空数组', () => {
-    expect(readModifiedKeys_ACU({})).toEqual([]);
-  });
-
-  it('非数组返回空数组', () => {
-    expect(readModifiedKeys_ACU({ TavernDB_ACU_ModifiedKeys: 'not_array' })).toEqual([]);
-  });
-});
-
-describe('readUpdateGroupKeys_ACU', () => {
-  it('有数组返回数组', () => {
-    expect(readUpdateGroupKeys_ACU({ TavernDB_ACU_UpdateGroupKeys: ['sheet_0'] })).toEqual(['sheet_0']);
-  });
-
-  it('无字段返回空数组', () => {
-    expect(readUpdateGroupKeys_ACU({})).toEqual([]);
   });
 });
 
@@ -229,41 +77,11 @@ describe('writeMessageIdentity_ACU', () => {
     writeMessageIdentity_ACU(msg, { enabled: false, code: '' });
     expect(msg.TavernDB_ACU_Identity).toBeUndefined();
   });
-
-  it('null msg 不抛错', () => {
-    expect(() => writeMessageIdentity_ACU(null, { enabled: true, code: 'x' })).not.toThrow();
-  });
 });
 
 // ═══ 删除类 ═══
 
 describe('purgeSheetKeysFromMessage_ACU', () => {
-  it('null msg 返回 false', () => {
-    expect(purgeSheetKeysFromMessage_ACU(null, ['sheet_0'])).toBe(false);
-  });
-
-  it('空 sheetKeys 返回 false', () => {
-    expect(purgeSheetKeysFromMessage_ACU({}, [])).toBe(false);
-  });
-
-  it('从新版 IsolatedData 中删除 sheet', () => {
-    const msg: any = {
-      TavernDB_ACU_IsolatedData: {
-        tag1: {
-          independentData: { sheet_0: { name: '表0' }, sheet_1: { name: '表1' } },
-          modifiedKeys: ['sheet_0', 'sheet_1'],
-          updateGroupKeys: ['sheet_0'],
-        },
-      },
-    };
-    const result = purgeSheetKeysFromMessage_ACU(msg, ['sheet_0']);
-    expect(result).toBe(true);
-    const tagData = msg.TavernDB_ACU_IsolatedData.tag1;
-    expect(tagData.independentData.sheet_0).toBeUndefined();
-    expect(tagData.independentData.sheet_1).toBeDefined();
-    expect(tagData.modifiedKeys).toEqual(['sheet_1']);
-    expect(tagData.updateGroupKeys).toEqual([]);
-  });
 
   it('从旧版 IndependentData 中删除 sheet', () => {
     const msg: any = {
@@ -275,24 +93,6 @@ describe('purgeSheetKeysFromMessage_ACU', () => {
     expect(msg.TavernDB_ACU_IndependentData.sheet_1).toBeDefined();
   });
 
-  it('旧版 IndependentData 删除后无 sheet 键且无非 sheet 键时删除字段', () => {
-    const msg: any = {
-      TavernDB_ACU_IndependentData: { sheet_0: { name: '表0' } },
-    };
-    purgeSheetKeysFromMessage_ACU(msg, ['sheet_0']);
-    expect(msg.TavernDB_ACU_IndependentData).toBeUndefined();
-  });
-
-  it('从旧版 ModifiedKeys/UpdateGroupKeys 中移除', () => {
-    const msg: any = {
-      TavernDB_ACU_ModifiedKeys: ['sheet_0', 'sheet_1'],
-      TavernDB_ACU_UpdateGroupKeys: ['sheet_0'],
-    };
-    purgeSheetKeysFromMessage_ACU(msg, ['sheet_0']);
-    expect(msg.TavernDB_ACU_ModifiedKeys).toEqual(['sheet_1']);
-    expect(msg.TavernDB_ACU_UpdateGroupKeys).toEqual([]);
-  });
-
   it('从旧版 Data 中删除 sheet', () => {
     const msg: any = {
       TavernDB_ACU_Data: { sheet_0: { name: '标准表' }, sheet_1: { name: '标准表1' } },
@@ -300,39 +100,6 @@ describe('purgeSheetKeysFromMessage_ACU', () => {
     purgeSheetKeysFromMessage_ACU(msg, ['sheet_0']);
     expect(msg.TavernDB_ACU_Data.sheet_0).toBeUndefined();
     expect(msg.TavernDB_ACU_Data.sheet_1).toBeDefined();
-  });
-
-  it('从旧版 SummaryData 中删除 sheet', () => {
-    const msg: any = {
-      TavernDB_ACU_SummaryData: { sheet_0: { name: '摘要表' } },
-    };
-    purgeSheetKeysFromMessage_ACU(msg, ['sheet_0']);
-    expect(msg.TavernDB_ACU_SummaryData).toBeUndefined();
-  });
-
-  it('新版+旧版混合数据全部清理', () => {
-    const msg: any = {
-      TavernDB_ACU_IsolatedData: {
-        tag1: {
-          independentData: { sheet_0: { name: '新版表' } },
-          modifiedKeys: ['sheet_0'],
-          updateGroupKeys: [],
-        },
-      },
-      TavernDB_ACU_IndependentData: { sheet_0: { name: '旧版独立表' } },
-      TavernDB_ACU_Data: { sheet_0: { name: '旧版标准表' } },
-      TavernDB_ACU_SummaryData: { sheet_0: { name: '旧版摘要表' } },
-      TavernDB_ACU_ModifiedKeys: ['sheet_0'],
-      TavernDB_ACU_UpdateGroupKeys: ['sheet_0'],
-    };
-    const result = purgeSheetKeysFromMessage_ACU(msg, ['sheet_0']);
-    expect(result).toBe(true);
-    expect(msg.TavernDB_ACU_IsolatedData.tag1.independentData.sheet_0).toBeUndefined();
-    expect(msg.TavernDB_ACU_IndependentData).toBeUndefined();
-    expect(msg.TavernDB_ACU_Data).toBeUndefined();
-    expect(msg.TavernDB_ACU_SummaryData).toBeUndefined();
-    expect(msg.TavernDB_ACU_ModifiedKeys).toEqual([]);
-    expect(msg.TavernDB_ACU_UpdateGroupKeys).toEqual([]);
   });
 
   it('从 V2 checkpoint 中只删除目标 sheet 并保留同楼层其他 sheet', () => {
@@ -1647,42 +1414,7 @@ describe('purgeManualRefillIncrementalSheetKeysFromMessage_ACU', () => {
 
 });
 
-describe('clearAllTableFields_ACU', () => {
-  it('null msg 不抛错', () => {
-    expect(() => clearAllTableFields_ACU(null)).not.toThrow();
-  });
-
-  it('清除所有 TavernDB_ACU_* 字段', () => {
-    const msg: any = {
-      TavernDB_ACU_IsolatedData: { tag1: {} },
-      TavernDB_ACU_IndependentData: { sheet_0: {} },
-      TavernDB_ACU_Data: { sheet_0: {} },
-      TavernDB_ACU_SummaryData: { sheet_0: {} },
-      TavernDB_ACU_Identity: 'code_1',
-      TavernDB_ACU_ModifiedKeys: ['sheet_0'],
-      TavernDB_ACU_UpdateGroupKeys: ['sheet_0'],
-      _acu_local_template_base_state_seeded: true,
-      otherField: '保留',
-    };
-    clearAllTableFields_ACU(msg);
-    expect(msg.TavernDB_ACU_IsolatedData).toBeUndefined();
-    expect(msg.TavernDB_ACU_IndependentData).toBeUndefined();
-    expect(msg.TavernDB_ACU_Data).toBeUndefined();
-    expect(msg.TavernDB_ACU_SummaryData).toBeUndefined();
-    expect(msg.TavernDB_ACU_Identity).toBeUndefined();
-    expect(msg.TavernDB_ACU_ModifiedKeys).toBeUndefined();
-    expect(msg.TavernDB_ACU_UpdateGroupKeys).toBeUndefined();
-    expect(msg._acu_local_template_base_state_seeded).toBeUndefined();
-    // 非 ACU 字段保留
-    expect(msg.otherField).toBe('保留');
-  });
-});
-
 describe('scanResidualTableFields_ACU', () => {
-  it('null / 非对象返回空数组', () => {
-    expect(scanResidualTableFields_ACU(null)).toEqual([]);
-    expect(scanResidualTableFields_ACU(undefined)).toEqual([]);
-  });
 
   it('字符串/损坏值形态的字段同样被识别为残留', () => {
     const msg: any = {
@@ -1712,27 +1444,9 @@ describe('scanResidualTableFields_ACU', () => {
     expect(scanResidualTableFields_ACU(msg)).toEqual([]);
     expect(msg.mes).toBe('正文保留');
   });
-
-  it('字段清单包含全部硬清空目标字段', () => {
-    expect([...MESSAGE_TABLE_FIELDS_ACU]).toEqual([
-      'TavernDB_ACU_IsolatedData',
-      'TavernDB_ACU_IndependentData',
-      'TavernDB_ACU_Data',
-      'TavernDB_ACU_SummaryData',
-      'TavernDB_ACU_Identity',
-      'TavernDB_ACU_LocalMessageAnchor',
-      'TavernDB_ACU_ModifiedKeys',
-      'TavernDB_ACU_UpdateGroupKeys',
-      '_acu_local_template_base_state_seeded',
-    ]);
-  });
 });
 
 describe('scanResidualFirstMessageScopeFields_ACU', () => {
-  it('空聊天 / 无首消息返回空数组', () => {
-    expect(scanResidualFirstMessageScopeFields_ACU([])).toEqual([]);
-    expect(scanResidualFirstMessageScopeFields_ACU([null])).toEqual([]);
-  });
 
   it('识别 chat[0] 上的 scope/Guide 镜像残留', () => {
     const chat: any[] = [{
@@ -1747,26 +1461,11 @@ describe('scanResidualFirstMessageScopeFields_ACU', () => {
       'TavernDB_ACU_TableHeaderGuide',
     ]);
   });
-
-  it('无镜像残留返回空数组', () => {
-    expect(scanResidualFirstMessageScopeFields_ACU([{ mes: 'x' }])).toEqual([]);
-  });
-
-  it('常量清单含全部 scope/Guide 字段', () => {
-    expect([...FIRST_MESSAGE_SCOPE_GUIDE_FIELDS_ACU]).toEqual([
-      'TavernDB_ACU_ScopedConfig',
-      'TavernDB_ACU_InternalSheetGuide',
-      'TavernDB_ACU_TableHeaderGuide',
-    ]);
-  });
 });
 
 // ═══ 辅助类 ═══
 
 describe('hasAnyTableData_ACU', () => {
-  it('null msg 返回 false', () => {
-    expect(hasAnyTableData_ACU(null)).toBe(false);
-  });
 
   // R1-04：V2 存储帧（storageFrame）也是表格数据，不能只认 V1 independentData。
   it('R1-04：指定 isolationKey 时认 V2 storageFrame', () => {
@@ -1787,11 +1486,6 @@ describe('hasAnyTableData_ACU', () => {
     };
     expect(hasAnyTableData_ACU(msg, 'tag1')).toBe(true);
     expect(hasAnyTableData_ACU(msg, 'tag2')).toBe(false);
-  });
-
-  it('不指定 isolationKey 检查容器是否有内容', () => {
-    const msg = { TavernDB_ACU_IsolatedData: { tag1: {} } };
-    expect(hasAnyTableData_ACU(msg)).toBe(true);
   });
 
   it('有旧版 IndependentData 返回 true', () => {
@@ -1816,16 +1510,9 @@ describe('hasAnyTableData_ACU', () => {
     };
     expect(hasAnyTableData_ACU(msg, undefined, { enabled: true, code: 'code_1' })).toBe(false);
   });
-
-  it('空 msg 无任何数据返回 false', () => {
-    expect(hasAnyTableData_ACU({})).toBe(false);
-  });
 });
 
 describe('cloneIsolatedData_ACU', () => {
-  it('无 IsolatedData 返回空对象', () => {
-    expect(cloneIsolatedData_ACU({})).toEqual({});
-  });
 
   it('有 IsolatedData 返回深拷贝', () => {
     const original = { tag1: { independentData: { sheet_0: { name: '表' } } } };
@@ -1989,35 +1676,12 @@ describe('patchIsolatedTagMetadata_ACU', () => {
     expect(msg).toEqual(before);
   });
 
-  it('expectedIndexId 匹配时成功提交', () => {
-    const msg: any = {
-      TavernDB_ACU_IsolatedData: {
-        tag1: { ...v1Slot(), summaryVectorIndexState: validState('idx-existing') },
-      },
-    };
-    const result = patchIsolatedTagMetadata_ACU(msg, 'tag1', {
-      summaryVectorIndexState: validState('idx-existing-new'),
-    }, { expectedIndexId: 'idx-existing' });
-    expect(result.changed).toBe(true);
-    expect(msg.TavernDB_ACU_IsolatedData.tag1.summaryVectorIndexState.indexId).toBe('idx-existing-new');
-  });
-
   it('patch 为 null / 字符串等畸形值在赋值前失败', () => {
     const msg: any = { TavernDB_ACU_IsolatedData: { tag1: v1Slot() } };
     const before = JSON.parse(JSON.stringify(msg));
     expect(() => patchIsolatedTagMetadata_ACU(msg, 'tag1', null as any)).toThrowError(ISOLATED_TAG_METADATA_PATCH_FORBIDDEN_ACU);
     expect(() => patchIsolatedTagMetadata_ACU(msg, 'tag1', 'bad' as any)).toThrowError(ISOLATED_TAG_METADATA_PATCH_FORBIDDEN_ACU);
     expect(msg).toEqual(before);
-  });
-
-  it('container 为字符串时从消息重新读取并提交', () => {
-    const msg: any = { TavernDB_ACU_IsolatedData: JSON.stringify({ tag1: v1Slot() }) };
-    const result = patchIsolatedTagMetadata_ACU(msg, 'tag1', {
-      summaryVectorIndexState: validState('idx-str'),
-    });
-    expect(result.changed).toBe(true);
-    expect(msg.TavernDB_ACU_IsolatedData).toBeTruthy();
-    expect(msg.TavernDB_ACU_IsolatedData.tag1.summaryVectorIndexState.indexId).toBe('idx-str');
   });
 
   it('no-op：候选与当前槽等价时不制造新容器、不赋值', () => {

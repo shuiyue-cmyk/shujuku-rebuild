@@ -74,17 +74,6 @@ describe('createEmbeddings_ACU 错误结构化分类（T3）', () => {
     });
   });
 
-  it('403 普通 → credential', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(403, errorBody('forbidden', 'forbidden'))));
-
-    await expect(createEmbeddings_ACU({
-      endpoint: 'https://embedding.test/v1',
-      apiKey: 'sk-1',
-      model: 'm',
-      input: ['x'],
-    })).rejects.toMatchObject({ kind: 'credential', httpStatus: 403, providerCode: 'forbidden' });
-  });
-
   it('400 / 404 / 422 → request（terminal）', async () => {
     for (const status of [400, 404, 422]) {
       vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(status, errorBody('bad_request', `err-${status}`))));

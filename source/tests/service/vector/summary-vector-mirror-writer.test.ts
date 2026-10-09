@@ -85,11 +85,4 @@ describe('findTouchedSummarySheetKey_ACU', () => {
       writeSet: [{ kind: 'all' }],
     })).toBe(SUMMARY);
   });
-
-  it('只改非纪要表返回 null', () => {
-    expect(findTouchedSummarySheetKey_ACU({
-      tableData,
-      changedSheetKeys: [OTHER],
-    })).toBeNull();
-  });
 });

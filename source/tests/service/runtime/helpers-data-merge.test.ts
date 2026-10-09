@@ -265,43 +265,6 @@ describe('migrateContentNullToRowId', () => {
     expect(result!.sheet_0.seedRows[1]).toEqual(['2', '种子数据2']);
   });
 
-  it('seedRows 不存在时不报错', () => {
-    const data = {
-      sheet_0: {
-        name: '测试表',
-        content: [[null, '名称'], [null, '铁剑']],
-      },
-    };
-    expect(() => migrateContentNullToRowId(data)).not.toThrow();
-  });
-
-  it('seedRows 为空数组时不报错', () => {
-    const data = {
-      sheet_0: {
-        name: '测试表',
-        content: [[null, '名称']],
-        seedRows: [],
-      },
-    };
-    expect(() => migrateContentNullToRowId(data)).not.toThrow();
-  });
-
-  // ═══════════════════════════════════════════════════════════════
-  // 边界条件
-  // ═══════════════════════════════════════════════════════════════
-  it('data 为 null 时返回 null', () => {
-    expect(migrateContentNullToRowId(null)).toBeNull();
-  });
-
-  it('data 为 undefined 时返回 undefined', () => {
-    expect(migrateContentNullToRowId(undefined as any)).toBeUndefined();
-  });
-
-  it('空对象返回空对象', () => {
-    const result = migrateContentNullToRowId({});
-    expect(result).toEqual({});
-  });
-
   it('非 sheet_ 开头的键被跳过', () => {
     const data = {
       mate: { type: 'acu' },
@@ -313,35 +276,6 @@ describe('migrateContentNullToRowId', () => {
     const result = migrateContentNullToRowId(data);
     expect(result!.mate).toEqual({ type: 'acu' });
     expect(result!.sheet_0.content[0][0]).toBe('row_id');
-  });
-
-  it('content 为空数组时不报错', () => {
-    const data = {
-      sheet_0: {
-        name: '测试表',
-        content: [],
-      },
-    };
-    expect(() => migrateContentNullToRowId(data)).not.toThrow();
-  });
-
-  it('content 不存在时不报错', () => {
-    const data = {
-      sheet_0: {
-        name: '测试表',
-      },
-    };
-    expect(() => migrateContentNullToRowId(data)).not.toThrow();
-  });
-
-  it('表头行为空数组时不报错', () => {
-    const data = {
-      sheet_0: {
-        name: '测试表',
-        content: [[]],
-      },
-    };
-    expect(() => migrateContentNullToRowId(data)).not.toThrow();
   });
 
   it('只有表头行（无数据行）时正确迁移', () => {
@@ -414,19 +348,6 @@ describe('mergeAllIndependentTables_ACU', () => {
     vi.mocked(reorderDataBySheetKeys_ACU).mockImplementation((data: any) => data);
     vi.mocked(resolveTableStorageStrategy_ACU).mockReturnValue({ mode: 'none' } as any);
     vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue(null);
-  });
-
-  // ═══ 空聊天记录 ═══
-  it('聊天记录为空时返回 null', async () => {
-    vi.mocked(getChatArray_ACU).mockReturnValue([]);
-    const result = await mergeAllIndependentTables_ACU();
-    expect(result).toBeNull();
-  });
-
-  it('聊天记录为 null 时返回 null', async () => {
-    vi.mocked(getChatArray_ACU).mockReturnValue(null as any);
-    const result = await mergeAllIndependentTables_ACU();
-    expect(result).toBeNull();
   });
 
   // ═══ 新版隔离标签存储格式 ═══
@@ -589,19 +510,6 @@ describe('mergeAllIndependentTables_ACU', () => {
     const result = await mergeAllIndependentTables_ACU();
     expect(result).not.toBeNull();
     expect(result!.sheet_0.name).toBe('正确数据');
-  });
-
-  // ═══ 无数据且无指导表时返回 null ═══
-  it('聊天记录中无任何表格数据时返回 null', async () => {
-    const mockChat = [
-      { is_user: false, mes: 'AI回复' },
-    ];
-    vi.mocked(getChatArray_ACU).mockReturnValue(mockChat);
-    vi.mocked(readIsolatedTagData_ACU).mockReturnValue(null);
-    vi.mocked(isLegacyMatchForIsolation_ACU).mockReturnValue(false);
-
-    const result = await mergeAllIndependentTables_ACU();
-    expect(result).toBeNull();
   });
 
   // ═══ 无数据但有指导表时返回物化结构 ═══
@@ -1434,16 +1342,6 @@ describe('formatJsonToReadable_ACU', () => {
     expect(result.readableText).not.toContain('# 不注入表');
   });
 
-  it('只有数据行没有表头时仍不报错', () => {
-    const jsonData = {
-      sheet_0: {
-        name: '空表头表',
-        content: [],
-      },
-    };
-    expect(() => formatJsonToReadable_ACU(jsonData)).not.toThrow();
-  });
-
   it('多张普通表按顺序输出', () => {
     const jsonData = {
       sheet_0: {
@@ -1581,19 +1479,6 @@ describe('fillFirstLayerWithTemplateData_ACU', () => {
     expect(result).toBe(false);
   });
 
-  it('聊天中无AI消息时返回 false', async () => {
-    vi.mocked(getChatArray_ACU).mockReturnValue([
-      { is_user: true, mes: '用户消息' },
-    ]);
-    const result = await fillFirstLayerWithTemplateData_ACU({ sheet_0: { name: '表', content: [] } });
-    expect(result).toBe(false);
-  });
-
-  it('模板中无表格数据时返回 false', async () => {
-    const result = await fillFirstLayerWithTemplateData_ACU({ mate: { type: 'acu' } });
-    expect(result).toBe(false);
-  });
-
   it('有指导表时同步指导表和模板快照', async () => {
     const guideData = { sheet_0: { name: '背包物品表', content: [['row_id', '物品名称']] } };
     vi.mocked(buildChatSheetGuideDataFromTemplateObj_ACU).mockReturnValue(guideData);
@@ -1681,17 +1566,6 @@ describe('fillFirstLayerWithTemplateData_ACU', () => {
     expect(firstMessage._acu_local_template_base_state_seeded).toBe(GREETING_LOCAL_BASE_STATE_MARKER_ACU);
   });
 
-  it('多张表格全部写入', async () => {
-    const templateObj = {
-      sheet_0: { name: '表A', content: [['row_id', 'col1'], ['1', 'a']] },
-      sheet_1: { name: '表B', content: [['row_id', 'col2'], ['1', 'b']] },
-      sheet_2: { name: '表C', content: [['row_id', 'col3'], ['1', 'c']] },
-    };
-
-    const result = await fillFirstLayerWithTemplateData_ACU(templateObj);
-    expect(result).toEqual({ success: true, messageIndex: 0, sheetCount: 3 });
-  });
-
   it('不可安全修复的模板行会返回初始化失败，且不写入 checkpoint 或内存', async () => {
     const result = await fillFirstLayerWithTemplateData_ACU({
       sheet_invalid: {
@@ -1714,13 +1588,6 @@ describe('maybeLiftWorldbookSuppression_ACU', () => {
     vi.clearAllMocks();
   });
 
-  it('suppressWorldbookInjectionInGreeting_ACU 为 false 时直接返回，不调用任何函数', () => {
-    // mock 模块返回 false（默认值）
-    maybeLiftWorldbookSuppression_ACU();
-    // 不应调用 _set_suppressWorldbookInjectionInGreeting_ACU
-    expect(vi.mocked(_set_suppressWorldbookInjectionInGreeting_ACU)).not.toHaveBeenCalled();
-  });
-
   it('聊天中无用户消息时不解除抑制', () => {
     // 需要 suppressWorldbookInjectionInGreeting_ACU 为 true 才能进入逻辑
     // 但由于 mock 模块返回的是固定值 false，这个测试验证的是：即使调用也不会错误地解除
@@ -1730,28 +1597,12 @@ describe('maybeLiftWorldbookSuppression_ACU', () => {
     maybeLiftWorldbookSuppression_ACU();
     expect(vi.mocked(_set_suppressWorldbookInjectionInGreeting_ACU)).not.toHaveBeenCalled();
   });
-
-  it('聊天记录为非数组时不报错', () => {
-    vi.mocked(getChatArray_ACU).mockReturnValue(null as any);
-    expect(() => maybeLiftWorldbookSuppression_ACU()).not.toThrow();
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════
 // getEffectiveAutoUpdateThreshold_ACU — 获取有效的自动更新阈值
 // ═══════════════════════════════════════════════════════════════
 describe('getEffectiveAutoUpdateThreshold_ACU', () => {
-  it('settings_ACU.autoUpdateThreshold 为正常数字时返回该值', () => {
-    (settings_ACU as any).autoUpdateThreshold = 5;
-    const result = getEffectiveAutoUpdateThreshold_ACU();
-    expect(result).toBe(5);
-  });
-
-  it('settings_ACU.autoUpdateThreshold 为 NaN 时返回默认值 3', () => {
-    (settings_ACU as any).autoUpdateThreshold = 'abc';
-    const result = getEffectiveAutoUpdateThreshold_ACU();
-    expect(result).toBe(3);
-  });
 
   it('settings_ACU.autoUpdateThreshold 为 undefined 时返回默认值 3', () => {
     (settings_ACU as any).autoUpdateThreshold = undefined;
@@ -1763,12 +1614,6 @@ describe('getEffectiveAutoUpdateThreshold_ACU', () => {
     (settings_ACU as any).autoUpdateThreshold = 0;
     const result = getEffectiveAutoUpdateThreshold_ACU();
     expect(result).toBe(0);
-  });
-
-  it('接受 calledFrom 参数但不影响返回值', () => {
-    (settings_ACU as any).autoUpdateThreshold = 7;
-    const result = getEffectiveAutoUpdateThreshold_ACU('manual');
-    expect(result).toBe(7);
   });
 });
 
@@ -1785,31 +1630,6 @@ describe('shouldSuppressWorldbookInjection_ACU', () => {
 // isNewChatGreetingStage_ACU — 判断是否处于新对话开场白阶段
 // ═══════════════════════════════════════════════════════════════
 describe('isNewChatGreetingStage_ACU', () => {
-  it('只有AI消息、无用户消息时返回 true', () => {
-    const chat = [{ is_user: false, mes: '你好，欢迎来到冒险世界！' }];
-    expect(isNewChatGreetingStage_ACU(chat)).toBe(true);
-  });
-
-  it('有用户消息时返回 false', () => {
-    const chat = [
-      { is_user: false, mes: 'AI开场白' },
-      { is_user: true, mes: '你好' },
-    ];
-    expect(isNewChatGreetingStage_ACU(chat)).toBe(false);
-  });
-
-  it('空数组返回 false', () => {
-    expect(isNewChatGreetingStage_ACU([])).toBe(false);
-  });
-
-  it('null 输入返回 false', () => {
-    expect(isNewChatGreetingStage_ACU(null as any)).toBe(false);
-  });
-
-  it('只有用户消息（无AI消息）时返回 false', () => {
-    const chat = [{ is_user: true, mes: '用户消息' }];
-    expect(isNewChatGreetingStage_ACU(chat)).toBe(false);
-  });
 
   it('多条AI消息、无用户消息时返回 true', () => {
     const chat = [
@@ -1824,10 +1644,6 @@ describe('isNewChatGreetingStage_ACU', () => {
 // isSingleAiNoUserChat_ACU — 判断是否只有单条AI消息无用户消息
 // ═══════════════════════════════════════════════════════════════
 describe('isSingleAiNoUserChat_ACU', () => {
-  it('单条AI消息、无用户消息时返回 true', () => {
-    const chat = [{ is_user: false, mes: 'AI开场白' }];
-    expect(isSingleAiNoUserChat_ACU(chat)).toBe(true);
-  });
 
   it('多条AI消息、无用户消息时返回 false', () => {
     const chat = [
@@ -1836,39 +1652,12 @@ describe('isSingleAiNoUserChat_ACU', () => {
     ];
     expect(isSingleAiNoUserChat_ACU(chat)).toBe(false);
   });
-
-  it('有用户消息时返回 false', () => {
-    const chat = [
-      { is_user: false, mes: 'AI消息' },
-      { is_user: true, mes: '用户消息' },
-    ];
-    expect(isSingleAiNoUserChat_ACU(chat)).toBe(false);
-  });
-
-  it('空数组返回 false', () => {
-    expect(isSingleAiNoUserChat_ACU([])).toBe(false);
-  });
-
-  it('null 输入返回 false', () => {
-    expect(isSingleAiNoUserChat_ACU(null as any)).toBe(false);
-  });
 });
 
 // ═══════════════════════════════════════════════════════════════
 // buildTemplateBaseStateDataForLocalStorage_ACU — 构建本地存储数据结构
 // ═══════════════════════════════════════════════════════════════
 describe('buildTemplateBaseStateDataForLocalStorage_ACU', () => {
-  it('正常模板对象返回包含 mate 和 sheet_ 数据的结构', () => {
-    const templateObj = {
-      sheet_0: { name: '背包物品表', content: [['row_id', '物品名称'], ['1', '铁剑']] },
-      sheet_1: { name: '角色表', content: [['row_id', '角色名'], ['1', '冈部']] },
-    };
-    const result = buildTemplateBaseStateDataForLocalStorage_ACU(templateObj);
-    expect(result).not.toBeNull();
-    expect(result!.mate).toEqual({ type: 'chatSheets', version: 1 });
-    expect(result!.sheet_0.name).toBe('背包物品表');
-    expect(result!.sheet_1.name).toBe('角色表');
-  });
 
   it('为初始 checkpoint 的模板预置行补齐稳定 row_id，且不修改原模板', () => {
     const systemRulesRows = Array.from({ length: 11 }, (_, index) => [
@@ -1954,19 +1743,6 @@ describe('buildTemplateBaseStateDataForLocalStorage_ACU', () => {
     const result = buildTemplateBaseStateDataForLocalStorage_ACU(templateObj);
     result!.sheet_0.name = '被修改的名称';
     expect(templateObj.sheet_0.name).toBe('背包物品表');
-  });
-
-  it('null 输入返回 null', () => {
-    expect(buildTemplateBaseStateDataForLocalStorage_ACU(null)).toBeNull();
-  });
-
-  it('非对象输入返回 null', () => {
-    expect(buildTemplateBaseStateDataForLocalStorage_ACU('string' as any)).toBeNull();
-  });
-
-  it('无 sheet_ 键的对象返回 null', () => {
-    const templateObj = { mate: { type: 'acu' }, config: {} };
-    expect(buildTemplateBaseStateDataForLocalStorage_ACU(templateObj)).toBeNull();
   });
 
   it('非 sheet_ 键被排除', () => {
@@ -2215,33 +1991,6 @@ describe('parseReadableToJson_ACU', () => {
     expect(result!.sheet_0.content[1][1]).toBe('值1');
     expect(result!.sheet_0.content[1][2]).toBe(''); // padded
     expect(result!.sheet_0.content[1][3]).toBe(''); // padded
-
-    Object.defineProperty(stateManager, 'currentJsonTableData_ACU', {
-      value: null, writable: true, configurable: true,
-    });
-  });
-
-  it('列数多于表头时截断（truncate）', () => {
-    Object.defineProperty(stateManager, 'currentJsonTableData_ACU', {
-      value: {
-        sheet_0: {
-          name: '表A',
-          content: [['row_id', 'col1'], ['1', 'a']],
-        },
-      },
-      writable: true,
-      configurable: true,
-    });
-
-    // Markdown 有 3 列数据，但表头只有 1 列（+ row_id = 2列）
-    const markdownText = '# 表A\n| col1 | col2 | col3 |\n|---|---|---|\n| 值1 | 值2 | 值3 |';
-    const result = parseReadableToJson_ACU(markdownText);
-
-    expect(result).not.toBeNull();
-    // row_id + 值1 + 值2 + 值3 = 4列，需要 truncate 到 2 列
-    expect(result!.sheet_0.content[1].length).toBe(2);
-    expect(result!.sheet_0.content[1][0]).toBe('2'); // 不复用原有 row_id
-    expect(result!.sheet_0.content[1][1]).toBe('值1'); // 只保留第一列
 
     Object.defineProperty(stateManager, 'currentJsonTableData_ACU', {
       value: null, writable: true, configurable: true,

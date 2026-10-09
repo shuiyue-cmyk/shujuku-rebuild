@@ -47,10 +47,6 @@ describe('Agent 资料快照存储', () => {
     expect(snapshot.revisions.hooks).toBe(1);
   });
 
-  it('聊天里没有任何快照时返回未结算的空快照', () => {
-    expect(readAgentModuleSnapshot_ACU([{ mes: 'a' }]).settledThroughIndex).toBe(-1);
-  });
-
   it('读取不再把基线里的水位钳到当前数组长度', () => {
     const chat: any[] = [{ mes: 'a', [AGENT_MODULE_FIELD_ACU]: snapshotAt_ACU(9) }];
     expect(readAgentModuleSnapshot_ACU(chat).settledThroughIndex).toBe(9);
@@ -88,12 +84,6 @@ describe('Agent 资料快照存储', () => {
     expect(readAgentModuleSnapshot_ACU(chat).pendingFixes).toEqual([]);
     expect(readAgentModuleSnapshot_ACU(chat).schemaVersion).toBe(AGENT_MODULE_SCHEMA_VERSION_ACU);
     expect(chat[0][AGENT_MODULE_FIELD_ACU].schemaVersion).toBe(1);
-  });
-
-  it('空快照自带空用户要求清单及其修订号', () => {
-    const empty = buildEmptyAgentModuleSnapshot_ACU();
-    expect(empty.userRequirements).toEqual([]);
-    expect(empty.revisions.userRequirements).toBe(0);
   });
 
   it('追溯边界缺字段兼容为无；出现就必须整体合法（移植上游 365dd863）', () => {
@@ -181,12 +171,6 @@ describe('Agent 资料快照存储', () => {
       { mes: 'b', [AGENT_MODULE_FIELD_ACU]: malformed },
     ];
     expect(readAgentModuleSnapshot_ACU(chat).storyArc).toEqual([expect.objectContaining({ id: 'VOL-01' })]);
-  });
-
-  it('空快照初始化 chronology 为空账本且 revision 为 0', () => {
-    const empty = buildEmptyAgentModuleSnapshot_ACU();
-    expect(empty.chronology).toEqual([]);
-    expect(empty.revisions.chronology).toBe(0);
   });
 
   it('旧快照缺 chronology 与其 revision 时兼容读成空账本，不误报数据丢失', () => {

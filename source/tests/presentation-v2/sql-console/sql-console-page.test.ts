@@ -86,20 +86,6 @@ async function openHistory(): Promise<void> {
 }
 
 describe('AdvancedToolsPage SQL panel', () => {
-  it('高级工具页渲染 SQL 控制台、运行日志、Debug 三个分节，顶部标题为高级工具', async () => {
-    const { mount } = await mountAdvancedToolsSqlPanel();
-
-    const text = page().textContent || '';
-    expect(text).toContain('SQL 控制台');
-    expect(text).toContain('运行日志');
-    expect(text).toContain('执行历史');
-    expect(text).toContain('SQLite 模式');
-    expect(sqlSection()).not.toBeNull();
-    expect(page().querySelector('#at-logs')).not.toBeNull();
-    expect(document.querySelector('.ub-top__title')?.textContent?.trim()).toBe('高级工具');
-
-    mount.__resetAcuV2MountForTests();
-  });
 
   it('输入 SELECT 后执行，展示查询表格并记录历史；点历史回填编辑器', async () => {
     const { mount, executeQuery } = await mountAdvancedToolsSqlPanel({

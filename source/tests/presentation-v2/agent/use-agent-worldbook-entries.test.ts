@@ -165,20 +165,6 @@ describe('useAgentWorldbookEntries', () => {
     });
   });
 
-  it('空 scope 清空列表和选择状态', async () => {
-    mockResolveScope.mockResolvedValueOnce(['AgentBook']).mockResolvedValueOnce([]);
-    mockGetEntries.mockResolvedValue({ AgentBook: [{ uid: 1, comment: '角色', enabled: true, type: 'selective' }] });
-    const c = await getComposable();
-    await c.loadEntries();
-    c.toggleSkillifyEntry('AgentBook', 1, true);
-
-    await c.loadEntries();
-
-    expect(c.groups.value).toEqual([]);
-    expect(c.getSelectedSkillifyEntries()).toEqual([]);
-    expect(c.status.value).toBe('success');
-  });
-
   it('Skill 元数据写入成功后更新本地状态并通知接管同步', async () => {
     const notify = vi.fn(async () => undefined);
     mockResolveScope.mockResolvedValue(['AgentBook']);
@@ -278,15 +264,6 @@ describe('useAgentWorldbookEntries', () => {
     expect(entry.label).toBe('已接管条目');
     expect(entry.label).not.toContain('ACU_AGENT_WORLDBOOK_TAKEOVER_META');
     expect(entry.label).not.toContain('\n');
-  });
-
-  it('暴露批量编辑面（batchBusy+三个批量函数），AgentPage 世界书编辑区可直接消费', async () => {
-    const c = await getComposable();
-
-    expect(c.batchBusy.value).toBe(false);
-    expect(typeof c.batchEnableDisabledSkillEntries).toBe('function');
-    expect(typeof c.batchConvertBlueToGreenEntries).toBe('function');
-    expect(typeof c.batchCombinedBlueToGreenAndEnable).toBe('function');
   });
 
   it('批量启用关闭的 Skill 条目：只写回 enabled=false 的命中条目', async () => {

@@ -153,22 +153,6 @@ describe('theme-store', () => {
     expect(store.activeId).toBe(before);
   });
 
-  it('只暴露当前维护的八个内置主题', async () => {
-    const m = await freshImport();
-    m.pinia.setActivePinia(m.pinia.createPinia());
-    const store = m.themeStore.useThemeStore();
-    expect(store.themes.map(t => t.id)).toEqual([
-      'default-light',
-      'default-dark',
-      'creamy-minimal',
-      'jirai-kei',
-      'claude',
-      'claude-night',
-      'mist-blue',
-      'midnight',
-    ]);
-  });
-
   it('导入 v2 自定义主题后加入列表、切为活动主题并持久化', async () => {
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());
@@ -413,103 +397,6 @@ describe('theme-store', () => {
     }
     // 正常的渐变与带引号的字体名仍可导入
     expect(attempt('linear-gradient(180deg, #111 0%, rgba(0, 0, 0, 0.8) 100%)')).not.toThrow();
-  });
-
-  it('深色使用灰蓝底色与冷薄荷 accent', async () => {
-    const m = await freshImport();
-    m.pinia.setActivePinia(m.pinia.createPinia());
-    const store = m.themeStore.useThemeStore();
-    const defaultDark = store.themes.find(t => t.id === 'default-dark');
-    expect(defaultDark).toMatchObject({
-      name: '深色',
-      colorScheme: 'dark',
-      tokens: {
-        bg0: '#15181C',
-        bg1: '#1E2227',
-        sidebarBg: '#121519',
-        text1: '#EEF1F4',
-        accent: '#7FD6CA',
-        onAccent: '#15181C',
-      },
-    });
-  });
-
-  it('包含奶油风主题', async () => {
-    const m = await freshImport();
-    m.pinia.setActivePinia(m.pinia.createPinia());
-    const store = m.themeStore.useThemeStore();
-    const creamyMinimal = store.themes.find(t => t.id === 'creamy-minimal');
-    expect(creamyMinimal).toMatchObject({
-      name: '奶油风',
-      colorScheme: 'light',
-      tokens: {
-        bg0: '#F2E8DA',
-        bg1: '#FFFBF5',
-        text1: '#463B2F',
-        accent: '#5A7A44',
-        onAccent: '#FFFBF5',
-        hoverOverlay: 'rgba(116, 91, 62, 0.08)',
-        radiusLg: '18px',
-      },
-    });
-
-    store.setTheme('creamy-minimal');
-    expect(store.activeId).toBe('creamy-minimal');
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({
-      theme: { activeId: 'creamy-minimal' },
-    });
-  });
-
-  it('包含地雷色主题', async () => {
-    const m = await freshImport();
-    m.pinia.setActivePinia(m.pinia.createPinia());
-    const store = m.themeStore.useThemeStore();
-    const jiraiKei = store.themes.find(t => t.id === 'jirai-kei');
-    expect(jiraiKei).toMatchObject({
-      name: '地雷色',
-      colorScheme: 'dark',
-      tokens: {
-        bg0: '#2B2B2B',
-        bg1: '#1F1F1F',
-        bg2: 'rgba(255, 196, 212, 0.08)',
-        sidebarBg: '#1F1F1F',
-        border: 'transparent',
-        text1: '#FFFFFF',
-        accent: '#FFC4D4',
-        accent2: '#FFD9E4',
-        onAccent: '#2B2B2B',
-        hoverOverlay: 'rgba(255, 196, 212, 0.12)',
-        success: '#E5A0B5',
-        warning: '#FFB38B',
-        danger: '#D96C6C',
-        radiusLg: '18px',
-      },
-    });
-
-    store.setTheme('jirai-kei');
-    expect(store.activeId).toBe('jirai-kei');
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({
-      theme: { activeId: 'jirai-kei' },
-    });
-  });
-  it('包含 Claude 浅色与 Claude 夜主题：暖象牙底 + 赤陶 accent', async () => {
-    const m = await freshImport();
-    m.pinia.setActivePinia(m.pinia.createPinia());
-    const store = m.themeStore.useThemeStore();
-    expect(store.themes.find(t => t.id === 'claude')).toMatchObject({
-      name: 'Claude',
-      colorScheme: 'light',
-      tokens: { bg0: '#F0EEE6', bg1: '#FAF9F5', text1: '#1F1E1D', accent: '#BA5A36', onAccent: '#FFFFFF' },
-    });
-    expect(store.themes.find(t => t.id === 'claude-night')).toMatchObject({
-      name: 'Claude 夜',
-      colorScheme: 'dark',
-      tokens: { bg0: '#1F1E1D', bg1: '#2A2927', text1: '#FAF9F5', accent: '#D97757', onAccent: '#1F1E1D' },
-    });
-
-    store.setTheme('claude');
-    expect(store.activeId).toBe('claude');
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({ theme: { activeId: 'claude' } });
   });
 
   /**

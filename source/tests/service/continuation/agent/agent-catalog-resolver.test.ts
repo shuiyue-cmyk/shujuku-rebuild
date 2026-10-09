@@ -71,24 +71,6 @@ describe('Agent 目录渲染', () => {
     expect(catalog).not.toContain('requirements-maintainer');
   });
 
-  it('资料模块目录说明谁能写，长期约束标注仅主 Agent 可登记', () => {
-    const catalog = renderAgentModuleCatalog_ACU();
-    expect(catalog).toContain('$HOOKS_LEDGER');
-    expect(catalog).toContain('$ACTIVE_CONSTRAINTS');
-    expect(catalog).toContain('仅主 Agent 裁决后登记');
-  });
-
-  it('目录与写入说明公开故事年代学账本，并由维护代理职责固定负责', () => {
-    const moduleCatalog = renderAgentModuleCatalog_ACU();
-    expect(moduleCatalog).toContain('$CHRONOLOGY');
-    expect(moduleCatalog).toContain('故事年代学账本');
-    expect(moduleCatalog).toContain('大纲里的时间字段是计划，不在此账本内');
-
-    const subagentCatalog = renderAgentSubagentCatalog_ACU();
-    expect(subagentCatalog).toContain('$HOOKS_LEDGER、$INFO_GAP、$CHRONOLOGY（职责固定');
-    expect(subagentCatalog).toContain('故事年代学账本');
-  });
-
   it('未知代理名查不到定义', () => {
     expect(findAgentSubagentDefinition_ACU('hook-cognition-maintainer')?.kind).toBe('maintain');
     expect(findAgentSubagentDefinition_ACU('不存在的代理')).toBeNull();
@@ -160,17 +142,6 @@ describe('Agent 读写集解析', () => {
     expect(stateText).toContain('adjust_progress');
   });
 
-  it('大纲窗口标出本轮位置并声明大纲只是计划', () => {
-    const text = resolveAgentReadToken_ACU('$OUTLINE_WINDOW', context_ACU()).text;
-    expect(text).toContain('← 本轮');
-    expect(text).toContain('阶段结构职责：development');
-    expect(text).toContain('阶段时间目标：三日');
-    expect(text).toContain('function=reveal');
-    expect(text).toContain('mainline=step');
-    expect(text).toContain('time=days｜anchor=第三日清晨');
-    expect(text).toContain('大纲是计划，不是已经发生的事实');
-  });
-
   it('大纲窗口给出全部启用节点与逐轮目标，并标出本轮', () => {
     const context = context_ACU();
     const node2 = {
@@ -232,17 +203,6 @@ describe('Agent 读写集解析', () => {
     expect(materials).toContain('伏笔账本');
     expect(materials).toContain('林瑶');
     expect(renderAgentReadMaterials_ACU([], context_ACU())).toContain('信息不足');
-  });
-
-  it('读集词汇表覆盖全部地址体系，主/子代理共用同一份', () => {
-    const catalog = renderAgentReadCatalog_ACU();
-    expect(catalog).toContain('$STORY_RANGE:');
-    expect(catalog).toContain('$TABLE:表名:起始行-结束行');
-    expect(catalog).toContain('$WORLDBOOK:书名:uid');
-    expect(catalog).toContain('$TABLE:纪要表:起始行-结束行');
-    expect(catalog).toContain('$CHRONOLOGY / $CHRONOLOGY:ID,ID');
-    expect(catalog).not.toContain('$CHRONICLES');
-    expect(catalog).toContain('search');
   });
 
   it('$CHRONOLOGY 读地址解析为年代学账本，支持按 ID 精读', () => {

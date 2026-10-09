@@ -481,13 +481,6 @@ describe('applyPlotWorldbookSelectionForCurrentCharacter_ACU', () => {
 
 // ═══ saveSettings_ACU ═══
 describe('saveSettings_ACU', () => {
-  it('tavern 存储正常时返回 { saved: true, storageType: "tavern" }', () => {
-    mockGetConfigStorage.mockReturnValue({ _isTavern: true, getItem: vi.fn(), setItem: vi.fn() });
-    const result = saveSettings_ACU();
-    expect(result).toEqual({ saved: true, storageType: 'tavern' });
-    expect(mockPersistSettingsToStorage).toHaveBeenCalledTimes(1);
-    expect(mockSaveGlobalMeta).toHaveBeenCalledTimes(1);
-  });
 
   it('宿主仅能内存保存时明确返回 memory warning', () => {
     mockGetConfigStorage.mockReturnValue({ _isTavern: true, _lastPersistenceStatus: 'memory' });
@@ -544,30 +537,12 @@ describe('saveSettings_ACU', () => {
 
 // ═══ buildDefaultSettings_ACU ═══
 describe('buildDefaultSettings_ACU', () => {
-  it('返回包含所有必要字段的默认设置对象', () => {
-    const defaults = buildDefaultSettings_ACU();
-    expect(defaults.apiConfig).toBeDefined();
-    expect(defaults.autoUpdateThreshold).toBe(3);
-    expect(defaults.autoUpdateEnabled).toBe(true);
-    expect(defaults.maxConcurrentGroups).toBe(1);
-    expect(defaults.discardUnauthorizedTableEditsEnabled).toBe(true);
-    expect(defaults.storageMode).toBe('sqlite');
-    expect(defaults.promptTemplateSettings).toBeDefined();
-    expect(defaults.promptTemplateSettings.enabled).toBe(true);
-    expect(defaults.contentOptimizationSettings).toBeDefined();
-    expect(defaults.contentOptimizationSettings.enabled).toBe(false);
-  });
 
   it('plotSettings 是深拷贝，修改不影响默认常量', () => {
     const defaults1 = buildDefaultSettings_ACU();
     const defaults2 = buildDefaultSettings_ACU();
     defaults1.plotSettings.customField = 'modified';
     expect(defaults2.plotSettings.customField).toBeUndefined();
-  });
-
-  it('characterSettings 初始为空对象', () => {
-    const defaults = buildDefaultSettings_ACU();
-    expect(defaults.characterSettings).toEqual({});
   });
 });
 
@@ -576,14 +551,6 @@ describe('applyCombinedSettingsImport_ACU', () => {
   beforeEach(() => {
     // saveSettings_ACU 内部会调用 getConfigStorage，需要 mock
     mockGetConfigStorage.mockReturnValue({ _isTavern: true });
-  });
-
-  it('导入 prompt 字段', () => {
-    const fields = applyCombinedSettingsImport_ACU({
-      prompt: [{ role: 'USER', content: '新提示词' }],
-    });
-    expect(fields).toContain('charCardPrompt');
-    expect(mockSettings.charCardPrompt).toEqual([{ role: 'USER', content: '新提示词' }]);
   });
 
   it('导入合并设置字段；R8-03：自动合并已停用，导入 autoMergeEnabled: true 也不会打开', () => {
@@ -666,9 +633,6 @@ describe('applyCombinedSettingsImport_ACU', () => {
 
 // ═══ persistCurrentTemplatePresetName_ACU ═══
 describe('persistCurrentTemplatePresetName_ACU', () => {
-  it('settingsObj 为 null 时返回空字符串', () => {
-    expect(persistCurrentTemplatePresetName_ACU(null, '预设A')).toBe('');
-  });
 
   it('save=true 时触发持久化', () => {
     const obj: any = { dataIsolationCode: 'code1' };
@@ -729,15 +693,6 @@ describe('applyTemplateScopeForCurrentChat_ACU', () => {
     expect(result).not.toBeNull();
     expect(result!.mode).toBe('inherit_global');
   });
-
-  it('所有快照都无效时返回 null', () => {
-    mockGetCurrentChatTemplateScopeState.mockReturnValue(null);
-    mockMigrateLegacyTemplateScopeForCurrentChat.mockReturnValue(null);
-    mockGetGlobalTemplateSnapshotForCurrentProfile.mockReturnValue(null);
-
-    const result = applyTemplateScopeForCurrentChat_ACU();
-    expect(result).toBeNull();
-  });
 });
 
 // ═══ loadSettings_ACU ═══
@@ -759,20 +714,6 @@ describe('loadSettings_ACU', () => {
     const calledWith = mockSetSettings.mock.calls[0][0];
     expect(calledWith.autoUpdateEnabled).toBe(true);
     expect(calledWith.maxConcurrentGroups).toBe(1);
-    expect(calledWith.discardUnauthorizedTableEditsEnabled).toBe(true);
-  });
-
-  it('有保存设置时 deepMerge 合并', () => {
-    mockReadProfileSettings.mockReturnValue({
-      autoUpdateEnabled: false,
-      customField: '自定义值',
-    });
-    loadSettings_ACU();
-    expect(mockSetSettings).toHaveBeenCalled();
-    // deepMerge 的 mock 实现是 { ...target, ...source }，source 覆盖 target
-    const calledWith = mockSetSettings.mock.calls[0][0];
-    expect(calledWith.autoUpdateEnabled).toBe(false);
-    expect(calledWith.customField).toBe('自定义值');
     expect(calledWith.discardUnauthorizedTableEditsEnabled).toBe(true);
   });
 

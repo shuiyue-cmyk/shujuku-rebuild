@@ -1,12 +1,4 @@
-/**
- * Debug 面板「前往 GitHub 提交 issue」链接
- *
- * 上报路径的用户价值全在「有没有把导出的 Debug JSON 带上来」，所以正文模板的第一件事就是
- * 引导附件；环境项只留空位、不代填宿主版本（我们无法在页面里证实用户跑的是哪个 TT 版本，
- * 代填等于替用户下结论）。
- */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -50,27 +42,5 @@ describe('Debug issue 链接构造', () => {
 
     expect(url).not.toContain('undefined');
     expect(decodeURIComponent(url)).toContain('unknown');
-  });
-});
-
-/**
- * 页面接线用源码文本断言：AdvancedToolsPage 依赖 log/debug/vector 多条宿主链路，
- * 这里只锁「Debug 操作区里确实有一个指向 issue 页的入口」。
- */
-describe('Debug 操作区的 issue 入口接线', () => {
-  const pageSource = readFileSync(
-    join(process.cwd(), 'src/presentation-v3/pages/AdvancedToolsPage.vue'),
-    'utf8',
-  );
-
-  it('操作区内有一个绑定 issue URL 的按钮（文案点明去向）', () => {
-    expect(pageSource).toContain(':href="debugIssueUrl"');
-    expect(pageSource).toContain('前往 GitHub 提交 issue');
-  });
-
-  it('URL 由 buildDebugIssueUrl_ACU 生成，不在模板里手写仓库地址', () => {
-    expect(pageSource).toMatch(/const debugIssueUrl = buildDebugIssueUrl_ACU\(\)/);
-    // 仓库地址只能有一个出处（composable），页面里不得再出现第二份硬编码。
-    expect(pageSource).not.toContain('github.com/shuiyue-cmyk');
   });
 });

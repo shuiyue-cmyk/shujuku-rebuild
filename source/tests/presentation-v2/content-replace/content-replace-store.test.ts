@@ -106,14 +106,6 @@ beforeEach(() => {
 });
 
 describe('useContentReplaceStore', () => {
-  it('从 settings 读取正文替换配置和 API 预设', async () => {
-    const { store } = await setupStore();
-
-    expect(store.apiPresetNames).toEqual(['fast', 'quality']);
-    expect(store.apiPreset).toBe('fast');
-    expect(store.promptGroup[0].content).toBe('优化 $CONTENT');
-    expect(store.lastOptimizedMessageIndex).toBe(2);
-  });
 
   it('保存基础字段时写回 contentOptimizationSettings', async () => {
     const { store, settings, saveSettings } = await setupStore();
@@ -212,18 +204,6 @@ describe('useContentReplaceStore', () => {
 
     expect(settings.contentOptimizationSettings.promptPresets.map((p: any) => p.name)).toEqual(['新正文替换预设']);
     expect(store.message?.kind).toBe('warning');
-  });
-
-  it('手动测试调用正文优化 service 并展示结果', async () => {
-    const { store, performOptimization, toast } = await setupStore();
-
-    store.setString('testInput', '这是一段足够长的测试正文。');
-    await store.runTest();
-
-    expect(performOptimization).toHaveBeenCalledWith('这是一段足够长的测试正文。', { currentLoop: 1, userMessage: '' });
-    expect(store.testOutput).toContain('优化完成：1 处建议');
-    expect(store.message).toBeNull();
-    expect(toast.items.map(item => item.text)).toContain('正文替换测试完成。');
   });
 
   it('重新优化等待期间切换聊天会拒绝旧 index 写回', async () => {

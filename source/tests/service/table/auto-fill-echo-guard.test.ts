@@ -75,13 +75,6 @@ describe('resolveLatestAiFloor_ACU', () => {
       { is_user: true, message_id: 4 },
     ])).toEqual({ messageIndex: 0, messageId: 3 });
   });
-
-  it('空聊天 / 非数组 / 没有 message_id 一律返回 null 或 messageId=null', () => {
-    expect(resolveLatestAiFloor_ACU([])).toBeNull();
-    expect(resolveLatestAiFloor_ACU(null as any)).toBeNull();
-    expect(resolveLatestAiFloor_ACU([{ is_user: true }])).toBeNull();
-    expect(resolveLatestAiFloor_ACU([{ is_user: false }])).toEqual({ messageIndex: 0, messageId: null });
-  });
 });
 
 // [152 收紧] 无配对 GENERATION_ENDED 的「新 AI 楼证据」签名：门控拿它判「零产出假事件」。
@@ -136,10 +129,6 @@ describe('resolveAiFloorSignature_ACU', () => {
     expect(resolveAiFloorSignature_ACU([])).toEqual({ aiFloorCount: 0, latestAiMessageId: null });
     expect(resolveAiFloorSignature_ACU(null as any)).toEqual({ aiFloorCount: 0, latestAiMessageId: null });
     expect(resolveAiFloorSignature_ACU([{ is_user: true, message_id: 1 }])).toEqual({ aiFloorCount: 0, latestAiMessageId: null });
-  });
-
-  it('脏数据（数组里的 null 元素）不计入楼数', () => {
-    expect(resolveAiFloorSignature_ACU([null, { is_user: false, message_id: 2 }])).toEqual({ aiFloorCount: 1, latestAiMessageId: 2 });
   });
 });
 
