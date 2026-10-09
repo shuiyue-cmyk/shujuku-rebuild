@@ -435,8 +435,9 @@ describe('标签排除规则写回保护接线（performContentOptimization_ACU�
       expect.any(Array),
       { excludeRules: COMMENT_RULES, excludeTags: '' },
     );
-    // 写回只喂保留下来的建议
-    expect(vi.mocked(applyOptimizationsWithStats_ACU).mock.calls.some(call => call[1] === kept)).toBe(true);
+    // 写回只喂保留下来的建议，并带上排除规则（标明已预过滤）：前面的建议改过正文后仍要按当前正文复核排除段
+    expect(vi.mocked(applyOptimizationsWithStats_ACU).mock.calls.some(call => call[1] === kept
+      && (call[2] as any)?.excludeRules === COMMENT_RULES && (call[2] as any)?.alreadyFiltered === true)).toBe(true);
   });
 
   it('送给替换模型的 $CONTENT 不含 MVU 变量块（省字数、免得模型去改变量）', async () => {
@@ -509,6 +510,16 @@ describe('自动替换判重 service 入口', () => {
       chatKey: 'test-chat', updatedAt: 1,
     });
     expect(shouldSkipDuplicateAutoContentOptimization_ACU(11, '优化后的正文')).toBe(true);
+  });
+
+  it('指纹不含 MVU 变量块：判定/替换后 MVU 才追加变量块，重复事件仍判重命中；续写等正文变化照常放行', () => {
+    mockFindProcessed.mockReturnValue({
+      messageIndex: 3, messageId: '11',
+      contentHash: computeAutoOptimizationContentHash_ACU('她推开门。'),
+      chatKey: 'test-chat', updatedAt: 1,
+    });
+    expect(shouldSkipDuplicateAutoContentOptimization_ACU(11, '她推开门。\n\n<UpdateVariable>_.set("a", 1, 2);</UpdateVariable>')).toBe(true);
+    expect(shouldSkipDuplicateAutoContentOptimization_ACU(11, '她推开门。她又回头看了一眼。')).toBe(false);
   });
 
   it('有记录但内容已变化 → 放行（正常执行并随后更新记录）', () => {

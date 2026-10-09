@@ -193,6 +193,8 @@ export function trimPunctuation_ACU(text: string): { trimmed: string; prefix: st
 export interface OptimizationExcludeOptions_ACU {
   excludeRules?: any[];
   excludeTags?: string;
+  /** 调用方已用同一规则对原文预过滤过：写回时跳过重复的预过滤，只做按当前正文的复核。 */
+  alreadyFiltered?: boolean;
 }
 
 export interface DroppedOptimization_ACU {
@@ -349,7 +351,7 @@ export function applyOptimizationsWithStats_ACU(
   const failedItems: any[] = [];
 
   let effectiveOptimizations = Array.isArray(optimizations) ? optimizations : [];
-  if (hasExcludeRuleInput_ACU(options)) {
+  if (hasExcludeRuleInput_ACU(options) && !options?.alreadyFiltered) {
     effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(
       originalContent,
       effectiveOptimizations,
@@ -357,16 +359,18 @@ export function applyOptimizationsWithStats_ACU(
     ).kept;
   }
 
+  // 受保护区（MVU 变量块 / 排除段）按当前正文计算，只在正文真的被改写后才重算
+  let protectedRanges = collectOptimizationExcludeRanges_ACU(result, options);
   for (let i = 0; i < effectiveOptimizations.length; i++) {
     const opt = effectiveOptimizations[i];
     if (opt.type === 'replace' && opt.original && opt.optimized) {
       let replaced = false;
 
       const match = findParagraphMatch_ACU(opt.original, result);
-      // 前面的建议改过正文后，同一段原文可能改为命中受保护区（MVU 变量块 / 排除段）里的同名文字：
+      // 前面的建议改过正文后，同一段原文可能改为命中受保护区里的同名文字：
       // 按当前正文重新核对，落进去就不写（预过滤只核对了原文里的第一处命中）。
       const hitProtected = match.start !== -1
-        && !!findOverlappingBoundaryRange_ACU(collectOptimizationExcludeRanges_ACU(result, options), match.start, match.end);
+        && !!findOverlappingBoundaryRange_ACU(protectedRanges, match.start, match.end);
       if (hitProtected) {
         logDebug_ACU(`[正文优化] 优化项 ${i + 1} 在当前正文中命中受保护区（写回保护），跳过`);
       }
@@ -381,6 +385,7 @@ export function applyOptimizationsWithStats_ACU(
         const finalContent = originalPunct.prefix + optimizedPunct.trimmed + originalPunct.suffix;
 
         result = result.substring(0, match.start) + finalContent + result.substring(match.end);
+        protectedRanges = collectOptimizationExcludeRanges_ACU(result, options);
         replaced = true;
         logDebug_ACU(`[正文优化] 优化项 ${i + 1} 使用${match.method}成功，位置: ${match.start}-${match.end}`);
       }

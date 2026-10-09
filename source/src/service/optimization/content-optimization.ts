@@ -325,7 +325,12 @@ import { createUntrustedTemplateGuard_ACU } from '../../shared/untrusted-templat
          if (exclusion.dropped.length > 0) {
            logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 有 ${exclusion.dropped.length} 个优化项命中标签排除规则，已按写回保护丢弃（不写回、不计入替换数）`);
          }
-         const applied = applyOptimizationsWithStats_ACU(content, exclusion.kept);
+         // 带上排除规则：前面的建议改过正文后，按当前正文复核排除段（预过滤只核对了原文的第一处命中）
+         const applied = applyOptimizationsWithStats_ACU(content, exclusion.kept, {
+           excludeRules: config.excludeRules,
+           excludeTags: config.excludeTags,
+           alreadyFiltered: true,
+         });
          if (exclusion.kept.length > 0 && applied.appliedCount === 0) {
            logWarn_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 没有可应用的优化项，放弃本轮写回`);
            return {
@@ -726,8 +731,12 @@ import { createUntrustedTemplateGuard_ACU } from '../../shared/untrusted-templat
   // 只服务自动链；手动「重新优化」/测试入口不调用这两个函数，因此完全不受影响。
 
   /** 计算写回后消息内容的指纹（复用仓内同步 sha256，无新增依赖）。 */
+  /**
+   * 判重指纹不含 MVU 变量块：替换或判定之后 MVU 才往本楼追加变量块（时机不定），
+   * 剧情正文没变就应判为同一份内容，否则重复的生成结束事件会再判一次、甚至把已判「不好」的楼替换掉。
+   */
   export function computeAutoOptimizationContentHash_ACU(content: any): string {
-    return sha256HexSync_ACU(typeof content === 'string' ? content : String(content ?? ''));
+    return sha256HexSync_ACU(stripMvuUpdateBlocks_ACU(typeof content === 'string' ? content : String(content ?? '')));
   }
 
   /**

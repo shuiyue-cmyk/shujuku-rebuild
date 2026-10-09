@@ -380,6 +380,17 @@ describe('MVU 变量更新块始终受写回保护', () => {
     expect(result.appliedCount).toBe(1);
   });
 
+  it('已预过滤时不再重复预过滤，但前一条建议改过正文后仍按当前正文复核用户排除段', () => {
+    const content = '甲说：你好。<think>甲说：你好。</think>';
+    const opts = [makeOpt('甲说：你好。', '甲笑着说：你好呀。'), makeOpt('甲说：你好。', '不该写进思考段')];
+    const result = applyOptimizationsWithStats_ACU(content, opts, {
+      excludeRules: [{ start: '<think>', end: '</think>' }],
+      alreadyFiltered: true,
+    });
+    expect(result.content).toBe('甲笑着说：你好呀。<think>甲说：你好。</think>');
+    expect(result.appliedCount).toBe(1);
+  });
+
   it('stripMvuUpdateBlocks_ACU 去掉变量块，夹在中间的块换成换行', () => {
     expect(stripMvuUpdateBlocks_ACU(`甲。<UpdateVariable>x</UpdateVariable>乙。\n\n<JSONPatch>[]</JSONPatch>`)).toBe('甲。\n乙。');
   });

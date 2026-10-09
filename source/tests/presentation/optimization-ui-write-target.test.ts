@@ -1,7 +1,7 @@
 /**
  * tests/presentation/optimization-ui-write-target.test.ts
  * R9-01：正文优化写回前复核楼层身份（滑动 / 删楼 / 切聊天后不写错楼）。
- * R9-08：手动确认多轮，末轮「跳过」时写回前几轮已确认的结果，只触发一次填表。
+ * R9-08：手动确认多轮，末轮「跳过」时写回前几轮已确认的结果，填表交给调度层。
  * R9-09：重新优化对话框里 AI 返回的 summary 必须转义。
  *
  * @vitest-environment jsdom
@@ -197,7 +197,7 @@ describe('手动确认模式', () => {
   it.each([
     ['末轮无需优化', { success: true, optimizations: [], summary: '', optimizedContent: '' }],
     ['末轮请求失败', { success: false, error: 'boom' }],
-  ])('R9-08：第 1 轮已应用、%s时写回第 1 轮结果，只触发一次填表', async (_label, secondRound) => {
+  ])('R9-08：第 1 轮已应用、%s时写回第 1 轮结果，确认流程自身不触发填表', async (_label, secondRound) => {
     h.perform
       .mockImplementationOnce(async (content: string) => optimizeResult(content, '屋檐', '窗台'))
       .mockImplementationOnce(async () => secondRound);
@@ -210,7 +210,8 @@ describe('手动确认模式', () => {
     expect(h.replace).toHaveBeenCalledTimes(1);
     expect(h.chat[1].mes).toBe('旧回复：夜色漫过窗台');
     expect(h.record).toHaveBeenCalledOnce();
-    expect(h.triggerAutoUpdate).toHaveBeenCalledTimes(1);
+    // 填表由调度层在本流程结束后统一触发，确认流程自己不再触发（避免早跑时抢在 MVU 解析前填表）
+    expect(h.triggerAutoUpdate).not.toHaveBeenCalled();
   });
 
   it('末轮「应用并完成」只写回一次，并登记已处理', async () => {

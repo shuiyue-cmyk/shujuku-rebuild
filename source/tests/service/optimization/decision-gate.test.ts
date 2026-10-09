@@ -224,3 +224,28 @@ describe('复审修正', () => {
     await expect(fetchDecisionModels_ACU({ fetch: hanging as any, timeoutMs: 5 })).rejects.toThrow('超时');
   });
 });
+
+describe('复审修正（二）：读响应体同样受超时与取消约束', () => {
+  const settings = normalizeDecisionGateSettings_ACU({ enabled: true, apiKey: 'sk-or-x' });
+  const stalledBody = () => ({ ok: true, status: 200, json: () => new Promise(() => {}) } as any);
+
+  it('响应头到了、响应体卡住：判定按超时报错，而不是一直等', async () => {
+    const verdict = await requestContentDecision_ACU('正文', settings, { fetch: vi.fn(async () => stalledBody()), timeoutMs: 5 });
+    expect(verdict.kind).toBe('error');
+    expect((verdict as any).message).toContain('超时');
+  });
+
+  it('读响应体期间按取消：立即返回已取消', async () => {
+    const controller = new AbortController();
+    const pending = requestContentDecision_ACU('正文', settings, { fetch: vi.fn(async () => stalledBody()), signal: controller.signal });
+    await Promise.resolve();
+    await Promise.resolve();
+    controller.abort();
+    const verdict = await pending;
+    expect((verdict as any).message).toContain('取消');
+  });
+
+  it('模型列表的响应体卡住同样超时', async () => {
+    await expect(fetchDecisionModels_ACU({ fetch: vi.fn(async () => stalledBody()), timeoutMs: 5 })).rejects.toThrow('超时');
+  });
+});

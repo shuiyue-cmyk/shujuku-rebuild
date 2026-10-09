@@ -88,13 +88,14 @@
       </UbRow>
       <UbRow label="判定门槛（%）" hint="「好」的概率达到这个值才替换；50 即按模型的选择。调高则更少替换。">
         <UbInput
+          :key="thresholdInputKey"
           :model-value="store.decisionGate.threshold"
           type="number"
           :min="0"
           :max="100"
           :step="5"
           aria-label="判定门槛"
-          @change="store.setDecisionGate({ threshold: $event })"
+          @change="setDecisionThreshold"
         />
       </UbRow>
     </UbSection>
@@ -327,6 +328,13 @@ const decisionModelOptions = computed(() => {
   }
   return options;
 });
+
+/** 清空或填超范围时规整后的值可能与原值相同，输入框不会自己刷新：换个 key 让它按规整后的值重绘。 */
+const thresholdInputKey = ref(0);
+function setDecisionThreshold(value: string | number): void {
+  store.setDecisionGate({ threshold: value });
+  thresholdInputKey.value += 1;
+}
 
 function setDecisionEnabled(value: boolean): void {
   store.setDecisionGate({ enabled: value });

@@ -3316,18 +3316,20 @@ function applyOptimizationsWithStats_ACU(originalContent, optimizations, options
     let failedCount = 0;
     const failedItems = [];
     let effectiveOptimizations = Array.isArray(optimizations) ? optimizations : [];
-    if (hasExcludeRuleInput_ACU(options)) {
+    if (hasExcludeRuleInput_ACU(options) && !options?.alreadyFiltered) {
         effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(originalContent, effectiveOptimizations, options).kept;
     }
+    // 受保护区（MVU 变量块 / 排除段）按当前正文计算，只在正文真的被改写后才重算
+    let protectedRanges = collectOptimizationExcludeRanges_ACU(result, options);
     for (let i = 0; i < effectiveOptimizations.length; i++) {
         const opt = effectiveOptimizations[i];
         if (opt.type === 'replace' && opt.original && opt.optimized) {
             let replaced = false;
             const match = findParagraphMatch_ACU(opt.original, result);
-            // 前面的建议改过正文后，同一段原文可能改为命中受保护区（MVU 变量块 / 排除段）里的同名文字：
+            // 前面的建议改过正文后，同一段原文可能改为命中受保护区里的同名文字：
             // 按当前正文重新核对，落进去就不写（预过滤只核对了原文里的第一处命中）。
             const hitProtected = match.start !== -1
-                && !!findOverlappingBoundaryRange_ACU(collectOptimizationExcludeRanges_ACU(result, options), match.start, match.end);
+                && !!findOverlappingBoundaryRange_ACU(protectedRanges, match.start, match.end);
             if (hitProtected) {
                 logDebug_ACU(`[正文优化] 优化项 ${i + 1} 在当前正文中命中受保护区（写回保护），跳过`);
             }
@@ -3339,6 +3341,7 @@ function applyOptimizationsWithStats_ACU(originalContent, optimizations, options
                 // 英文撇号会被改成弯引号，直接改坏用户正文。引号风格交给提示词约束。
                 const finalContent = originalPunct.prefix + optimizedPunct.trimmed + originalPunct.suffix;
                 result = result.substring(0, match.start) + finalContent + result.substring(match.end);
+                protectedRanges = collectOptimizationExcludeRanges_ACU(result, options);
                 replaced = true;
                 logDebug_ACU(`[正文优化] 优化项 ${i + 1} 使用${match.method}成功，位置: ${match.start}-${match.end}`);
             }
@@ -87975,7 +87978,12 @@ async function performContentOptimization_ACU(content, options = {}) {
                 if (exclusion.dropped.length > 0) {
                     logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 有 ${exclusion.dropped.length} 个优化项命中标签排除规则，已按写回保护丢弃（不写回、不计入替换数）`);
                 }
-                const applied = applyOptimizationsWithStats_ACU(content, exclusion.kept);
+                // 带上排除规则：前面的建议改过正文后，按当前正文复核排除段（预过滤只核对了原文的第一处命中）
+                const applied = applyOptimizationsWithStats_ACU(content, exclusion.kept, {
+                    excludeRules: config.excludeRules,
+                    excludeTags: config.excludeTags,
+                    alreadyFiltered: true,
+                });
                 if (exclusion.kept.length > 0 && applied.appliedCount === 0) {
                     logWarn_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 没有可应用的优化项，放弃本轮写回`);
                     return {
@@ -88328,8 +88336,12 @@ function getLastOptimizationBase_ACU() {
 // 这里按 messageId 记录「已成功写回」的内容指纹：同一楼内容未变 → 跳过；内容变了 → 正常执行并更新记录。
 // 只服务自动链；手动「重新优化」/测试入口不调用这两个函数，因此完全不受影响。
 /** 计算写回后消息内容的指纹（复用仓内同步 sha256，无新增依赖）。 */
+/**
+ * 判重指纹不含 MVU 变量块：替换或判定之后 MVU 才往本楼追加变量块（时机不定），
+ * 剧情正文没变就应判为同一份内容，否则重复的生成结束事件会再判一次、甚至把已判「不好」的楼替换掉。
+ */
 function computeAutoOptimizationContentHash_ACU(content) {
-    return sha256HexSync_ACU(typeof content === 'string' ? content : String(content ?? ''));
+    return sha256HexSync_ACU(stripMvuUpdateBlocks_ACU(typeof content === 'string' ? content : String(content ?? '')));
 }
 /**
  * 自动链入口判重：该楼是否已经用「当前这份内容」成功自动替换过一次。
@@ -92725,7 +92737,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261009-10"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261009-11"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92744,7 +92756,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261009-10";
+        const stamp = "20261009-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -106640,17 +106652,25 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, boundaryAnchorInde
     return { changed, foldFiles };
 }
 /**
+ * 本楼 MVU 变量块以楼层当前内容为准：新正文里的块与本楼一致时原样写回（不挪位置）；
+ * 不一致（缺块、带着重新优化基准里的旧块、块数不同）时去掉新正文里的块，接上本楼当前的块，
+ * 免得把 MVU 之后重算的新变量改回旧值。本楼没有块时返回 null，新正文原样写回。
+ */
+function reconcileMvuBlocksWithFloor_ACU(oldContent, newContent) {
+    const previous = typeof oldContent === 'string' ? oldContent : '';
+    const next = String(newContent ?? '');
+    const liveBlocks = collectMvuUpdateBlockRanges_ACU(previous).map(range => previous.slice(range.start, range.end));
+    if (liveBlocks.length === 0)
+        return null;
+    const nextBlocks = collectMvuUpdateBlockRanges_ACU(next).map(range => next.slice(range.start, range.end));
+    if (nextBlocks.length === liveBlocks.length && nextBlocks.every((block, index) => block === liveBlocks[index]))
+        return null;
+    return `${stripMvuUpdateBlocks_ACU(next).trimEnd()}\n\n${liveBlocks.map(block => block.trim()).join('\n\n')}`;
+}
+/**
  * 替换聊天消息内容（正文优化核心逻辑）
  * 从 presentation/components/optimization-ui/optimization-ui-exec.ts 搬迁
  */
-/** 旧正文里有 MVU 变量块而新正文一个都没有时，返回要接回的块（按原顺序空行分隔）；否则返回空串。 */
-function collectMissingMvuBlocks_ACU(oldContent, newContent) {
-    const previous = typeof oldContent === 'string' ? oldContent : '';
-    const blocks = collectMvuUpdateBlockRanges_ACU(previous);
-    if (blocks.length === 0 || collectMvuUpdateBlockRanges_ACU(String(newContent ?? '')).length > 0)
-        return '';
-    return blocks.map(range => previous.slice(range.start, range.end).trim()).join('\n\n');
-}
 async function replaceChatMessage_ACU(messageIndex, newContent, options = {}) {
     try {
         logDebug_ACU(`[正文优化] replaceChatMessage_ACU 开始执行, messageIndex=${messageIndex}, newContent长度=${newContent?.length || 0}`);
@@ -106671,11 +106691,11 @@ async function replaceChatMessage_ACU(messageIndex, newContent, options = {}) {
             newContent = String(newContent ?? '').trimEnd() + appendedTail;
         }
         const oldContent = chat[messageIndex].mes;
-        // 本楼现有的 MVU 变量块不能被替换抹掉：从块追加之前的原文重新优化时，新正文里没有块，接回末尾。
-        const missingMvuBlocks = collectMissingMvuBlocks_ACU(oldContent, newContent);
-        if (missingMvuBlocks) {
-            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼的新正文缺少现有 MVU 变量块，已接回末尾`);
-            newContent = `${String(newContent ?? '').trimEnd()}\n\n${missingMvuBlocks}`;
+        // 本楼现有的 MVU 变量块不能被替换抹掉或改回旧版（重新优化的基准可能早于 MVU 追加或重算）
+        const reconciledContent = reconcileMvuBlocksWithFloor_ACU(oldContent, newContent);
+        if (reconciledContent !== null) {
+            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼的新正文与本楼 MVU 变量块不一致，已换成本楼当前的变量块`);
+            newContent = reconciledContent;
         }
         logDebug_ACU(`[正文优化] 原内容长度: ${oldContent?.length || 0}, 新内容长度: ${newContent?.length || 0}`);
         // 保存原始内容到 extra 字段，用于"重新优化"功能
@@ -118330,6 +118350,873 @@ function hideOptimizationOverlay_ACU() {
  */
 
 /**
+ * service/optimization/decision-gate.ts — 正文替换「替换前判定」（OpenRouter 决策模型）
+ *
+ * 思路（用户拍板）：RP 常用的性价比模型 AI 味重，而决策模型恰好偏爱这种写法。
+ * 所以正文出来后先问决策模型「这篇文章写得好不好」，判为「好」的才交给替换模型润色，
+ * 判为「不好」的保持原文。决策模型只回答预设选项并附概率，不生成文字，单次花费可忽略。
+ *
+ * 决策接口与聊天接口格式不同，宿主的 chat-completions 转发带不了它；OpenRouter 对任意来源放行跨域，
+ * 插件在 TT WebView 内直连（与向量 embedding / rerank 直连外部接口同一做法）。
+ * 判定失败一律返回 error，由调用方照常替换，判定永远不会卡住正文。
+ */
+const DECISION_API_URL_ACU = 'https://openrouter.ai/api/alpha/decisions';
+const DECISION_MODELS_URL_ACU = 'https://openrouter.ai/api/v1/models?output_modalities=decisions';
+const DECISION_GOOD_LABEL_ACU = '好';
+const DECISION_BAD_LABEL_ACU = '不好';
+const DECISION_TIMEOUT_MS_ACU = 20000;
+const DECISION_QUESTION_KEY_ACU = 'quality';
+function normalizeDecisionGateSettings_ACU(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    // 清空输入框得到 '' / null：Number 会把它们当成 0，门槛 0% 等于判定形同虚设，回到默认值
+    const rawThreshold = source.threshold;
+    const threshold = rawThreshold === null || rawThreshold === undefined || String(rawThreshold).trim() === ''
+        ? NaN
+        : Number(rawThreshold);
+    const model = typeof source.model === 'string' ? source.model.trim() : '';
+    return {
+        enabled: source.enabled === true,
+        apiKey: typeof source.apiKey === 'string' ? source.apiKey.trim() : '',
+        model: model || DEFAULT_DECISION_MODEL_ACU,
+        threshold: Number.isFinite(threshold) ? Math.min(100, Math.max(0, Math.round(threshold))) : DEFAULT_DECISION_THRESHOLD_ACU,
+    };
+}
+function buildDecisionRequestBody_ACU(model, text) {
+    return {
+        model,
+        state: text,
+        questions: {
+            [DECISION_QUESTION_KEY_ACU]: {
+                type: 'choice',
+                instructions: '这篇文章写得好不好？',
+                criteria: {
+                    [DECISION_GOOD_LABEL_ACU]: '这篇文章写得好',
+                    [DECISION_BAD_LABEL_ACU]: '这篇文章写得不好',
+                },
+            },
+        },
+    };
+}
+/** 概率可能是 { 选项: p } 或 [{ choice, probability }]；读不到返回 null。 */
+function readOptionProbability_ACU(probabilities, label) {
+    if (Array.isArray(probabilities)) {
+        const entry = probabilities.find((item) => (item?.choice ?? item?.label ?? item?.option) === label);
+        const value = Number(entry?.probability ?? entry?.p);
+        return entry && Number.isFinite(value) ? value : null;
+    }
+    if (probabilities && typeof probabilities === 'object') {
+        const value = Number(probabilities[label]);
+        return Number.isFinite(value) ? value : null;
+    }
+    return null;
+}
+function interpretDecisionResponse_ACU(payload, threshold) {
+    const answer = payload?.answers?.[DECISION_QUESTION_KEY_ACU];
+    const choice = String(answer?.choice ?? '');
+    if (choice !== DECISION_GOOD_LABEL_ACU && choice !== DECISION_BAD_LABEL_ACU) {
+        return { kind: 'error', message: '决策模型没有给出「好 / 不好」的判断' };
+    }
+    const goodProbability = readOptionProbability_ACU(answer.probabilities, DECISION_GOOD_LABEL_ACU)
+        ?? (choice === DECISION_GOOD_LABEL_ACU ? 1 : 0);
+    return {
+        kind: 'decided',
+        // 0.57 * 100 = 56.999…：容差比较，恰好达到门槛也算
+        replace: goodProbability * 100 >= threshold - 1e-9,
+        choice,
+        goodProbability,
+        model: String(payload?.model ?? ''),
+    };
+}
+/**
+ * 在超时与外部取消约束下跑完整个请求（含读取响应体）；超时与取消各自给出可读原因，供调用方区分。
+ * 只约束 fetch 不够：响应头到了、响应体卡住时 response.json() 会一直挂着。
+ */
+async function runWithDeadline_ACU(deps, work) {
+    const controller = new AbortController();
+    let reason = '';
+    const abortWith = (text) => {
+        if (!reason)
+            reason = text;
+        controller.abort();
+    };
+    const aborted = new Promise((_resolve, reject) => {
+        controller.signal.addEventListener('abort', () => reject(new Error(reason)), { once: true });
+    });
+    const timer = setTimeout(() => abortWith('超时未响应'), deps.timeoutMs ?? DECISION_TIMEOUT_MS_ACU);
+    const onExternalAbort = () => abortWith('已取消');
+    if (deps.signal?.aborted)
+        onExternalAbort();
+    deps.signal?.addEventListener('abort', onExternalAbort, { once: true });
+    try {
+        return { ok: true, value: await Promise.race([work(controller.signal), aborted]) };
+    }
+    catch (error) {
+        return { ok: false, failure: reason, error };
+    }
+    finally {
+        clearTimeout(timer);
+        deps.signal?.removeEventListener('abort', onExternalAbort);
+    }
+}
+async function readErrorMessage_ACU(response) {
+    try {
+        const body = await response.json();
+        return String(body?.error?.message ?? body?.message ?? '').trim();
+    }
+    catch {
+        return '';
+    }
+}
+async function requestContentDecision_ACU(text, settings, deps = {}) {
+    if (!settings.apiKey)
+        return { kind: 'error', message: '未填写 OpenRouter Key' };
+    const fetchImpl = deps.fetch ?? globalThis.fetch;
+    const outcome = await runWithDeadline_ACU(deps, async (signal) => {
+        const response = await fetchImpl(DECISION_API_URL_ACU, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${settings.apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(buildDecisionRequestBody_ACU(settings.model, text)),
+            signal,
+        });
+        if (!response.ok) {
+            const reason = await readErrorMessage_ACU(response);
+            return { kind: 'error', message: `HTTP ${response.status}${reason ? `：${reason}` : ''}` };
+        }
+        return interpretDecisionResponse_ACU(await response.json(), settings.threshold);
+    });
+    if (outcome.ok)
+        return outcome.value;
+    if (outcome.failure)
+        return { kind: 'error', message: `决策模型${outcome.failure}` };
+    return { kind: 'error', message: `请求失败：${outcome.error?.message || outcome.error}` };
+}
+/**
+ * 自动替换入口：读设置，去掉 MVU 变量块后送去判定。
+ * 开关关闭或还没填 key 时不发请求、视同未开启（页面上会提示缺 key），免得每楼都弹失败提示。
+ */
+async function judgeContentForAutoReplace_ACU(text, deps = {}) {
+    const settings = normalizeDecisionGateSettings_ACU(settings_ACU?.contentOptimizationSettings?.decisionGate);
+    if (!settings.enabled || !settings.apiKey)
+        return { kind: 'disabled' };
+    return requestContentDecision_ACU(stripMvuUpdateBlocks_ACU(text), settings, deps);
+}
+/** 价格字段都明确为 0 才算免费；缺失、空值或任何一项非 0（如按次收费）都不算。 */
+function isFreePricing_ACU(pricing) {
+    if (!pricing || typeof pricing !== 'object')
+        return false;
+    const record = pricing;
+    const isZero = (value) => value !== null && value !== undefined && String(value).trim() !== '' && Number(value) === 0;
+    return isZero(record.prompt) && Object.values(record).every(value => value === null || value === undefined || isZero(value));
+}
+/** OpenRouter 上当前可用的决策模型（公开列表，不需要 key）。失败或超时抛错，由调用方提示。 */
+async function fetchDecisionModels_ACU(deps = {}) {
+    const fetchImpl = deps.fetch ?? globalThis.fetch;
+    const outcome = await runWithDeadline_ACU(deps, async (signal) => {
+        const response = await fetchImpl(DECISION_MODELS_URL_ACU, { method: 'GET', signal });
+        if (!response.ok)
+            throw new Error(`HTTP ${response.status}`);
+        return response.json();
+    });
+    if (!outcome.ok)
+        throw new Error(outcome.failure || outcome.error?.message || String(outcome.error));
+    const body = outcome.value;
+    const models = Array.isArray(body?.data) ? body.data : [];
+    return models
+        .filter((model) => typeof model?.id === 'string'
+        && Array.isArray(model?.architecture?.output_modalities)
+        && model.architecture.output_modalities.includes('decisions'))
+        .map((model) => ({
+        id: model.id,
+        name: typeof model.name === 'string' && model.name ? model.name : model.id,
+        free: isFreePricing_ACU(model?.pricing),
+    }));
+}
+
+/**
+ * presentation/components/optimization-ui/optimization-ui-diff.ts
+ * 优化 Diff 对话框
+ */
+function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
+    const isLastLoop = result.currentLoop >= result.totalLoops;
+    const applyButtonText = isLastLoop ? '应用并完成' : '应用并继续';
+    const originalContent = getOriginalContent_ACU(messageIndex) || result.optimizedContent;
+    const dialogHtml = renderOptimizationReviewDialog_ACU({
+        title: '正文替换建议',
+        summaryHtml: escapeHtml_ACU(String(result.summary || '')),
+        meta: result.totalLoops > 1 ? `第 ${result.currentLoop}/${result.totalLoops} 轮` : undefined,
+        optimizations: result.optimizations,
+        buttons: [
+            { id: 'acu-opt-cancel', label: '取消优化', variant: 'ghost' },
+            ...(!isLastLoop ? [{ id: 'acu-opt-skip', label: '跳过本轮', variant: 'ghost' }] : []),
+            { id: 'acu-opt-reoptimize', label: '重新优化', variant: 'soft', icon: 'fa-solid fa-rotate-right' },
+            { id: 'acu-opt-apply', label: applyButtonText, variant: 'primary' },
+        ],
+    });
+    ensureHostDialogStylesInjected_ACU();
+    jQuery_API_ACU('body').append(dialogHtml);
+    // 绑定取消事件
+    jQuery_API_ACU('#acu-opt-cancel, #acu-opt-backdrop').on('click', function () {
+        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+        callback('cancel');
+    });
+    // 绑定跳过事件（仅非最后一轮显示）
+    jQuery_API_ACU('#acu-opt-skip').on('click', function () {
+        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+        callback('skip');
+    });
+    // 绑定重新优化事件
+    jQuery_API_ACU('#acu-opt-reoptimize').on('click', async function () {
+        jQuery_API_ACU(this).prop('disabled', true).text('优化中...');
+        // 关闭当前对话框
+        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+        // 获取原始内容并重新优化
+        const originalContent = getOriginalContent_ACU(messageIndex) || result.optimizedContent;
+        logDebug_ACU(`[正文优化] 用户点击重新优化，messageIndex=${messageIndex}`);
+        // 重新优化
+        await reoptimizeMessage_ACU(messageIndex);
+        // 触发回调，结束当前优化流程
+        callback('cancel');
+    });
+    // 绑定应用事件
+    jQuery_API_ACU('#acu-opt-apply').on('click', async function () {
+        jQuery_API_ACU(this).prop('disabled', true).text('处理中...');
+        logDebug_ACU(`[正文优化] 用户点击应用，isLastLoop=${isLastLoop}, messageIndex=${messageIndex}`);
+        logDebug_ACU(`[正文优化] optimizedContent长度: ${result.optimizedContent?.length || 0}`);
+        // 如果是最后一轮，先应用优化
+        if (isLastLoop) {
+            logDebug_ACU(`[正文优化] 准备调用 replaceChatMessage_ACU...`);
+            const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, {
+                originalContent: getOriginalContent_ACU(messageIndex) || originalContent,
+                expected: result.writeTarget,
+            });
+            logDebug_ACU(`[正文优化] replaceChatMessage_ACU 返回: ${success}`);
+            // R9-01：对话框打开期间楼层被滑动/删除或聊天已切换：结果作废，关闭对话框并结束本次优化。
+            if (!success && result.writeTarget !== undefined && !isChatMessageWriteTargetCurrent_ACU(result.writeTarget)) {
+                jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+                showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
+                callback('cancel');
+                return;
+            }
+            if (!success) {
+                jQuery_API_ACU(this).prop('disabled', false).text(applyButtonText);
+                showToastr_ACU('error', '应用失败');
+                return;
+            }
+        }
+        else {
+            logDebug_ACU(`[正文优化] 非最后一轮，跳过应用，直接回调`);
+        }
+        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+        callback('apply');
+    });
+}
+/**
+ * 自动链只读结果对话框：内容已由自动流程写回，这里只展示对比（原文/修改方案/优化），
+ * 不提供「应用」按钮。用于 showDiff 开启 + 非无感模式的自动替换收尾；
+ * DOM 对话框不受静默提示框拦截。
+ */
+function showOptimizationResultDialog_ACU(messageIndex, result) {
+    const optimizations = Array.isArray(result?.optimizations) ? result.optimizations : [];
+    const dialogHtml = renderOptimizationReviewDialog_ACU({
+        title: '正文替换完成',
+        icon: 'fa-solid fa-circle-check',
+        summaryHtml: `共 ${optimizations.length} 处改进${result?.summary ? `，${escapeHtml_ACU(String(result.summary))}` : ''}`,
+        optimizations,
+        buttons: [
+            { id: 'acu-opt-result-reoptimize', label: '重新优化', variant: 'soft', icon: 'fa-solid fa-rotate-right' },
+            { id: 'acu-opt-result-close', label: '关闭', variant: 'primary' },
+        ],
+    });
+    jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+    ensureHostDialogStylesInjected_ACU();
+    jQuery_API_ACU('body').append(dialogHtml);
+    jQuery_API_ACU('#acu-opt-result-close, #acu-opt-backdrop').on('click', function () {
+        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+    });
+    jQuery_API_ACU('#acu-opt-result-reoptimize').on('click', async function () {
+        jQuery_API_ACU(this).prop('disabled', true).text('优化中...');
+        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+        logDebug_ACU(`[正文优化] 结果对话框点击重新优化，messageIndex=${messageIndex}`);
+        await reoptimizeMessage_ACU(messageIndex);
+    });
+}
+/**
+ * 无感模式 + 显示优化对比的完成提示：内容已写回，不弹模态框打扰，提示里给「查看对比」入口，
+ * 点开即只读结果对话框。用户主动开了对比，所以不受静默提示框拦截。
+ */
+function showOptimizationResultToast_ACU(messageIndex, result, text) {
+    showHostSurfaceToast_ACU({
+        kind: 'success',
+        text,
+        action: {
+            label: '查看对比',
+            onClick: () => showOptimizationResultDialog_ACU(messageIndex, result),
+        },
+    });
+}
+/**
+ * HTML转义
+ */
+// === 以下为 presentation 层独有的 UI 函数（DOM 操作/渲染）===
+
+/**
+ * presentation/components/optimization-ui/optimization-ui-exec.ts
+ * 优化执行逻辑
+ */
+// replaceChatMessage_ACU 和 getOriginalContent_ACU 已搬迁到 service/chat/chat-service.ts
+// 通过文件顶部的 re-export 保持外部调用方兼容
+/**
+ * 重新优化消息
+ * @param {number} messageIndex - 消息索引
+ * @returns {Promise<boolean>} 是否成功
+ */
+async function reoptimizeMessage_ACU(messageIndex) {
+    const config = settings_ACU.contentOptimizationSettings || {};
+    _set_contentOptimizationAbortRequested_ACU(false);
+    // 检查是否启用
+    if (!config.enabled) {
+        showToastr_ACU('warning', '正文优化功能未启用');
+        return false;
+    }
+    const chat = getChatArray_ACU();
+    if (!chat || !chat[messageIndex]) {
+        showToastr_ACU('error', '消息不存在');
+        return false;
+    }
+    const message = chat[messageIndex];
+    // 跳过用户消息
+    if (message.is_user) {
+        showToastr_ACU('warning', '无法优化用户消息');
+        return false;
+    }
+    // 获取原始内容
+    const originalContent = getOriginalContent_ACU(messageIndex) || message.mes;
+    // R9-01：AI 在途与对话框打开期间楼层可能被滑动、删除或切聊天；应用前按此快照复核。
+    const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
+    if (!originalContent) {
+        showToastr_ACU('error', '无法获取消息内容');
+        return false;
+    }
+    logDebug_ACU(`[重新优化] 开始重新优化消息 ${messageIndex}，内容长度: ${originalContent.length}`);
+    if (config.seamlessMode) {
+        showOptimizationOverlay_ACU('正在重新优化正文...');
+    }
+    else {
+        showOptimizationProgressToast_ACU('正在进行正文优化（重新优化）...');
+    }
+    try {
+        ensureOptimizationNotCancelled_ACU();
+        const result = await performContentOptimization_ACU(originalContent, {
+            currentLoop: 1,
+            userMessage: ''
+        });
+        hideOptimizationOverlay_ACU();
+        hideOptimizationProgressToast_ACU();
+        if (contentOptimizationAbortRequested_ACU) {
+            return false;
+        }
+        if (!result.success) {
+            showToastr_ACU('error', `重新优化失败: ${result.error || '未知错误'}`);
+            return false;
+        }
+        if (!result.optimizations || result.optimizations.length === 0) {
+            showToastr_ACU('info', '原文已足够好，无需优化');
+            return true;
+        }
+        showReoptimizationDialog_ACU(messageIndex, result, originalContent, writeTarget);
+        return true;
+    }
+    catch (error) {
+        hideOptimizationOverlay_ACU();
+        hideOptimizationProgressToast_ACU();
+        if (contentOptimizationAbortRequested_ACU || error?.message === '用户终止正文优化') {
+            logDebug_ACU('[重新优化] 用户已取消正文优化');
+            return false;
+        }
+        logError_ACU('[重新优化] 执行出错:', error);
+        showToastr_ACU('error', `重新优化失败: ${error.message}`);
+        return false;
+    }
+    finally {
+        hideOptimizationOverlay_ACU();
+        hideOptimizationProgressToast_ACU();
+        _set_contentOptimizationAbortRequested_ACU(false);
+    }
+}
+/**
+ * 显示重新优化对话框
+ * @param {number} messageIndex - 消息索引
+ * @param {object} result - 优化结果
+ * @param {string} originalContent - 原始内容
+ */
+function showReoptimizationDialog_ACU(messageIndex, result, originalContent, writeTarget) {
+    const dialogHtml = renderOptimizationReviewDialog_ACU({
+        title: '重新优化结果',
+        icon: 'fa-solid fa-rotate-right',
+        summaryHtml: escapeHtml_ACU(String(result.summary || '')),
+        optimizations: result.optimizations,
+        buttons: [
+            { id: 'acu-opt-cancel', label: '取消', variant: 'ghost' },
+            { id: 'acu-opt-reoptimize', label: '再次优化', variant: 'soft', icon: 'fa-solid fa-rotate-right' },
+            { id: 'acu-opt-apply', label: '应用优化', variant: 'primary' },
+        ],
+    });
+    ensureHostDialogStylesInjected_ACU();
+    jQuery_API_ACU('body').append(dialogHtml);
+    // 绑定取消事件
+    jQuery_API_ACU('#acu-opt-cancel, #acu-opt-backdrop').on('click', function () {
+        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+    });
+    // 绑定再次优化事件
+    jQuery_API_ACU('#acu-opt-reoptimize').on('click', async function () {
+        jQuery_API_ACU(this).prop('disabled', true).text('优化中...');
+        // 关闭当前对话框
+        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+        // 重新优化（使用原始内容）
+        await reoptimizeMessage_ACU(messageIndex);
+    });
+    // 绑定应用事件
+    jQuery_API_ACU('#acu-opt-apply').on('click', async function () {
+        jQuery_API_ACU(this).prop('disabled', true).text('应用中...');
+        const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, {
+            originalContent: getOriginalContent_ACU(messageIndex) || originalContent,
+            expected: writeTarget,
+        });
+        if (success) {
+            jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+            showToastr_ACU('success', '优化已应用');
+        }
+        else if (!isChatMessageWriteTargetCurrent_ACU(writeTarget)) {
+            jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+            showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
+        }
+        else {
+            jQuery_API_ACU(this).prop('disabled', false).text('应用优化');
+            showToastr_ACU('error', '应用失败');
+        }
+    });
+}
+/** 写回被拒或失败时的提示：楼层已变化与写入出错分开说明（R9-01）。 */
+function reportOptimizationWriteBackFailure_ACU(writeTarget) {
+    if (!isChatMessageWriteTargetCurrent_ACU(writeTarget)) {
+        showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
+    }
+    else {
+        showToastr_ACU('error', '正文优化结果写回失败，原文未改动，详情见运行日志。');
+    }
+}
+/**
+ * 自动替换成功写回后登记「已处理」指纹，供下一次自动触发判重。
+ * 指纹取写回后聊天数组里该楼的实际正文，避免宿主二次渲染导致内容漂移而漏判。
+ * @param {number} messageIndex - 已写回的消息索引
+ * @param {string} fallbackContent - 读不到实时内容时兜底使用的写回内容
+ */
+function recordAutoProcessedAfterWriteBack_ACU(messageIndex, fallbackContent) {
+    try {
+        const liveMessage = getChatArray_ACU()?.[messageIndex];
+        const liveContent = typeof liveMessage?.mes === 'string' && liveMessage.mes ? liveMessage.mes : fallbackContent;
+        const recorded = recordAutoContentOptimizationProcessed_ACU({
+            messageIndex,
+            messageId: liveMessage?.message_id ?? null,
+            content: liveContent
+        });
+        if (recorded) {
+            logDebug_ACU(`[正文优化] 已登记第 ${messageIndex} 楼的自动替换指纹，用于后续重复触发判重`);
+        }
+    }
+    catch (error) {
+        logDebug_ACU('[正文优化] 登记自动替换已处理记录失败:', error);
+    }
+}
+/**
+ * 替换前判定：问决策模型「这篇文章写得好不好」，判「好」才继续替换（性价比模型的 AI 味正合它口味）。
+ * 判「不好」保持原文，并登记本楼已处理，重复的生成结束事件不再重判；判定失败照常替换。填表一律由调度层负责。
+ * 判定请求挂在正文优化的取消机制上：按「取消」会中断请求，之后既不提示也不登记。
+ */
+async function runDecisionGate_ACU(messageIndex, message, content, judgedText, config) {
+    // 没填 key 时判定不生效（页面有提示），不闪「正在判定」
+    if (config.decisionGate?.enabled !== true || !String(config.decisionGate?.apiKey ?? '').trim())
+        return 'continue';
+    if (config.seamlessMode) {
+        showOptimizationOverlay_ACU('正在判定正文...');
+    }
+    else {
+        showOptimizationProgressToast_ACU('正在判定正文...');
+    }
+    const abort = trackContentOptimizationAbort_ACU();
+    let outcome;
+    try {
+        outcome = await judgeContentForAutoReplace_ACU(judgedText, { signal: abort.signal });
+    }
+    catch (error) {
+        outcome = { kind: 'error', message: error?.message || String(error) };
+    }
+    finally {
+        abort.release();
+    }
+    // 以本次请求自己的信号为准：并发的另一轮可能已把全局取消标志复位
+    let cancelled = abort.signal.aborted;
+    try {
+        ensureOptimizationNotCancelled_ACU();
+    }
+    catch {
+        cancelled = true;
+    }
+    if (cancelled) {
+        hideOptimizationOverlay_ACU();
+        hideOptimizationProgressToast_ACU();
+        logDebug_ACU('[正文优化] 替换前判定期间用户取消，本楼不再处理');
+        return 'cancelled';
+    }
+    if (outcome.kind === 'disabled')
+        return 'continue';
+    if (outcome.kind === 'error') {
+        logError_ACU('[正文优化] 替换前判定失败，照常替换:', outcome.message);
+        showToastr_ACU('warning', `决策判定失败（${outcome.message}），本楼照常替换`);
+        return 'continue';
+    }
+    const goodPercent = Math.round(outcome.goodProbability * 100);
+    logDebug_ACU(`[正文优化] 替换前判定：${outcome.choice}（好 ${goodPercent}%，模型 ${outcome.model || '未知'}）→ ${outcome.replace ? '替换' : '不替换'}`);
+    if (outcome.replace)
+        return 'continue';
+    hideOptimizationOverlay_ACU();
+    hideOptimizationProgressToast_ACU();
+    // 登记判定时的正文：判重指纹不含 MVU 变量块，之后 MVU 追加变量块仍能判重命中；续写等改动照常重新处理
+    recordAutoContentOptimizationProcessed_ACU({ messageIndex, messageId: message.message_id, content });
+    showToastr_ACU('info', `决策模型判定本楼「${outcome.choice}」（好 ${goodPercent}%），不替换`);
+    return 'skipped';
+}
+/**
+ * 执行正文优化流程（在GENERATION_ENDED后调用）
+ * @param {number} messageIndex - AI消息索引
+ * @param options.onCancelled - 用户取消（判定或替换途中）时的回调，供 MVU 早跑区分「取消」与「失败」
+ * @returns {Promise<boolean>} 是否成功
+ * 填表不在这里触发：各模式统一由调度层在本函数返回后负责（早跑时要等 MVU 解析结束）。
+ */
+async function executeContentOptimization_ACU(messageIndex, options = {}) {
+    const config = settings_ACU.contentOptimizationSettings || {};
+    _set_contentOptimizationAbortRequested_ACU(false);
+    // 检查是否启用
+    if (!config.enabled) {
+        return false;
+    }
+    const chat = getChatArray_ACU();
+    if (!chat || !chat[messageIndex]) {
+        return false;
+    }
+    const message = chat[messageIndex];
+    // 跳过用户消息
+    if (message.is_user) {
+        return false;
+    }
+    let content = message.mes || '';
+    // [自动链判重] 宿主可能对本楼再派发一条无配对上下文的 GENERATION_ENDED（典型来源：外部 MVU
+    // 插件非静默 generate 收尾时 hideStopButton 的第二次 emit）。内容未变说明上一次自动替换已生效，
+    // 直接跳过：不调 AI、不写回，也不覆盖优化基准缓存。手动「重新优化」/测试入口不经过本函数，不受影响。
+    if (shouldSkipDuplicateAutoContentOptimization_ACU(message.message_id, content)) {
+        logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼内容未变，跳过重复自动替换`);
+        return true;
+    }
+    // R9-01：AI 在途期间楼层可能被滑动、删除或切聊天；写回前按此快照复核，不按下标盲写。
+    const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
+    // [新增] 获取用户消息（用于$8占位符）
+    let userMessage = '';
+    for (let i = messageIndex - 1; i >= 0; i--) {
+        if (chat[i] && chat[i].is_user) {
+            userMessage = chat[i].mes || '';
+            break;
+        }
+    }
+    const extractTags = (config.extractTags || '').trim();
+    const extractRules = config.extractRules || [];
+    const excludeTags = (config.excludeTags || '').trim();
+    const excludeRules = config.excludeRules || [];
+    let processedContent = applyContextTagFilters_ACU(content, {
+        extractTags,
+        extractRules,
+        excludeTags,
+        excludeRules
+    });
+    const minLength = config.minLength || 100;
+    if (processedContent.length < minLength) {
+        logDebug_ACU(`[正文优化] 处理后正文长度 ${processedContent.length} 小于最小阈值 ${minLength}，跳过优化`);
+        return false;
+    }
+    const gate = await runDecisionGate_ACU(messageIndex, message, content, processedContent, config);
+    if (gate === 'cancelled') {
+        _set_contentOptimizationAbortRequested_ACU(false);
+        options.onCancelled?.();
+        return false;
+    }
+    if (gate === 'skipped')
+        return true;
+    // 真正进入替换才把本楼记为「重新优化」的目标：判「不好」或取消的楼不应顶掉上一次真正替换过的楼
+    setLastOptimizationBase_ACU({
+        messageIndex,
+        messageId: message.message_id,
+        baseContent: content
+    });
+    const loopCount = config.loopCount || 1;
+    logDebug_ACU(`[正文优化] 开始优化消息 ${messageIndex}，原始长度 ${content.length}，处理后长度 ${processedContent.length}，循环次数: ${loopCount}`);
+    if (config.seamlessMode) {
+        showOptimizationOverlay_ACU(loopCount > 1 ? `正在优化正文 (1/${loopCount})...` : '正在优化正文...');
+    }
+    else {
+        showOptimizationProgressToast_ACU(loopCount > 1 ? `正在进行正文优化 (1/${loopCount})...` : '正在进行正文优化...');
+    }
+    try {
+        ensureOptimizationNotCancelled_ACU();
+        if (config.autoApply || config.seamlessMode) {
+            let currentContent = content;
+            let totalOptimizations = [];
+            let finalOptimizedContent = content;
+            for (let loop = 1; loop <= loopCount; loop++) {
+                ensureOptimizationNotCancelled_ACU();
+                logDebug_ACU(`[正文优化] 执行第 ${loop}/${loopCount} 轮优化`);
+                if (config.seamlessMode && loopCount > 1) {
+                    showOptimizationOverlay_ACU(`正在优化正文 (${loop}/${loopCount})...`);
+                }
+                else if (!config.seamlessMode) {
+                    showOptimizationProgressToast_ACU(`正在进行正文优化 (${loop}/${loopCount})...`);
+                }
+                const result = await performContentOptimization_ACU(currentContent, {
+                    currentLoop: loop,
+                    userMessage: userMessage
+                });
+                ensureOptimizationNotCancelled_ACU();
+                if (!result.success) {
+                    logDebug_ACU(`[正文优化] 第 ${loop} 轮优化失败:`, result.error);
+                    if (loop === 1) {
+                        if (config.seamlessMode) {
+                            hideOptimizationOverlay_ACU();
+                        }
+                        else {
+                            hideOptimizationProgressToast_ACU();
+                        }
+                        return false;
+                    }
+                    break;
+                }
+                if (result.optimizedContent === currentContent) {
+                    logDebug_ACU(`[正文优化] 第 ${loop} 轮没有实际正文变化，放弃写回`);
+                    if (totalOptimizations.length === 0) {
+                        if (config.seamlessMode) {
+                            hideOptimizationOverlay_ACU();
+                        }
+                        else {
+                            hideOptimizationProgressToast_ACU();
+                        }
+                        return false;
+                    }
+                    break;
+                }
+                if (!result.optimizations || result.optimizations.length === 0) {
+                    logDebug_ACU(`[正文优化] 第 ${loop} 轮无需优化，原文已足够好`);
+                    if (loop === 1) {
+                        if (config.seamlessMode) {
+                            hideOptimizationOverlay_ACU();
+                        }
+                        else {
+                            hideOptimizationProgressToast_ACU();
+                        }
+                        return true;
+                    }
+                    break;
+                }
+                totalOptimizations = totalOptimizations.concat(result.optimizations);
+                finalOptimizedContent = result.optimizedContent;
+                currentContent = result.optimizedContent;
+                logDebug_ACU(`[正文优化] 第 ${loop} 轮完成，本轮 ${result.optimizations.length} 个优化项，累计 ${totalOptimizations.length} 个`);
+            }
+            if (totalOptimizations.length === 0) {
+                logDebug_ACU('[正文优化] 所有轮次均无需优化');
+                if (config.seamlessMode) {
+                    hideOptimizationOverlay_ACU();
+                }
+                else {
+                    hideOptimizationProgressToast_ACU();
+                }
+                return true;
+            }
+            const writtenBack = await replaceChatMessage_ACU(messageIndex, finalOptimizedContent, { expected: writeTarget });
+            if (config.seamlessMode) {
+                hideOptimizationOverlay_ACU();
+            }
+            else {
+                hideOptimizationProgressToast_ACU();
+            }
+            if (!writtenBack) {
+                reportOptimizationWriteBackFailure_ACU(writeTarget);
+                return false;
+            }
+            recordAutoProcessedAfterWriteBack_ACU(messageIndex, finalOptimizedContent);
+            const doneText = `正文优化完成，共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`;
+            const resultForReview = {
+                optimizations: totalOptimizations,
+                summary: `共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`,
+                optimizedContent: finalOptimizedContent
+            };
+            if (config.showDiff && !config.seamlessMode) {
+                // 自动链已写回：用只读结果对话框展示对比（原文/修改方案/优化）。
+                // 对话框是 DOM 覆盖层，不受静默提示框拦截。
+                showOptimizationResultDialog_ACU(messageIndex, resultForReview);
+            }
+            else if (config.showDiff) {
+                // 无感模式不弹模态框打扰，完成提示带「查看对比」入口；用户开了对比，静默时也照常显示。
+                showOptimizationResultToast_ACU(messageIndex, resultForReview, doneText);
+            }
+            else {
+                showToastr_ACU('success', doneText);
+            }
+            return true;
+        }
+        else {
+            hideOptimizationProgressToast_ACU();
+            return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, loopCount, writeTarget);
+        }
+    }
+    catch (error) {
+        if (contentOptimizationAbortRequested_ACU || error?.message === '用户终止正文优化') {
+            logDebug_ACU('[正文优化] 用户已取消正文优化');
+            options.onCancelled?.();
+            return false;
+        }
+        logError_ACU('[正文优化] 执行出错:', error);
+        if (config.seamlessMode) {
+            hideOptimizationOverlay_ACU();
+        }
+        else {
+            hideOptimizationProgressToast_ACU();
+        }
+        return false;
+    }
+    finally {
+        hideOptimizationOverlay_ACU();
+        hideOptimizationProgressToast_ACU();
+        _set_contentOptimizationAbortRequested_ACU(false);
+    }
+}
+/**
+ * 执行正文优化（手动确认模式，逐轮确认）
+ * @param {number} messageIndex - 消息索引
+ * @param {string} content - 原始内容
+ * @param {string} userMessage - 用户消息
+ * @param {number} totalLoops - 总循环次数
+ * @param writeTarget - 读取正文时的楼层快照，写回前复核（R9-01）
+ * @param {number} currentLoop - 当前循环次数（内部使用）
+ * @param {string} currentContent - 当前内容（内部使用）
+ * @param {Array} totalOptimizations - 累计优化项（内部使用）
+ * @returns {Promise<boolean>} 是否成功
+ */
+async function executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop = 1, currentContent = null, totalOptimizations = []) {
+    // 使用传入的当前内容，或者原始内容
+    let workingContent = currentContent !== null ? currentContent : content;
+    // R9-08：前几轮「应用并继续」只把结果交给下一轮，不写回。后续轮次失败、无需优化或跳过时，
+    // 要写回已确认的内容，否则用户确认过的修改会丢失，界面却报成功。填表由调度层在整个流程结束后触发。
+    const finishWithConfirmedContent = async (confirmedContent, confirmedOptimizations) => {
+        if (confirmedOptimizations.length > 0 && confirmedContent !== content) {
+            const written = await replaceChatMessage_ACU(messageIndex, confirmedContent, { expected: writeTarget });
+            if (written) {
+                recordAutoProcessedAfterWriteBack_ACU(messageIndex, confirmedContent);
+                showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${confirmedOptimizations.length} 处改进`);
+            }
+            else {
+                reportOptimizationWriteBackFailure_ACU(writeTarget);
+            }
+        }
+        else {
+            showToastr_ACU('info', '正文无需优化');
+        }
+        return true;
+    };
+    logDebug_ACU(`[正文优化-手动确认] 执行第 ${currentLoop}/${totalLoops} 轮优化`);
+    // 执行优化
+    const result = await performContentOptimization_ACU(workingContent, {
+        currentLoop: currentLoop,
+        userMessage: userMessage
+    });
+    if (!result.success) {
+        logDebug_ACU(`[正文优化-手动确认] 第 ${currentLoop} 轮优化失败:`, result.error);
+        // 如果是第一轮就失败，显示错误
+        if (currentLoop === 1) {
+            showToastr_ACU('error', `正文优化失败: ${result.error}`);
+            return false;
+        }
+        // 后续轮次失败：写回此前已确认的结果，再触发填表
+        return finishWithConfirmedContent(workingContent, totalOptimizations);
+    }
+    // 检查是否有实际优化
+    if (!result.optimizations || result.optimizations.length === 0) {
+        logDebug_ACU(`[正文优化-手动确认] 第 ${currentLoop} 轮无需优化，原文已足够好`);
+        // 如果没有优化项，检查是否还有下一轮
+        if (currentLoop < totalLoops) {
+            // 继续下一轮（使用当前内容）
+            return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop + 1, workingContent, totalOptimizations);
+        }
+        else {
+            // 所有轮次完成：写回此前已确认的结果，再触发填表
+            return finishWithConfirmedContent(workingContent, totalOptimizations);
+        }
+    }
+    // 累积优化项
+    const newTotalOptimizations = totalOptimizations.concat(result.optimizations);
+    // 显示对比对话框
+    return new Promise((resolve) => {
+        showOptimizationDiffDialogForLoop_ACU(messageIndex, {
+            optimizations: result.optimizations,
+            summary: `第 ${currentLoop}/${totalLoops} 轮优化，本轮 ${result.optimizations.length} 处改进`,
+            optimizedContent: result.optimizedContent,
+            currentLoop: currentLoop,
+            totalLoops: totalLoops,
+            totalOptimizations: newTotalOptimizations,
+            writeTarget
+        }, async (action) => {
+            if (action === 'apply') {
+                // 用户确认应用
+                if (currentLoop < totalLoops) {
+                    // 还有下一轮，继续优化
+                    const nextResult = await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop + 1, result.optimizedContent, newTotalOptimizations);
+                    resolve(nextResult);
+                }
+                else {
+                    // 所有轮次完成：末轮对话框已按快照复核并写回（只写一次），这里登记已处理
+                    recordAutoProcessedAfterWriteBack_ACU(messageIndex, result.optimizedContent);
+                    showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${newTotalOptimizations.length} 处改进`);
+                    resolve(true);
+                }
+            }
+            else if (action === 'skip') {
+                // 用户跳过本轮，但继续下一轮
+                if (currentLoop < totalLoops) {
+                    const nextResult = await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop + 1, workingContent, // 使用未优化的内容
+                    totalOptimizations // 不累积本轮优化项
+                    );
+                    resolve(nextResult);
+                }
+                else {
+                    // 最后一轮跳过：写回此前已确认的结果
+                    resolve(await finishWithConfirmedContent(workingContent, totalOptimizations));
+                }
+            }
+            else {
+                // 用户取消，结束优化流程（填表照常由调度层触发）
+                resolve(true);
+            }
+        });
+    });
+}
+/**
+ * 显示优化对比对话框（支持循环优化）
+ */
+
+/**
+ * presentation/components/optimization-ui/index.ts — 统一 re-export
+ */
+
+/**
  * presentation/triggers/settings-ui-sync/settings-ui-config.ts
  * 旧弹窗时代保存各设置项的 save* 函数已随旧弹窗入口链删除而失去调用者，
  * 本文件仅保留仍被引用的 re-export（purgeOldLayerData_ACU 供 settings-ui-trigger 使用）。
@@ -119024,874 +119911,6 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
         queueMicrotask(() => { void triggerAutomaticUpdateIfNeeded_ACU(followUpContext); });
     }
 }
-
-/**
- * presentation/triggers/settings-ui-sync/index.ts
- */
-
-/**
- * service/optimization/decision-gate.ts — 正文替换「替换前判定」（OpenRouter 决策模型）
- *
- * 思路（用户拍板）：RP 常用的性价比模型 AI 味重，而决策模型恰好偏爱这种写法。
- * 所以正文出来后先问决策模型「这篇文章写得好不好」，判为「好」的才交给替换模型润色，
- * 判为「不好」的保持原文。决策模型只回答预设选项并附概率，不生成文字，单次花费可忽略。
- *
- * 决策接口与聊天接口格式不同，宿主的 chat-completions 转发带不了它；OpenRouter 对任意来源放行跨域，
- * 插件在 TT WebView 内直连（与向量 embedding / rerank 直连外部接口同一做法）。
- * 判定失败一律返回 error，由调用方照常替换，判定永远不会卡住正文。
- */
-const DECISION_API_URL_ACU = 'https://openrouter.ai/api/alpha/decisions';
-const DECISION_MODELS_URL_ACU = 'https://openrouter.ai/api/v1/models?output_modalities=decisions';
-const DECISION_GOOD_LABEL_ACU = '好';
-const DECISION_BAD_LABEL_ACU = '不好';
-const DECISION_TIMEOUT_MS_ACU = 20000;
-const DECISION_QUESTION_KEY_ACU = 'quality';
-function normalizeDecisionGateSettings_ACU(raw) {
-    const source = raw && typeof raw === 'object' ? raw : {};
-    // 清空输入框得到 '' / null：Number 会把它们当成 0，门槛 0% 等于判定形同虚设，回到默认值
-    const rawThreshold = source.threshold;
-    const threshold = rawThreshold === null || rawThreshold === undefined || String(rawThreshold).trim() === ''
-        ? NaN
-        : Number(rawThreshold);
-    const model = typeof source.model === 'string' ? source.model.trim() : '';
-    return {
-        enabled: source.enabled === true,
-        apiKey: typeof source.apiKey === 'string' ? source.apiKey.trim() : '',
-        model: model || DEFAULT_DECISION_MODEL_ACU,
-        threshold: Number.isFinite(threshold) ? Math.min(100, Math.max(0, Math.round(threshold))) : DEFAULT_DECISION_THRESHOLD_ACU,
-    };
-}
-function buildDecisionRequestBody_ACU(model, text) {
-    return {
-        model,
-        state: text,
-        questions: {
-            [DECISION_QUESTION_KEY_ACU]: {
-                type: 'choice',
-                instructions: '这篇文章写得好不好？',
-                criteria: {
-                    [DECISION_GOOD_LABEL_ACU]: '这篇文章写得好',
-                    [DECISION_BAD_LABEL_ACU]: '这篇文章写得不好',
-                },
-            },
-        },
-    };
-}
-/** 概率可能是 { 选项: p } 或 [{ choice, probability }]；读不到返回 null。 */
-function readOptionProbability_ACU(probabilities, label) {
-    if (Array.isArray(probabilities)) {
-        const entry = probabilities.find((item) => (item?.choice ?? item?.label ?? item?.option) === label);
-        const value = Number(entry?.probability ?? entry?.p);
-        return entry && Number.isFinite(value) ? value : null;
-    }
-    if (probabilities && typeof probabilities === 'object') {
-        const value = Number(probabilities[label]);
-        return Number.isFinite(value) ? value : null;
-    }
-    return null;
-}
-function interpretDecisionResponse_ACU(payload, threshold) {
-    const answer = payload?.answers?.[DECISION_QUESTION_KEY_ACU];
-    const choice = String(answer?.choice ?? '');
-    if (choice !== DECISION_GOOD_LABEL_ACU && choice !== DECISION_BAD_LABEL_ACU) {
-        return { kind: 'error', message: '决策模型没有给出「好 / 不好」的判断' };
-    }
-    const goodProbability = readOptionProbability_ACU(answer.probabilities, DECISION_GOOD_LABEL_ACU)
-        ?? (choice === DECISION_GOOD_LABEL_ACU ? 1 : 0);
-    return {
-        kind: 'decided',
-        // 0.57 * 100 = 56.999…：容差比较，恰好达到门槛也算
-        replace: goodProbability * 100 >= threshold - 1e-9,
-        choice,
-        goodProbability,
-        model: String(payload?.model ?? ''),
-    };
-}
-/** 带超时与外部取消的请求；超时与取消各自给出可读原因，供调用方区分。 */
-async function fetchWithDeadline_ACU(url, init, deps) {
-    const fetchImpl = deps.fetch ?? globalThis.fetch;
-    const controller = new AbortController();
-    let reason = '';
-    const abortWith = (text) => {
-        if (!reason)
-            reason = text;
-        controller.abort();
-    };
-    const timer = setTimeout(() => abortWith('超时未响应'), deps.timeoutMs ?? DECISION_TIMEOUT_MS_ACU);
-    const onExternalAbort = () => abortWith('已取消');
-    if (deps.signal?.aborted)
-        onExternalAbort();
-    deps.signal?.addEventListener('abort', onExternalAbort, { once: true });
-    try {
-        return { response: await fetchImpl(url, { ...init, signal: controller.signal }) };
-    }
-    catch (error) {
-        return { failure: reason, error };
-    }
-    finally {
-        clearTimeout(timer);
-        deps.signal?.removeEventListener('abort', onExternalAbort);
-    }
-}
-async function readErrorMessage_ACU(response) {
-    try {
-        const body = await response.json();
-        return String(body?.error?.message ?? body?.message ?? '').trim();
-    }
-    catch {
-        return '';
-    }
-}
-async function requestContentDecision_ACU(text, settings, deps = {}) {
-    if (!settings.apiKey)
-        return { kind: 'error', message: '未填写 OpenRouter Key' };
-    const { response, failure, error } = await fetchWithDeadline_ACU(DECISION_API_URL_ACU, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${settings.apiKey}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(buildDecisionRequestBody_ACU(settings.model, text)),
-    }, deps);
-    if (!response) {
-        if (failure)
-            return { kind: 'error', message: `决策模型${failure}` };
-        return { kind: 'error', message: `请求失败：${error?.message || error}` };
-    }
-    try {
-        if (!response.ok) {
-            const reason = await readErrorMessage_ACU(response);
-            return { kind: 'error', message: `HTTP ${response.status}${reason ? `：${reason}` : ''}` };
-        }
-        return interpretDecisionResponse_ACU(await response.json(), settings.threshold);
-    }
-    catch (readError) {
-        return { kind: 'error', message: `读取判定结果失败：${readError?.message || readError}` };
-    }
-}
-/**
- * 自动替换入口：读设置，去掉 MVU 变量块后送去判定。
- * 开关关闭或还没填 key 时不发请求、视同未开启（页面上会提示缺 key），免得每楼都弹失败提示。
- */
-async function judgeContentForAutoReplace_ACU(text, deps = {}) {
-    const settings = normalizeDecisionGateSettings_ACU(settings_ACU?.contentOptimizationSettings?.decisionGate);
-    if (!settings.enabled || !settings.apiKey)
-        return { kind: 'disabled' };
-    return requestContentDecision_ACU(stripMvuUpdateBlocks_ACU(text), settings, deps);
-}
-/** 价格字段都明确为 0 才算免费；缺失、空值或任何一项非 0（如按次收费）都不算。 */
-function isFreePricing_ACU(pricing) {
-    if (!pricing || typeof pricing !== 'object')
-        return false;
-    const record = pricing;
-    const isZero = (value) => value !== null && value !== undefined && String(value).trim() !== '' && Number(value) === 0;
-    return isZero(record.prompt) && Object.values(record).every(value => value === null || value === undefined || isZero(value));
-}
-/** OpenRouter 上当前可用的决策模型（公开列表，不需要 key）。失败或超时抛错，由调用方提示。 */
-async function fetchDecisionModels_ACU(deps = {}) {
-    const { response, failure, error } = await fetchWithDeadline_ACU(DECISION_MODELS_URL_ACU, { method: 'GET' }, deps);
-    if (!response)
-        throw new Error(failure || error?.message || String(error));
-    if (!response.ok)
-        throw new Error(`HTTP ${response.status}`);
-    const body = await response.json();
-    const models = Array.isArray(body?.data) ? body.data : [];
-    return models
-        .filter((model) => typeof model?.id === 'string'
-        && Array.isArray(model?.architecture?.output_modalities)
-        && model.architecture.output_modalities.includes('decisions'))
-        .map((model) => ({
-        id: model.id,
-        name: typeof model.name === 'string' && model.name ? model.name : model.id,
-        free: isFreePricing_ACU(model?.pricing),
-    }));
-}
-
-/**
- * presentation/components/optimization-ui/optimization-ui-diff.ts
- * 优化 Diff 对话框
- */
-function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
-    const isLastLoop = result.currentLoop >= result.totalLoops;
-    const applyButtonText = isLastLoop ? '应用并完成' : '应用并继续';
-    const originalContent = getOriginalContent_ACU(messageIndex) || result.optimizedContent;
-    const dialogHtml = renderOptimizationReviewDialog_ACU({
-        title: '正文替换建议',
-        summaryHtml: escapeHtml_ACU(String(result.summary || '')),
-        meta: result.totalLoops > 1 ? `第 ${result.currentLoop}/${result.totalLoops} 轮` : undefined,
-        optimizations: result.optimizations,
-        buttons: [
-            { id: 'acu-opt-cancel', label: '取消优化', variant: 'ghost' },
-            ...(!isLastLoop ? [{ id: 'acu-opt-skip', label: '跳过本轮', variant: 'ghost' }] : []),
-            { id: 'acu-opt-reoptimize', label: '重新优化', variant: 'soft', icon: 'fa-solid fa-rotate-right' },
-            { id: 'acu-opt-apply', label: applyButtonText, variant: 'primary' },
-        ],
-    });
-    ensureHostDialogStylesInjected_ACU();
-    jQuery_API_ACU('body').append(dialogHtml);
-    // 绑定取消事件
-    jQuery_API_ACU('#acu-opt-cancel, #acu-opt-backdrop').on('click', function () {
-        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-        callback('cancel');
-    });
-    // 绑定跳过事件（仅非最后一轮显示）
-    jQuery_API_ACU('#acu-opt-skip').on('click', function () {
-        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-        callback('skip');
-    });
-    // 绑定重新优化事件
-    jQuery_API_ACU('#acu-opt-reoptimize').on('click', async function () {
-        jQuery_API_ACU(this).prop('disabled', true).text('优化中...');
-        // 关闭当前对话框
-        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-        // 获取原始内容并重新优化
-        const originalContent = getOriginalContent_ACU(messageIndex) || result.optimizedContent;
-        logDebug_ACU(`[正文优化] 用户点击重新优化，messageIndex=${messageIndex}`);
-        // 重新优化
-        await reoptimizeMessage_ACU(messageIndex);
-        // 触发回调，结束当前优化流程
-        callback('cancel');
-    });
-    // 绑定应用事件
-    jQuery_API_ACU('#acu-opt-apply').on('click', async function () {
-        jQuery_API_ACU(this).prop('disabled', true).text('处理中...');
-        logDebug_ACU(`[正文优化] 用户点击应用，isLastLoop=${isLastLoop}, messageIndex=${messageIndex}`);
-        logDebug_ACU(`[正文优化] optimizedContent长度: ${result.optimizedContent?.length || 0}`);
-        // 如果是最后一轮，先应用优化
-        if (isLastLoop) {
-            logDebug_ACU(`[正文优化] 准备调用 replaceChatMessage_ACU...`);
-            const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, {
-                originalContent: getOriginalContent_ACU(messageIndex) || originalContent,
-                expected: result.writeTarget,
-            });
-            logDebug_ACU(`[正文优化] replaceChatMessage_ACU 返回: ${success}`);
-            // R9-01：对话框打开期间楼层被滑动/删除或聊天已切换：结果作废，关闭对话框并结束本次优化。
-            if (!success && result.writeTarget !== undefined && !isChatMessageWriteTargetCurrent_ACU(result.writeTarget)) {
-                jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-                showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
-                callback('cancel');
-                return;
-            }
-            if (!success) {
-                jQuery_API_ACU(this).prop('disabled', false).text(applyButtonText);
-                showToastr_ACU('error', '应用失败');
-                return;
-            }
-        }
-        else {
-            logDebug_ACU(`[正文优化] 非最后一轮，跳过应用，直接回调`);
-        }
-        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-        callback('apply');
-    });
-}
-/**
- * 自动链只读结果对话框：内容已由自动流程写回，这里只展示对比（原文/修改方案/优化），
- * 不提供「应用」按钮。用于 showDiff 开启 + 非无感模式的自动替换收尾；
- * DOM 对话框不受静默提示框拦截。
- */
-function showOptimizationResultDialog_ACU(messageIndex, result) {
-    const optimizations = Array.isArray(result?.optimizations) ? result.optimizations : [];
-    const dialogHtml = renderOptimizationReviewDialog_ACU({
-        title: '正文替换完成',
-        icon: 'fa-solid fa-circle-check',
-        summaryHtml: `共 ${optimizations.length} 处改进${result?.summary ? `，${escapeHtml_ACU(String(result.summary))}` : ''}`,
-        optimizations,
-        buttons: [
-            { id: 'acu-opt-result-reoptimize', label: '重新优化', variant: 'soft', icon: 'fa-solid fa-rotate-right' },
-            { id: 'acu-opt-result-close', label: '关闭', variant: 'primary' },
-        ],
-    });
-    jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-    ensureHostDialogStylesInjected_ACU();
-    jQuery_API_ACU('body').append(dialogHtml);
-    jQuery_API_ACU('#acu-opt-result-close, #acu-opt-backdrop').on('click', function () {
-        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-    });
-    jQuery_API_ACU('#acu-opt-result-reoptimize').on('click', async function () {
-        jQuery_API_ACU(this).prop('disabled', true).text('优化中...');
-        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-        logDebug_ACU(`[正文优化] 结果对话框点击重新优化，messageIndex=${messageIndex}`);
-        await reoptimizeMessage_ACU(messageIndex);
-    });
-}
-/**
- * 无感模式 + 显示优化对比的完成提示：内容已写回，不弹模态框打扰，提示里给「查看对比」入口，
- * 点开即只读结果对话框。用户主动开了对比，所以不受静默提示框拦截。
- */
-function showOptimizationResultToast_ACU(messageIndex, result, text) {
-    showHostSurfaceToast_ACU({
-        kind: 'success',
-        text,
-        action: {
-            label: '查看对比',
-            onClick: () => showOptimizationResultDialog_ACU(messageIndex, result),
-        },
-    });
-}
-/**
- * HTML转义
- */
-// === 以下为 presentation 层独有的 UI 函数（DOM 操作/渲染）===
-
-/**
- * presentation/components/optimization-ui/optimization-ui-exec.ts
- * 优化执行逻辑
- */
-// replaceChatMessage_ACU 和 getOriginalContent_ACU 已搬迁到 service/chat/chat-service.ts
-// 通过文件顶部的 re-export 保持外部调用方兼容
-/**
- * 重新优化消息
- * @param {number} messageIndex - 消息索引
- * @returns {Promise<boolean>} 是否成功
- */
-async function reoptimizeMessage_ACU(messageIndex) {
-    const config = settings_ACU.contentOptimizationSettings || {};
-    _set_contentOptimizationAbortRequested_ACU(false);
-    // 检查是否启用
-    if (!config.enabled) {
-        showToastr_ACU('warning', '正文优化功能未启用');
-        return false;
-    }
-    const chat = getChatArray_ACU();
-    if (!chat || !chat[messageIndex]) {
-        showToastr_ACU('error', '消息不存在');
-        return false;
-    }
-    const message = chat[messageIndex];
-    // 跳过用户消息
-    if (message.is_user) {
-        showToastr_ACU('warning', '无法优化用户消息');
-        return false;
-    }
-    // 获取原始内容
-    const originalContent = getOriginalContent_ACU(messageIndex) || message.mes;
-    // R9-01：AI 在途与对话框打开期间楼层可能被滑动、删除或切聊天；应用前按此快照复核。
-    const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
-    if (!originalContent) {
-        showToastr_ACU('error', '无法获取消息内容');
-        return false;
-    }
-    logDebug_ACU(`[重新优化] 开始重新优化消息 ${messageIndex}，内容长度: ${originalContent.length}`);
-    if (config.seamlessMode) {
-        showOptimizationOverlay_ACU('正在重新优化正文...');
-    }
-    else {
-        showOptimizationProgressToast_ACU('正在进行正文优化（重新优化）...');
-    }
-    try {
-        ensureOptimizationNotCancelled_ACU();
-        const result = await performContentOptimization_ACU(originalContent, {
-            currentLoop: 1,
-            userMessage: ''
-        });
-        hideOptimizationOverlay_ACU();
-        hideOptimizationProgressToast_ACU();
-        if (contentOptimizationAbortRequested_ACU) {
-            return false;
-        }
-        if (!result.success) {
-            showToastr_ACU('error', `重新优化失败: ${result.error || '未知错误'}`);
-            return false;
-        }
-        if (!result.optimizations || result.optimizations.length === 0) {
-            showToastr_ACU('info', '原文已足够好，无需优化');
-            return true;
-        }
-        showReoptimizationDialog_ACU(messageIndex, result, originalContent, writeTarget);
-        return true;
-    }
-    catch (error) {
-        hideOptimizationOverlay_ACU();
-        hideOptimizationProgressToast_ACU();
-        if (contentOptimizationAbortRequested_ACU || error?.message === '用户终止正文优化') {
-            logDebug_ACU('[重新优化] 用户已取消正文优化');
-            return false;
-        }
-        logError_ACU('[重新优化] 执行出错:', error);
-        showToastr_ACU('error', `重新优化失败: ${error.message}`);
-        return false;
-    }
-    finally {
-        hideOptimizationOverlay_ACU();
-        hideOptimizationProgressToast_ACU();
-        _set_contentOptimizationAbortRequested_ACU(false);
-    }
-}
-/**
- * 显示重新优化对话框
- * @param {number} messageIndex - 消息索引
- * @param {object} result - 优化结果
- * @param {string} originalContent - 原始内容
- */
-function showReoptimizationDialog_ACU(messageIndex, result, originalContent, writeTarget) {
-    const dialogHtml = renderOptimizationReviewDialog_ACU({
-        title: '重新优化结果',
-        icon: 'fa-solid fa-rotate-right',
-        summaryHtml: escapeHtml_ACU(String(result.summary || '')),
-        optimizations: result.optimizations,
-        buttons: [
-            { id: 'acu-opt-cancel', label: '取消', variant: 'ghost' },
-            { id: 'acu-opt-reoptimize', label: '再次优化', variant: 'soft', icon: 'fa-solid fa-rotate-right' },
-            { id: 'acu-opt-apply', label: '应用优化', variant: 'primary' },
-        ],
-    });
-    ensureHostDialogStylesInjected_ACU();
-    jQuery_API_ACU('body').append(dialogHtml);
-    // 绑定取消事件
-    jQuery_API_ACU('#acu-opt-cancel, #acu-opt-backdrop').on('click', function () {
-        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-    });
-    // 绑定再次优化事件
-    jQuery_API_ACU('#acu-opt-reoptimize').on('click', async function () {
-        jQuery_API_ACU(this).prop('disabled', true).text('优化中...');
-        // 关闭当前对话框
-        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-        // 重新优化（使用原始内容）
-        await reoptimizeMessage_ACU(messageIndex);
-    });
-    // 绑定应用事件
-    jQuery_API_ACU('#acu-opt-apply').on('click', async function () {
-        jQuery_API_ACU(this).prop('disabled', true).text('应用中...');
-        const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, {
-            originalContent: getOriginalContent_ACU(messageIndex) || originalContent,
-            expected: writeTarget,
-        });
-        if (success) {
-            jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-            showToastr_ACU('success', '优化已应用');
-        }
-        else if (!isChatMessageWriteTargetCurrent_ACU(writeTarget)) {
-            jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-            showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
-        }
-        else {
-            jQuery_API_ACU(this).prop('disabled', false).text('应用优化');
-            showToastr_ACU('error', '应用失败');
-        }
-    });
-}
-/** 写回被拒或失败时的提示：楼层已变化与写入出错分开说明（R9-01）。 */
-function reportOptimizationWriteBackFailure_ACU(writeTarget) {
-    if (!isChatMessageWriteTargetCurrent_ACU(writeTarget)) {
-        showToastr_ACU('warning', CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
-    }
-    else {
-        showToastr_ACU('error', '正文优化结果写回失败，原文未改动，详情见运行日志。');
-    }
-}
-/**
- * 自动替换成功写回后登记「已处理」指纹，供下一次自动触发判重。
- * 指纹取写回后聊天数组里该楼的实际正文，避免宿主二次渲染导致内容漂移而漏判。
- * @param {number} messageIndex - 已写回的消息索引
- * @param {string} fallbackContent - 读不到实时内容时兜底使用的写回内容
- */
-function recordAutoProcessedAfterWriteBack_ACU(messageIndex, fallbackContent) {
-    try {
-        const liveMessage = getChatArray_ACU()?.[messageIndex];
-        const liveContent = typeof liveMessage?.mes === 'string' && liveMessage.mes ? liveMessage.mes : fallbackContent;
-        const recorded = recordAutoContentOptimizationProcessed_ACU({
-            messageIndex,
-            messageId: liveMessage?.message_id ?? null,
-            content: liveContent
-        });
-        if (recorded) {
-            logDebug_ACU(`[正文优化] 已登记第 ${messageIndex} 楼的自动替换指纹，用于后续重复触发判重`);
-        }
-    }
-    catch (error) {
-        logDebug_ACU('[正文优化] 登记自动替换已处理记录失败:', error);
-    }
-}
-/**
- * 替换前判定：问决策模型「这篇文章写得好不好」，判「好」才继续替换（性价比模型的 AI 味正合它口味）。
- * 判「不好」保持原文，并登记本楼已处理，重复的生成结束事件不再重判；判定失败照常替换。
- * 串行的手动确认链原本由确认流程收尾时触发填表，跳过替换时要在这里补触发（并行模式填表已在同时跑）；
- * 调用方传了 onGateSkipped（MVU 早跑）时改为通知调用方，由它在 MVU 解析结束后再填表。
- * 判定请求挂在正文优化的取消机制上：按「取消」会中断请求，之后既不提示也不登记、不填表。
- */
-async function runDecisionGate_ACU(messageIndex, message, content, judgedText, config, onGateSkipped) {
-    if (config.decisionGate?.enabled !== true)
-        return 'continue';
-    if (config.seamlessMode) {
-        showOptimizationOverlay_ACU('正在判定正文...');
-    }
-    else {
-        showOptimizationProgressToast_ACU('正在判定正文...');
-    }
-    const abort = trackContentOptimizationAbort_ACU();
-    let outcome;
-    try {
-        outcome = await judgeContentForAutoReplace_ACU(judgedText, { signal: abort.signal });
-    }
-    catch (error) {
-        outcome = { kind: 'error', message: error?.message || String(error) };
-    }
-    finally {
-        abort.release();
-    }
-    try {
-        ensureOptimizationNotCancelled_ACU();
-    }
-    catch {
-        hideOptimizationOverlay_ACU();
-        hideOptimizationProgressToast_ACU();
-        logDebug_ACU('[正文优化] 替换前判定期间用户取消，本楼不再处理');
-        return 'cancelled';
-    }
-    if (outcome.kind === 'disabled')
-        return 'continue';
-    if (outcome.kind === 'error') {
-        logError_ACU('[正文优化] 替换前判定失败，照常替换:', outcome.message);
-        showToastr_ACU('warning', `决策判定失败（${outcome.message}），本楼照常替换`);
-        return 'continue';
-    }
-    const goodPercent = Math.round(outcome.goodProbability * 100);
-    logDebug_ACU(`[正文优化] 替换前判定：${outcome.choice}（好 ${goodPercent}%，模型 ${outcome.model || '未知'}）→ ${outcome.replace ? '替换' : '不替换'}`);
-    if (outcome.replace)
-        return 'continue';
-    hideOptimizationOverlay_ACU();
-    hideOptimizationProgressToast_ACU();
-    // 判定期间 MVU 可能往本楼追加了变量块：登记实际正文，下一次重复的生成结束事件才能判重命中。
-    // 被滑动或改写过就仍登记判定时的正文，不把别的 swipe 误登记为已处理。
-    const live = getChatArray_ACU()?.[messageIndex];
-    const liveContent = live && live.message_id === message.message_id && typeof live.mes === 'string'
-        && live.mes.startsWith(content.trimEnd()) ? live.mes : content;
-    recordAutoContentOptimizationProcessed_ACU({ messageIndex, messageId: message.message_id, content: liveContent });
-    showToastr_ACU('info', `决策模型判定本楼「${outcome.choice}」（好 ${goodPercent}%），不替换`);
-    if (onGateSkipped) {
-        onGateSkipped();
-    }
-    else if (!config.parallelMode && !config.autoApply && !config.seamlessMode) {
-        await triggerAutomaticUpdateIfNeeded_ACU();
-    }
-    return 'skipped';
-}
-/**
- * 执行正文优化流程（在GENERATION_ENDED后调用）
- * @param {number} messageIndex - AI消息索引
- * @param options.onGateSkipped - 替换前判定判「不好」时的回调；传了就由调用方负责之后的填表
- * @returns {Promise<boolean>} 是否成功
- */
-async function executeContentOptimization_ACU(messageIndex, options = {}) {
-    const config = settings_ACU.contentOptimizationSettings || {};
-    _set_contentOptimizationAbortRequested_ACU(false);
-    // 检查是否启用
-    if (!config.enabled) {
-        return false;
-    }
-    const chat = getChatArray_ACU();
-    if (!chat || !chat[messageIndex]) {
-        return false;
-    }
-    const message = chat[messageIndex];
-    // 跳过用户消息
-    if (message.is_user) {
-        return false;
-    }
-    let content = message.mes || '';
-    // [自动链判重] 宿主可能对本楼再派发一条无配对上下文的 GENERATION_ENDED（典型来源：外部 MVU
-    // 插件非静默 generate 收尾时 hideStopButton 的第二次 emit）。内容未变说明上一次自动替换已生效，
-    // 直接跳过：不调 AI、不写回，也不覆盖优化基准缓存。手动「重新优化」/测试入口不经过本函数，不受影响。
-    if (shouldSkipDuplicateAutoContentOptimization_ACU(message.message_id, content)) {
-        logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼内容未变，跳过重复自动替换`);
-        return true;
-    }
-    setLastOptimizationBase_ACU({
-        messageIndex,
-        messageId: message.message_id,
-        baseContent: content
-    });
-    // R9-01：AI 在途期间楼层可能被滑动、删除或切聊天；写回前按此快照复核，不按下标盲写。
-    const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
-    // [新增] 获取用户消息（用于$8占位符）
-    let userMessage = '';
-    for (let i = messageIndex - 1; i >= 0; i--) {
-        if (chat[i] && chat[i].is_user) {
-            userMessage = chat[i].mes || '';
-            break;
-        }
-    }
-    const extractTags = (config.extractTags || '').trim();
-    const extractRules = config.extractRules || [];
-    const excludeTags = (config.excludeTags || '').trim();
-    const excludeRules = config.excludeRules || [];
-    let processedContent = applyContextTagFilters_ACU(content, {
-        extractTags,
-        extractRules,
-        excludeTags,
-        excludeRules
-    });
-    const minLength = config.minLength || 100;
-    if (processedContent.length < minLength) {
-        logDebug_ACU(`[正文优化] 处理后正文长度 ${processedContent.length} 小于最小阈值 ${minLength}，跳过优化`);
-        return false;
-    }
-    const gate = await runDecisionGate_ACU(messageIndex, message, content, processedContent, config, options.onGateSkipped);
-    if (gate === 'cancelled') {
-        _set_contentOptimizationAbortRequested_ACU(false);
-        return false;
-    }
-    if (gate === 'skipped')
-        return true;
-    const loopCount = config.loopCount || 1;
-    logDebug_ACU(`[正文优化] 开始优化消息 ${messageIndex}，原始长度 ${content.length}，处理后长度 ${processedContent.length}，循环次数: ${loopCount}`);
-    if (config.seamlessMode) {
-        showOptimizationOverlay_ACU(loopCount > 1 ? `正在优化正文 (1/${loopCount})...` : '正在优化正文...');
-    }
-    else {
-        showOptimizationProgressToast_ACU(loopCount > 1 ? `正在进行正文优化 (1/${loopCount})...` : '正在进行正文优化...');
-    }
-    try {
-        ensureOptimizationNotCancelled_ACU();
-        if (config.autoApply || config.seamlessMode) {
-            let currentContent = content;
-            let totalOptimizations = [];
-            let finalOptimizedContent = content;
-            for (let loop = 1; loop <= loopCount; loop++) {
-                ensureOptimizationNotCancelled_ACU();
-                logDebug_ACU(`[正文优化] 执行第 ${loop}/${loopCount} 轮优化`);
-                if (config.seamlessMode && loopCount > 1) {
-                    showOptimizationOverlay_ACU(`正在优化正文 (${loop}/${loopCount})...`);
-                }
-                else if (!config.seamlessMode) {
-                    showOptimizationProgressToast_ACU(`正在进行正文优化 (${loop}/${loopCount})...`);
-                }
-                const result = await performContentOptimization_ACU(currentContent, {
-                    currentLoop: loop,
-                    userMessage: userMessage
-                });
-                ensureOptimizationNotCancelled_ACU();
-                if (!result.success) {
-                    logDebug_ACU(`[正文优化] 第 ${loop} 轮优化失败:`, result.error);
-                    if (loop === 1) {
-                        if (config.seamlessMode) {
-                            hideOptimizationOverlay_ACU();
-                        }
-                        else {
-                            hideOptimizationProgressToast_ACU();
-                        }
-                        return false;
-                    }
-                    break;
-                }
-                if (result.optimizedContent === currentContent) {
-                    logDebug_ACU(`[正文优化] 第 ${loop} 轮没有实际正文变化，放弃写回`);
-                    if (totalOptimizations.length === 0) {
-                        if (config.seamlessMode) {
-                            hideOptimizationOverlay_ACU();
-                        }
-                        else {
-                            hideOptimizationProgressToast_ACU();
-                        }
-                        return false;
-                    }
-                    break;
-                }
-                if (!result.optimizations || result.optimizations.length === 0) {
-                    logDebug_ACU(`[正文优化] 第 ${loop} 轮无需优化，原文已足够好`);
-                    if (loop === 1) {
-                        if (config.seamlessMode) {
-                            hideOptimizationOverlay_ACU();
-                        }
-                        else {
-                            hideOptimizationProgressToast_ACU();
-                        }
-                        return true;
-                    }
-                    break;
-                }
-                totalOptimizations = totalOptimizations.concat(result.optimizations);
-                finalOptimizedContent = result.optimizedContent;
-                currentContent = result.optimizedContent;
-                logDebug_ACU(`[正文优化] 第 ${loop} 轮完成，本轮 ${result.optimizations.length} 个优化项，累计 ${totalOptimizations.length} 个`);
-            }
-            if (totalOptimizations.length === 0) {
-                logDebug_ACU('[正文优化] 所有轮次均无需优化');
-                if (config.seamlessMode) {
-                    hideOptimizationOverlay_ACU();
-                }
-                else {
-                    hideOptimizationProgressToast_ACU();
-                }
-                return true;
-            }
-            const writtenBack = await replaceChatMessage_ACU(messageIndex, finalOptimizedContent, { expected: writeTarget });
-            if (config.seamlessMode) {
-                hideOptimizationOverlay_ACU();
-            }
-            else {
-                hideOptimizationProgressToast_ACU();
-            }
-            if (!writtenBack) {
-                reportOptimizationWriteBackFailure_ACU(writeTarget);
-                return false;
-            }
-            recordAutoProcessedAfterWriteBack_ACU(messageIndex, finalOptimizedContent);
-            const doneText = `正文优化完成，共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`;
-            const resultForReview = {
-                optimizations: totalOptimizations,
-                summary: `共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`,
-                optimizedContent: finalOptimizedContent
-            };
-            if (config.showDiff && !config.seamlessMode) {
-                // 自动链已写回：用只读结果对话框展示对比（原文/修改方案/优化）。
-                // 对话框是 DOM 覆盖层，不受静默提示框拦截。
-                showOptimizationResultDialog_ACU(messageIndex, resultForReview);
-            }
-            else if (config.showDiff) {
-                // 无感模式不弹模态框打扰，完成提示带「查看对比」入口；用户开了对比，静默时也照常显示。
-                showOptimizationResultToast_ACU(messageIndex, resultForReview, doneText);
-            }
-            else {
-                showToastr_ACU('success', doneText);
-            }
-            return true;
-        }
-        else {
-            hideOptimizationProgressToast_ACU();
-            return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, loopCount, writeTarget);
-        }
-    }
-    catch (error) {
-        if (contentOptimizationAbortRequested_ACU || error?.message === '用户终止正文优化') {
-            logDebug_ACU('[正文优化] 用户已取消正文优化');
-            return false;
-        }
-        logError_ACU('[正文优化] 执行出错:', error);
-        if (config.seamlessMode) {
-            hideOptimizationOverlay_ACU();
-        }
-        else {
-            hideOptimizationProgressToast_ACU();
-        }
-        return false;
-    }
-    finally {
-        hideOptimizationOverlay_ACU();
-        hideOptimizationProgressToast_ACU();
-        _set_contentOptimizationAbortRequested_ACU(false);
-    }
-}
-/**
- * 执行正文优化（手动确认模式，逐轮确认）
- * @param {number} messageIndex - 消息索引
- * @param {string} content - 原始内容
- * @param {string} userMessage - 用户消息
- * @param {number} totalLoops - 总循环次数
- * @param writeTarget - 读取正文时的楼层快照，写回前复核（R9-01）
- * @param {number} currentLoop - 当前循环次数（内部使用）
- * @param {string} currentContent - 当前内容（内部使用）
- * @param {Array} totalOptimizations - 累计优化项（内部使用）
- * @returns {Promise<boolean>} 是否成功
- */
-async function executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop = 1, currentContent = null, totalOptimizations = []) {
-    // 使用传入的当前内容，或者原始内容
-    let workingContent = currentContent !== null ? currentContent : content;
-    // R9-08：前几轮「应用并继续」只把结果交给下一轮，不写回。后续轮次失败、无需优化或跳过时，
-    // 要写回已确认的内容，否则用户确认过的修改会丢失，界面却报成功。填表只触发一次。
-    const finishWithConfirmedContent = async (confirmedContent, confirmedOptimizations) => {
-        if (confirmedOptimizations.length > 0 && confirmedContent !== content) {
-            const written = await replaceChatMessage_ACU(messageIndex, confirmedContent, { expected: writeTarget });
-            if (written) {
-                recordAutoProcessedAfterWriteBack_ACU(messageIndex, confirmedContent);
-                showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${confirmedOptimizations.length} 处改进`);
-            }
-            else {
-                reportOptimizationWriteBackFailure_ACU(writeTarget);
-            }
-        }
-        else {
-            showToastr_ACU('info', '正文无需优化');
-        }
-        await triggerAutomaticUpdateIfNeeded_ACU();
-        return true;
-    };
-    logDebug_ACU(`[正文优化-手动确认] 执行第 ${currentLoop}/${totalLoops} 轮优化`);
-    // 执行优化
-    const result = await performContentOptimization_ACU(workingContent, {
-        currentLoop: currentLoop,
-        userMessage: userMessage
-    });
-    if (!result.success) {
-        logDebug_ACU(`[正文优化-手动确认] 第 ${currentLoop} 轮优化失败:`, result.error);
-        // 如果是第一轮就失败，显示错误
-        if (currentLoop === 1) {
-            showToastr_ACU('error', `正文优化失败: ${result.error}`);
-            return false;
-        }
-        // 后续轮次失败：写回此前已确认的结果，再触发填表
-        return finishWithConfirmedContent(workingContent, totalOptimizations);
-    }
-    // 检查是否有实际优化
-    if (!result.optimizations || result.optimizations.length === 0) {
-        logDebug_ACU(`[正文优化-手动确认] 第 ${currentLoop} 轮无需优化，原文已足够好`);
-        // 如果没有优化项，检查是否还有下一轮
-        if (currentLoop < totalLoops) {
-            // 继续下一轮（使用当前内容）
-            return await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop + 1, workingContent, totalOptimizations);
-        }
-        else {
-            // 所有轮次完成：写回此前已确认的结果，再触发填表
-            return finishWithConfirmedContent(workingContent, totalOptimizations);
-        }
-    }
-    // 累积优化项
-    const newTotalOptimizations = totalOptimizations.concat(result.optimizations);
-    // 显示对比对话框
-    return new Promise((resolve) => {
-        showOptimizationDiffDialogForLoop_ACU(messageIndex, {
-            optimizations: result.optimizations,
-            summary: `第 ${currentLoop}/${totalLoops} 轮优化，本轮 ${result.optimizations.length} 处改进`,
-            optimizedContent: result.optimizedContent,
-            currentLoop: currentLoop,
-            totalLoops: totalLoops,
-            totalOptimizations: newTotalOptimizations,
-            writeTarget
-        }, async (action) => {
-            if (action === 'apply') {
-                // 用户确认应用
-                if (currentLoop < totalLoops) {
-                    // 还有下一轮，继续优化
-                    const nextResult = await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop + 1, result.optimizedContent, newTotalOptimizations);
-                    resolve(nextResult);
-                }
-                else {
-                    // 所有轮次完成：末轮对话框已按快照复核并写回（只写一次），这里登记已处理并触发填表
-                    recordAutoProcessedAfterWriteBack_ACU(messageIndex, result.optimizedContent);
-                    showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${newTotalOptimizations.length} 处改进`);
-                    await triggerAutomaticUpdateIfNeeded_ACU();
-                    resolve(true);
-                }
-            }
-            else if (action === 'skip') {
-                // 用户跳过本轮，但继续下一轮
-                if (currentLoop < totalLoops) {
-                    const nextResult = await executeContentOptimizationWithConfirm_ACU(messageIndex, content, userMessage, totalLoops, writeTarget, currentLoop + 1, workingContent, // 使用未优化的内容
-                    totalOptimizations // 不累积本轮优化项
-                    );
-                    resolve(nextResult);
-                }
-                else {
-                    // 最后一轮跳过：写回此前已确认的结果
-                    resolve(await finishWithConfirmedContent(workingContent, totalOptimizations));
-                }
-            }
-            else {
-                // 用户取消，结束优化流程
-                await triggerAutomaticUpdateIfNeeded_ACU();
-                resolve(true);
-            }
-        });
-    });
-}
-/**
- * 显示优化对比对话框（支持循环优化）
- */
-
-/**
- * presentation/components/optimization-ui/index.ts — 统一 re-export
- */
 
 /**
  * service/host/host-state-service.ts — 宿主运行时状态服务
@@ -120657,9 +120676,10 @@ function attemptToLoadCoreApis_ACU() {
 /**
  * [忽略MVU更新] 早跑：防抖到期即跑一次正文替换，不等 W4 闸门。
  * 只跑替换分支（填表仍走正常管线等 MVU）；解析/评估失败一律静默放弃，
- * 交由正常管线兜底。返回 true = 早跑已执行（正常轮不再重复跑替换）。
+ * 交由正常管线兜底。返回 true = 早跑已执行（正常轮不再重复跑替换）；
+ * 用户在早跑中途取消也算已执行，否则正常轮会重跑判定与替换、无视这次取消。
  */
-async function runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey, scheduledIsolationKey, onGateSkipped) {
+async function runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey, scheduledIsolationKey) {
     try {
         await loadAllChatMessages_ACU();
         if (currentChatFileIdentifier_ACU !== scheduledChatKey
@@ -120687,8 +120707,14 @@ async function runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey,
             && earlyResult.action !== 'optimize_then_update')
             return false;
         logDebug_ACU('[MVU联动] 忽略MVU更新已开启，正文替换不等闸门直接开跑');
-        // 判「不好」时不在这里填表：手动确认模式的填表要等 MVU 解析结束，由正常轮补跑
-        const earlyReplaceSucceeded = await executeContentOptimization_ACU(earlyResult.lastMessageIndex, { onGateSkipped });
+        let cancelledByUser = false;
+        const earlyReplaceSucceeded = await executeContentOptimization_ACU(earlyResult.lastMessageIndex, {
+            onCancelled: () => { cancelledByUser = true; },
+        });
+        if (cancelledByUser) {
+            logDebug_ACU('[MVU联动] 早跑替换被用户取消，正常轮不再重跑替换');
+            return true;
+        }
         if (earlyReplaceSucceeded !== true) {
             logDebug_ACU('[MVU联动] 早跑替换未成功，交由正常管线接管');
             return false;
@@ -120748,11 +120774,8 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
             const ignoreMvuUpdate_ACU = settings_ACU?.contentOptimizationSettings?.ignoreMvuUpdate === true;
             const isMvuRerun_ACU = eventType === 'MVU_ANALYSIS_ENDED';
             let earlyReplaceDone_ACU = false;
-            let earlyGateSkipped_ACU = false;
             if (ignoreMvuUpdate_ACU && !isMvuRerun_ACU) {
-                earlyReplaceDone_ACU = await runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey_ACU, scheduledIsolationKey_ACU, () => {
-                    earlyGateSkipped_ACU = true;
-                });
+                earlyReplaceDone_ACU = await runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey_ACU, scheduledIsolationKey_ACU);
             }
             if (stopIfAutoFillRunStale_ACU('after_early_replace'))
                 return;
@@ -120940,22 +120963,22 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                     ]);
                     break;
                 case 'optimize_manual':
+                    // 手动确认模式的填表也由这里负责（与串行模式同口径）：替换流程（含用户确认 / 取消 / 判定跳过）
+                    // 结束后再填表；早跑或 W5 重跑跳过替换时，填表在 MVU 解析之后的这一轮跑，不抢在解析前。
                     if (skipReplace_ACU) {
-                        // 手动模式的填表本由确认流程收尾触发；早跑被替换前判定跳过时没有确认流程，在这里（MVU 解析后）补跑
-                        if (earlyGateSkipped_ACU && !isMvuRerun_ACU) {
-                            logDebug_ACU('[MVU联动] 早跑替换被替换前判定跳过，手动模式在 MVU 解析后补跑填表');
-                            if (stopIfAutoFillRunStale_ACU('before_trigger'))
-                                break;
-                            await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
+                        logDebug_ACU('[MVU联动] 忽略MVU更新已开启，跳过正文替换，只跑填表');
+                        if (stopIfAutoFillRunStale_ACU('before_trigger'))
                             break;
-                        }
-                        logDebug_ACU('[MVU联动] 忽略MVU更新已开启，W5 重跑跳过正文替换（手动模式本就不跑填表）');
+                        await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
                         break;
                     }
                     logDebug_ACU('[正文优化] 手动确认模式：等待用户确认后再填表...');
                     if (stopIfAutoFillRunStale_ACU('before_manual_optimize'))
                         break;
                     await executeContentOptimization_ACU(result.lastMessageIndex);
+                    if (stopIfAutoFillRunStale_ACU('after_manual_optimize'))
+                        break;
+                    await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
                     break;
                 case 'optimize_then_update':
                     if (skipReplace_ACU) {
@@ -152473,6 +152496,10 @@ apiRef = api;
 topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 
 /**
+ * presentation/triggers/settings-ui-sync/index.ts
+ */
+
+/**
  * 全局构建水印（右下角固定小字）：任何截图都能辨别设备实际运行的构建。
  * 角标缺失 = 设备没有加载本插件代码（缓存/CDN 旧版本）；角标时间戳旧 = 加载了旧构建。
  * 曾随 biotracker 面板实现（af269aa），biotracker 整层删除时被连带移除，此处以独立模块还回。
@@ -152481,7 +152508,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261009-10";
+        const stamp = "20261009-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -193429,6 +193456,12 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             }
             return options;
         });
+        /** 清空或填超范围时规整后的值可能与原值相同，输入框不会自己刷新：换个 key 让它按规整后的值重绘。 */
+        const thresholdInputKey = ref(0);
+        function setDecisionThreshold(value) {
+            store.setDecisionGate({ threshold: value });
+            thresholdInputKey.value += 1;
+        }
         function setDecisionEnabled(value) {
             store.setDecisionGate({ enabled: value });
             if (value && !store.decisionModels.length)
@@ -193536,14 +193569,14 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 confirmVariant: 'danger',
             });
         });
-        const __returned__ = { PLACEHOLDERS, store, dialogStore, apiStore, followActiveApiLabel, apiOptions, contentReplaceStale, markContentReplaceConfirmed, presetSheetOpen, promptSheetOpen, editingPresetName, sections, modeToggles, presetItems, promptSegmentsForView, reoptimizeHint, decisionModelOptions, setDecisionEnabled, promptGroupMissingContent, canEditCurrentPrompt, setApiPreset, onDeletePreset, onRenamePreset, confirmLeaveCustomPrompt, onSelectPreset, onEditPreset, openPromptSheetForCurrent, closePromptSheet, onSavePromptGroup, onResetPromptGroup, onPromptUpdate, refreshAll, get copy() { return contentReplaceCopy; }, PromptSegmentsSheet, UbBadge, UbButton, UbCallout, UbFileButton, UbIconButton, UbInput, UbPage, UbPresetPicker, UbRow, UbRulePairs, UbSection, UbSelect, UbSheet, UbSwitch, UbTextarea };
+        const __returned__ = { PLACEHOLDERS, store, dialogStore, apiStore, followActiveApiLabel, apiOptions, contentReplaceStale, markContentReplaceConfirmed, presetSheetOpen, promptSheetOpen, editingPresetName, sections, modeToggles, presetItems, promptSegmentsForView, reoptimizeHint, decisionModelOptions, thresholdInputKey, setDecisionThreshold, setDecisionEnabled, promptGroupMissingContent, canEditCurrentPrompt, setApiPreset, onDeletePreset, onRenamePreset, confirmLeaveCustomPrompt, onSelectPreset, onEditPreset, openPromptSheetForCurrent, closePromptSheet, onSavePromptGroup, onResetPromptGroup, onPromptUpdate, refreshAll, get copy() { return contentReplaceCopy; }, PromptSegmentsSheet, UbBadge, UbButton, UbCallout, UbFileButton, UbIconButton, UbInput, UbPage, UbPresetPicker, UbRow, UbRulePairs, UbSection, UbSelect, UbSheet, UbSwitch, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-cr__preset[data-v-3f6df057] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-3f6df057] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-3f6df057] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-3f6df057] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-3f6df057] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-3f6df057] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-3f6df057] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-3f6df057] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-3f6df057] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-3f6df057] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-3f6df057] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-3f6df057] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-3f6df057] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-3f6df057] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-3f6df057");
-var ContentReplacePage_vue_vue_type_style_index_0_scoped_3f6df057_lang = null;
+injectSfcStyle("\n.ub-cr__preset[data-v-38f7f6d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-38f7f6d5] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-38f7f6d5] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-38f7f6d5] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-38f7f6d5] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-38f7f6d5] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-38f7f6d5] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-38f7f6d5] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-38f7f6d5] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-38f7f6d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-38f7f6d5] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-38f7f6d5] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-38f7f6d5] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-38f7f6d5] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-38f7f6d5");
+var ContentReplacePage_vue_vue_type_style_index_0_scoped_38f7f6d5_lang = null;
 
 const _hoisted_1$j = { class: "ub-cr__picker" };
 const _hoisted_2$i = { class: "ub-cr__preset" };
@@ -193712,7 +193745,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.store.lastOptimizedMessageIndex < 0,
 							onClick: $setup.store.reoptimizeLatest
 						}, {
-							default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+							default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
 								" 重新优化 ",
 								-1
 								/* CACHED */
@@ -193735,7 +193768,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							busy: $setup.store.busyAction === "optimize-current",
 							onClick: $setup.store.optimizeCurrentContent
 						}, {
-							default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+							default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 								" 优化当前正文 ",
 								-1
 								/* CACHED */
@@ -193769,7 +193802,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						key: 0,
 						kind: "warning"
 					}, {
-						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+						default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
 							" 还没填 OpenRouter Key，判定暂不生效，正文照常替换。 ",
 							-1
 							/* CACHED */
@@ -193812,15 +193845,16 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						label: "判定门槛（%）",
 						hint: "「好」的概率达到这个值才替换；50 即按模型的选择。调高则更少替换。"
 					}, {
-						default: withCtx(() => [createVNode($setup["UbInput"], {
+						default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
+							key: $setup.thresholdInputKey,
 							"model-value": $setup.store.decisionGate.threshold,
 							type: "number",
 							min: 0,
 							max: 100,
 							step: 5,
 							"aria-label": "判定门槛",
-							onChange: _cache[6] || (_cache[6] = ($event) => $setup.store.setDecisionGate({ threshold: $event }))
-						}, null, 8, ["model-value"])]),
+							onChange: $setup.setDecisionThreshold
+						}, null, 8, ["model-value"]))]),
 						_: 1
 					})
 				]),
@@ -193842,7 +193876,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				}, 8, ["variant"])]),
 				default: withCtx(() => [createBaseVNode("div", _hoisted_2$i, [
 					createBaseVNode("p", _hoisted_3$h, [
-						_cache[18] || (_cache[18] = createTextVNode(
+						_cache[17] || (_cache[17] = createTextVNode(
 							"当前提示词：",
 							-1
 							/* CACHED */
@@ -193868,7 +193902,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							"empty-text": "暂无正文替换预设",
 							placeholder: "自定义提示词",
 							"show-default-action": false,
-							"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.onSelectPreset($event))
+							"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.onSelectPreset($event))
 						}, null, 8, ["items", "model-value"]),
 						createVNode($setup["UbIconButton"], {
 							icon: "fa-solid fa-pen",
@@ -193888,14 +193922,14 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						createVNode($setup["UbIconButton"], {
 							icon: "fa-solid fa-gear",
 							title: "管理预设",
-							onClick: _cache[8] || (_cache[8] = ($event) => $setup.presetSheetOpen = true)
+							onClick: _cache[7] || (_cache[7] = ($event) => $setup.presetSheetOpen = true)
 						})
 					]),
 					$setup.promptGroupMissingContent ? (openBlock(), createBlock($setup["UbCallout"], {
 						key: 0,
 						kind: "warning"
 					}, {
-						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
+						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 							" 正文替换提示词缺少 $CONTENT 占位符，运行时无法知道要检查哪段正文；请打开编辑器载入默认提示词或补回占位符。 ",
 							-1
 							/* CACHED */
@@ -193921,7 +193955,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value": $setup.store.extractTags,
 							placeholder: "例如: content,正文",
 							"aria-label": "提取标签",
-							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.store.setString("extractTags", String($event)))
+							"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.store.setString("extractTags", String($event)))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -193934,7 +193968,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value": $setup.store.excludeTags,
 							placeholder: "例如: think,thinking",
 							"aria-label": "排除标签",
-							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.store.setString("excludeTags", String($event)))
+							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.store.setString("excludeTags", String($event)))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -193976,14 +194010,14 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						rows: 5,
 						label: "测试文本",
 						placeholder: "输入一段模拟 AI 正文，验证提示词与返回格式。",
-						"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.store.setString("testInput", $event))
+						"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.store.setString("testInput", $event))
 					}, null, 8, ["model-value"]),
 					createBaseVNode("div", _hoisted_5$e, [createVNode($setup["UbButton"], {
 						icon: "fa-solid fa-scale-balanced",
 						busy: $setup.store.busyAction === "decision-test",
 						onClick: $setup.store.runDecisionTest
 					}, {
-						default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 							"测试决策判定",
 							-1
 							/* CACHED */
@@ -193995,7 +194029,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						busy: $setup.store.busyAction === "test",
 						onClick: $setup.store.runTest
 					}, {
-						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+						default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
 							"执行优化测试",
 							-1
 							/* CACHED */
@@ -194016,7 +194050,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				"is-open": $setup.presetSheetOpen,
 				title: "管理正文替换预设",
 				width: "560px",
-				onClose: _cache[12] || (_cache[12] = ($event) => $setup.presetSheetOpen = false)
+				onClose: _cache[11] || (_cache[11] = ($event) => $setup.presetSheetOpen = false)
 			}, {
 				default: withCtx(() => [
 					$setup.store.message ? (openBlock(), createBlock($setup["UbCallout"], {
@@ -194035,7 +194069,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						icon: "fa-solid fa-plus",
 						onClick: $setup.store.createPresetFromDefault
 					}, {
-						default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
+						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
 							"从默认新建",
 							-1
 							/* CACHED */
@@ -194090,7 +194124,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						/* KEYED_FRAGMENT */
 					))])) : (openBlock(), createElementBlock("p", _hoisted_11$5, "暂无预设。点上方「从默认新建」，或在预设卡片里导入。")),
 					createVNode($setup["UbCallout"], { kind: "info" }, {
-						default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
+						default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 							"点「编辑提示词」会先把该预设载入为当前提示词，再打开编辑器；保存后同步更新这个预设。",
 							-1
 							/* CACHED */
@@ -194111,11 +194145,11 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				onClose: $setup.closePromptSheet,
 				onSave: $setup.onSavePromptGroup,
 				onReset: $setup.onResetPromptGroup,
-				onAdd: _cache[13] || (_cache[13] = ($event) => $setup.store.addPromptSegment($event)),
-				onDelete: _cache[14] || (_cache[14] = ($event) => $setup.store.deletePromptSegment($event)),
+				onAdd: _cache[12] || (_cache[12] = ($event) => $setup.store.addPromptSegment($event)),
+				onDelete: _cache[13] || (_cache[13] = ($event) => $setup.store.deletePromptSegment($event)),
 				onUpdate: $setup.onPromptUpdate
 			}, {
-				lead: withCtx(() => [createBaseVNode("div", _hoisted_12$4, [_cache[24] || (_cache[24] = createBaseVNode(
+				lead: withCtx(() => [createBaseVNode("div", _hoisted_12$4, [_cache[23] || (_cache[23] = createBaseVNode(
 					"span",
 					null,
 					"可用占位符",
@@ -194147,7 +194181,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-3f6df057"]]);
+var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-38f7f6d5"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;

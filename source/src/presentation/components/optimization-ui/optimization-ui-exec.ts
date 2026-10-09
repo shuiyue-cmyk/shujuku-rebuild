@@ -46,9 +46,6 @@ import {
   logError_ACU
 } from '../../../shared/utils';
 import {
-  triggerAutomaticUpdateIfNeeded_ACU
-} from '../../triggers/settings-ui-sync';
-import {
   contentOptimizationAbortRequested_ACU,
   ensureOptimizationNotCancelled_ACU,
   performContentOptimization_ACU,
@@ -268,10 +265,8 @@ import {
   
   /**
    * 替换前判定：问决策模型「这篇文章写得好不好」，判「好」才继续替换（性价比模型的 AI 味正合它口味）。
-   * 判「不好」保持原文，并登记本楼已处理，重复的生成结束事件不再重判；判定失败照常替换。
-   * 串行的手动确认链原本由确认流程收尾时触发填表，跳过替换时要在这里补触发（并行模式填表已在同时跑）；
-   * 调用方传了 onGateSkipped（MVU 早跑）时改为通知调用方，由它在 MVU 解析结束后再填表。
-   * 判定请求挂在正文优化的取消机制上：按「取消」会中断请求，之后既不提示也不登记、不填表。
+   * 判「不好」保持原文，并登记本楼已处理，重复的生成结束事件不再重判；判定失败照常替换。填表一律由调度层负责。
+   * 判定请求挂在正文优化的取消机制上：按「取消」会中断请求，之后既不提示也不登记。
    */
   async function runDecisionGate_ACU(
     messageIndex: number,
@@ -279,9 +274,9 @@ import {
     content: string,
     judgedText: string,
     config: any,
-    onGateSkipped?: () => void,
   ): Promise<'continue' | 'skipped' | 'cancelled'> {
-    if (config.decisionGate?.enabled !== true) return 'continue';
+    // 没填 key 时判定不生效（页面有提示），不闪「正在判定」
+    if (config.decisionGate?.enabled !== true || !String(config.decisionGate?.apiKey ?? '').trim()) return 'continue';
     if (config.seamlessMode) {
       showOptimizationOverlay_ACU('正在判定正文...');
     } else {
@@ -296,9 +291,14 @@ import {
     } finally {
       abort.release();
     }
+    // 以本次请求自己的信号为准：并发的另一轮可能已把全局取消标志复位
+    let cancelled = abort.signal.aborted;
     try {
       ensureOptimizationNotCancelled_ACU();
     } catch {
+      cancelled = true;
+    }
+    if (cancelled) {
       hideOptimizationOverlay_ACU();
       hideOptimizationProgressToast_ACU();
       logDebug_ACU('[正文优化] 替换前判定期间用户取消，本楼不再处理');
@@ -316,28 +316,20 @@ import {
 
     hideOptimizationOverlay_ACU();
     hideOptimizationProgressToast_ACU();
-    // 判定期间 MVU 可能往本楼追加了变量块：登记实际正文，下一次重复的生成结束事件才能判重命中。
-    // 被滑动或改写过就仍登记判定时的正文，不把别的 swipe 误登记为已处理。
-    const live = getChatArray_ACU()?.[messageIndex];
-    const liveContent = live && live.message_id === message.message_id && typeof live.mes === 'string'
-      && live.mes.startsWith(content.trimEnd()) ? live.mes : content;
-    recordAutoContentOptimizationProcessed_ACU({ messageIndex, messageId: message.message_id, content: liveContent });
+    // 登记判定时的正文：判重指纹不含 MVU 变量块，之后 MVU 追加变量块仍能判重命中；续写等改动照常重新处理
+    recordAutoContentOptimizationProcessed_ACU({ messageIndex, messageId: message.message_id, content });
     showToastr_ACU('info', `决策模型判定本楼「${outcome.choice}」（好 ${goodPercent}%），不替换`);
-    if (onGateSkipped) {
-      onGateSkipped();
-    } else if (!config.parallelMode && !config.autoApply && !config.seamlessMode) {
-      await triggerAutomaticUpdateIfNeeded_ACU();
-    }
     return 'skipped';
   }
 
   /**
    * 执行正文优化流程（在GENERATION_ENDED后调用）
    * @param {number} messageIndex - AI消息索引
-   * @param options.onGateSkipped - 替换前判定判「不好」时的回调；传了就由调用方负责之后的填表
+   * @param options.onCancelled - 用户取消（判定或替换途中）时的回调，供 MVU 早跑区分「取消」与「失败」
    * @returns {Promise<boolean>} 是否成功
+   * 填表不在这里触发：各模式统一由调度层在本函数返回后负责（早跑时要等 MVU 解析结束）。
    */
-  export async function executeContentOptimization_ACU(messageIndex: number, options: { onGateSkipped?: () => void } = {}) {
+  export async function executeContentOptimization_ACU(messageIndex: number, options: { onCancelled?: () => void } = {}) {
     const config = settings_ACU.contentOptimizationSettings || {};
     _set_contentOptimizationAbortRequested_ACU(false);
     
@@ -368,11 +360,6 @@ import {
       return true;
     }
     
-    setLastOptimizationBase_ACU({
-      messageIndex,
-      messageId: message.message_id,
-      baseContent: content
-    });
     // R9-01：AI 在途期间楼层可能被滑动、删除或切聊天；写回前按此快照复核，不按下标盲写。
     const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
 
@@ -403,12 +390,20 @@ import {
       return false;
     }
     
-    const gate = await runDecisionGate_ACU(messageIndex, message, content, processedContent, config, options.onGateSkipped);
+    const gate = await runDecisionGate_ACU(messageIndex, message, content, processedContent, config);
     if (gate === 'cancelled') {
       _set_contentOptimizationAbortRequested_ACU(false);
+      options.onCancelled?.();
       return false;
     }
     if (gate === 'skipped') return true;
+
+    // 真正进入替换才把本楼记为「重新优化」的目标：判「不好」或取消的楼不应顶掉上一次真正替换过的楼
+    setLastOptimizationBase_ACU({
+      messageIndex,
+      messageId: message.message_id,
+      baseContent: content
+    });
     
     const loopCount = config.loopCount || 1;
     logDebug_ACU(`[正文优化] 开始优化消息 ${messageIndex}，原始长度 ${content.length}，处理后长度 ${processedContent.length}，循环次数: ${loopCount}`);
@@ -537,6 +532,7 @@ import {
     } catch (error) {
       if (contentOptimizationAbortRequested_ACU || error?.message === '用户终止正文优化') {
         logDebug_ACU('[正文优化] 用户已取消正文优化');
+        options.onCancelled?.();
         return false;
       }
       logError_ACU('[正文优化] 执行出错:', error);
@@ -570,7 +566,7 @@ import {
     let workingContent = currentContent !== null ? currentContent : content;
 
     // R9-08：前几轮「应用并继续」只把结果交给下一轮，不写回。后续轮次失败、无需优化或跳过时，
-    // 要写回已确认的内容，否则用户确认过的修改会丢失，界面却报成功。填表只触发一次。
+    // 要写回已确认的内容，否则用户确认过的修改会丢失，界面却报成功。填表由调度层在整个流程结束后触发。
     const finishWithConfirmedContent = async (confirmedContent: string, confirmedOptimizations: any[]): Promise<boolean> => {
       if (confirmedOptimizations.length > 0 && confirmedContent !== content) {
         const written = await replaceChatMessage_ACU(messageIndex, confirmedContent, { expected: writeTarget });
@@ -583,7 +579,6 @@ import {
       } else {
         showToastr_ACU('info', '正文无需优化');
       }
-      await triggerAutomaticUpdateIfNeeded_ACU();
       return true;
     };
     
@@ -649,10 +644,9 @@ import {
             );
             resolve(nextResult);
           } else {
-            // 所有轮次完成：末轮对话框已按快照复核并写回（只写一次），这里登记已处理并触发填表
+            // 所有轮次完成：末轮对话框已按快照复核并写回（只写一次），这里登记已处理
             recordAutoProcessedAfterWriteBack_ACU(messageIndex, result.optimizedContent);
             showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${newTotalOptimizations.length} 处改进`);
-            await triggerAutomaticUpdateIfNeeded_ACU();
             resolve(true);
           }
         } else if (action === 'skip') {
@@ -674,8 +668,7 @@ import {
             resolve(await finishWithConfirmedContent(workingContent, totalOptimizations));
           }
         } else {
-          // 用户取消，结束优化流程
-          await triggerAutomaticUpdateIfNeeded_ACU();
+          // 用户取消，结束优化流程（填表照常由调度层触发）
           resolve(true);
         }
       });

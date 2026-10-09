@@ -114,27 +114,31 @@ export function interpretDecisionResponse_ACU(payload: any, threshold: number): 
   };
 }
 
-/** 带超时与外部取消的请求；超时与取消各自给出可读原因，供调用方区分。 */
-async function fetchWithDeadline_ACU(
-  url: string,
-  init: RequestInit,
+/**
+ * 在超时与外部取消约束下跑完整个请求（含读取响应体）；超时与取消各自给出可读原因，供调用方区分。
+ * 只约束 fetch 不够：响应头到了、响应体卡住时 response.json() 会一直挂着。
+ */
+async function runWithDeadline_ACU<T>(
   deps: DecisionFetchDeps_ACU,
-): Promise<{ response?: Response; failure?: string; error?: unknown }> {
-  const fetchImpl = deps.fetch ?? globalThis.fetch;
+  work: (signal: AbortSignal) => Promise<T>,
+): Promise<{ value?: T; failure?: string; error?: unknown; ok: boolean }> {
   const controller = new AbortController();
   let reason = '';
   const abortWith = (text: string) => {
     if (!reason) reason = text;
     controller.abort();
   };
+  const aborted = new Promise<never>((_resolve, reject) => {
+    controller.signal.addEventListener('abort', () => reject(new Error(reason)), { once: true });
+  });
   const timer = setTimeout(() => abortWith('超时未响应'), deps.timeoutMs ?? DECISION_TIMEOUT_MS_ACU);
   const onExternalAbort = () => abortWith('已取消');
   if (deps.signal?.aborted) onExternalAbort();
   deps.signal?.addEventListener('abort', onExternalAbort, { once: true });
   try {
-    return { response: await fetchImpl(url, { ...init, signal: controller.signal }) };
+    return { ok: true, value: await Promise.race([work(controller.signal), aborted]) };
   } catch (error) {
-    return { failure: reason, error };
+    return { ok: false, failure: reason, error };
   } finally {
     clearTimeout(timer);
     deps.signal?.removeEventListener('abort', onExternalAbort);
@@ -156,27 +160,26 @@ export async function requestContentDecision_ACU(
   deps: DecisionFetchDeps_ACU = {},
 ): Promise<DecisionVerdict_ACU> {
   if (!settings.apiKey) return { kind: 'error', message: '未填写 OpenRouter Key' };
-  const { response, failure, error } = await fetchWithDeadline_ACU(DECISION_API_URL_ACU, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${settings.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(buildDecisionRequestBody_ACU(settings.model, text)),
-  }, deps);
-  if (!response) {
-    if (failure) return { kind: 'error', message: `决策模型${failure}` };
-    return { kind: 'error', message: `请求失败：${(error as any)?.message || error}` };
-  }
-  try {
+  const fetchImpl = deps.fetch ?? globalThis.fetch;
+  const outcome = await runWithDeadline_ACU<DecisionVerdict_ACU>(deps, async signal => {
+    const response = await fetchImpl(DECISION_API_URL_ACU, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(buildDecisionRequestBody_ACU(settings.model, text)),
+      signal,
+    });
     if (!response.ok) {
       const reason = await readErrorMessage_ACU(response);
       return { kind: 'error', message: `HTTP ${response.status}${reason ? `：${reason}` : ''}` };
     }
     return interpretDecisionResponse_ACU(await response.json(), settings.threshold);
-  } catch (readError: any) {
-    return { kind: 'error', message: `读取判定结果失败：${readError?.message || readError}` };
-  }
+  });
+  if (outcome.ok) return outcome.value!;
+  if (outcome.failure) return { kind: 'error', message: `决策模型${outcome.failure}` };
+  return { kind: 'error', message: `请求失败：${(outcome.error as any)?.message || outcome.error}` };
 }
 
 /**
@@ -202,10 +205,14 @@ function isFreePricing_ACU(pricing: unknown): boolean {
 
 /** OpenRouter 上当前可用的决策模型（公开列表，不需要 key）。失败或超时抛错，由调用方提示。 */
 export async function fetchDecisionModels_ACU(deps: DecisionFetchDeps_ACU = {}): Promise<DecisionModelOption_ACU[]> {
-  const { response, failure, error } = await fetchWithDeadline_ACU(DECISION_MODELS_URL_ACU, { method: 'GET' }, deps);
-  if (!response) throw new Error(failure || (error as any)?.message || String(error));
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const body: any = await response.json();
+  const fetchImpl = deps.fetch ?? globalThis.fetch;
+  const outcome = await runWithDeadline_ACU<any>(deps, async signal => {
+    const response = await fetchImpl(DECISION_MODELS_URL_ACU, { method: 'GET', signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+  });
+  if (!outcome.ok) throw new Error(outcome.failure || (outcome.error as any)?.message || String(outcome.error));
+  const body: any = outcome.value;
   const models = Array.isArray(body?.data) ? body.data : [];
   return models
     .filter((model: any) => typeof model?.id === 'string'

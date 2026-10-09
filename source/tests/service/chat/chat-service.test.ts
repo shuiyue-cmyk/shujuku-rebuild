@@ -343,6 +343,35 @@ describe('replaceChatMessage_ACU', () => {
     );
   });
 
+  it('新正文带着旧版变量块（从旧原文重新优化）时，换成本楼当前的变量块，不把 MVU 的新变量改回旧的', async () => {
+    const oldBlock = '<UpdateVariable>_.set("好感度", 1, 2);</UpdateVariable>';
+    const liveBlocks = '<UpdateVariable>_.set("好感度", 2, 3);</UpdateVariable>\n\n<UpdateVariable>_.set("金钱", 5, 6);</UpdateVariable>';
+    const chat = [{ is_user: false, mes: `她推开门。\n\n${liveBlocks}`, message_id: 'msg1', swipe_id: 0, extra: {} }];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSetChatMessages.mockClear();
+    mockSetChatMessages.mockResolvedValue(true);
+
+    expect(await replaceChatMessage_ACU(0, `她轻轻推开门。\n\n${oldBlock}`)).toBe(true);
+    expect(mockSetChatMessages).toHaveBeenCalledWith(
+      [expect.objectContaining({ mes: `她轻轻推开门。\n\n${liveBlocks}` })],
+      expect.anything(),
+    );
+  });
+
+  it('新正文的变量块与本楼一致时原样写回（不挪动块的位置）', async () => {
+    const block = '<UpdateVariable>_.set("好感度", 1, 2);</UpdateVariable>';
+    const chat = [{ is_user: false, mes: `她推开门。${block}门外下着雨。`, message_id: 'msg1', swipe_id: 0, extra: {} }];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSetChatMessages.mockClear();
+    mockSetChatMessages.mockResolvedValue(true);
+
+    expect(await replaceChatMessage_ACU(0, `她轻轻推开门。${block}门外下着雨。`)).toBe(true);
+    expect(mockSetChatMessages).toHaveBeenCalledWith(
+      [expect.objectContaining({ mes: `她轻轻推开门。${block}门外下着雨。` })],
+      expect.anything(),
+    );
+  });
+
   it('追加尾巴之外原文也被改过时仍拒绝写回', async () => {
     const { captureChatMessageWriteTarget_ACU } = await import('../../../src/service/chat/chat-message-write-target');
     const chat = [{ is_user: false, mes: '她推开门。', message_id: 'msg1', swipe_id: 0, extra: {} }];

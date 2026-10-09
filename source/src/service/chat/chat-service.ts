@@ -21,7 +21,7 @@ export { purgeCurrentChatDatabaseState_ACU, type ChatDatabasePurgeResult_ACU } f
 
 import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostStrict_ACU, setChatMessages_ACU, emitMessageUpdated_ACU } from '../../data/gateways/chat-gateway';
 import { logDebug_ACU, logError_ACU, logWarn_ACU, isSummaryOrOutlineTable_ACU } from '../../shared/utils';
-import { collectMvuUpdateBlockRanges_ACU } from '../../shared/text-optimization';
+import { collectMvuUpdateBlockRanges_ACU, stripMvuUpdateBlocks_ACU } from '../../shared/text-optimization';
 import { getLastOptimizationBase_ACU, setLastOptimizationBase_ACU } from '../optimization/content-optimization';
 import { settings_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
 import { sanitizeSheetForStorage_ACU } from '../template/chat-scope';
@@ -1132,17 +1132,24 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
 }
 
 /**
+ * 本楼 MVU 变量块以楼层当前内容为准：新正文里的块与本楼一致时原样写回（不挪位置）；
+ * 不一致（缺块、带着重新优化基准里的旧块、块数不同）时去掉新正文里的块，接上本楼当前的块，
+ * 免得把 MVU 之后重算的新变量改回旧值。本楼没有块时返回 null，新正文原样写回。
+ */
+function reconcileMvuBlocksWithFloor_ACU(oldContent: unknown, newContent: unknown): string | null {
+    const previous = typeof oldContent === 'string' ? oldContent : '';
+    const next = String(newContent ?? '');
+    const liveBlocks = collectMvuUpdateBlockRanges_ACU(previous).map(range => previous.slice(range.start, range.end));
+    if (liveBlocks.length === 0) return null;
+    const nextBlocks = collectMvuUpdateBlockRanges_ACU(next).map(range => next.slice(range.start, range.end));
+    if (nextBlocks.length === liveBlocks.length && nextBlocks.every((block, index) => block === liveBlocks[index])) return null;
+    return `${stripMvuUpdateBlocks_ACU(next).trimEnd()}\n\n${liveBlocks.map(block => block.trim()).join('\n\n')}`;
+}
+
+/**
  * 替换聊天消息内容（正文优化核心逻辑）
  * 从 presentation/components/optimization-ui/optimization-ui-exec.ts 搬迁
  */
-/** 旧正文里有 MVU 变量块而新正文一个都没有时，返回要接回的块（按原顺序空行分隔）；否则返回空串。 */
-function collectMissingMvuBlocks_ACU(oldContent: unknown, newContent: unknown): string {
-    const previous = typeof oldContent === 'string' ? oldContent : '';
-    const blocks = collectMvuUpdateBlockRanges_ACU(previous);
-    if (blocks.length === 0 || collectMvuUpdateBlockRanges_ACU(String(newContent ?? '')).length > 0) return '';
-    return blocks.map(range => previous.slice(range.start, range.end).trim()).join('\n\n');
-}
-
 export async function replaceChatMessage_ACU(
     messageIndex: number,
     newContent: string,
@@ -1169,11 +1176,11 @@ export async function replaceChatMessage_ACU(
         }
 
         const oldContent = chat[messageIndex].mes;
-        // 本楼现有的 MVU 变量块不能被替换抹掉：从块追加之前的原文重新优化时，新正文里没有块，接回末尾。
-        const missingMvuBlocks = collectMissingMvuBlocks_ACU(oldContent, newContent);
-        if (missingMvuBlocks) {
-            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼的新正文缺少现有 MVU 变量块，已接回末尾`);
-            newContent = `${String(newContent ?? '').trimEnd()}\n\n${missingMvuBlocks}`;
+        // 本楼现有的 MVU 变量块不能被替换抹掉或改回旧版（重新优化的基准可能早于 MVU 追加或重算）
+        const reconciledContent = reconcileMvuBlocksWithFloor_ACU(oldContent, newContent);
+        if (reconciledContent !== null) {
+            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼的新正文与本楼 MVU 变量块不一致，已换成本楼当前的变量块`);
+            newContent = reconciledContent;
         }
         logDebug_ACU(`[正文优化] 原内容长度: ${oldContent?.length || 0}, 新内容长度: ${newContent?.length || 0}`);
 

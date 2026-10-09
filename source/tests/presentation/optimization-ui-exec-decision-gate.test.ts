@@ -139,7 +139,7 @@ function useSettings(overrides: Record<string, any> = {}) {
     extractRules: [],
     excludeTags: '',
     excludeRules: [],
-    decisionGate: { enabled: true },
+    decisionGate: { enabled: true, apiKey: 'sk-or-test' },
     ...overrides,
   };
 }
@@ -211,37 +211,6 @@ describe('替换前判定（executeContentOptimization_ACU）', () => {
     expect(h.showOverlay).toHaveBeenCalledWith(expect.stringContaining('判定'));
   });
 
-  it('手动确认模式判「不好」时照常触发填表（原本由确认流程收尾时触发）', async () => {
-    useSettings({ seamlessMode: false, autoApply: false });
-    h.judge.mockResolvedValue({ kind: 'decided', replace: false, choice: '不好', goodProbability: 0.1, model: 'm' });
-
-    await executeContentOptimization_ACU(1);
-
-    expect(h.perform).not.toHaveBeenCalled();
-    expect(h.triggerAutoUpdate).toHaveBeenCalledTimes(1);
-  });
-
-  it('并行模式判「不好」时不重复触发填表（填表已在并行跑）', async () => {
-    useSettings({ seamlessMode: false, autoApply: false, parallelMode: true });
-    h.judge.mockResolvedValue({ kind: 'decided', replace: false, choice: '不好', goodProbability: 0.1, model: 'm' });
-
-    await executeContentOptimization_ACU(1);
-
-    expect(h.triggerAutoUpdate).not.toHaveBeenCalled();
-  });
-  it('判定期间 MVU 往本楼追加了变量块：登记的是追加后的实际正文，重复事件不会再判一次', async () => {
-    h.judge.mockImplementation(async () => {
-      h.chat[1].mes = `${ORIGINAL}
-
-<UpdateVariable>_.set("a", 1, 2);</UpdateVariable>`;
-      return { kind: 'decided', replace: false, choice: '不好', goodProbability: 0.2, model: 'm' };
-    });
-
-    await executeContentOptimization_ACU(1);
-
-    expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ messageId: 11, content: h.chat[1].mes }));
-  });
-
   it('判定时把取消信号交给请求；判定期间按了取消：不再继续替换、不提示、不触发填表，并撤掉遮罩', async () => {
     useSettings({ seamlessMode: false, autoApply: false });
     h.judge.mockResolvedValue({ kind: 'decided', replace: false, choice: '不好', goodProbability: 0.1, model: 'm' });
@@ -257,14 +226,71 @@ describe('替换前判定（executeContentOptimization_ACU）', () => {
     expect(h.triggerAutoUpdate).not.toHaveBeenCalled();
   });
 
-  it('调用方接管填表时（MVU 早跑）：判「不好」只通知调用方，不自己触发填表', async () => {
+  it('判「不好」时不自己触发填表（任何模式的填表都由调度层在本函数返回后负责）', async () => {
     useSettings({ seamlessMode: false, autoApply: false });
     h.judge.mockResolvedValue({ kind: 'decided', replace: false, choice: '不好', goodProbability: 0.1, model: 'm' });
-    const onGateSkipped = vi.fn();
 
-    expect(await executeContentOptimization_ACU(1, { onGateSkipped })).toBe(true);
+    expect(await executeContentOptimization_ACU(1)).toBe(true);
 
-    expect(onGateSkipped).toHaveBeenCalledTimes(1);
+    expect(h.perform).not.toHaveBeenCalled();
     expect(h.triggerAutoUpdate).not.toHaveBeenCalled();
+  });
+
+  it('判「不好」登记判定时的正文（指纹本身不含 MVU 变量块）；判定期间被续写的内容不会被误登记为已处理', async () => {
+    h.judge.mockImplementation(async () => {
+      h.chat[1].mes = `${ORIGINAL}她又回头看了一眼。`;
+      return { kind: 'decided', replace: false, choice: '不好', goodProbability: 0.2, model: 'm' };
+    });
+
+    await executeContentOptimization_ACU(1);
+
+    expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ messageId: 11, content: ORIGINAL }));
+  });
+
+  it('判「不好」或取消时不把本楼设为「重新优化」的目标（基准只在真正进入替换时才记）', async () => {
+    h.judge.mockResolvedValue({ kind: 'decided', replace: false, choice: '不好', goodProbability: 0.2, model: 'm' });
+    await executeContentOptimization_ACU(1);
+    expect(h.setLastBase).not.toHaveBeenCalled();
+
+    h.processed.clear();
+    h.judge.mockResolvedValue({ kind: 'decided', replace: true, choice: '好', goodProbability: 0.9, model: 'm' });
+    await executeContentOptimization_ACU(1);
+    expect(h.setLastBase).toHaveBeenCalledTimes(1);
+  });
+
+  it('取消以自己的请求信号为准：别的流程已把全局取消标志复位，也不会误当成「判定失败照常替换」', async () => {
+    const controller = new AbortController();
+    h.abortSignal = controller.signal;
+    h.judge.mockImplementation(async () => {
+      controller.abort();
+      return { kind: 'error', message: '决策模型已取消' };
+    });
+    const onCancelled = vi.fn();
+
+    expect(await executeContentOptimization_ACU(1, { onCancelled })).toBe(false);
+
+    expect(onCancelled).toHaveBeenCalledTimes(1);
+    expect(h.perform).not.toHaveBeenCalled();
+    expect(h.toast).not.toHaveBeenCalled();
+    h.abortSignal = new AbortController().signal;
+  });
+
+  it('替换途中取消同样通知调用方（MVU 早跑据此不再让正常轮重跑）', async () => {
+    h.judge.mockResolvedValue({ kind: 'decided', replace: true, choice: '好', goodProbability: 0.9, model: 'm' });
+    h.perform.mockImplementation(async () => { throw new Error('用户终止正文优化'); });
+    const onCancelled = vi.fn();
+
+    expect(await executeContentOptimization_ACU(1, { onCancelled })).toBe(false);
+    expect(onCancelled).toHaveBeenCalledTimes(1);
+  });
+
+  it('开了判定但没填 key：不闪「正在判定」，直接替换', async () => {
+    useSettings({ decisionGate: { enabled: true, apiKey: '' } });
+
+    await executeContentOptimization_ACU(1);
+
+    expect(h.judge).not.toHaveBeenCalled();
+    expect(h.showOverlay).not.toHaveBeenCalledWith(expect.stringContaining('判定'));
+    expect(h.perform).toHaveBeenCalledTimes(1);
   });
 });
