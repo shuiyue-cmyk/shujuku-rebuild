@@ -207,10 +207,26 @@ describe('fetchAvailableModels_ACU', () => {
       expect(lastStatusBody().custom_api_format).toBe(format);
       // 探活仍走自定义源，且 base/密钥解析不受协议字段影响。
       expect(lastStatusBody().chat_completion_source).toBe('custom');
-      expect(lastStatusBody().custom_url).toBe('https://api.test');
+      expect(lastStatusBody().reverse_proxy).toBe('https://api.test');
       expect(lastStatusBody().custom_include_headers).toContain('key');
     }
     expect(mockFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('密钥走反向代理密码：TT 不再改用自己「自定义」连接里存的密钥（Claude 协议的 x-api-key、Gemini 的 key 参数）', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ models: [{ id: 'm' }] }) });
+
+    await fetchAvailableModels_ACU('https://api.test', 'preset-key\n', 'claude_messages');
+
+    const body = lastStatusBody();
+    expect(body.custom_url).toBe('');
+    expect(body.reverse_proxy).toBe('https://api.test');
+    expect(body.proxy_password).toBe('preset-key');
+
+    // 没填密钥：照旧填 custom_url，让 TT 回退到它「自定义」连接里存的密钥
+    await fetchAvailableModels_ACU('https://keyless.test', '', 'openai_compat');
+    expect(lastStatusBody().custom_url).toBe('https://keyless.test');
+    expect(lastStatusBody().proxy_password).toBe('');
   });
 
   it('非法 customApiFormat 降级为 ""（TT 后端对非法值 fail fast，必须客户端兜底）', async () => {

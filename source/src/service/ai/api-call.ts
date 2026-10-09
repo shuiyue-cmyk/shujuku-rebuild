@@ -465,9 +465,13 @@ export function buildCustomApiRequestBody_ACU(
     // 保留多个 system：默认开启；严格/半严格后处理也不把中部 system 降级为 user。
     // 后端不识别该键时忽略之，行为与旧 strict 一致，不改变现状。
     preserve_multiple_system: effectiveApiConfig.preserveMultipleSystem !== false,
+    // 端点与密钥走「反向代理 + 代理密码」：填了 custom_url 时 TT 改用自己「自定义」连接里存的密钥，
+    // Claude 协议以 x-api-key、Gemini 以 x-goog-api-key 与 ?key= 发出，预设密钥只在 Authorization 里，
+    // 上游认错密钥（同一把密钥换协议就报未订阅）。custom_url 留空后 TT 一律取代理密码。
+    // 预设没填密钥时照旧填 custom_url，保留 TT 回退到它自己存的密钥的老行为。
     reverse_proxy: effectiveApiConfig.url,
-    proxy_password: '',
-    custom_url: effectiveApiConfig.url,
+    proxy_password: apiKey,
+    custom_url: apiKey ? '' : effectiveApiConfig.url,
     custom_include_headers: headers,
     custom_include_body: composedIncludeBody.value,
     custom_exclude_body: sanitizeExcludeBodyForPresetFields_ACU(effectiveApiConfig.excludeBodyParams, effectiveApiConfig),

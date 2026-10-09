@@ -266,6 +266,26 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(body.type).toBe('quiet');
   });
 
+  it('预设密钥走反向代理密码：TT 不再改用自己「自定义」连接里存的密钥（Claude 协议 x-api-key、Gemini key 参数都取它）', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://opencode.ai/zen/go/v1', model: 'qwen3.8-flash', apiKey: 'preset-key\r\n', customApiFormat: 'claude_messages' as any },
+    );
+    expect(body.custom_url).toBe('');
+    expect(body.reverse_proxy).toBe('https://opencode.ai/zen/go/v1');
+    expect(body.proxy_password).toBe('preset-key');
+    // 兼容 OpenAI 系协议照旧带 Authorization（与 TT 按代理密码生成的值一致）
+    expect(body.custom_include_headers).toContain('Authorization: Bearer preset-key');
+
+    // 预设没填密钥：照旧填 custom_url，让 TT 回退到它「自定义」连接里存的密钥
+    const keyless = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com/v1', model: 'm', apiKey: '' },
+    );
+    expect(keyless.custom_url).toBe('https://api.example.com/v1');
+    expect(keyless.proxy_password).toBe('');
+  });
+
   it('max_tokens=0 不被回退为 20000', () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],

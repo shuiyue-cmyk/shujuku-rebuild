@@ -136,13 +136,16 @@ async function fetchAvailableModelsUncached_ACU(apiUrl: string, apiKey: string, 
     const statusUrl = `/api/backends/chat-completions/status`;
     const sanitizedKey = String(apiKey || '').replace(/[\r\n\0]+/g, '');
     const body = {
+        // 端点与密钥走「反向代理 + 代理密码」：填了 custom_url 时 TT 改用自己「自定义」连接里存的密钥
+        // （Claude 协议 x-api-key、Gemini key 参数），与请求路径（api-call）同口径。
         "reverse_proxy": apiUrl,
-        "proxy_password": "",
+        "proxy_password": sanitizedKey,
         "chat_completion_source": "custom",
         // 接口协议（预设级）：TT status 路由按 custom_api_format 解析模型列表来源
         // （resolve_status_model_list_source，仅 source==Custom 生效），不改 base/密钥解析。
         "custom_api_format": normalizeStatusCustomApiFormat_ACU(customApiFormat),
-        "custom_url": apiUrl,
+        // 没填密钥时照旧填 custom_url，保留 TT 回退到它自己存的密钥的老行为
+        "custom_url": sanitizedKey ? "" : apiUrl,
         // OpenCode Go 端点自动补 x-opencode-session 会话头（缺失会被 Go 拒单）
         "custom_include_headers": withOpencodeSessionHeader_ACU(sanitizedKey ? `Authorization: Bearer ${sanitizedKey}` : "", apiUrl)
     };
