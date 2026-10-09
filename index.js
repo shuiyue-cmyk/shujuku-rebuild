@@ -193249,6 +193249,60 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
                 this.busyAction = '';
             }
         },
+        /**
+         * 优化当前正文：取最新一条 AI 回复此刻显示的正文（含已替换过的部分）再优化一次，可多次叠加。
+         * 与「重新优化」（从替换前的原文重来）互补；首次替换保存的原文不被覆盖，之后仍可从原文重来。
+         */
+        async optimizeCurrentContent() {
+            if (!this.enabled) {
+                setMessage$1(this, 'warning', '正文替换功能未启用。');
+                return;
+            }
+            if (this.busyAction)
+                return;
+            const chat = getChatArray_ACU() || [];
+            let messageIndex = -1;
+            for (let i = chat.length - 1; i >= 0; i--) {
+                if (isAiFloor_ACU(chat[i])) {
+                    messageIndex = i;
+                    break;
+                }
+            }
+            const currentContent = messageIndex >= 0 ? String(chat[messageIndex]?.mes || '') : '';
+            if (!currentContent.trim()) {
+                setMessage$1(this, 'warning', '当前聊天里还没有可优化的 AI 回复。');
+                return;
+            }
+            const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
+            this.busyAction = 'optimize-current';
+            try {
+                const result = await performContentOptimization_ACU(currentContent, { currentLoop: 1, userMessage: '' });
+                if (!isChatMessageWriteTargetCurrent_ACU(writeTarget))
+                    throw new Error(CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
+                if (!result?.success)
+                    throw new Error(result?.error || '正文替换失败。');
+                if (!Array.isArray(result.optimizations) || result.optimizations.length === 0) {
+                    clearMessageAndToast(this, 'info', '当前正文已足够好，无需再优化。', { muteable: false });
+                    return;
+                }
+                const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, {
+                    originalContent: currentContent,
+                    expected: writeTarget,
+                });
+                if (!success)
+                    throw new Error('写回聊天消息失败。');
+                this.refreshFromSettings();
+                clearMessageAndToast(this, 'success', `已在当前正文基础上优化 ${result.optimizations.length} 处内容。`, { muteable: false });
+            }
+            catch (e) {
+                logError_ACU('[ACU-V2] optimize current content failed', e);
+                setMessage$1(this, 'error', '上一次优化当前正文失败，请检查配置或查看运行日志。');
+                useToastStore().error(`优化当前正文失败：${e?.message || '未知错误'}`, { muteable: false });
+            }
+            finally {
+                this.busyAction = '';
+            }
+        },
         async reoptimizeLatest() {
             if (!this.enabled) {
                 setMessage$1(this, 'warning', '正文替换功能未启用。');
@@ -193358,6 +193412,9 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             isMain: segment.isMain,
             isMain2: segment.isMain2,
         })));
+        const reoptimizeHint = computed(() => (store.lastOptimizedMessageIndex >= 0
+            ? `${store.lastOptimizedLabel}：丢掉已替换的结果，用替换前的原文重新优化（相当于重 roll）。`
+            : store.lastOptimizedLabel));
         /** 列表还没拉到（或拉取失败）时，当前所选模型仍要能显示。 */
         const decisionModelOptions = computed(() => {
             const options = store.decisionModels.map(model => ({
@@ -193476,14 +193533,14 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 confirmVariant: 'danger',
             });
         });
-        const __returned__ = { PLACEHOLDERS, store, dialogStore, apiStore, followActiveApiLabel, apiOptions, contentReplaceStale, markContentReplaceConfirmed, presetSheetOpen, promptSheetOpen, editingPresetName, sections, modeToggles, presetItems, promptSegmentsForView, decisionModelOptions, setDecisionEnabled, promptGroupMissingContent, canEditCurrentPrompt, setApiPreset, onDeletePreset, onRenamePreset, confirmLeaveCustomPrompt, onSelectPreset, onEditPreset, openPromptSheetForCurrent, closePromptSheet, onSavePromptGroup, onResetPromptGroup, onPromptUpdate, refreshAll, get copy() { return contentReplaceCopy; }, PromptSegmentsSheet, UbBadge, UbButton, UbCallout, UbFileButton, UbIconButton, UbInput, UbPage, UbPresetPicker, UbRow, UbRulePairs, UbSection, UbSelect, UbSheet, UbSwitch, UbTextarea };
+        const __returned__ = { PLACEHOLDERS, store, dialogStore, apiStore, followActiveApiLabel, apiOptions, contentReplaceStale, markContentReplaceConfirmed, presetSheetOpen, promptSheetOpen, editingPresetName, sections, modeToggles, presetItems, promptSegmentsForView, reoptimizeHint, decisionModelOptions, setDecisionEnabled, promptGroupMissingContent, canEditCurrentPrompt, setApiPreset, onDeletePreset, onRenamePreset, confirmLeaveCustomPrompt, onSelectPreset, onEditPreset, openPromptSheetForCurrent, closePromptSheet, onSavePromptGroup, onResetPromptGroup, onPromptUpdate, refreshAll, get copy() { return contentReplaceCopy; }, PromptSegmentsSheet, UbBadge, UbButton, UbCallout, UbFileButton, UbIconButton, UbInput, UbPage, UbPresetPicker, UbRow, UbRulePairs, UbSection, UbSelect, UbSheet, UbSwitch, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-cr__preset[data-v-88f35716] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-88f35716] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-88f35716] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-88f35716] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-88f35716] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-88f35716] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-88f35716] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-88f35716] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-88f35716] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-88f35716] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-88f35716] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-88f35716] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-88f35716] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-88f35716] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-88f35716");
-var ContentReplacePage_vue_vue_type_style_index_0_scoped_88f35716_lang = null;
+injectSfcStyle("\n.ub-cr__preset[data-v-3f6df057] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-3f6df057] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-3f6df057] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-3f6df057] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-3f6df057] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-3f6df057] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-3f6df057] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-3f6df057] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-3f6df057] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-3f6df057] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-3f6df057] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-3f6df057] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-3f6df057] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-3f6df057] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-3f6df057");
+var ContentReplacePage_vue_vue_type_style_index_0_scoped_3f6df057_lang = null;
 
 const _hoisted_1$j = { class: "ub-cr__picker" };
 const _hoisted_2$i = { class: "ub-cr__preset" };
@@ -193616,53 +193673,75 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				description: $setup.copy.panels.mode.description,
 				icon: "fa-solid fa-shuffle"
 			}, {
-				default: withCtx(() => [(openBlock(), createElementBlock(
-					Fragment,
-					null,
-					renderList($setup.modeToggles, (item) => {
-						return createVNode($setup["UbRow"], {
-							key: item.key,
-							label: item.label,
-							hint: item.hint
-						}, {
-							default: withCtx(() => [createVNode($setup["UbSwitch"], {
-								"model-value": $setup.store[item.key],
-								"aria-label": item.label,
-								"onUpdate:modelValue": ($event) => $setup.store.setBoolean(item.key, $event)
-							}, null, 8, [
-								"model-value",
-								"aria-label",
-								"onUpdate:modelValue"
-							])]),
-							_: 2
-						}, 1032, ["label", "hint"]);
-					}),
-					64
-					/* STABLE_FRAGMENT */
-				)), createVNode($setup["UbRow"], {
-					label: "最近可重新优化",
-					hint: $setup.store.lastOptimizedLabel
-				}, {
-					default: withCtx(() => [createVNode($setup["UbButton"], {
-						size: "sm",
-						icon: "fa-solid fa-rotate-right",
-						busy: $setup.store.busyAction === "reoptimize",
-						disabled: $setup.store.lastOptimizedMessageIndex < 0,
-						onClick: $setup.store.reoptimizeLatest
+				default: withCtx(() => [
+					(openBlock(), createElementBlock(
+						Fragment,
+						null,
+						renderList($setup.modeToggles, (item) => {
+							return createVNode($setup["UbRow"], {
+								key: item.key,
+								label: item.label,
+								hint: item.hint
+							}, {
+								default: withCtx(() => [createVNode($setup["UbSwitch"], {
+									"model-value": $setup.store[item.key],
+									"aria-label": item.label,
+									"onUpdate:modelValue": ($event) => $setup.store.setBoolean(item.key, $event)
+								}, null, 8, [
+									"model-value",
+									"aria-label",
+									"onUpdate:modelValue"
+								])]),
+								_: 2
+							}, 1032, ["label", "hint"]);
+						}),
+						64
+						/* STABLE_FRAGMENT */
+					)),
+					createVNode($setup["UbRow"], {
+						label: "从原文重来",
+						hint: $setup.reoptimizeHint
 					}, {
-						default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
-							" 重新优化最近一次 ",
-							-1
-							/* CACHED */
-						)])]),
+						default: withCtx(() => [createVNode($setup["UbButton"], {
+							size: "sm",
+							icon: "fa-solid fa-rotate-right",
+							busy: $setup.store.busyAction === "reoptimize",
+							disabled: $setup.store.lastOptimizedMessageIndex < 0,
+							onClick: $setup.store.reoptimizeLatest
+						}, {
+							default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+								" 重新优化 ",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}, 8, [
+							"busy",
+							"disabled",
+							"onClick"
+						])]),
 						_: 1
-					}, 8, [
-						"busy",
-						"disabled",
-						"onClick"
-					])]),
-					_: 1
-				}, 8, ["hint"])]),
+					}, 8, ["hint"]),
+					createVNode($setup["UbRow"], {
+						label: "在当前正文上再优化",
+						hint: "对最新一条 AI 回复现在显示的正文再优化一次，可以叠加多次；替换前的原文仍保留，之后照样能从原文重来。"
+					}, {
+						default: withCtx(() => [createVNode($setup["UbButton"], {
+							size: "sm",
+							icon: "fa-solid fa-wand-magic-sparkles",
+							busy: $setup.store.busyAction === "optimize-current",
+							onClick: $setup.store.optimizeCurrentContent
+						}, {
+							default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+								" 优化当前正文 ",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}, 8, ["busy", "onClick"])]),
+						_: 1
+					})
+				]),
 				_: 1
 			}, 8, ["title", "description"]),
 			createVNode($setup["UbSection"], {
@@ -193687,7 +193766,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						key: 0,
 						kind: "warning"
 					}, {
-						default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
 							" 还没填 OpenRouter Key，判定暂不生效，正文照常替换。 ",
 							-1
 							/* CACHED */
@@ -193760,7 +193839,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				}, 8, ["variant"])]),
 				default: withCtx(() => [createBaseVNode("div", _hoisted_2$i, [
 					createBaseVNode("p", _hoisted_3$h, [
-						_cache[17] || (_cache[17] = createTextVNode(
+						_cache[18] || (_cache[18] = createTextVNode(
 							"当前提示词：",
 							-1
 							/* CACHED */
@@ -193813,7 +193892,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						key: 0,
 						kind: "warning"
 					}, {
-						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
+						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 							" 正文替换提示词缺少 $CONTENT 占位符，运行时无法知道要检查哪段正文；请打开编辑器载入默认提示词或补回占位符。 ",
 							-1
 							/* CACHED */
@@ -193901,7 +193980,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						busy: $setup.store.busyAction === "decision-test",
 						onClick: $setup.store.runDecisionTest
 					}, {
-						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
+						default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
 							"测试决策判定",
 							-1
 							/* CACHED */
@@ -193913,7 +193992,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						busy: $setup.store.busyAction === "test",
 						onClick: $setup.store.runTest
 					}, {
-						default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
 							"执行优化测试",
 							-1
 							/* CACHED */
@@ -193953,7 +194032,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						icon: "fa-solid fa-plus",
 						onClick: $setup.store.createPresetFromDefault
 					}, {
-						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+						default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 							"从默认新建",
 							-1
 							/* CACHED */
@@ -194008,7 +194087,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						/* KEYED_FRAGMENT */
 					))])) : (openBlock(), createElementBlock("p", _hoisted_11$5, "暂无预设。点上方「从默认新建」，或在预设卡片里导入。")),
 					createVNode($setup["UbCallout"], { kind: "info" }, {
-						default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
+						default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
 							"点「编辑提示词」会先把该预设载入为当前提示词，再打开编辑器；保存后同步更新这个预设。",
 							-1
 							/* CACHED */
@@ -194033,7 +194112,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				onDelete: _cache[14] || (_cache[14] = ($event) => $setup.store.deletePromptSegment($event)),
 				onUpdate: $setup.onPromptUpdate
 			}, {
-				lead: withCtx(() => [createBaseVNode("div", _hoisted_12$4, [_cache[23] || (_cache[23] = createBaseVNode(
+				lead: withCtx(() => [createBaseVNode("div", _hoisted_12$4, [_cache[24] || (_cache[24] = createBaseVNode(
 					"span",
 					null,
 					"可用占位符",
@@ -194065,7 +194144,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-88f35716"]]);
+var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-3f6df057"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;

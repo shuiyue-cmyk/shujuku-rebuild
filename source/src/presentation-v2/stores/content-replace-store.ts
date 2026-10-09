@@ -21,12 +21,18 @@ import { applyContextTagFilters_ACU } from '../../service/runtime/helpers-contex
 import { getLastOptimizedMessageIndex_ACU } from '../../service/plot/plot-logic';
 import { currentChatFileIdentifier_ACU, settings_ACU } from '../../service/runtime/state-manager';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
+import {
+  CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU,
+  captureChatMessageWriteTarget_ACU,
+  isChatMessageWriteTargetCurrent_ACU,
+} from '../../service/chat/chat-message-write-target';
 import { saveSettings_ACU } from '../../service/settings/settings-service';
 import { useToastStore } from './toast-store';
 import { downloadJsonToHost_ACU } from '../bootstrap/host-download';
 
 export type ContentReplaceMessageKind = 'info' | 'success' | 'warning' | 'error';
-export type ContentReplaceBusyAction = '' | 'test' | 'decision-test' | 'reoptimize' | 'import-presets' | 'export-preset';
+export type ContentReplaceBusyAction = '' | 'test' | 'decision-test' | 'reoptimize' | 'optimize-current' | 'import-presets' | 'export-preset';
 
 export interface ContentReplaceMessage {
   kind: ContentReplaceMessageKind;
@@ -723,6 +729,51 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         this.testOutput = `优化出错：${e?.message || '未知错误'}`;
         setMessage(this, 'error', '上一次正文替换测试失败，请检查配置或查看运行日志。');
         useToastStore().error(`正文替换测试失败：${e?.message || '未知错误'}`, { muteable: false });
+      } finally {
+        this.busyAction = '';
+      }
+    },
+    /**
+     * 优化当前正文：取最新一条 AI 回复此刻显示的正文（含已替换过的部分）再优化一次，可多次叠加。
+     * 与「重新优化」（从替换前的原文重来）互补；首次替换保存的原文不被覆盖，之后仍可从原文重来。
+     */
+    async optimizeCurrentContent(): Promise<void> {
+      if (!this.enabled) {
+        setMessage(this, 'warning', '正文替换功能未启用。');
+        return;
+      }
+      if (this.busyAction) return;
+      const chat = getChatArray_ACU() || [];
+      let messageIndex = -1;
+      for (let i = chat.length - 1; i >= 0; i--) {
+        if (isAiFloor_ACU(chat[i])) { messageIndex = i; break; }
+      }
+      const currentContent = messageIndex >= 0 ? String(chat[messageIndex]?.mes || '') : '';
+      if (!currentContent.trim()) {
+        setMessage(this, 'warning', '当前聊天里还没有可优化的 AI 回复。');
+        return;
+      }
+      const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
+      this.busyAction = 'optimize-current';
+      try {
+        const result = await performContentOptimization_ACU(currentContent, { currentLoop: 1, userMessage: '' });
+        if (!isChatMessageWriteTargetCurrent_ACU(writeTarget)) throw new Error(CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
+        if (!result?.success) throw new Error(result?.error || '正文替换失败。');
+        if (!Array.isArray(result.optimizations) || result.optimizations.length === 0) {
+          clearMessageAndToast(this, 'info', '当前正文已足够好，无需再优化。', { muteable: false });
+          return;
+        }
+        const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, {
+          originalContent: currentContent,
+          expected: writeTarget,
+        });
+        if (!success) throw new Error('写回聊天消息失败。');
+        this.refreshFromSettings();
+        clearMessageAndToast(this, 'success', `已在当前正文基础上优化 ${result.optimizations.length} 处内容。`, { muteable: false });
+      } catch (e: any) {
+        logError_ACU('[ACU-V2] optimize current content failed', e);
+        setMessage(this, 'error', '上一次优化当前正文失败，请检查配置或查看运行日志。');
+        useToastStore().error(`优化当前正文失败：${e?.message || '未知错误'}`, { muteable: false });
       } finally {
         this.busyAction = '';
       }

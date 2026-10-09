@@ -30,7 +30,7 @@
       <UbRow v-for="item in modeToggles" :key="item.key" :label="item.label" :hint="item.hint">
         <UbSwitch :model-value="store[item.key]" :aria-label="item.label" @update:model-value="store.setBoolean(item.key, $event)" />
       </UbRow>
-      <UbRow label="最近可重新优化" :hint="store.lastOptimizedLabel">
+      <UbRow label="从原文重来" :hint="reoptimizeHint">
         <UbButton
           size="sm"
           icon="fa-solid fa-rotate-right"
@@ -38,7 +38,17 @@
           :disabled="store.lastOptimizedMessageIndex < 0"
           @click="store.reoptimizeLatest"
         >
-          重新优化最近一次
+          重新优化
+        </UbButton>
+      </UbRow>
+      <UbRow label="在当前正文上再优化" hint="对最新一条 AI 回复现在显示的正文再优化一次，可以叠加多次；替换前的原文仍保留，之后照样能从原文重来。">
+        <UbButton
+          size="sm"
+          icon="fa-solid fa-wand-magic-sparkles"
+          :busy="store.busyAction === 'optimize-current'"
+          @click="store.optimizeCurrentContent"
+        >
+          优化当前正文
         </UbButton>
       </UbRow>
     </UbSection>
@@ -301,6 +311,10 @@ const promptSegmentsForView = computed<UbPromptSegment[]>(() =>
     isMain2: segment.isMain2,
   })),
 );
+
+const reoptimizeHint = computed(() => (store.lastOptimizedMessageIndex >= 0
+  ? `${store.lastOptimizedLabel}：丢掉已替换的结果，用替换前的原文重新优化（相当于重 roll）。`
+  : store.lastOptimizedLabel));
 
 /** 列表还没拉到（或拉取失败）时，当前所选模型仍要能显示。 */
 const decisionModelOptions = computed(() => {

@@ -297,6 +297,43 @@ describe('useContentReplaceStore', () => {
     expect(store.message?.kind).toBe('error');
   });
 
+  it('优化当前正文：取最新一条 AI 回复此刻的正文（含已替换部分）再优化，带楼层快照写回', async () => {
+    const { store, performOptimization, replaceChatMessage, getOriginalContent, setChat, toast } = await setupStore();
+    setChat('chat-a', [
+      { message_id: 'a-0', mes: '开场' },
+      { message_id: 'a-1', mes: '用户', is_user: true },
+      { message_id: 'a-2', mes: '已经替换过一次的正文' },
+      { message_id: 'a-3', mes: '用户又说了一句', is_user: true },
+    ]);
+    store.setBoolean('enabled', true);
+
+    await store.optimizeCurrentContent();
+
+    expect(getOriginalContent).not.toHaveBeenCalled();
+    expect(performOptimization).toHaveBeenCalledWith('已经替换过一次的正文', { currentLoop: 1, userMessage: '' });
+    expect(replaceChatMessage).toHaveBeenCalledWith(2, '新句子', {
+      originalContent: '已经替换过一次的正文',
+      expected: expect.objectContaining({ messageIndex: 2, messageId: 'a-2', mes: '已经替换过一次的正文' }),
+    });
+    expect(toast.items.map(item => item.text)).toContain('已在当前正文基础上优化 1 处内容。');
+  });
+
+  it('优化当前正文：等待期间切换聊天则不写回', async () => {
+    const { store, performOptimization, replaceChatMessage, setChat } = await setupStore();
+    store.setBoolean('enabled', true);
+    let resolveOptimization: ((value: any) => void) | null = null;
+    performOptimization.mockImplementation(() => new Promise(resolve => { resolveOptimization = resolve; }));
+
+    const pending = store.optimizeCurrentContent();
+    await Promise.resolve();
+    setChat('chat-b', [{ message_id: 'b-0', mes: 'B 开场' }, { message_id: 'b-1', mes: 'B 正文' }, { message_id: 'b-2', mes: 'B 原文' }]);
+    resolveOptimization?.({ success: true, optimizations: [{ original: '旧句子', optimized: 'A', plan: '改写' }], optimizedContent: 'A', summary: '完成' });
+    await pending;
+
+    expect(replaceChatMessage).not.toHaveBeenCalled();
+    expect(store.message?.kind).toBe('error');
+  });
+
   it('重新优化最近一次会读取原文、优化并写回聊天消息', async () => {
     const { store, performOptimization, replaceChatMessage, getOriginalContent, toast } = await setupStore();
 
