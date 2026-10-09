@@ -4941,7 +4941,7 @@ function splitRerankDocumentsIntoBatches_ACU(documents, batchSize) {
     }
     return batches;
 }
-function normalizeEndpoint_ACU(endpoint) {
+function normalizeEndpoint_ACU$1(endpoint) {
     return String(endpoint || '').trim().replace(/\/+$/, '');
 }
 /**
@@ -5050,7 +5050,7 @@ async function requestRerankBatch_ACU(request) {
  * 任一批失败整体抛错，由调用方回退到 embedding 排序（不接受"半批有分、半批无分"的混合排序）。
  */
 async function createRerankScores_ACU(request) {
-    const endpoint = normalizeEndpoint_ACU(request.endpoint);
+    const endpoint = normalizeEndpoint_ACU$1(request.endpoint);
     const model = String(request.model || '').trim();
     const query = String(request.query || '').trim();
     const documents = Array.isArray(request.documents)
@@ -187939,6 +187939,52 @@ function hasManagedClientKeys_ACU(currentHeaders) {
         .some((l) => l.trim() && MANAGED_KEYS_ACU.has(headerKeyOf(l)));
 }
 
+const API_PROVIDER_ENDPOINTS_ACU = [
+    { id: 'ant-ling', label: 'Ant Ling', url: 'https://api.ant-ling.com/v1', format: 'openai_compat' },
+    { id: 'anthropic', label: 'Anthropic', url: 'https://api.anthropic.com/v1', format: 'claude_messages' },
+    { id: 'baseten', label: 'Baseten', url: 'https://inference.baseten.co/v1', format: 'openai_compat' },
+    { id: 'cerebras', label: 'Cerebras', url: 'https://api.cerebras.ai/v1', format: 'openai_compat' },
+    { id: 'deepseek', label: 'DeepSeek', url: 'https://api.deepseek.com', format: 'openai_compat' },
+    { id: 'fireworks', label: 'Fireworks', url: 'https://api.fireworks.ai/inference/v1', format: 'openai_compat' },
+    { id: 'google', label: 'Google Gemini', url: 'https://generativelanguage.googleapis.com/v1beta', format: 'gemini_generate_content' },
+    { id: 'groq', label: 'Groq', url: 'https://api.groq.com/openai/v1', format: 'openai_compat' },
+    { id: 'huggingface', label: 'Hugging Face', url: 'https://router.huggingface.co/v1', format: 'openai_compat' },
+    { id: 'kimi-coding', label: 'Kimi For Coding', url: 'https://api.kimi.com/coding/v1', format: 'claude_messages' },
+    { id: 'minimax', label: 'MiniMax', url: 'https://api.minimax.io/anthropic/v1', format: 'claude_messages' },
+    { id: 'minimax-cn', label: 'MiniMax（中国）', url: 'https://api.minimaxi.com/anthropic/v1', format: 'claude_messages' },
+    { id: 'mistral', label: 'Mistral', url: 'https://api.mistral.ai/v1', format: 'openai_compat' },
+    { id: 'moonshotai', label: 'Moonshot AI', url: 'https://api.moonshot.ai/v1', format: 'openai_compat' },
+    { id: 'moonshotai-cn', label: 'Moonshot AI（中国）', url: 'https://api.moonshot.cn/v1', format: 'openai_compat' },
+    { id: 'nvidia', label: 'NVIDIA', url: 'https://integrate.api.nvidia.com/v1', format: 'openai_compat' },
+    { id: 'openai', label: 'OpenAI', url: 'https://api.openai.com/v1', format: 'openai_compat' },
+    { id: 'opencode', label: 'OpenCode Zen', url: 'https://opencode.ai/zen/v1', format: 'openai_compat' },
+    { id: 'opencode-go', label: 'OpenCode Go', url: 'https://opencode.ai/zen/go/v1', format: 'openai_compat' },
+    { id: 'openrouter', label: 'OpenRouter', url: 'https://openrouter.ai/api/v1', format: 'openai_compat' },
+    { id: 'qwen-token-plan', label: 'Qwen Token Plan（国际 / 个人版）', url: 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1', format: 'openai_compat' },
+    { id: 'qwen-token-plan-cn', label: 'Qwen Token Plan（中国）', url: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', format: 'openai_compat' },
+    { id: 'together', label: 'Together', url: 'https://api.together.ai/v1', format: 'openai_compat' },
+    { id: 'vercel-ai-gateway', label: 'Vercel AI Gateway', url: 'https://ai-gateway.vercel.sh/v1', format: 'claude_messages' },
+    { id: 'xai', label: 'xAI', url: 'https://api.x.ai/v1', format: 'openai_compat' },
+    { id: 'xiaomi', label: 'Xiaomi MiMo', url: 'https://api.xiaomimimo.com/v1', format: 'openai_compat' },
+    { id: 'xiaomi-token-plan-ams', label: 'Xiaomi Token Plan AMS', url: 'https://token-plan-ams.xiaomimimo.com/v1', format: 'openai_compat' },
+    { id: 'xiaomi-token-plan-cn', label: 'Xiaomi Token Plan（中国）', url: 'https://token-plan-cn.xiaomimimo.com/v1', format: 'openai_compat' },
+    { id: 'xiaomi-token-plan-sgp', label: 'Xiaomi Token Plan SGP', url: 'https://token-plan-sgp.xiaomimimo.com/v1', format: 'openai_compat' },
+    { id: 'zai', label: 'Z.AI', url: 'https://api.z.ai/api/coding/paas/v4', format: 'openai_compat' },
+    { id: 'zai-coding-cn', label: 'Z.AI Coding（中国）', url: 'https://open.bigmodel.cn/api/coding/paas/v4', format: 'openai_compat' },
+];
+/** 「手填」选项值：不改端点与协议。 */
+const API_PROVIDER_ENDPOINT_MANUAL_ACU = '';
+function normalizeEndpoint_ACU(url) {
+    return String(url || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+/** 当前端点 + 协议对应的服务商；没有对应（手填的地址）时返回 null。 */
+function matchApiProviderEndpoint_ACU(url, format) {
+    const target = normalizeEndpoint_ACU(url);
+    if (!target)
+        return null;
+    return API_PROVIDER_ENDPOINTS_ACU.find(p => normalizeEndpoint_ACU(p.url) === target && p.format === (format || 'openai_compat')) || null;
+}
+
 function createEmptyApiPresetDraft() {
     return {
         name: '',
@@ -188258,6 +188304,10 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
             { value: CLIENT_HEADER_PRESET_NONE_ACU, label: '不使用预设' },
             ...CLIENT_HEADER_PRESETS_ACU.map(p => ({ value: p.id, label: p.label })),
         ];
+        const providerOptions = [
+            { value: API_PROVIDER_ENDPOINT_MANUAL_ACU, label: '手填（中转站 / 其他服务商）' },
+            ...API_PROVIDER_ENDPOINTS_ACU.map(p => ({ value: p.id, label: p.label })),
+        ];
         const store = useApiPresetStore();
         const dialogStore = useDialogStore();
         const toast = useToastStore();
@@ -188280,6 +188330,16 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
             // 没有任何受管身份键时显示「不使用预设」；手改过的残留不回显
             return hasManagedClientKeys_ACU(draft.requestHeaders) ? '' : CLIENT_HEADER_PRESET_NONE_ACU;
         });
+        // 按当前端点 + 协议回显；手改过端点或协议即显示「手填」
+        const matchedProviderId = computed(() => matchApiProviderEndpoint_ACU(draft.url, draft.customApiFormat)?.id ?? API_PROVIDER_ENDPOINT_MANUAL_ACU);
+        /** 只填端点与接口协议；选「手填」不动已有内容。 */
+        function applyProvider(id) {
+            const provider = API_PROVIDER_ENDPOINTS_ACU.find(p => p.id === id);
+            if (!provider)
+                return;
+            draft.url = provider.url;
+            draft.customApiFormat = provider.format;
+        }
         function setPromptPostProcessing(value) {
             draft.promptPostProcessing = value;
         }
@@ -188403,14 +188463,14 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
             });
         });
         watch(() => store.activePresetName, () => syncActiveDraft(), { flush: 'sync' });
-        const __returned__ = { reasoningEffortOptions, customApiFormatOptions, promptPostProcessingOptions, clientPresetOptions, store, dialogStore, toast, formMode, draft, draftOriginalName, draftSnapshot, draftError, draftDirty, presetItems, modelSelectOptions, matchedClientPresetId, setPromptPostProcessing, applyClientPreset, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, validateDraft, saveActiveDraft, loadModelsForActive, UbButton, UbCallout, UbIconButton, UbInput, UbPresetPicker, UbRow, UbSection, UbSelect, UbSwitch, UbTextarea };
+        const __returned__ = { reasoningEffortOptions, customApiFormatOptions, promptPostProcessingOptions, clientPresetOptions, providerOptions, store, dialogStore, toast, formMode, draft, draftOriginalName, draftSnapshot, draftError, draftDirty, presetItems, modelSelectOptions, matchedClientPresetId, matchedProviderId, applyProvider, setPromptPostProcessing, applyClientPreset, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, validateDraft, saveActiveDraft, loadModelsForActive, UbButton, UbCallout, UbIconButton, UbInput, UbPresetPicker, UbRow, UbSection, UbSelect, UbSwitch, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-api[data-v-fce3ed8d],\r\n.ub-api__form[data-v-fce3ed8d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-fce3ed8d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-fce3ed8d] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-fce3ed8d] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-fce3ed8d] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-fce3ed8d] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__danger-hint[data-v-fce3ed8d] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-fce3ed8d] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-fce3ed8d]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-fce3ed8d] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-fce3ed8d] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-fce3ed8d] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-fce3ed8d] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-fce3ed8d] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-fce3ed8d");
-var ApiPresetEditor_vue_vue_type_style_index_0_scoped_fce3ed8d_lang = null;
+injectSfcStyle("\n.ub-api[data-v-7e35edfa],\r\n.ub-api__form[data-v-7e35edfa] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-7e35edfa] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-7e35edfa] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-7e35edfa] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-7e35edfa] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-7e35edfa] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__danger-hint[data-v-7e35edfa] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-7e35edfa] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-7e35edfa]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-7e35edfa] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-7e35edfa] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-7e35edfa] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-7e35edfa] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-7e35edfa] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-7e35edfa");
+var ApiPresetEditor_vue_vue_type_style_index_0_scoped_7e35edfa_lang = null;
 
 const _hoisted_1$r = { class: "ub-api" };
 const _hoisted_2$p = { class: "ub-api__picker" };
@@ -188465,14 +188525,14 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 				onClick: _cache[1] || (_cache[1] = ($event) => $setup.store.activePreset && $setup.deletePreset($setup.store.activePreset.name))
 			}, null, 8, ["disabled"])
 		]), $setup.formMode === "empty" ? (openBlock(), createElementBlock("div", _hoisted_3$n, [createVNode($setup["UbCallout"], { kind: "warning" }, {
-			default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+			default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
 				"暂无可用 API 预设，请新建并设为当前或全局默认。",
 				-1
 				/* CACHED */
 			)])]),
 			_: 1
 		})])) : $setup.formMode === "create" ? (openBlock(), createElementBlock("div", _hoisted_4$k, [createVNode($setup["UbCallout"], { kind: "info" }, {
-			default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+			default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 				"正在新建预设：填好下面的连接信息后保存，会自动切换为当前聊天使用。",
 				-1
 				/* CACHED */
@@ -188508,6 +188568,19 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					}),
 					createVNode($setup["UbRow"], {
+						label: "常用服务商",
+						hint: "选一家自动填好端点和接口协议，API 密钥和模型名仍需自己填。用中转站或列表里没有的服务商时选「手填」。",
+						stack: ""
+					}, {
+						default: withCtx(() => [createVNode($setup["UbSelect"], {
+							options: $setup.providerOptions,
+							"model-value": $setup.matchedProviderId,
+							"aria-label": "常用服务商",
+							"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.applyProvider($event))
+						}, null, 8, ["model-value"])]),
+						_: 1
+					}),
+					createVNode($setup["UbRow"], {
 						label: "接口协议",
 						hint: "决定请求变形与上游端点：OpenAI→/chat/completions；OpenAI Responses→/responses；Claude Messages→/messages；Gemini Interactions→/interactions（自动补 /v1beta）。默认兼容 OpenAI。纯原生端点下「加载模型」可能失败，可手填模型名。",
 						stack: ""
@@ -188516,7 +188589,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 							options: $setup.customApiFormatOptions,
 							"model-value": $setup.draft.customApiFormat,
 							"aria-label": "接口协议",
-							"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.draft.customApiFormat = $event)
+							"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.draft.customApiFormat = $event)
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -188526,7 +188599,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbInput"], {
 							modelValue: $setup.draft.url,
-							"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.draft.url = $event),
+							"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.draft.url = $event),
 							placeholder: "https://example.com/v1",
 							"aria-label": "端点"
 						}, null, 8, ["modelValue"])]),
@@ -188538,7 +188611,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbInput"], {
 							modelValue: $setup.draft.apiKey,
-							"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.draft.apiKey = $event),
+							"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.draft.apiKey = $event),
 							type: "password",
 							autocomplete: "off",
 							"aria-label": "API 密钥"
@@ -188552,14 +188625,14 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 						default: withCtx(() => [
 							createBaseVNode("div", _hoisted_5$h, [createVNode($setup["UbInput"], {
 								modelValue: $setup.draft.model,
-								"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.draft.model = $event),
+								"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.draft.model = $event),
 								"aria-label": "模型名"
 							}, null, 8, ["modelValue"]), createVNode($setup["UbButton"], {
 								busy: $setup.store.modelLoadStatus === "loading",
 								icon: "fa-solid fa-cloud-arrow-down",
 								onClick: $setup.loadModelsForActive
 							}, {
-								default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
+								default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
 									"加载模型",
 									-1
 									/* CACHED */
@@ -188572,7 +188645,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 								"model-value": $setup.draft.model,
 								placeholder: "从已加载的模型中选择",
 								"aria-label": "模型列表",
-								"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.draft.model = $event)
+								"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.draft.model = $event)
 							}, null, 8, ["options", "model-value"])) : createCommentVNode("v-if", true),
 							$setup.store.modelLoadStatus === "error" ? (openBlock(), createElementBlock(
 								"p",
@@ -188596,7 +188669,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					createVNode($setup["UbRow"], { label: "最大回复长度" }, {
 						default: withCtx(() => [createVNode($setup["UbInput"], {
 							modelValue: $setup.draft.max_tokens,
-							"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.draft.max_tokens = $event),
+							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.draft.max_tokens = $event),
 							type: "number",
 							min: 1,
 							step: 1,
@@ -188607,7 +188680,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					createVNode($setup["UbRow"], { label: "温度" }, {
 						default: withCtx(() => [createVNode($setup["UbInput"], {
 							modelValue: $setup.draft.temperature,
-							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.draft.temperature = $event),
+							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.draft.temperature = $event),
 							type: "number",
 							min: 0,
 							max: 2,
@@ -188624,7 +188697,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 							options: $setup.reasoningEffortOptions,
 							"model-value": $setup.draft.reasoningEffort || "",
 							"aria-label": "思考强度",
-							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.draft.reasoningEffort = $event)
+							"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.draft.reasoningEffort = $event)
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})
@@ -188645,7 +188718,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 						default: withCtx(() => [createVNode($setup["UbSwitch"], {
 							"model-value": $setup.draft.streamingEnabled === true,
 							"aria-label": "流式输出",
-							"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.draft.streamingEnabled = $event)
+							"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.draft.streamingEnabled = $event)
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -188655,7 +188728,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbSwitch"], {
 							modelValue: $setup.draft.nonPrefillSupport,
-							"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.draft.nonPrefillSupport = $event),
+							"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.draft.nonPrefillSupport = $event),
 							"aria-label": "非预填充支持"
 						}, null, 8, ["modelValue"])]),
 						_: 1
@@ -188666,7 +188739,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbSwitch"], {
 							modelValue: $setup.draft.publicServiceMode,
-							"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.draft.publicServiceMode = $event),
+							"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.draft.publicServiceMode = $event),
 							"aria-label": "公益站兼容"
 						}, null, 8, ["modelValue"])]),
 						_: 1
@@ -188677,7 +188750,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbSwitch"], {
 							modelValue: $setup.draft.jsonFormatOutput,
-							"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.draft.jsonFormatOutput = $event),
+							"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.draft.jsonFormatOutput = $event),
 							"aria-label": "需要时格式化输出"
 						}, null, 8, ["modelValue"])]),
 						_: 1
@@ -188688,7 +188761,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbSwitch"], {
 							modelValue: $setup.draft.preserveMultipleSystem,
-							"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.draft.preserveMultipleSystem = $event),
+							"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.draft.preserveMultipleSystem = $event),
 							"aria-label": "保留多个 system 消息"
 						}, null, 8, ["modelValue"])]),
 						_: 1
@@ -188710,7 +188783,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbTextarea"], {
 							modelValue: $setup.draft.bodyParams,
-							"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.draft.bodyParams = $event),
+							"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.draft.bodyParams = $event),
 							rows: 3,
 							mono: "",
 							"aria-label": "附加主体参数",
@@ -188725,7 +188798,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbTextarea"], {
 							modelValue: $setup.draft.excludeBodyParams,
-							"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.draft.excludeBodyParams = $event),
+							"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.draft.excludeBodyParams = $event),
 							rows: 2,
 							mono: "",
 							"aria-label": "排除主体参数",
@@ -188751,7 +188824,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 						label: "客户端伪装",
 						stack: ""
 					}, {
-						hint: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
+						hint: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
 							" 选择客户端身份后，其特征请求头会合并进下方附加请求标头（受管身份键统一替换，其余行保留），用于部分屏蔽第三方客户端的供应商。 ",
 							-1
 							/* CACHED */
@@ -188768,7 +188841,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.draft.publicServiceMode,
 							placeholder: $setup.draft.publicServiceMode ? "已开启公益站兼容，不可使用客户端伪装" : "请选择",
 							"aria-label": "客户端伪装",
-							"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.applyClientPreset($event))
+							"onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => $setup.applyClientPreset($event))
 						}, null, 8, [
 							"model-value",
 							"disabled",
@@ -188783,7 +188856,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbTextarea"], {
 							modelValue: $setup.draft.requestHeaders,
-							"onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => $setup.draft.requestHeaders = $event),
+							"onUpdate:modelValue": _cache[20] || (_cache[20] = ($event) => $setup.draft.requestHeaders = $event),
 							rows: 2,
 							mono: "",
 							"aria-label": "附加请求标头",
@@ -188832,7 +188905,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.draftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
+						default: withCtx(() => [..._cache[25] || (_cache[25] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -188861,7 +188934,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION */
 	)) : createCommentVNode("v-if", true)]);
 }
-var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-fce3ed8d"]]);
+var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-7e35edfa"]]);
 
 var _sfc_main$u = /*@__PURE__*/ defineComponent({
     __name: 'ApiPage',

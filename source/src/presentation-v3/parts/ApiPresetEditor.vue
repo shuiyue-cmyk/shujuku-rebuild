@@ -40,6 +40,18 @@
           <UbInput v-model="draft.name" autocomplete="off" aria-label="预设名称" />
         </UbRow>
         <UbRow
+          label="常用服务商"
+          hint="选一家自动填好端点和接口协议，API 密钥和模型名仍需自己填。用中转站或列表里没有的服务商时选「手填」。"
+          stack
+        >
+          <UbSelect
+            :options="providerOptions"
+            :model-value="matchedProviderId"
+            aria-label="常用服务商"
+            @update:model-value="applyProvider($event)"
+          />
+        </UbRow>
+        <UbRow
           label="接口协议"
           hint="决定请求变形与上游端点：OpenAI→/chat/completions；OpenAI Responses→/responses；Claude Messages→/messages；Gemini Interactions→/interactions（自动补 /v1beta）。默认兼容 OpenAI。纯原生端点下「加载模型」可能失败，可手填模型名。"
           stack
@@ -181,6 +193,11 @@ import {
   stripManagedClientHeaders_ACU,
 } from '../../presentation-v2/composables/client-header-presets';
 import {
+  API_PROVIDER_ENDPOINTS_ACU,
+  API_PROVIDER_ENDPOINT_MANUAL_ACU,
+  matchApiProviderEndpoint_ACU,
+} from '../../presentation-v2/composables/api-provider-endpoints';
+import {
   apiPresetDraftFromPreset,
   apiPresetFromDraft,
   createEmptyApiPresetDraft,
@@ -239,6 +256,11 @@ const clientPresetOptions: UbSelectOption[] = [
   ...CLIENT_HEADER_PRESETS_ACU.map(p => ({ value: p.id, label: p.label })),
 ];
 
+const providerOptions: UbSelectOption[] = [
+  { value: API_PROVIDER_ENDPOINT_MANUAL_ACU, label: '手填（中转站 / 其他服务商）' },
+  ...API_PROVIDER_ENDPOINTS_ACU.map(p => ({ value: p.id, label: p.label })),
+];
+
 const store = useApiPresetStore();
 const dialogStore = useDialogStore();
 const toast = useToastStore();
@@ -263,6 +285,17 @@ const matchedClientPresetId = computed(() => {
   // 没有任何受管身份键时显示「不使用预设」；手改过的残留不回显
   return hasManagedClientKeys_ACU(draft.requestHeaders) ? '' : CLIENT_HEADER_PRESET_NONE_ACU;
 });
+
+// 按当前端点 + 协议回显；手改过端点或协议即显示「手填」
+const matchedProviderId = computed(() => matchApiProviderEndpoint_ACU(draft.url, draft.customApiFormat)?.id ?? API_PROVIDER_ENDPOINT_MANUAL_ACU);
+
+/** 只填端点与接口协议；选「手填」不动已有内容。 */
+function applyProvider(id: string): void {
+  const provider = API_PROVIDER_ENDPOINTS_ACU.find(p => p.id === id);
+  if (!provider) return;
+  draft.url = provider.url;
+  draft.customApiFormat = provider.format;
+}
 
 function setPromptPostProcessing(value: string): void {
   draft.promptPostProcessing = value;
