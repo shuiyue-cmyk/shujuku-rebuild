@@ -71,6 +71,12 @@ describe('orchestrateAfterCommandsStrategy1_ACU', () => {
     expect(result.originalMessage).toBe('你好');
     expect(result.lastMessageIndex).toBe(5);
   });
+  it('其它规划失败（blocked）同样透出 failed，发送层据此停发', async () => {
+    const msg = { is_user: true, mes: '你好' };
+    const runPlanning = vi.fn().mockResolvedValue({ blocked: true, reason: 'stage_failure' });
+    const result = await orchestrateAfterCommandsStrategy1_ACU(msg, 5, runPlanning);
+    expect(result).toMatchObject({ action: 'failed', blocked: true, originalMessage: '你好', lastMessageIndex: 5 });
+  });
 });
 
 // ═══ orchestrateAfterCommandsStrategy2_ACU ═══
@@ -91,6 +97,11 @@ describe('orchestrateAfterCommandsStrategy2_ACU', () => {
     const result = await orchestrateAfterCommandsStrategy2_ACU('继续', runPlanning);
     expect(result.action).toBe('failed');
     expect(result.apiRetriesExhausted).toBe(true);
+  });
+  it('其它规划失败（blocked）同样透出 failed', async () => {
+    const runPlanning = vi.fn().mockResolvedValue({ blocked: true, reason: 'all_failed' });
+    const result = await orchestrateAfterCommandsStrategy2_ACU('继续', runPlanning);
+    expect(result).toMatchObject({ action: 'failed', blocked: true });
   });
   it('用户中止返回 aborted', async () => {
     const runPlanning = vi.fn().mockResolvedValue({ aborted: true, manual: true });

@@ -61,6 +61,7 @@ let mockSettings: any = {
 let mockCurrentJsonTableData: any = null;
 let mockIsAutoUpdating = false;
 let mockWasStopped = false;
+let mockFillStopEpoch = 0;
 let mockCoreApisReady = true;
 let mockPendingFinalGenerationGreenlights: any[] = [];
 
@@ -70,6 +71,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   get currentChatFileIdentifier_ACU() { return 'test-chat'; },
   get isAutoUpdatingCard_ACU() { return mockIsAutoUpdating; },
   get wasStoppedByUser_ACU() { return mockWasStopped; },
+  getAutoFillStopEpoch_ACU: () => mockFillStopEpoch,
   get coreApisAreReady_ACU() { return mockCoreApisReady; },
   get pendingFinalGenerationGreenlights_ACU() { return mockPendingFinalGenerationGreenlights; },
   independentTableStates_ACU: mockIndependentTableStates,
@@ -1098,6 +1100,26 @@ describe('processUpdatesBatch_ACU', () => {
     expect(result).toEqual({ success: false, error: 'mixed storage evidence insufficient' });
     expect(mockExecute).not.toHaveBeenCalled();
     expect(mockReloadStorageProvider).not.toHaveBeenCalled();
+  });
+
+  it('本轮途中点了「终止」、随后停止标记被新一轮填表或宿主新生成复位：本轮后续批次仍不再执行（移植上游 02a523c4）', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true }, { is_user: false, mes: '一' }, { is_user: true }, { is_user: false, mes: '二' },
+    ]);
+    mockCurrentJsonTableData = { sheet_0: { name: '测试' } };
+    const mockExecute = vi.fn().mockImplementation(async () => {
+      // 第一批请求返回后才点终止（请求已无可中止），紧接着标记被别处复位
+      mockFillStopEpoch += 1;
+      mockWasStopped = false;
+      return { success: true, modifiedKeys: ['sheet_0'] } as CardUpdateResult;
+    });
+
+    const result = await processUpdatesBatch_ACU([1, 3], 'auto_independent', { batchSize: 1 }, mockExecute);
+
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toContain('终止');
   });
 
   it('外层调度已持有「正在填表」标志时（并发分组），本批结束不得清掉标志与用户停止信号', async () => {
@@ -6706,6 +6728,60 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     const promptMessages = mockPrepareAIInput.mock.calls[0][0];
     promptMessages[0].mes = '被调用方修改';
     expect(mockGetChatArray_ACU.mock.results[0].value[0].mes).toBe('问题');
+  });
+
+  it('AI 请求途中目标楼层被滑动成另一条回复：放弃本次结果，不写回聊天（移植上游 02a523c4）', async () => {
+    const chat: any[] = [
+      { is_user: true, mes: '问题' },
+      { is_user: false, mes: '第一版回复', swipe_id: 0, swipes: ['第一版回复'] },
+    ];
+    mockGetChatArray_ACU.mockReturnValue(chat);
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+      mate: { type: 'acu' },
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+    } as any);
+    mockCallCustomOpenAI.mockImplementationOnce(async () => {
+      chat[1].swipe_id = 1;
+      chat[1].swipes.push('第二版回复');
+      chat[1].mes = '第二版回复';
+      return '<tableEdit>sheet_0</tableEdit>';
+    });
+
+    const result = await processGroupedRuntimeChunk_ACU([
+      { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
+    ], 'manual_independent');
+
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toContain('目标楼层已换成另一条回复');
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+  });
+
+  it('分组填表途中点了「终止」、停止标记随后被复位：后续 bucket 不再请求 AI', async () => {
+    mockGetChatArray_ACU.mockReturnValue([
+      { is_user: true, mes: '问1' }, { is_user: false, mes: '答1' },
+      { is_user: true, mes: '问2' }, { is_user: false, mes: '答2' },
+    ]);
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+      mate: { type: 'acu' },
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+    } as any);
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+    // 第一个 bucket 的请求已返回、正在写回时点终止（无在途请求可中止），随后标记被别处复位
+    mockPersistTablesToChatMessage.mockImplementationOnce(async () => {
+      mockFillStopEpoch += 1;
+      mockWasStopped = false;
+      return { saved: true, messageIndex: 1 };
+    });
+
+    const result = await processGroupedRuntimeChunk_ACU([
+      { key: 'group_a', groupId: 0, indices: [1, 3], batchSize: 1, sheetKeys: ['sheet_0'], requestOptions: null },
+    ], 'manual_independent');
+
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(false);
   });
 
   it('目标楼层自身已有前端 CRUD 写入的 init checkpoint 时，AI 基底包含既有行而不是空模板', async () => {

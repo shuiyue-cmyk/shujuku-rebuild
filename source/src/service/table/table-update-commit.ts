@@ -1,5 +1,6 @@
 import type { TableDataObject_ACU } from '../../shared/models/table-data';
 import type { SqlMutationResult } from '../../shared/table-storage-provider';
+import type { TableFillTargetGuard_ACU } from './table-fill-target-guard';
 import { logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, isAutoUpdatingCard_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
 import { ensureLegacyStorageMigratedBeforeWrite_ACU, persistTablesToChatMessage_ACU } from './table-service';
@@ -70,6 +71,8 @@ export interface RunTableUpdateCommitOptions_ACU {
   workingDataMode?: 'clone' | 'none';
   initialData?: TableDataObject_ACU | null;
   targetMessageIndex: number;
+  /** AI 填表专用：填表开始时冻结的目标楼层身份；写回前目标换成另一条回复即拒绝（不重试）。 */
+  targetGuard?: TableFillTargetGuard_ACU;
   targetSheetKeys: string[] | null;
   updateGroupKeys?: string[] | null;
   trackingSheetKeys?: string[] | null;
@@ -296,7 +299,17 @@ function assertNoActiveFillForExternalMutation_ACU(options: RunTableUpdateCommit
   );
 }
 
-function assertExpectedCommitScope_ACU(options: RunTableUpdateCommitOptions_ACU, phase: string): void {
+function assertExpectedCommitScope_ACU(
+  options: RunTableUpdateCommitOptions_ACU,
+  phase: string,
+  targetMessageIndex: number = options.targetMessageIndex,
+): void {
+  if (options.targetGuard && !options.targetGuard.isCurrent(targetMessageIndex)) {
+    throw new TableUpdateCommitError_ACU(
+      `[TableUpdateCommit] ${options.reason}: ${phase} 检测到目标楼层已换成另一条回复（滑动或重新生成），已放弃本次填表结果。`,
+      'precondition',
+    );
+  }
   if (options.chatKey === undefined && options.isolationKey === undefined) return;
   const currentChatKey = String(currentChatFileIdentifier_ACU || 'current-chat');
   const expectedChatKey = String(options.chatKey ?? currentChatKey);
@@ -427,10 +440,11 @@ export async function runTableUpdateCommit_ACU<T>(
             rollbackBeforePersist = staged.rollback;
           }
           if (!options.skipChatSave) {
-            assertExpectedCommitScope_ACU(options, '持久化前');
+            const persistTargetIndex = persistOptions.targetMessageIndex ?? options.targetMessageIndex;
+            assertExpectedCommitScope_ACU(options, '持久化前', persistTargetIndex);
             assertPersistableRowIdentities_ACU(applied.tableData, options.reason, targetSheetKeys);
             const saveResult = await persistTablesToChatMessage_ACU({
-              targetMessageIndex: persistOptions.targetMessageIndex ?? options.targetMessageIndex,
+              targetMessageIndex: persistTargetIndex,
               targetSheetKeys,
               updateGroupKeys: persistOptions.updateGroupKeys !== undefined ? persistOptions.updateGroupKeys : (options.updateGroupKeys ?? null),
               trackingSheetKeys: persistOptions.trackingSheetKeys !== undefined ? persistOptions.trackingSheetKeys : (options.trackingSheetKeys ?? []),

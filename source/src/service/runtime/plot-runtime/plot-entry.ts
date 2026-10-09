@@ -150,7 +150,7 @@ function isTaskAbortedError_ACU(error: unknown): boolean {
           return {
             success: false,
             errorType: 'all_failed',
-            errorMessage: `共 ${runtimeResult.enabledTaskCount} 个剧情任务均未返回有效结果，继续宿主发送。`,
+            errorMessage: `共 ${runtimeResult.enabledTaskCount} 个剧情任务均未返回有效结果。`,
             enabledTaskCount: runtimeResult.enabledTaskCount,
           };
         } else {

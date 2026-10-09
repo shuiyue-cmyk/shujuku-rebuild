@@ -6,8 +6,8 @@
  */
 import { toastr_API_ACU } from '../../shared/host-api';
 import { ACU_TOAST_CATEGORY_ACU } from '../../shared/constants';
-import { logDebug_ACU } from '../../shared/utils';
-import { processSummaryVectorIndexBeforeGeneration_ACU, type SummaryVectorIndexRuntimeResult_ACU } from '../../service/vector/summary-vector-index-runtime';
+import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { processSummaryVectorIndexBeforeGeneration_ACU, type SummaryVectorIndexRuntimeOptions_ACU, type SummaryVectorIndexRuntimeResult_ACU } from '../../service/vector/summary-vector-index-runtime';
 import { rebuildCurrentSummaryVectorIndexNow_ACU } from '../../service/vector/summary-vector-index-rebuild-service';
 import { isSummaryVectorIndexSourceTextOutdated_ACU, type SummaryVectorIndexArchiveResult_ACU } from '../../service/vector/summary-vector-index-archive-service';
 import { getLatestSummaryVectorIndexSnapshotState_ACU } from '../../service/vector/summary-vector-index-state-service';
@@ -118,8 +118,15 @@ export async function rebuildOutdatedSummaryVectorIndexInBackground_ACU(): Promi
 /**
  * 包装交火发送前处理，显示“正在召回记忆”进度提示。
  */
+export const SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU = '交火记忆召回失败，本次生成已停止。请检查向量接口后重新生成。';
+
+/** 召回真的失败了（不是关闭、无可召回内容、已去重等跳过）：发送层据此停止这次生成。 */
+export function isSummaryVectorRecallFailure_ACU(result: SummaryVectorIndexRuntimeResult_ACU | null | undefined): boolean {
+  return !!result && result.success !== true && result.skipped !== true;
+}
+
 export async function processSummaryVectorIndexBeforeGenerationWithUI_ACU(
-  options: { userInput?: string; source?: string } = {},
+  options: SummaryVectorIndexRuntimeOptions_ACU = {},
 ): Promise<SummaryVectorIndexRuntimeResult_ACU> {
   const toastMsg = `
       <div style="display: flex; align-items: center; justify-content: space-between;">
@@ -182,7 +189,9 @@ export async function processSummaryVectorIndexBeforeGenerationWithUI_ACU(
         }
         return retried;
       } catch (error) {
-        logDebug_ACU(`[交火模式纪要索引] 自愈重建后补跑召回失败；继续原始生成：${error instanceof Error ? error.message : String(error)}`);
+        // 索引已重建、补跑召回却失败：按召回失败处理，由发送层停止这次生成
+        logWarn_ACU(`[交火模式纪要索引] 自愈重建后补跑召回失败：${error instanceof Error ? error.message : String(error)}`);
+        return { success: false, reason: 'recall_after_rebuild_failed' };
       }
     }
   }

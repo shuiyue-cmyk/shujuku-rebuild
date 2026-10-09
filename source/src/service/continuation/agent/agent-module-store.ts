@@ -902,7 +902,7 @@ function fieldCommitProblem_ACU(module: FieldCommitModule_ACU, field: string, va
     case 'infoGap':
       if (field === 'revealStatus') return fieldCommitInList_ACU(value, AGENT_REVEAL_STATUSES_ACU) ? null : 'revealStatus 枚举非法';
       if (field === 'revealIndex') return value === null || (fieldCommitIndex_ACU(value) && (value as number) <= bound && evidence.has(value as number)) ? null : 'revealIndex 必须为空或已结算正文楼层' + fieldCommitEvidenceRepair_ACU(bound, evidence);
-      if (field === 'characterKnowledge') return Array.isArray(value) && value.every(item => fieldCommitRecord_ACU(item) && fieldCommitNonempty_ACU(item.name) && fieldCommitText_ACU(item.knows)) ? null : 'characterKnowledge 需要带 name / knows 的数组；SQL 列名 character_knowledge，值用单引号包裹完整 JSON 数组，如 \'[{"name":"角色","knows":"亲眼所见"}]\'；JSON 文本内部双引号须用反斜杠转义，SQL 文本内部单引号须写成两个单引号';
+      if (field === 'characterKnowledge') return Array.isArray(value) && value.every(item => fieldCommitRecord_ACU(item) && fieldCommitNonempty_ACU(item.name) && fieldCommitText_ACU(item.knows)) ? null : 'characterKnowledge 需要带 name / knows 的数组；SQL 列名 character_knowledge，值用单引号包裹完整 JSON 数组，如 \'[{"name":"角色","knows":"亲眼所见"}]\'；JSON 结构双引号不加反斜杠，字符串内容中的双引号按 JSON 规则转义，SQL 文本内部单引号须写成两个单引号';
       return field === 'topic' ? (fieldCommitNonempty_ACU(value) ? null : 'topic 必须为非空文本') : (fieldCommitText_ACU(value) ? null : '必须为字符串');
     case 'chronology':
       if (field === 'precision') return fieldCommitInList_ACU(value, AGENT_CHRONOLOGY_PRECISIONS_ACU) ? null : 'precision 枚举非法';

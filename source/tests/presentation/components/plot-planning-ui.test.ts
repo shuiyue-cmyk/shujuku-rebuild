@@ -57,11 +57,22 @@ describe('runOptimizationLogicWithUI_ACU 中断口径', () => {
     expect(result).toBe('规划好的正文');
   });
 
-  it('普通失败只告警并返回 skipped（继续宿主发送，不再弹 error 中断语义）', async () => {
-    mockRunOptimizationLogic.mockResolvedValue({ success: false, errorType: 'stage_failure', errorMessage: '阶段失败' });
-    const result = await runOptimizationLogicWithUI_ACU('继续');
-    expect(result).toEqual({ skipped: true, reason: 'stage_failure' });
-    expect(mockShowToastr).toHaveBeenCalledWith('warning', expect.anything(), '剧情推进');
+  it('规划失败（阶段失败 / 全部无结果 / 世界书预检失败）弹 error 并透出 blocked，发送层据此停发（移植上游 2adf068b）', async () => {
+    for (const errorType of ['stage_failure', 'all_failed', 'worldbook_preflight_failure', 'exception']) {
+      mockShowToastr.mockClear();
+      mockRunOptimizationLogic.mockResolvedValue({ success: false, errorType, errorMessage: '阶段失败。' });
+      const result = await runOptimizationLogicWithUI_ACU('继续');
+      expect(result).toEqual({ blocked: true, reason: errorType });
+      expect(mockShowToastr).toHaveBeenCalledWith('error', expect.stringContaining('本次发送已停止'), '规划失败', expect.anything());
+    }
+  });
+
+  it('没有可执行的任务、规划期间已切走聊天不算失败：告警后返回 skipped，照常发送', async () => {
+    for (const errorType of ['no_tasks', 'scope_changed']) {
+      mockRunOptimizationLogic.mockResolvedValue({ success: false, errorType, errorMessage: '说明' });
+      const result = await runOptimizationLogicWithUI_ACU('继续');
+      expect(result).toEqual({ skipped: true, reason: errorType });
+    }
   });
 
   it('API 重试耗尽弹 error 并透出标记（发送层据此中断）', async () => {
@@ -71,10 +82,10 @@ describe('runOptimizationLogicWithUI_ACU 中断口径', () => {
     expect(mockShowToastr).toHaveBeenCalledWith('error', '重试耗尽', '规划失败', expect.anything());
   });
 
-  it('服务抛异常不向外抛：告警后返回 skipped（继续宿主发送）', async () => {
+  it('服务抛异常不向外抛：弹 error 并透出 blocked（停发）', async () => {
     mockRunOptimizationLogic.mockRejectedValue(new Error('boom'));
     const result = await runOptimizationLogicWithUI_ACU('继续');
-    expect(result).toEqual({ skipped: true, reason: 'processing_error' });
-    expect(mockShowToastr).toHaveBeenCalledWith('warning', '剧情任务处理异常，继续宿主发送。', '剧情推进');
+    expect(result).toEqual({ blocked: true, reason: 'processing_error' });
+    expect(mockShowToastr).toHaveBeenCalledWith('error', expect.stringContaining('本次发送已停止'), '规划失败', expect.anything());
   });
 });

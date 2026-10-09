@@ -35,6 +35,7 @@ import {
   recordLastUserSend_ACU,
   settings_ACU,
   shouldProcessAutoTableUpdateForGenerationEnded_ACU,
+  markChatChangedForEndedGate_ACU,
   shouldProcessPlotForGeneration_ACU,
   shouldProcessSummaryVectorIndexForGeneration_ACU,
   _set_allChatMessages_ACU,
@@ -119,6 +120,8 @@ import {
 } from '../components/plot-pending-disguise';
 import {
   processSummaryVectorIndexBeforeGenerationWithUI_ACU,
+  isSummaryVectorRecallFailure_ACU,
+  SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU,
   rebuildCurrentSummaryVectorIndexWithUI_ACU,
   rebuildOutdatedSummaryVectorIndexInBackground_ACU,
   shouldRebuildSummaryVectorIndexWithUI_ACU
@@ -599,6 +602,30 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
 // 不做全量 off 配对（大重构超范围），卫兵封死 double-fire 主路径。
 let mainInitializeDone_ACU = false;
 
+// 发送租约用的两个计数：宿主「停止生成」次数与聊天切换次数。宿主切聊天时 chat 数组可能原地复用，
+// 不能只靠数组身份判断「还是不是这次发送」。
+let hostGenerationStopSeq_ACU = 0;
+let chatChangeEpoch_ACU = 0;
+
+/** 捕获「这次发送」的租约：之后停止过生成、切换过聊天或隔离标识，租约即失效。 */
+function captureSendLease_ACU(): () => boolean {
+  const stopSeq = hostGenerationStopSeq_ACU;
+  const chatEpoch = chatChangeEpoch_ACU;
+  const chatKey = currentChatFileIdentifier_ACU;
+  const isolationKey = getCurrentIsolationKey_ACU();
+  return () => hostGenerationStopSeq_ACU === stopSeq
+    && chatChangeEpoch_ACU === chatEpoch
+    && currentChatFileIdentifier_ACU === chatKey
+    && getCurrentIsolationKey_ACU() === isolationKey;
+}
+
+function stopHostGeneration_ACU(): void {
+  try {
+    if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function') SillyTavern_API_ACU.stopGeneration();
+    else if ((window as any).SillyTavern?.stopGeneration) (window as any).SillyTavern.stopGeneration();
+  } catch (e) {}
+}
+
 /**
  * 启动时已有聊天的初始化链（原 mainInitialize_ACU 内的 initWithChatId 闭包）。
  * 经 scheduleInitChainRun_ACU 与 CHAT_CHANGED 延迟链共用互斥守卫。
@@ -746,6 +773,9 @@ export   function mainInitialize_ACU() {
         // [H2/M3] 处理体抽至模块级 handleChatChangedEvent_ACU：整体 try/catch，延迟链走互斥守卫入口。
         if (SillyTavern_API_ACU.eventTypes.CHAT_CHANGED) {
           SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_CHANGED, (chatFileName: string) => {
+            // 同步标记：宿主载入聊天时收起停止按钮派发的无配对 ENDED 只立新聊天基线，不误开自动链
+            markChatChangedForEndedGate_ACU();
+            chatChangeEpoch_ACU += 1;
             void handleChatChangedEvent_ACU(chatFileName);
           });
         }
@@ -830,6 +860,7 @@ export   function mainInitialize_ACU() {
             try {
               // TT 的 GENERATION_STOPPED 是本轮停止事实：立即使已排队的旧自动填表回调失效。
               _set_wasStoppedByUser_ACU(true);
+              hostGenerationStopSeq_ACU += 1;
               const discarded = discardLatestGenerationContext_ACU();
               // 被中止的生成不会再有 GENERATION_ENDED；通知桥把等待中的续写轮转为可重试，避免卡死。
               void getContinuationHostGenerationBridge_ACU()?.onGenerationStopped(discarded?.seq);
@@ -980,6 +1011,7 @@ export   function mainInitialize_ACU() {
             // 本 try 的任何 return/throw 都经 finally 把文本交还发送框，宿主随后按原生流程入楼并生成。
             const chatAtStart = SillyTavern_API_ACU.chat;
             const lastAtStart = chatAtStart?.length ? (chatAtStart as any)[chatAtStart.length - 1] : null;
+            const sendLease = captureSendLease_ACU();
             const pendingTextInBox = String(getSendTextareaValue_ACU() || '');
             const pendingDisguiseEnabled = settings_ACU?.plotSettings?.pendingDisguiseEnabled === true;
             let disguise: PlotPendingDisguiseHandle_ACU | null = null;
@@ -998,10 +1030,27 @@ export   function mainInitialize_ACU() {
                 })) {
                   disguise = beginPlotPendingDisguise_ACU(pendingTextInBox, { notice: SUMMARY_RECALL_PENDING_NOTICE_ACU });
                 }
-                const summaryVectorResult = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: lastUserText, source: 'generation_after_commands' });
+                const summaryVectorResult = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({
+                  userInput: lastUserText, source: 'generation_after_commands', isActive: sendLease,
+                });
                 logDebug_ACU(`[交火模式纪要索引] GENERATION_AFTER_COMMANDS 发送前处理完成：success=${summaryVectorResult.success}, skipped=${summaryVectorResult.skipped === true}, reason=${summaryVectorResult.reason || 'none'}, keywords=${summaryVectorResult.keywordCount ?? 0}, injected=${summaryVectorResult.injectedCount ?? 0}`);
+                if (!sendLease()) {
+                  logDebug_ACU('[交火模式纪要索引] 召回期间已停止生成或切换聊天，本次发送不再继续后续处理。');
+                  return;
+                }
+                if (isSummaryVectorRecallFailure_ACU(summaryVectorResult)) {
+                  // 宁可不发，也不带着残缺的记忆发（移植上游 2adf068b）；用户楼保留，可直接重新生成
+                  logWarn_ACU(`[交火模式纪要索引] 发送前召回失败（${summaryVectorResult.reason || 'unknown'}），本次生成已停止。`);
+                  stopHostGeneration_ACU();
+                  showToastr_ACU('error', SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU, '交火召回失败');
+                  return;
+                }
               } catch (error) {
-                logWarn_ACU('[交火模式纪要索引] 发送前注入失败，继续原始生成:', error);
+                if (!sendLease()) return;
+                logWarn_ACU('[交火模式纪要索引] 发送前召回失败，本次生成已停止:', error);
+                stopHostGeneration_ACU();
+                showToastr_ACU('error', SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU, '交火召回失败');
+                return;
               }
             }
             if (!shouldProcessPlot) return;
@@ -1037,15 +1086,11 @@ export   function mainInitialize_ACU() {
               switch (s1.action) {
                 case 'failed':
                 case 'aborted': {
-                  // API 重试耗尽与手动中止同口径中断：停生成、删刚建的用户楼、恢复输入框。
-                  // failed 必带 apiRetriesExhausted（编排器保证），裸 failed 不处理。
-                  const interrupted = s1.action === 'aborted' ? !!s1.manual : s1.apiRetriesExhausted === true;
+                  // 规划失败（重试耗尽或其它失败）与手动中止同口径中断：停生成、删刚建的用户楼、恢复输入框。
+                  // failed 必带 apiRetriesExhausted 或 blocked（编排器保证），裸 failed 不处理。
+                  const interrupted = s1.action === 'aborted' ? !!s1.manual : (s1.apiRetriesExhausted === true || s1.blocked === true);
                   if (interrupted) {
-                    // 停止生成
-                    try {
-                      if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function') SillyTavern_API_ACU.stopGeneration();
-                      else if ((window as any).SillyTavern?.stopGeneration) (window as any).SillyTavern.stopGeneration();
-                    } catch (e) {}
+                    stopHostGeneration_ACU();
                     // 删除刚创建的用户消息
                     try {
                       const chatNow = SillyTavern_API_ACU.chat;
@@ -1118,14 +1163,11 @@ export   function mainInitialize_ACU() {
             switch (s2.action) {
               case 'failed':
               case 'aborted': {
-                // API 重试耗尽与手动中止同口径：停掉本轮生成（S2 楼层未建，输入框原文保留供重试）。
+                // 规划失败（重试耗尽或其它失败）与手动中止同口径：停掉本轮生成（S2 楼层未建，输入框原文保留供重试）。
                 // 注：此处只能截停已起的生成，拦不住宿主续发（无发送门控）；真中断要改 params.prompt，
                 // 超出本批口径，保持现状。
-                if (s2.manual || s2.apiRetriesExhausted === true) {
-                  try {
-                    if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function') SillyTavern_API_ACU.stopGeneration();
-                    else if ((window as any).SillyTavern?.stopGeneration) (window as any).SillyTavern.stopGeneration();
-                  } catch (e) {}
+                if (s2.manual || s2.apiRetriesExhausted === true || s2.blocked === true) {
+                  stopHostGeneration_ACU();
                 }
                 break;
               }

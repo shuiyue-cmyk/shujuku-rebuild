@@ -50,6 +50,11 @@ export interface SummaryVectorIndexRuntimeOptions_ACU {
      * 第一次调用已登记签名，不绕过的话补跑会被当作重复钩子触发直接去重掉。
      */
     bypassDedupe?: boolean;
+    /**
+     * 发送租约：这次发送是否仍有效（未停止生成、未切走聊天）。返回 false 后迟到的召回结果不再写世界书，
+     * 否则会把上一次发送、甚至另一个聊天的召回结果写进当前世界书。
+     */
+    isActive?: () => boolean;
 }
 
 export interface SummaryVectorIndexRuntimeResult_ACU {
@@ -340,10 +345,11 @@ function buildSummaryIndexOverwriteContent_ACU(candidates: SummaryIndexSelectedC
     return lines.join('\n');
 }
 
-async function upsertOriginalSummaryIndexEntry_ACU(content: string): Promise<void> {
-    if (!isWorldbookApiAvailable_ACU()) return;
+/** 返回 false 表示这次发送已失效、未写入。 */
+async function upsertOriginalSummaryIndexEntry_ACU(content: string, isActive: () => boolean): Promise<boolean> {
+    if (!isWorldbookApiAvailable_ACU()) return true;
     const targetLorebook = await getInjectionTargetLorebook_ACU();
-    if (!targetLorebook) return;
+    if (!targetLorebook) return true;
 
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
     const comment = `${getIsolationPrefix_ACU()}TavernDB-ACU-CustomExport-纪要索引`;
@@ -361,12 +367,17 @@ async function upsertOriginalSummaryIndexEntry_ACU(content: string): Promise<voi
         prevent_recursion: true,
     };
 
+    // 读世界书也要等待：写入前最后再核对一次这次发送仍有效
+    if (!isActive()) return false;
     if (existing?.uid != null) {
         await setLorebookEntries_ACU(targetLorebook, [{ ...nextEntry, uid: existing.uid }]);
     } else {
         await createLorebookEntries_ACU(targetLorebook, [nextEntry]);
     }
+    return true;
 }
+
+const SEND_CANCELLED_RESULT_ACU: SummaryVectorIndexRuntimeResult_ACU = { success: false, skipped: true, reason: 'send_cancelled' };
 
 interface LiveSummaryVectorRows_ACU {
     summaryKey: string;
@@ -498,30 +509,10 @@ async function materializeSummaryVectorMirrorHead_ACU(
     return { rows, chunks, incompleteRowIds, contentMismatchedRowIds };
 }
 
-// T5：query embedding 失败时的降级路径 —— 仅注入最近固定行，不依赖向量检索。
-// 仅在 recentFixedRows 非空时调用；调用方负责确认 recentFixedRows.length > 0。
-async function injectRecentFixedRowsOnly_ACU(recentFixedRows: ChatSummaryVectorIndexRow_ACU[]): Promise<SummaryVectorIndexRuntimeResult_ACU> {
-    const selected = recentFixedRows
-        .map((row): SummaryIndexSelectedCandidate_ACU => ({ kind: 'recent_fixed', row }))
-        .sort((left, right) => (Number(left.row.rowOrder) || 0) - (Number(right.row.rowOrder) || 0));
-    const content = buildSummaryIndexOverwriteContent_ACU(selected);
-    await upsertOriginalSummaryIndexEntry_ACU(content);
-    return {
-        success: true,
-        reason: 'query_embedding_failed_recent_fixed_only',
-        keywordCount: 0,
-        candidateCount: 0,
-        injectedCount: selected.length,
-        denseCandidateCount: 0,
-        sparseCandidateCount: 0,
-        fusionCandidateCount: 0,
-    };
-}
-
-
 export async function processSummaryVectorIndexBeforeGeneration_ACU(
     options: SummaryVectorIndexRuntimeOptions_ACU = {},
 ): Promise<SummaryVectorIndexRuntimeResult_ACU> {
+    const isActive = (): boolean => options.isActive?.() !== false;
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
     const globalEnabled = globalMeta_ACU?.summaryVectorIndexModeGlobal === true;
     if (!globalEnabled) {
@@ -663,9 +654,8 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     // 较早的行（不参与排序的候选池）
     const olderRows = rows.filter((row) => !recentFixedRowKeys.has(row.rowKey));
 
-    // T5：query embedding 失败不中断宿主生成。generateKeywords/createEmbeddings 抛异常或返回空向量时，
-    // 若存在最近固定行（recentFixedRows），降级为仅注入固定行（不依赖向量），继续原始生成；
-    // 否则保持原行为（空向量返回 empty_query_embedding；异常穿透给上层 init.ts 的 try/catch 兜底）。
+    // query embedding（含关键词 AI）失败即本次召回失败，由发送层停止这次生成（移植上游 2adf068b）：
+    // 宁可不发，也不带着残缺的记忆发。不再降级为只注入最近固定行。
     let keywords: string[] = [];
     let queryText = '';
     let queryVector: number[] | Float32Array = [];
@@ -680,18 +670,13 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         });
         queryVector = embeddings[0]?.embedding || [];
         if (queryVector.length === 0) {
-            if (recentFixedRows.length > 0) {
-                logWarn_ACU('[交火模式纪要索引] query embedding 返回空向量，降级为仅注入最近固定行:', userInput);
-                return await injectRecentFixedRowsOnly_ACU(recentFixedRows);
-            }
-            return { success: false, skipped: true, reason: 'empty_query_embedding' };
+            logWarn_ACU('[交火模式纪要索引] query embedding 返回空向量，本次召回失败:', userInput);
+            return { success: false, reason: 'empty_query_embedding' };
         }
     } catch (error) {
-        if (recentFixedRows.length > 0) {
-            logWarn_ACU('[交火模式纪要索引] query embedding 失败，降级为仅注入最近固定行，继续原始生成:', error);
-            return await injectRecentFixedRowsOnly_ACU(recentFixedRows);
-        }
-        throw error;
+        if (!isActive()) return SEND_CANCELLED_RESULT_ACU;
+        logWarn_ACU('[交火模式纪要索引] query embedding 失败，本次召回失败:', error);
+        return { success: false, reason: 'query_embedding_failed' };
     }
 
     // 只对较早行的 chunks 做向量匹配
@@ -765,7 +750,7 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     }
 
     const content = buildSummaryIndexOverwriteContent_ACU(selected);
-    await upsertOriginalSummaryIndexEntry_ACU(content);
+    if (!isActive() || !(await upsertOriginalSummaryIndexEntry_ACU(content, isActive))) return SEND_CANCELLED_RESULT_ACU;
     logDebug_ACU(
         `[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（其中固定注入 ${recentFixedRows.length} 条，排序选取 ${selected.length - recentFixedRows.length} 条），关键词 ${keywords.length} 个（关键词 AI ${keywordGenerationEnabled ? '开' : '关'}），rerank=${rerank.status}${rerank.documentCount ? `（${rerank.documentCount} 条 documents）` : ''}，输出顺序按纪要表原 rowOrder。`,
     );

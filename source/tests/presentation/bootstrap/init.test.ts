@@ -3,6 +3,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
+  markChatChangedForEndedGate: vi.fn(),
   chatChanged: undefined as undefined | ((name: string) => Promise<void>),
   chatMutationHandler: undefined as undefined | ((data: any) => Promise<void>),
   chatDeletedHandler: undefined as undefined | (() => void),
@@ -70,6 +71,7 @@ vi.mock('../../../src/service/runtime/helpers-remaining', () => ({ ensureInitial
 vi.mock('../../../src/service/table/runtime-only-pending-flush', () => ({ flushRuntimeOnlyPendingChanges_ACU: (...args: any[]) => m.runtimeOnlyFlush(...args) }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   chatMutationDebounceTimer_ACU: null, _set_chatMutationDebounceTimer_ACU: m.setChatMutationTimer, generationGate_ACU: m.gate,
+  markChatChangedForEndedGate_ACU: m.markChatChangedForEndedGate,
   get currentChatFileIdentifier_ACU() { return m.currentChatKey; }, currentJsonTableData_ACU: null,
   resolveGenerationContextForEnded_ACU: (...args: any[]) => {
     const context = m.consumeGenerationContext(...args);
@@ -126,7 +128,7 @@ vi.mock('../../../src/service/plot/plot-orchestrator', () => ({
 }));
 vi.mock('../../../src/shared/host-input', () => ({ getSendTextareaValue_ACU: vi.fn(), setSendTextareaValue_ACU: vi.fn() }));
 vi.mock('../../../src/presentation/components/plot-planning-ui', () => ({ runOptimizationLogicWithUI_ACU: vi.fn() }));
-vi.mock('../../../src/presentation/components/summary-vector-index-ui', () => ({ processSummaryVectorIndexBeforeGenerationWithUI_ACU: (...args: any[]) => m.processBeforeGen(...args), shouldRebuildSummaryVectorIndexWithUI_ACU: (...args: any[]) => m.shouldRebuild(...args), rebuildCurrentSummaryVectorIndexWithUI_ACU: (...args: any[]) => m.rebuild(...args) }));
+vi.mock('../../../src/presentation/components/summary-vector-index-ui', () => ({ processSummaryVectorIndexBeforeGenerationWithUI_ACU: (...args: any[]) => m.processBeforeGen(...args), isSummaryVectorRecallFailure_ACU: (r: any) => !!r && r.success !== true && r.skipped !== true, SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU: '召回失败已停止', shouldRebuildSummaryVectorIndexWithUI_ACU: (...args: any[]) => m.shouldRebuild(...args), rebuildCurrentSummaryVectorIndexWithUI_ACU: (...args: any[]) => m.rebuild(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-cache-service', () => ({ preloadSummaryVectorIndexCacheForCurrentChat_ACU: (...args: any[]) => m.preload(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({ restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU: (...args: any[]) => m.restoreFlush(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-realign-state', () => ({ markSummaryVectorIndexDirtyForRealign_ACU: vi.fn() }));
@@ -217,6 +219,12 @@ describe('mainInitialize_ACU CHAT_CHANGED 无活动聊天早退', () => {
     expect(m.loadMessages).not.toHaveBeenCalled();
     expect(m.refresh).not.toHaveBeenCalled();
     expect(m.gate).toEqual({ lastUserMessageId: null, lastUserMessageText: '', lastUserMessageAt: 0, lastUserSendIntentAt: 0, lastGeneration: null, generationSeq: 0, activeGenerations: [] });
+  });
+
+  it('CHAT_CHANGED 同步标记「等新聊天基线」，载入时宿主派发的无配对 ENDED 不误开自动链', async () => {
+    m.markChatChangedForEndedGate.mockClear();
+    void m.chatChanged!('');
+    expect(m.markChatChangedForEndedGate).toHaveBeenCalledOnce();
   });
 
   it('无效聊天名但仍有消息时不误清理运行时', async () => {
@@ -462,6 +470,58 @@ describe('mainInitialize_ACU 剧情 API 重试耗尽中断发送', () => {
     } finally {
       (window as any).SillyTavern = prevSillyTavern;
     }
+  });
+});
+
+describe('mainInitialize_ACU 交火召回失败停发与发送租约（移植上游 2adf068b）', () => {
+  async function runWithStop(setup: () => void) {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(true);
+    m.shouldProcessSummary.mockReturnValue(true);
+    m.api.chat = [{ is_user: true, mes: '问' }];
+    m.currentChatKey = 'chat-a';
+    const stopGeneration = vi.fn();
+    const prevSillyTavern = (window as any).SillyTavern;
+    (window as any).SillyTavern = { stopGeneration };
+    try {
+      setup();
+      await m.afterCommandsHandler!('normal', {}, false);
+      return stopGeneration;
+    } finally {
+      (window as any).SillyTavern = prevSillyTavern;
+      m.shouldProcessSummary.mockReturnValue(false);
+    }
+  }
+
+  it('召回真失败：停止本次生成并提示，不再跑剧情推进', async () => {
+    const stop = await runWithStop(() => m.processBeforeGen.mockResolvedValueOnce({ success: false, reason: 'query_embedding_failed' }));
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(m.orchestrate).not.toHaveBeenCalled();
+  });
+
+  it('召回抛异常同样停发', async () => {
+    const stop = await runWithStop(() => m.processBeforeGen.mockRejectedValueOnce(new Error('boom')));
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(m.orchestrate).not.toHaveBeenCalled();
+  });
+
+  it('召回跳过（关闭 / 无可召回内容）不停发，剧情推进照常', async () => {
+    m.orchestrate.mockResolvedValueOnce({ action: 'skipped' });
+    const stop = await runWithStop(() => m.processBeforeGen.mockResolvedValueOnce({ success: false, skipped: true, reason: 'no_candidates' }));
+    expect(stop).not.toHaveBeenCalled();
+    expect(m.orchestrate).toHaveBeenCalled();
+  });
+
+  it('召回途中用户停止了生成：租约失效，迟到结果不写回、也不再跑剧情推进', async () => {
+    let leaseActiveAfterStop: boolean | undefined;
+    const stop = await runWithStop(() => m.processBeforeGen.mockImplementationOnce(async (options: any) => {
+      m.generationStoppedHandler!();
+      leaseActiveAfterStop = options.isActive();
+      return { success: true, injectedCount: 1 };
+    }));
+    expect(leaseActiveAfterStop).toBe(false);
+    expect(stop).not.toHaveBeenCalled();
+    expect(m.orchestrate).not.toHaveBeenCalled();
   });
 });
 

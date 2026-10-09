@@ -670,42 +670,42 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
   });
 
 
-  it('T5：createEmbeddings 抛异常但有最近固定行时，降级为仅注入固定行，不中断生成', async () => {
+  it('T5（移植上游 2adf068b）：query embedding 抛异常时召回失败，不再降级只注入最近固定行，也不写世界书', async () => {
     h.config.summaryIndexRecentFixedInjectCount = 1;
     h.createEmbeddings.mockRejectedValueOnce(new Error('Embedding 请求失败 403: insufficient balance'));
 
-    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 't5-degrade' });
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 't5-fail' });
 
-    expect(result.success).toBe(true);
-    expect(result.reason).toBe('query_embedding_failed_recent_fixed_only');
-    expect(result.injectedCount).toBe(1);
-    expect(result.keywordCount).toBe(0);
-    // 固定行（rowOrder 3 = recent fixed summary）被注入，向量候选为 0。
-    const content = createdContent_ACU();
-    expect(content).toContain('recent fixed summary');
-    expect(content).not.toContain('old sparse summary');
-    expect(content).not.toContain('dense summary');
-  });
-
-  it('T5：createEmbeddings 抛异常且无最近固定行时，异常穿透（由上层 init.ts try/catch 兜底）', async () => {
-    h.config.summaryIndexRecentFixedInjectCount = 0;
-    h.createEmbeddings.mockRejectedValueOnce(new Error('Embedding 请求失败 500: boom'));
-
-    await expect(processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 't5-rethrow' }))
-      .rejects.toThrow('Embedding 请求失败 500: boom');
+    expect(result).toMatchObject({ success: false, reason: 'query_embedding_failed' });
+    expect(result.skipped).not.toBe(true);
     expect(h.createEntries).not.toHaveBeenCalled();
   });
 
-  it('T5：createEmbeddings 返回空向量但有最近固定行时，同样降级注入固定行', async () => {
+  it('T5：query embedding 返回空向量同样判召回失败（非跳过）', async () => {
     h.config.summaryIndexRecentFixedInjectCount = 1;
     h.createEmbeddings.mockResolvedValueOnce([{ index: 0, embedding: [] }]);
 
     const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 't5-empty-vector' });
 
-    expect(result.success).toBe(true);
-    expect(result.reason).toBe('query_embedding_failed_recent_fixed_only');
-    const content = createdContent_ACU();
-    expect(content).toContain('recent fixed summary');
+    expect(result).toMatchObject({ success: false, reason: 'empty_query_embedding' });
+    expect(result.skipped).not.toBe(true);
+    expect(h.createEntries).not.toHaveBeenCalled();
+  });
+
+  it('召回途中这次发送已失效（停止生成或切走聊天）：迟到的结果不写世界书（移植上游 2adf068b）', async () => {
+    let active = true;
+    h.createEmbeddings.mockImplementationOnce(async () => {
+      active = false;
+      return [{ index: 0, embedding: [1, 0] }];
+    });
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({
+      userInput: 'find secret relic', source: 'lease-test', isActive: () => active,
+    });
+
+    expect(result).toMatchObject({ success: false, skipped: true, reason: 'send_cancelled' });
+    expect(h.createEntries).not.toHaveBeenCalled();
+    expect(h.setEntries).not.toHaveBeenCalled();
   });
 
 });

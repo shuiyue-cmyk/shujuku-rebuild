@@ -17,7 +17,7 @@ function deferred<T>() { let resolve!: (value: T) => void; let reject!: (reason?
 
 vi.mock('../../../src/shared/host-api', () => ({ toastr_API_ACU: { clear: h.clear } }));
 vi.mock('../../../src/shared/constants', () => ({ ACU_TOAST_CATEGORY_ACU: { PLANNING: 'planning', PLAN_OK: 'plan_ok' } }));
-vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn() }));
+vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logWarn_ACU: vi.fn() }));
 vi.mock('../../../src/service/vector/summary-vector-index-runtime', () => ({
   processSummaryVectorIndexBeforeGeneration_ACU: h.process,
 }));
@@ -126,6 +126,17 @@ describe('summary vector index UI recovery', () => {
     expect(h.process.mock.calls[1][0]).toMatchObject({ userInput: '继续', source: 'test', bypassDedupe: true });
     expect(result).toMatchObject({ success: true, injectedCount: 42 });
     expect(h.toast).toHaveBeenCalledWith('success', expect.stringContaining('已重建并完成召回'), '交火召回完成', expect.any(Object));
+  });
+
+  it('自愈重建成功但补跑召回抛错：按召回失败返回（发送层据此停发），不再当作跳过', async () => {
+    h.process
+      .mockResolvedValueOnce({ success: false, skipped: true, reason: 'legacy_vector_scheme_rebuild_required' })
+      .mockRejectedValueOnce(new Error('embedding down'));
+
+    const result = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
+
+    expect(result).toMatchObject({ success: false, reason: 'recall_after_rebuild_failed' });
+    expect(result.skipped).not.toBe(true);
   });
 
   it('自愈重建失败或被跳过时不补跑召回，沿用首轮结果', async () => {

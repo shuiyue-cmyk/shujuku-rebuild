@@ -4,7 +4,7 @@
  * service 层不驱动 UI，只返回结果/状态，presentation 层根据返回值自行决定 UI 操作。
  */
 
-import { currentChatFileIdentifier_ACU, isAutoUpdatingCard_ACU, pendingFinalGenerationGreenlights_ACU, wasStoppedByUser_ACU, _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
+import { currentChatFileIdentifier_ACU, getAutoFillStopEpoch_ACU, isAutoUpdatingCard_ACU, pendingFinalGenerationGreenlights_ACU, wasStoppedByUser_ACU, _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
 import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { callCustomOpenAI_ACU, RetryableAiResponseError_ACU } from '../ai/prompt-builder';
 import { clearManualRefillSheetDataInRange_ACU, cleanupCheckpointVectorIndexManifestsAfterCommit_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU, ensureManualCatchUpAnchorBeforeTarget_ACU, ensureV2BoundaryCheckpointForRetainedBuffer_ACU, establishManualRefillTemplateRoot_ACU, getChatArray_ACU, rollbackManualRefillRangeSnapshotAtomic_ACU, shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU } from '../chat/chat-service';
@@ -98,6 +98,7 @@ import { getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU } from '../flight-mod
 import { getCurrentFlightModeState_ACU, stageFlightModeHiddenRowIds_ACU } from '../flight-mode/flight-mode-state';
 import { isAiFloor_ACU, isDataBearingMessage_ACU } from '../../shared/ai-floor';
 import { stripHtmlCommentMarkersOutsideSqlLiterals_ACU } from './sql-protocol-markers';
+import { captureTableFillTargetGuard_ACU, type TableFillTargetGuard_ACU } from './table-fill-target-guard';
 
 interface ManualRefillSummaryVectorCleanup_ACU {
     sourceTableKey: string;
@@ -516,6 +517,8 @@ interface FillExecutionScope_ACU {
     chatKey: string;
     isolationKey: string;
     promptMessages: any[];
+    /** 与 promptMessages 同一时刻冻结的楼层身份：写回前目标楼层换成另一条回复就放弃结果。 */
+    targetGuard: TableFillTargetGuard_ACU;
     templateScope: TemplateScope_ACU;
     sqlApplyScope?: SqlTableApplyScope_ACU;
 }
@@ -604,7 +607,8 @@ async function captureFillExecutionScope_ACU(
     const templateScope = sqlApplyScope
         ? buildTemplateScopeFromData_ACU(sqlApplyScope.templateData)
         : resolveTemplateScope_ACU(isolationKey);
-    const result = { chatKey, isolationKey, promptMessages, templateScope, sqlApplyScope };
+    const targetGuard = captureTableFillTargetGuard_ACU(liveChat, () => getChatArray_ACU() || []);
+    const result = { chatKey, isolationKey, promptMessages, targetGuard, templateScope, sqlApplyScope };
     performanceSpan.end({ messageCount: liveChat.length });
     return result;
 }
@@ -646,6 +650,15 @@ const SQL_ERROR_MARKER_ACU = '\n\n<!-- SQL_ERROR_FEEDBACK -->\n';
 const UNIFIED_GROUP_ERROR_MARKER_ACU = '\n\n<!-- UNIFIED_GROUP_ERROR_FEEDBACK -->\n';
 const MAX_RETRY_FEEDBACK_LENGTH_ACU = 500;
 const MAX_WARN_ERROR_LENGTH_ACU = 800;
+
+/**
+ * 本轮填表的「是否已被终止」探针。wasStoppedByUser_ACU 会被新一轮填表开跑、宿主新生成复位，
+ * 单看它，被终止的旧轮可能在两批之间「复活」接着跑；终止代次只增不减，开跑后变过就是本轮已被终止。
+ */
+function captureFillStopProbe_ACU(): () => boolean {
+    const epochAtStart = getAutoFillStopEpoch_ACU();
+    return () => wasStoppedByUser_ACU || getAutoFillStopEpoch_ACU() !== epochAtStart;
+}
 
 class ModelOutputRetryError_ACU extends Error {
     constructor(message: string) {
@@ -1399,7 +1412,8 @@ export async function collectGroupFillResponse_ACU(
     } = {}
 ): Promise<GroupFillResponse_ACU> {
     const effectiveAbortController = abortController || new AbortController();
-    const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && wasStoppedByUser_ACU);
+    const isRunStopped = captureFillStopProbe_ACU();
+    const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && isRunStopped());
     const maxRetries = options.maxRetriesOverride || settings_ACU.tableMaxRetries || 3;
     // 准备期诊断（移植上游 ece65f80）：仅自动填表链路开启时留痕，不记业务载荷。
     const diagnoseInput = (diagnosticCode: string, attempt = 0): void => {
@@ -1773,6 +1787,7 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
         isImportMode: boolean;
         chatKey?: string;
         isolationKey?: string;
+        targetGuard?: TableFillTargetGuard_ACU;
         templateScope?: TemplateScope_ACU;
         sqlApplyScope?: SqlTableApplyScope_ACU;
         replaceExistingIncremental?: { targetMessageIndices: number[]; targetSheetKeys: string[] };
@@ -1976,6 +1991,7 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
             reason: 'applyUnifiedGroupFillResponses:runtime_sql',
             chatKey: capturedChatKey,
             isolationKey: capturedIsolationKey,
+            targetGuard: options.targetGuard,
             writeSet: buildWriteSetForSheetKeys_ACU([...allTargetSheetKeySet].filter(sheetKey => sqlScopedKeys([sheetKey]).length > 0), baseSnapshot),
             baseRevision: options.baseRevision,
             workingDataMode: 'none',
@@ -2283,6 +2299,7 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
             reason: 'applyUnifiedGroupFillResponses:snapshot',
             chatKey: capturedChatKey,
             isolationKey: capturedIsolationKey,
+            targetGuard: options.targetGuard,
             writeSet: buildWriteSetForSheetKeys_ACU([...allTargetSheetKeySet], baseSnapshot),
             revisionWriteSet,
             baseRevision: options.baseRevision,
@@ -2568,7 +2585,8 @@ async function processGroupedRuntimeChunkCore_ACU(
             totalBatches: orderedBuckets.length,
         });
     };
-    const isStopped = () => options.abortController?.signal.aborted === true || (options.respectGlobalStop !== false && wasStoppedByUser_ACU);
+    const isRunStopped = captureFillStopProbe_ACU();
+    const isStopped = () => options.abortController?.signal.aborted === true || (options.respectGlobalStop !== false && isRunStopped());
     let committedBucketCount = 0;
     // 与 committedBucketCount 分开计数：伪提交（帧只落进度/事件，modifiedKeys 为空）会推进前者
     // 但不产生任何表数据，UI 与编排器只有后者能证明「真的写了数据」。
@@ -2887,6 +2905,8 @@ async function processGroupedRuntimeChunkCore_ACU(
                 baseRevision,
                 chatKey: executionScope.chatKey,
                 isolationKey: executionScope.isolationKey,
+                // 导入只生成候选、不写聊天楼层，不受目标楼层守卫约束
+                targetGuard: options.isImportMode === true ? undefined : executionScope.targetGuard,
                 templateScope: executionScope.templateScope,
                 sqlApplyScope: executionScope.sqlApplyScope,
                 manualCatchUpRunId: options.manualCatchUpRunId,
@@ -3360,6 +3380,7 @@ export async function executeCardUpdateCore_ACU(
                         reason: 'executeCardUpdateCore',
                         chatKey: executionScope.chatKey,
                         isolationKey: executionScope.isolationKey,
+                        targetGuard: isImportMode ? undefined : executionScope.targetGuard,
                         writeSet,
                         baseRevision,
                         workingDataMode: 'none',
@@ -3557,6 +3578,7 @@ export async function executeCardUpdateCore_ACU(
                     reason: 'executeCardUpdateCore:snapshot',
                     chatKey: executionScope.chatKey,
                     isolationKey: executionScope.isolationKey,
+                    targetGuard: isImportMode ? undefined : executionScope.targetGuard,
                     writeSet,
                     baseRevision,
                     initialData: rawBaseSnapshot as any,
@@ -3829,6 +3851,7 @@ export async function processUpdatesBatch_ACU(
         _set_wasStoppedByUser_ACU(false);
         _set_isAutoUpdatingCard_ACU(true);
     }
+    const isRunStopped = captureFillStopProbe_ACU();
 
     try {
         const isSummaryMode = (mode && (mode.includes('summary') || mode === 'manual_summary')) || false;
@@ -3852,6 +3875,10 @@ export async function processUpdatesBatch_ACU(
         for (let i = 0; i < batches.length; i++) {
             const batchIndices = batches[i];
             const batchNumber = i + 1;
+            // 「终止」作用于本轮当前与后续全部批次：上一批请求已返回、无可中止时点的终止也要拦住下一批
+            if (isRunStopped()) {
+                return { success: false, failedBatch: batchNumber, error: '填表任务已由用户终止。' };
+            }
             const firstMessageIndexOfBatch = batchIndices[0];
             const lastMessageIndexOfBatch = batchIndices[batchIndices.length - 1];
             const finalSaveTargetIndex = lastMessageIndexOfBatch;
@@ -5615,6 +5642,7 @@ export async function orchestrateManualUpdate_ACU(
         }
 
         _set_isAutoUpdatingCard_ACU(true);
+        const isRunStopped = captureFillStopProbe_ACU();
         const maxConcurrentGroups = Math.max(1, Number(settings_ACU.maxConcurrentGroups) || 1);
         const totalChunks = Math.max(1, Math.ceil(groupKeys.length / maxConcurrentGroups));
         const failedGroups: Array<{ key: string; error?: string }> = [];
@@ -5622,6 +5650,7 @@ export async function orchestrateManualUpdate_ACU(
         logDebug_ACU(`[Manual Update] 分组计划：选中 ${targetKeys.length} 张表，生成 ${groupKeys.length} 个组，最大并发组数 ${maxConcurrentGroups}。`);
 
         for (let start = 0; start < groupKeys.length; start += maxConcurrentGroups) {
+            if (isRunStopped()) break;
             const chunkIndex = Math.floor(start / maxConcurrentGroups) + 1;
             const chunkKeys = groupKeys.slice(start, start + maxConcurrentGroups);
             const groupedChunk: GroupedRuntimeUpdateGroup_ACU[] = chunkKeys.map((gKey): GroupedRuntimeUpdateGroup_ACU => {
@@ -5866,7 +5895,7 @@ export async function orchestrateManualUpdate_ACU(
             return await failManualRefillSession(failureError);
         }
 
-        if (wasStoppedByUser_ACU) {
+        if (isRunStopped()) {
             return await failManualRefillSession('手动更新已终止。');
         }
 

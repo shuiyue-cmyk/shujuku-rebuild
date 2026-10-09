@@ -80,6 +80,8 @@ export type PlanningFn = (userMessage: string, options: any) => Promise<string |
 export interface Strategy1Result {
     /** 'no_match' = 不匹配策略1, 'planned' = 规划成功, 'aborted' = 用户中止, 'skipped' = 跳过, 'failed' = API 重试耗尽 */
     action: 'no_match' | 'planned' | 'aborted' | 'skipped' | 'failed';
+    /** 规划失败（非重试耗尽），发送层同样中断。 */
+    blocked?: boolean;
     /** API 重试耗尽标记：发送层据此中断发送，不继续宿主发送 */
     apiRetriesExhausted?: boolean;
     /** 规划后的最终消息 */
@@ -100,6 +102,8 @@ export interface Strategy1Result {
 export interface Strategy2Result {
     /** 'skip' = 不处理, 'planned' = 规划成功, 'aborted' = 用户中止, 'failed' = API 重试耗尽 */
     action: 'skip' | 'planned' | 'aborted' | 'failed';
+    /** 规划失败（非重试耗尽），发送层同样中断。 */
+    blocked?: boolean;
     /** API 重试耗尽标记：发送层据此中断发送，不继续宿主发送 */
     apiRetriesExhausted?: boolean;
     /** 规划后的最终消息 */
@@ -141,9 +145,12 @@ export async function orchestrateAfterCommandsStrategy1_ACU(
             hasExistingUserMessage: true,
         });
 
-        // API 重试耗尽：透出 failed，由发送层中断发送；普通失败继续走跳过/原文路径。
+        // API 重试耗尽或其它规划失败：透出 failed，由发送层中断发送。
         if (finalMessage && typeof finalMessage === 'object' && (finalMessage as any).apiRetriesExhausted === true) {
             return { action: 'failed', apiRetriesExhausted: true, originalMessage: messageToProcess, lastMessageIndex };
+        }
+        if (finalMessage && typeof finalMessage === 'object' && (finalMessage as any).blocked === true) {
+            return { action: 'failed', blocked: true, originalMessage: messageToProcess, lastMessageIndex };
         }
 
         // 3. 处理跳过：S1 已匹配直接返回，不再进 S2（S2 框多为空或同文，重跑一次规划是浪费；
@@ -216,9 +223,12 @@ export async function orchestrateAfterCommandsStrategy2_ACU(
             hasExistingUserMessage: false,
         });
 
-        // API 重试耗尽：透出 failed，由发送层中断发送；普通失败继续走跳过/原文路径。
+        // API 重试耗尽或其它规划失败：透出 failed，由发送层中断发送。
         if (finalMessage && typeof finalMessage === 'object' && (finalMessage as any).apiRetriesExhausted === true) {
             return { action: 'failed', apiRetriesExhausted: true };
+        }
+        if (finalMessage && typeof finalMessage === 'object' && (finalMessage as any).blocked === true) {
+            return { action: 'failed', blocked: true };
         }
 
         // 处理跳过

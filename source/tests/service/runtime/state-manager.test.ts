@@ -49,6 +49,7 @@ import {
   isRecentUserSend_ACU,
   shouldProcessPlotForGeneration_ACU,
   shouldProcessAutoTableUpdateForGenerationEnded_ACU,
+  markChatChangedForEndedGate_ACU,
   getCurrentIsolationKey_ACU,
   settings_ACU,
   _set_settings_ACU,
@@ -93,6 +94,7 @@ beforeEach(() => {
   // 而不是让「无配对 + 签名相同 → 丢弃」的用例静默假绿。
   generationGate_ACU.lastEndedFloorSignature_ACU = null;
   expect(generationGate_ACU.lastEndedFloorSignature_ACU).toBeNull();
+  (generationGate_ACU as any).awaitingChatBaseline_ACU = false;
   // 重置 loopState
   loopState_ACU.isLooping = false;
   loopState_ACU.isRetrying = false;
@@ -297,6 +299,22 @@ describe('shouldProcessAutoTableUpdateForGenerationEnded_ACU 无配对 ENDED 的
     expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(2, 9));
     expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(2, 9))).toBe(false);
     expect(mockLogAutoFillSkip).toHaveBeenCalledTimes(2);
+  });
+
+  it('切换 / 新建聊天后第一条无配对 ENDED 只立新聊天基线、不放行；之后有新 AI 楼才放行（移植上游 54366b0c）', () => {
+    generationGate_ACU.lastEndedFloorSignature_ACU = signature(2, 9);
+    markChatChangedForEndedGate_ACU();
+    // 宿主载入新聊天时收起停止按钮派发的 ended：新聊天的楼层签名与旧聊天不同，但这不是一次生成
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(5, 30))).toBe(false);
+    expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(5, 30));
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(5, 30))).toBe(false);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(6, 32))).toBe(true);
+  });
+
+  it('切换聊天后有配对的真实生成照常放行，并结束「等基线」状态', () => {
+    markChatChangedForEndedGate_ACU();
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(paired() as any, signature(3, 12))).toBe(true);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(4, 14))).toBe(true);
   });
 
   it('无配对 + AI 楼数增加 → 放行，并且放行时登记当次签名', () => {

@@ -71,3 +71,34 @@ npm run drift                                  # 等价 node scripts/upstream-dr
 明确**不跟**（我方形态更强或缺陷载体不存在）：上游 `\bquota\b` 误报方案、`9b397355` 首批落盘前恢复
 （我方回滚更强）、`6d85ef88` 存储模式切换（我方已移除 native 模式）、世界推演/格林推演改名、
 `self-narration`/`procedure turns`/原生工具提交等提示词与功能改造（属功能移植）。
+
+## 2026-10-09 跟进（上游 main `2b4ea865..53fbc208`）
+
+已移植（均按我方口径重写，非逐字搬）：
+
+- `8c7d2fc5` 子集：实时填表 INSERT 列名写短时唯一前缀自动纠正（`sql-mutation-table-rebind.ts`）。
+- `f4d63ac5`：续写 SQL 值多一层 JSON 转义的完整解码（`parseSqlJsonValue_ACU`）＋修正诱导过度转义的提示文案。
+- `02a523c4` 思路：填表目标楼层守卫 `table-fill-target-guard.ts`——只认「是否同一条回复」
+  （swipe_id / gen_started / send_date），**不比正文**（我方正文替换、MVU 追加、续写都原地改正文），
+  也不比对象引用（边界提交会重建消息对象）。整轮取消改用终止代次 `captureFillStopProbe_ACU`，
+  防止 `wasStoppedByUser` 被新一轮/宿主新生成复位后旧轮「复活」。**保留**终止即释放 `isAutoUpdatingCard`
+  的兜底（上游去掉了；去掉后不响应中止的请求会让填表永久锁死）。
+- `54366b0c` 思路：切聊天后第一条无配对 ENDED 只立签名基线（`markChatChangedForEndedGate_ACU`）。
+  未搬上游「只认已配对生成」——会与我方 152 收紧的无配对放行设计冲突。
+- `2adf068b` 子集：召回发送租约（停止生成 / 切聊天后迟到结果不写世界书）；召回失败、剧情推进失败
+  （除 `no_tasks` / `scope_changed`）停止本次发送。query embedding 失败不再降级为只注入最近固定行（用户决定：
+  宁可不发，也不带残缺记忆发）。未搬上游宿主事件等待门（`installHostEventWaitGate_ACU`）与向量表格模式。
+
+明确不跟：
+
+- `733dbea7` 预设级请求超时：上游用户多用公益站，我方用户以合规渠道为主，固定超时易误杀长回复（用户决定）。
+- 世界推演 / 零层（`service/simulation/*`、`service/zero-layer/*`）全部提交：我方无此模块。
+- 桌宠、气泡外观、剧情伪装楼层渲染等界面风格类提交（用户决定）。
+- `560f9067` 续写 / 推演默认提示词整体重写：提示词红线，且主要服务推演模块。
+- `54432b72` / `5db8b51c`：我方本来就是按任务选 API、标签至少闭合一对。
+- `4d64556d` / `11cff173`（Kemini、强制 `tool_choice: none`）：上游自引入又回滚，我方从未有过。
+- `dcdf612f`：油猴 iframe 专属，TT 扩展模式不涉及。
+- `1a5ffdb3` / `1f4a6e0d`：上游重写自己的自动填表信号调度，我方是另一套调度设计。
+
+暂缓：智能续写约 10 笔（`c9afb631`、`5b71997b`、`317dbf7e`、`83ae1ba2`、`f625f1b8`、`ca4612bc`、`e520bb8d`、
+`0d2d46c4`、`37948da1`、`231a5f80`、`205b1a38`、`53fbc208`）——上游仍在高频互相修补，我方续写已分叉，待其稳定后整批评估。

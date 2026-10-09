@@ -98,7 +98,16 @@ export const generationGate_ACU = {
   generationEndMatchQuarantineUntil_ACU: 0,
   // [152 收紧] 上一次门控「放行」时的 AI 楼签名；null = 启动后尚未放行过（此时无配对 ENDED 保守放行）。
   lastEndedFloorSignature_ACU: null as AiFloorSignature_ACU | null,
+  // 切换 / 新建聊天后为 true，直到立起新聊天的签名基线：宿主载入聊天时收起停止按钮也会派发无配对 ENDED，
+  // 此时拿旧聊天的签名比对必然「有新楼」，会对新聊天的最新楼误开自动链（填表 + 正文替换）。
+  awaitingChatBaseline_ACU: false,
 };
+
+/** CHAT_CHANGED 时调用：下一条无配对 ENDED 只用来立新聊天的签名基线，不放行。 */
+export function markChatChangedForEndedGate_ACU(): void {
+  generationGate_ACU.awaitingChatBaseline_ACU = true;
+  generationGate_ACU.lastEndedFloorSignature_ACU = null;
+}
 
 export function markUserSendIntent_ACU() {
   generationGate_ACU.lastUserSendIntentAt = Date.now();
@@ -364,6 +373,12 @@ export function shouldProcessAutoTableUpdateForGenerationEnded_ACU(
     // 生成上下文，此前一律放行去拉自动链（填表 + 正文替换），而 W1/W3 判重拦不住「该楼未处理过 / 首轮在飞」，
     // 于是查看器一开就白烧一轮 AI。现在要求「新 AI 楼证据」：签名与上次放行完全相同即零产出 → 源头丢弃。
     // 签名缺失（启动后首次、调用方未读聊天数组）继续保守放行；配对上下文（g 存在）的判定路径一字不动。
+    if (currentSignature && generationGate_ACU.awaitingChatBaseline_ACU) {
+      generationGate_ACU.awaitingChatBaseline_ACU = false;
+      rememberEndedFloorSignature_ACU(currentSignature);
+      logUnpairedEndedWithoutNewFloor_ACU(currentSignature);
+      return false;
+    }
     if (currentSignature && isSameAiFloorSignature_ACU(generationGate_ACU.lastEndedFloorSignature_ACU, currentSignature)) {
       logUnpairedEndedWithoutNewFloor_ACU(currentSignature);
       return false;
@@ -377,6 +392,8 @@ export function shouldProcessAutoTableUpdateForGenerationEnded_ACU(
   if (g.dryRun) return false;
   if (isQuietLikeGeneration_ACU(g.type, g.params)) return false;
   if (g.params?.automatic_trigger) return false;
+  // 新聊天里的真实生成：其签名即新基线
+  generationGate_ACU.awaitingChatBaseline_ACU = false;
   rememberEndedFloorSignature_ACU(currentSignature);
   return true;
 }

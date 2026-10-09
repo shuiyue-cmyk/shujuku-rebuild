@@ -48,6 +48,7 @@ vi.mock('../../../src/service/table/manual-catch-up-provisional-bridge', () => (
 
 import { runSqliteRuntimeMutationCommit_ACU, runTableUpdateCommit_ACU } from '../../../src/service/table/table-update-commit';
 import { logError_ACU, logWarn_ACU } from '../../../src/shared/utils';
+import { captureTableFillTargetGuard_ACU } from '../../../src/service/table/table-fill-target-guard';
 import {
   clearRuntimeOnlyPendingSheets_ACU,
   markRuntimeOnlyPendingSheets_ACU,
@@ -134,6 +135,33 @@ describe('runTableUpdateCommit_ACU migration gate', () => {
     expect(apply).not.toHaveBeenCalled();
     expect(mocks.persist).not.toHaveBeenCalled();
     expect(mocks.setCurrentData).not.toHaveBeenCalled();
+  });
+
+  it('AI 等待期间目标楼层换成了另一条回复（滑动 / 重新生成）：拒绝写回，不重试', async () => {
+    const chat: any[] = [
+      { is_user: true, mes: '你好' },
+      { is_user: false, mes: '第一版', swipe_id: 0, send_date: 'd1' },
+    ];
+    const targetGuard = captureTableFillTargetGuard_ACU(chat, () => chat);
+    mocks.migration.mockImplementation(async () => {
+      chat[1].swipe_id = 1;
+      chat[1].mes = '第二版';
+      return { success: true, migrated: false };
+    });
+    mocks.transaction.mockImplementation(async (_options: any, task: any) => task({ runCommit: async (commitTask: any) => commitTask() }, null));
+
+    const result = await runTableUpdateCommit_ACU({
+      ...options('test_target_swiped'),
+      targetMessageIndex: 1,
+      targetGuard,
+    }, async () => ({ success: true, tableData: { mate: { type: 'acu', version: 1 } } as any }));
+
+    expect(result).toMatchObject({
+      success: false,
+      errorCategory: 'precondition',
+      error: expect.stringContaining('目标楼层已换成另一条回复'),
+    });
+    expect(mocks.persist).not.toHaveBeenCalled();
   });
 
   it('RuntimeRevision 错误不再分类为 conflict，未知提交错误统一归为 infrastructure', async () => {
