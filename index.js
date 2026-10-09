@@ -187940,59 +187940,40 @@ function hasManagedClientKeys_ACU(currentHeaders) {
 }
 
 // presentation-v2/composables/saved-api-endpoints.ts — API 预设「已保存的端点」
-// 从用户已保存的 API 预设里收集用过的端点（基础 URL + 接口协议），新建预设时一键复用。
-// 只带端点与协议（同一地址按模型分协议的服务商，协议要跟着端点走才能用），密钥、模型等仍由用户自己填。
-/** 「手填」选项值：不改端点与协议。 */
+// 从用户已保存的 API 预设里收集用过的端点（基础 URL），新建预设时一键复用。
+// 只带端点：同一地址的接口协议可能按模型不同（如 OpenCode），协议、密钥、模型都由用户自己选填。
+/** 「手填」选项值：不改端点。 */
 const SAVED_API_ENDPOINT_MANUAL_ACU = '';
-const FORMAT_LABELS_ACU = {
-    openai_compat: '兼容 OpenAI',
-    openai_responses: 'OpenAI Responses',
-    claude_messages: 'Claude Messages',
-    gemini_interactions: 'Gemini Interactions',
-    gemini_generate_content: 'Gemini generateContent',
-};
 const MAX_LABEL_PRESET_NAMES_ACU = 2;
 function normalizeEndpoint_ACU(url) {
     return String(url || '').trim().replace(/\/+$/, '').toLowerCase();
 }
-function normalizeFormat_ACU(format) {
-    return String(format || '').trim() || 'openai_compat';
-}
-function endpointId_ACU(url, format) {
-    return `${normalizeEndpoint_ACU(url)}|${normalizeFormat_ACU(format)}`;
-}
-/** 按「端点 + 协议」去重，保持预设顺序；标签带协议与来源预设名。 */
+/** 按端点去重（忽略大小写与末尾斜杠），保持预设顺序；标签带来源预设名。 */
 function collectSavedApiEndpoints_ACU(presets) {
     const groups = new Map();
     for (const preset of presets || []) {
         const url = String(preset?.apiConfig?.url || '').trim();
         if (!url)
             continue;
-        const format = normalizeFormat_ACU(preset.apiConfig?.customApiFormat);
-        const id = endpointId_ACU(url, format);
+        const id = normalizeEndpoint_ACU(url);
         const group = groups.get(id);
         if (group)
             group.names.push(preset.name);
         else
-            groups.set(id, { url, format, names: [preset.name] });
+            groups.set(id, { url, names: [preset.name] });
     }
     return [...groups.entries()].map(([id, group]) => {
         const shown = group.names.slice(0, MAX_LABEL_PRESET_NAMES_ACU).join('、');
         const more = group.names.length > MAX_LABEL_PRESET_NAMES_ACU ? ` 等 ${group.names.length} 个` : '';
         const address = group.url.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-        return {
-            id,
-            url: group.url,
-            format: group.format,
-            label: `${address} · ${FORMAT_LABELS_ACU[group.format] || group.format}（来自：${shown}${more}）`,
-        };
+        return { id, url: group.url, label: `${address}（来自：${shown}${more}）` };
     });
 }
-/** 当前端点 + 协议对应的已保存端点；没有对应（新地址）时返回 null。 */
-function matchSavedApiEndpoint_ACU(endpoints, url, format) {
-    if (!normalizeEndpoint_ACU(url))
+/** 当前端点对应的已保存端点；没有对应（新地址）时返回 null。 */
+function matchSavedApiEndpoint_ACU(endpoints, url) {
+    const id = normalizeEndpoint_ACU(url);
+    if (!id)
         return null;
-    const id = endpointId_ACU(url, format);
     return endpoints.find(endpoint => endpoint.id === id) || null;
 }
 
@@ -188342,15 +188323,13 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
             { value: SAVED_API_ENDPOINT_MANUAL_ACU, label: '手填' },
             ...savedEndpoints.value.map(e => ({ value: e.id, label: e.label })),
         ]);
-        // 按当前端点 + 协议回显；手改过端点或协议即显示「手填」
-        const matchedSavedEndpointId = computed(() => matchSavedApiEndpoint_ACU(savedEndpoints.value, draft.url, draft.customApiFormat)?.id ?? SAVED_API_ENDPOINT_MANUAL_ACU);
-        /** 只填端点与接口协议；选「手填」不动已有内容。 */
+        // 按当前端点回显；手改过端点即显示「手填」
+        const matchedSavedEndpointId = computed(() => matchSavedApiEndpoint_ACU(savedEndpoints.value, draft.url)?.id ?? SAVED_API_ENDPOINT_MANUAL_ACU);
+        /** 只填端点（协议按模型不同，留给用户选）；选「手填」不动已有内容。 */
         function applySavedEndpoint(id) {
             const endpoint = savedEndpoints.value.find(e => e.id === id);
-            if (!endpoint)
-                return;
-            draft.url = endpoint.url;
-            draft.customApiFormat = endpoint.format;
+            if (endpoint)
+                draft.url = endpoint.url;
         }
         function setPromptPostProcessing(value) {
             draft.promptPostProcessing = value;
@@ -188481,8 +188460,8 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-api[data-v-53d19630],\r\n.ub-api__form[data-v-53d19630] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-53d19630] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-53d19630] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-53d19630] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-53d19630] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-53d19630] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__danger-hint[data-v-53d19630] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-53d19630] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-53d19630]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-53d19630] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-53d19630] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-53d19630] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-53d19630] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-53d19630] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-53d19630");
-var ApiPresetEditor_vue_vue_type_style_index_0_scoped_53d19630_lang = null;
+injectSfcStyle("\n.ub-api[data-v-d0c50651],\r\n.ub-api__form[data-v-d0c50651] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-d0c50651] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-d0c50651] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-d0c50651] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-d0c50651] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-d0c50651] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__danger-hint[data-v-d0c50651] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-d0c50651] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-d0c50651]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-d0c50651] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-d0c50651] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-d0c50651] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-d0c50651] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-d0c50651] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-d0c50651");
+var ApiPresetEditor_vue_vue_type_style_index_0_scoped_d0c50651_lang = null;
 
 const _hoisted_1$r = { class: "ub-api" };
 const _hoisted_2$p = { class: "ub-api__picker" };
@@ -188582,7 +188561,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					$setup.savedEndpoints.length ? (openBlock(), createBlock($setup["UbRow"], {
 						key: 0,
 						label: "已保存的端点",
-						hint: "复用已保存预设里用过的端点，连同接口协议一起填好；API 密钥和模型名仍需自己填。用新地址时选「手填」。",
+						hint: "复用已保存预设里用过的端点，只填端点；接口协议、API 密钥和模型名按所用模型自己选填。用新地址时选「手填」。",
 						stack: ""
 					}, {
 						default: withCtx(() => [createVNode($setup["UbSelect"], {
@@ -188947,7 +188926,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION */
 	)) : createCommentVNode("v-if", true)]);
 }
-var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-53d19630"]]);
+var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-d0c50651"]]);
 
 var _sfc_main$u = /*@__PURE__*/ defineComponent({
     __name: 'ApiPage',

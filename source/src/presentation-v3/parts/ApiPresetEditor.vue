@@ -42,7 +42,7 @@
         <UbRow
           v-if="savedEndpoints.length"
           label="已保存的端点"
-          hint="复用已保存预设里用过的端点，连同接口协议一起填好；API 密钥和模型名仍需自己填。用新地址时选「手填」。"
+          hint="复用已保存预设里用过的端点，只填端点；接口协议、API 密钥和模型名按所用模型自己选填。用新地址时选「手填」。"
           stack
         >
           <UbSelect
@@ -287,17 +287,15 @@ const savedEndpointOptions = computed<UbSelectOption[]>(() => [
   { value: SAVED_API_ENDPOINT_MANUAL_ACU, label: '手填' },
   ...savedEndpoints.value.map(e => ({ value: e.id, label: e.label })),
 ]);
-// 按当前端点 + 协议回显；手改过端点或协议即显示「手填」
+// 按当前端点回显；手改过端点即显示「手填」
 const matchedSavedEndpointId = computed(
-  () => matchSavedApiEndpoint_ACU(savedEndpoints.value, draft.url, draft.customApiFormat)?.id ?? SAVED_API_ENDPOINT_MANUAL_ACU,
+  () => matchSavedApiEndpoint_ACU(savedEndpoints.value, draft.url)?.id ?? SAVED_API_ENDPOINT_MANUAL_ACU,
 );
 
-/** 只填端点与接口协议；选「手填」不动已有内容。 */
+/** 只填端点（协议按模型不同，留给用户选）；选「手填」不动已有内容。 */
 function applySavedEndpoint(id: string): void {
   const endpoint = savedEndpoints.value.find(e => e.id === id);
-  if (!endpoint) return;
-  draft.url = endpoint.url;
-  draft.customApiFormat = endpoint.format;
+  if (endpoint) draft.url = endpoint.url;
 }
 
 function setPromptPostProcessing(value: string): void {
