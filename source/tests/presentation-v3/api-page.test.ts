@@ -88,6 +88,25 @@ describe('API 页', () => {
     expect(settings.defaultApiPresetName).toBe('beta');
   });
 
+  it('点「+」新建后再选回已保存的预设（含当前这个），下面的表单载入该预设内容', { timeout: 60_000 }, async () => {
+    const { page, input } = await mountApiPage();
+    page().querySelector<HTMLButtonElement>('button[title="新建预设"]')!.click();
+    await flush();
+    expect(input('预设名称').value).toBe('');
+    // 新建状态下选择器不再显示旧预设名，免得看上去「已选中」却是空表单
+    expect(page().querySelector('.ub-picker__trigger')!.textContent).not.toContain('beta');
+
+    const trigger = page().querySelector<HTMLButtonElement>('.ub-picker__trigger')!;
+    trigger.click();
+    await flush();
+    byText<HTMLElement>('.ub-picker-panel__item', 'beta')!.click();
+    await flush();
+
+    expect(input('预设名称').value).toBe('beta');
+    expect(input('端点（基础 URL）').value).toBe('https://beta.test');
+    expect(page().textContent).not.toContain('正在新建预设');
+  });
+
   it('没有预设时给出提示；新建并保存第一个预设后自动选中', { timeout: 60_000 }, async () => {
     const empty = createSettings();
     empty.apiPresets = [];

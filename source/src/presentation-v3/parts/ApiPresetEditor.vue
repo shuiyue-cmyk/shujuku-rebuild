@@ -10,10 +10,10 @@
         <UbPresetPicker
           title="选择 API 预设"
           :items="presetItems"
-          :model-value="store.activePresetName"
+          :model-value="formMode === 'create' ? '' : store.activePresetName"
           :default-name="store.defaultApiPresetName"
           :disabled="!store.hasPresets"
-          placeholder="未选择 API 预设"
+          :placeholder="formMode === 'create' ? '新建中（未保存）' : '未选择 API 预设'"
           @update:model-value="selectPreset"
           @set-default="store.setDefaultPreset($event)"
         />
@@ -312,6 +312,8 @@ async function selectPreset(name: string): Promise<void> {
     if (!confirmed) return;
   }
   store.setActivePresetForCurrentChat(name);
+  // 选的若正是当前预设（如点「+」新建后又选回它），activePresetName 不变、watch 不触发，这里显式载入表单
+  syncActiveDraft();
 }
 
 async function deletePreset(name: string): Promise<void> {

@@ -92725,7 +92725,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261009-09"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261009-10"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92744,7 +92744,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261009-09";
+        const stamp = "20261009-10";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -152481,7 +152481,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261009-09";
+        const stamp = "20261009-10";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -187981,6 +187981,8 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
                     return;
             }
             store.setActivePresetForCurrentChat(name);
+            // 选的若正是当前预设（如点「+」新建后又选回它），activePresetName 不变、watch 不触发，这里显式载入表单
+            syncActiveDraft();
         }
         async function deletePreset(name) {
             const confirmed = await dialogStore.confirm({
@@ -188060,8 +188062,8 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-api[data-v-b186d3f1],\r\n.ub-api__form[data-v-b186d3f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-b186d3f1] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-b186d3f1] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-b186d3f1] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-b186d3f1] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-b186d3f1] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__danger-hint[data-v-b186d3f1] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-b186d3f1] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-b186d3f1]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-b186d3f1] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-b186d3f1] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-b186d3f1] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-b186d3f1] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-b186d3f1] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-b186d3f1");
-var ApiPresetEditor_vue_vue_type_style_index_0_scoped_b186d3f1_lang = null;
+injectSfcStyle("\n.ub-api[data-v-fce3ed8d],\r\n.ub-api__form[data-v-fce3ed8d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-fce3ed8d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-fce3ed8d] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-fce3ed8d] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-fce3ed8d] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-fce3ed8d] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__danger-hint[data-v-fce3ed8d] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-fce3ed8d] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-fce3ed8d]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-fce3ed8d] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-fce3ed8d] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-fce3ed8d] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-fce3ed8d] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-fce3ed8d] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-fce3ed8d");
+var ApiPresetEditor_vue_vue_type_style_index_0_scoped_fce3ed8d_lang = null;
 
 const _hoisted_1$r = { class: "ub-api" };
 const _hoisted_2$p = { class: "ub-api__picker" };
@@ -188089,17 +188091,18 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 			createVNode($setup["UbPresetPicker"], {
 				title: "选择 API 预设",
 				items: $setup.presetItems,
-				"model-value": $setup.store.activePresetName,
+				"model-value": $setup.formMode === "create" ? "" : $setup.store.activePresetName,
 				"default-name": $setup.store.defaultApiPresetName,
 				disabled: !$setup.store.hasPresets,
-				placeholder: "未选择 API 预设",
+				placeholder: $setup.formMode === "create" ? "新建中（未保存）" : "未选择 API 预设",
 				"onUpdate:modelValue": $setup.selectPreset,
 				onSetDefault: _cache[0] || (_cache[0] = ($event) => $setup.store.setDefaultPreset($event))
 			}, null, 8, [
 				"items",
 				"model-value",
 				"default-name",
-				"disabled"
+				"disabled",
+				"placeholder"
 			]),
 			createVNode($setup["UbIconButton"], {
 				icon: "fa-solid fa-plus",
@@ -188511,7 +188514,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION */
 	)) : createCommentVNode("v-if", true)]);
 }
-var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-b186d3f1"]]);
+var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-fce3ed8d"]]);
 
 var _sfc_main$u = /*@__PURE__*/ defineComponent({
     __name: 'ApiPage',
