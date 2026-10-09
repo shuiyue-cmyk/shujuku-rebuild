@@ -92629,7 +92629,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261009-00"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261009-01"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92648,7 +92648,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261009-00";
+        const stamp = "20261009-01";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -118989,6 +118989,20 @@ function showOptimizationResultDialog_ACU(messageIndex, result) {
     });
 }
 /**
+ * 无感模式 + 显示优化对比的完成提示：内容已写回，不弹模态框打扰，提示里给「查看对比」入口，
+ * 点开即只读结果对话框。用户主动开了对比，所以不受静默提示框拦截。
+ */
+function showOptimizationResultToast_ACU(messageIndex, result, text) {
+    showHostSurfaceToast_ACU({
+        kind: 'success',
+        text,
+        action: {
+            label: '查看对比',
+            onClick: () => showOptimizationResultDialog_ACU(messageIndex, result),
+        },
+    });
+}
+/**
  * HTML转义
  */
 // === 以下为 presentation 层独有的 UI 函数（DOM 操作/渲染）===
@@ -119315,17 +119329,23 @@ async function executeContentOptimization_ACU(messageIndex) {
                 return false;
             }
             recordAutoProcessedAfterWriteBack_ACU(messageIndex, finalOptimizedContent);
+            const doneText = `正文优化完成，共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`;
+            const resultForReview = {
+                optimizations: totalOptimizations,
+                summary: `共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`,
+                optimizedContent: finalOptimizedContent
+            };
             if (config.showDiff && !config.seamlessMode) {
-                // 自动链已写回：用只读结果对话框展示对比（原文/修改方案/优化），不用 toast。
-                // 对话框是 DOM 覆盖层，不受静默提示框拦截；无感模式下保持无打扰，不弹框。
-                showOptimizationResultDialog_ACU(messageIndex, {
-                    optimizations: totalOptimizations,
-                    summary: `共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`,
-                    optimizedContent: finalOptimizedContent
-                });
+                // 自动链已写回：用只读结果对话框展示对比（原文/修改方案/优化）。
+                // 对话框是 DOM 覆盖层，不受静默提示框拦截。
+                showOptimizationResultDialog_ACU(messageIndex, resultForReview);
+            }
+            else if (config.showDiff) {
+                // 无感模式不弹模态框打扰，完成提示带「查看对比」入口；用户开了对比，静默时也照常显示。
+                showOptimizationResultToast_ACU(messageIndex, resultForReview, doneText);
             }
             else {
-                showToastr_ACU('success', `正文优化完成，共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`);
+                showToastr_ACU('success', doneText);
             }
             return true;
         }
@@ -152050,7 +152070,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261009-00";
+        const stamp = "20261009-01";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -192817,7 +192837,7 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
         const modeToggles = [
             { key: 'seamlessMode', label: '无感替换模式', hint: '尽量把优化结果直接写回聊天；关闭则需要手动确认。' },
             { key: 'autoApply', label: '自动应用替换结果' },
-            { key: 'showDiff', label: '显示优化对比', hint: '排查误替换时建议关闭无感与自动应用，保留对比。' },
+            { key: 'showDiff', label: '显示优化对比', hint: '无感模式下完成提示里可点「查看对比」，否则直接弹出对比；开启静默提示框时也会显示。' },
             { key: 'parallelMode', label: '填表与正文替换并行执行' },
             { key: 'ignoreMvuUpdate', label: '忽略MVU更新' },
         ];
@@ -192946,8 +192966,8 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-cr__preset[data-v-9889d9b1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-9889d9b1] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-9889d9b1] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-9889d9b1] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-9889d9b1] {\r\n  display: flex;\r\n  justify-content: flex-end;\n}\n.ub-cr__output[data-v-9889d9b1] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-9889d9b1] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-9889d9b1] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-9889d9b1] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-9889d9b1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-9889d9b1] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-9889d9b1] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-9889d9b1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-9889d9b1] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-9889d9b1");
-var ContentReplacePage_vue_vue_type_style_index_0_scoped_9889d9b1_lang = null;
+injectSfcStyle("\n.ub-cr__preset[data-v-7f542341] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-7f542341] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-7f542341] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-7f542341] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-7f542341] {\r\n  display: flex;\r\n  justify-content: flex-end;\n}\n.ub-cr__output[data-v-7f542341] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-7f542341] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-7f542341] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-7f542341] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-7f542341] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-7f542341] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-7f542341] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-7f542341] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-7f542341] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-7f542341");
+var ContentReplacePage_vue_vue_type_style_index_0_scoped_7f542341_lang = null;
 
 const _hoisted_1$j = { class: "ub-cr__preset" };
 const _hoisted_2$i = { class: "ub-cr__meta" };
@@ -193438,7 +193458,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-9889d9b1"]]);
+var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-7f542341"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;

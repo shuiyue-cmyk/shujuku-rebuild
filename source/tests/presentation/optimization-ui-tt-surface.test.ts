@@ -78,6 +78,7 @@ vi.mock('../../src/presentation/dom-utils', () => ({
 
 vi.mock('../../src/presentation/theme/toast', () => ({
   showToastr_ACU: vi.fn(() => null),
+  showHostSurfaceToast_ACU: vi.fn(),
 }));
 
 vi.mock('../../src/shared/html-helpers', () => ({
@@ -113,7 +114,9 @@ import {
 import {
   showOptimizationDiffDialogForLoop_ACU,
   showOptimizationResultDialog_ACU,
+  showOptimizationResultToast_ACU,
 } from '../../src/presentation/components/optimization-ui/optimization-ui-diff';
+import { showHostSurfaceToast_ACU } from '../../src/presentation/theme/toast';
 import { _set_jQuery_API_ACU } from '../../src/shared/host-api';
 
 function makeResult(currentLoop: number, totalLoops: number) {
@@ -217,6 +220,24 @@ describe('optimization-ui TT surface 打标', () => {
 
     document.getElementById('acu-opt-backdrop')!.click();
     expect(document.querySelector('.acu-optimization-dialog')).toBeNull();
+  });
+
+  it('无感模式完成提示：走插件提示框（不受静默拦截），点「查看对比」打开只读结果对话框', async () => {
+    vi.mocked(showHostSurfaceToast_ACU).mockClear();
+    showOptimizationResultToast_ACU(3, makeResult(1, 1), '正文优化完成，共 1 轮优化，累计 1 处改进');
+
+    expect(showHostSurfaceToast_ACU).toHaveBeenCalledTimes(1);
+    const payload = vi.mocked(showHostSurfaceToast_ACU).mock.calls[0][0];
+    expect(payload.kind).toBe('success');
+    expect(payload.text).toContain('正文优化完成');
+    expect(payload.action?.label).toBe('查看对比');
+    expect(document.querySelector('.acu-optimization-dialog')).toBeNull();
+
+    await payload.action!.onClick();
+    const dialog = document.querySelector<HTMLElement>('.acu-optimization-dialog');
+    expect(dialog).not.toBeNull();
+    expect(dialog!.textContent).toContain('正文替换完成');
+    expect(dialog!.querySelectorAll('.acu-hd-item').length).toBe(1);
   });
 
   it('优化遮罩为主题化卡片：强调色转圈、次级取消按钮，无旧配色', () => {

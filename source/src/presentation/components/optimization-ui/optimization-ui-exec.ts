@@ -71,7 +71,8 @@ import {
 // 循环 import — 运行时安全
 import {
   showOptimizationDiffDialogForLoop_ACU,
-  showOptimizationResultDialog_ACU
+  showOptimizationResultDialog_ACU,
+  showOptimizationResultToast_ACU
 } from './optimization-ui-diff';
 
   // replaceChatMessage_ACU 和 getOriginalContent_ACU 已搬迁到 service/chat/chat-service.ts
@@ -432,16 +433,21 @@ import {
         }
         recordAutoProcessedAfterWriteBack_ACU(messageIndex, finalOptimizedContent);
         
+        const doneText = `正文优化完成，共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`;
+        const resultForReview = {
+          optimizations: totalOptimizations,
+          summary: `共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`,
+          optimizedContent: finalOptimizedContent
+        };
         if (config.showDiff && !config.seamlessMode) {
-          // 自动链已写回：用只读结果对话框展示对比（原文/修改方案/优化），不用 toast。
-          // 对话框是 DOM 覆盖层，不受静默提示框拦截；无感模式下保持无打扰，不弹框。
-          showOptimizationResultDialog_ACU(messageIndex, {
-            optimizations: totalOptimizations,
-            summary: `共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`,
-            optimizedContent: finalOptimizedContent
-          });
+          // 自动链已写回：用只读结果对话框展示对比（原文/修改方案/优化）。
+          // 对话框是 DOM 覆盖层，不受静默提示框拦截。
+          showOptimizationResultDialog_ACU(messageIndex, resultForReview);
+        } else if (config.showDiff) {
+          // 无感模式不弹模态框打扰，完成提示带「查看对比」入口；用户开了对比，静默时也照常显示。
+          showOptimizationResultToast_ACU(messageIndex, resultForReview, doneText);
         } else {
-          showToastr_ACU('success', `正文优化完成，共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`);
+          showToastr_ACU('success', doneText);
         }
         
         return true;

@@ -220,7 +220,7 @@ const sections = [
 const modeToggles: Array<{ key: ModeKey; label: string; hint?: string }> = [
   { key: 'seamlessMode', label: '无感替换模式', hint: '尽量把优化结果直接写回聊天；关闭则需要手动确认。' },
   { key: 'autoApply', label: '自动应用替换结果' },
-  { key: 'showDiff', label: '显示优化对比', hint: '排查误替换时建议关闭无感与自动应用，保留对比。' },
+  { key: 'showDiff', label: '显示优化对比', hint: '无感模式下完成提示里可点「查看对比」，否则直接弹出对比；开启静默提示框时也会显示。' },
   { key: 'parallelMode', label: '填表与正文替换并行执行' },
   { key: 'ignoreMvuUpdate', label: '忽略MVU更新' },
 ];

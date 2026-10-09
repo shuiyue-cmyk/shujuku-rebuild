@@ -52,6 +52,7 @@ const h = vi.hoisted(() => {
     logError: vi.fn(),
     toast: vi.fn(),
     showResultDialog: vi.fn(),
+    showResultToast: vi.fn(),
     showDiffDialogForLoop: vi.fn(),
     triggerAutoUpdate: vi.fn(async () => undefined),
   };
@@ -113,6 +114,7 @@ vi.mock('../../src/presentation/components/optimization-ui/optimization-ui-overl
 vi.mock('../../src/presentation/components/optimization-ui/optimization-ui-diff', () => ({
   showOptimizationDiffDialogForLoop_ACU: h.showDiffDialogForLoop,
   showOptimizationResultDialog_ACU: h.showResultDialog,
+  showOptimizationResultToast_ACU: h.showResultToast,
 }));
 
 import { settings_ACU } from '../../src/service/runtime/state-manager';
@@ -153,6 +155,7 @@ beforeEach(() => {
   h.logDebug.mockClear();
   h.toast.mockClear();
   h.showResultDialog.mockClear();
+  h.showResultToast.mockClear();
   h.showDiffDialogForLoop.mockClear();
   h.triggerAutoUpdate.mockClear();
   useAutoApplySettings();
@@ -350,5 +353,46 @@ describe('自动正文替换入口判重（executeContentOptimization_ACU）', (
       optimizations: [{ type: 'replace', original: '夜色漫过屋檐', optimized: '夜色漫过窗台', plan: '改写' }],
     }));
     expect(h.toast).not.toHaveBeenCalledWith('success', expect.stringContaining('正文优化完成'));
+    expect(h.showResultToast).not.toHaveBeenCalled();
+  });
+
+  it('无感模式 + 显示优化对比：完成提示带「查看对比」入口（不受静默拦截），不直接弹对话框', async () => {
+    (settings_ACU as any).contentOptimizationSettings.seamlessMode = true;
+    (settings_ACU as any).contentOptimizationSettings.showDiff = true;
+    h.perform.mockImplementation(async () => ({
+      success: true,
+      optimizations: [{ type: 'replace', original: '夜色漫过屋檐', optimized: '夜色漫过窗台', plan: '改写' }],
+      summary: '一处改进',
+      optimizedContent: '夜色漫过窗台，她收起最后一封信，站在阶前听雨。',
+    }));
+
+    expect(await executeContentOptimization_ACU(1)).toBe(true);
+    expect(h.replace).toHaveBeenCalledTimes(1);
+    expect(h.showResultDialog).not.toHaveBeenCalled();
+    expect(h.showResultToast).toHaveBeenCalledTimes(1);
+    expect(h.showResultToast).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        optimizations: [{ type: 'replace', original: '夜色漫过屋檐', optimized: '夜色漫过窗台', plan: '改写' }],
+      }),
+      expect.stringContaining('正文优化完成'),
+    );
+    expect(h.toast).not.toHaveBeenCalledWith('success', expect.stringContaining('正文优化完成'));
+  });
+
+  it('关闭显示优化对比：只发普通完成提示（静默时可被拦截），不提供对比入口', async () => {
+    (settings_ACU as any).contentOptimizationSettings.seamlessMode = true;
+    (settings_ACU as any).contentOptimizationSettings.showDiff = false;
+    h.perform.mockImplementation(async () => ({
+      success: true,
+      optimizations: [{ type: 'replace', original: '夜色漫过屋檐', optimized: '夜色漫过窗台', plan: '改写' }],
+      summary: '一处改进',
+      optimizedContent: '夜色漫过窗台，她收起最后一封信，站在阶前听雨。',
+    }));
+
+    expect(await executeContentOptimization_ACU(1)).toBe(true);
+    expect(h.showResultToast).not.toHaveBeenCalled();
+    expect(h.showResultDialog).not.toHaveBeenCalled();
+    expect(h.toast).toHaveBeenCalledWith('success', expect.stringContaining('正文优化完成'));
   });
 });

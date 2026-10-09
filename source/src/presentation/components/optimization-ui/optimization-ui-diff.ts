@@ -9,6 +9,7 @@ import {
   _set_currentPlotTaskEditorId_ACU
 } from '../../../service/plot/plot-state';
 import {
+  showHostSurfaceToast_ACU,
   showToastr_ACU
 } from '../../theme/toast';
 import {
@@ -165,6 +166,21 @@ import {
       jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
       logDebug_ACU(`[正文优化] 结果对话框点击重新优化，messageIndex=${messageIndex}`);
       await reoptimizeMessage_ACU(messageIndex);
+    });
+  }
+
+  /**
+   * 无感模式 + 显示优化对比的完成提示：内容已写回，不弹模态框打扰，提示里给「查看对比」入口，
+   * 点开即只读结果对话框。用户主动开了对比，所以不受静默提示框拦截。
+   */
+  export function showOptimizationResultToast_ACU(messageIndex: number, result: any, text: string) {
+    showHostSurfaceToast_ACU({
+      kind: 'success',
+      text,
+      action: {
+        label: '查看对比',
+        onClick: () => showOptimizationResultDialog_ACU(messageIndex, result),
+      },
     });
   }
 
