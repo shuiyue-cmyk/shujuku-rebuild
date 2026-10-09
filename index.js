@@ -92761,7 +92761,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261009-16"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261009-17"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92780,7 +92780,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261009-16";
+        const stamp = "20261009-17";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -152828,7 +152828,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261009-16";
+        const stamp = "20261009-17";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -187939,50 +187939,61 @@ function hasManagedClientKeys_ACU(currentHeaders) {
         .some((l) => l.trim() && MANAGED_KEYS_ACU.has(headerKeyOf(l)));
 }
 
-const API_PROVIDER_ENDPOINTS_ACU = [
-    { id: 'ant-ling', label: 'Ant Ling', url: 'https://api.ant-ling.com/v1', format: 'openai_compat' },
-    { id: 'anthropic', label: 'Anthropic', url: 'https://api.anthropic.com/v1', format: 'claude_messages' },
-    { id: 'baseten', label: 'Baseten', url: 'https://inference.baseten.co/v1', format: 'openai_compat' },
-    { id: 'cerebras', label: 'Cerebras', url: 'https://api.cerebras.ai/v1', format: 'openai_compat' },
-    { id: 'deepseek', label: 'DeepSeek', url: 'https://api.deepseek.com', format: 'openai_compat' },
-    { id: 'fireworks', label: 'Fireworks', url: 'https://api.fireworks.ai/inference/v1', format: 'openai_compat' },
-    { id: 'google', label: 'Google Gemini', url: 'https://generativelanguage.googleapis.com/v1beta', format: 'gemini_generate_content' },
-    { id: 'groq', label: 'Groq', url: 'https://api.groq.com/openai/v1', format: 'openai_compat' },
-    { id: 'huggingface', label: 'Hugging Face', url: 'https://router.huggingface.co/v1', format: 'openai_compat' },
-    { id: 'kimi-coding', label: 'Kimi For Coding', url: 'https://api.kimi.com/coding/v1', format: 'claude_messages' },
-    { id: 'minimax', label: 'MiniMax', url: 'https://api.minimax.io/anthropic/v1', format: 'claude_messages' },
-    { id: 'minimax-cn', label: 'MiniMax（中国）', url: 'https://api.minimaxi.com/anthropic/v1', format: 'claude_messages' },
-    { id: 'mistral', label: 'Mistral', url: 'https://api.mistral.ai/v1', format: 'openai_compat' },
-    { id: 'moonshotai', label: 'Moonshot AI', url: 'https://api.moonshot.ai/v1', format: 'openai_compat' },
-    { id: 'moonshotai-cn', label: 'Moonshot AI（中国）', url: 'https://api.moonshot.cn/v1', format: 'openai_compat' },
-    { id: 'nvidia', label: 'NVIDIA', url: 'https://integrate.api.nvidia.com/v1', format: 'openai_compat' },
-    { id: 'openai', label: 'OpenAI', url: 'https://api.openai.com/v1', format: 'openai_compat' },
-    { id: 'opencode', label: 'OpenCode Zen', url: 'https://opencode.ai/zen/v1', format: 'openai_compat' },
-    { id: 'opencode-go', label: 'OpenCode Go', url: 'https://opencode.ai/zen/go/v1', format: 'openai_compat' },
-    { id: 'openrouter', label: 'OpenRouter', url: 'https://openrouter.ai/api/v1', format: 'openai_compat' },
-    { id: 'qwen-token-plan', label: 'Qwen Token Plan（国际 / 个人版）', url: 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1', format: 'openai_compat' },
-    { id: 'qwen-token-plan-cn', label: 'Qwen Token Plan（中国）', url: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', format: 'openai_compat' },
-    { id: 'together', label: 'Together', url: 'https://api.together.ai/v1', format: 'openai_compat' },
-    { id: 'vercel-ai-gateway', label: 'Vercel AI Gateway', url: 'https://ai-gateway.vercel.sh/v1', format: 'claude_messages' },
-    { id: 'xai', label: 'xAI', url: 'https://api.x.ai/v1', format: 'openai_compat' },
-    { id: 'xiaomi', label: 'Xiaomi MiMo', url: 'https://api.xiaomimimo.com/v1', format: 'openai_compat' },
-    { id: 'xiaomi-token-plan-ams', label: 'Xiaomi Token Plan AMS', url: 'https://token-plan-ams.xiaomimimo.com/v1', format: 'openai_compat' },
-    { id: 'xiaomi-token-plan-cn', label: 'Xiaomi Token Plan（中国）', url: 'https://token-plan-cn.xiaomimimo.com/v1', format: 'openai_compat' },
-    { id: 'xiaomi-token-plan-sgp', label: 'Xiaomi Token Plan SGP', url: 'https://token-plan-sgp.xiaomimimo.com/v1', format: 'openai_compat' },
-    { id: 'zai', label: 'Z.AI', url: 'https://api.z.ai/api/coding/paas/v4', format: 'openai_compat' },
-    { id: 'zai-coding-cn', label: 'Z.AI Coding（中国）', url: 'https://open.bigmodel.cn/api/coding/paas/v4', format: 'openai_compat' },
-];
+// presentation-v2/composables/saved-api-endpoints.ts — API 预设「已保存的端点」
+// 从用户已保存的 API 预设里收集用过的端点（基础 URL + 接口协议），新建预设时一键复用。
+// 只带端点与协议（同一地址按模型分协议的服务商，协议要跟着端点走才能用），密钥、模型等仍由用户自己填。
 /** 「手填」选项值：不改端点与协议。 */
-const API_PROVIDER_ENDPOINT_MANUAL_ACU = '';
+const SAVED_API_ENDPOINT_MANUAL_ACU = '';
+const FORMAT_LABELS_ACU = {
+    openai_compat: '兼容 OpenAI',
+    openai_responses: 'OpenAI Responses',
+    claude_messages: 'Claude Messages',
+    gemini_interactions: 'Gemini Interactions',
+    gemini_generate_content: 'Gemini generateContent',
+};
+const MAX_LABEL_PRESET_NAMES_ACU = 2;
 function normalizeEndpoint_ACU(url) {
     return String(url || '').trim().replace(/\/+$/, '').toLowerCase();
 }
-/** 当前端点 + 协议对应的服务商；没有对应（手填的地址）时返回 null。 */
-function matchApiProviderEndpoint_ACU(url, format) {
-    const target = normalizeEndpoint_ACU(url);
-    if (!target)
+function normalizeFormat_ACU(format) {
+    return String(format || '').trim() || 'openai_compat';
+}
+function endpointId_ACU(url, format) {
+    return `${normalizeEndpoint_ACU(url)}|${normalizeFormat_ACU(format)}`;
+}
+/** 按「端点 + 协议」去重，保持预设顺序；标签带协议与来源预设名。 */
+function collectSavedApiEndpoints_ACU(presets) {
+    const groups = new Map();
+    for (const preset of presets || []) {
+        const url = String(preset?.apiConfig?.url || '').trim();
+        if (!url)
+            continue;
+        const format = normalizeFormat_ACU(preset.apiConfig?.customApiFormat);
+        const id = endpointId_ACU(url, format);
+        const group = groups.get(id);
+        if (group)
+            group.names.push(preset.name);
+        else
+            groups.set(id, { url, format, names: [preset.name] });
+    }
+    return [...groups.entries()].map(([id, group]) => {
+        const shown = group.names.slice(0, MAX_LABEL_PRESET_NAMES_ACU).join('、');
+        const more = group.names.length > MAX_LABEL_PRESET_NAMES_ACU ? ` 等 ${group.names.length} 个` : '';
+        const address = group.url.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+        return {
+            id,
+            url: group.url,
+            format: group.format,
+            label: `${address} · ${FORMAT_LABELS_ACU[group.format] || group.format}（来自：${shown}${more}）`,
+        };
+    });
+}
+/** 当前端点 + 协议对应的已保存端点；没有对应（新地址）时返回 null。 */
+function matchSavedApiEndpoint_ACU(endpoints, url, format) {
+    if (!normalizeEndpoint_ACU(url))
         return null;
-    return API_PROVIDER_ENDPOINTS_ACU.find(p => normalizeEndpoint_ACU(p.url) === target && p.format === (format || 'openai_compat')) || null;
+    const id = endpointId_ACU(url, format);
+    return endpoints.find(endpoint => endpoint.id === id) || null;
 }
 
 function createEmptyApiPresetDraft() {
@@ -188304,10 +188315,6 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
             { value: CLIENT_HEADER_PRESET_NONE_ACU, label: '不使用预设' },
             ...CLIENT_HEADER_PRESETS_ACU.map(p => ({ value: p.id, label: p.label })),
         ];
-        const providerOptions = [
-            { value: API_PROVIDER_ENDPOINT_MANUAL_ACU, label: '手填（中转站 / 其他服务商）' },
-            ...API_PROVIDER_ENDPOINTS_ACU.map(p => ({ value: p.id, label: p.label })),
-        ];
         const store = useApiPresetStore();
         const dialogStore = useDialogStore();
         const toast = useToastStore();
@@ -188330,15 +188337,20 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
             // 没有任何受管身份键时显示「不使用预设」；手改过的残留不回显
             return hasManagedClientKeys_ACU(draft.requestHeaders) ? '' : CLIENT_HEADER_PRESET_NONE_ACU;
         });
+        const savedEndpoints = computed(() => collectSavedApiEndpoints_ACU(store.presets));
+        const savedEndpointOptions = computed(() => [
+            { value: SAVED_API_ENDPOINT_MANUAL_ACU, label: '手填' },
+            ...savedEndpoints.value.map(e => ({ value: e.id, label: e.label })),
+        ]);
         // 按当前端点 + 协议回显；手改过端点或协议即显示「手填」
-        const matchedProviderId = computed(() => matchApiProviderEndpoint_ACU(draft.url, draft.customApiFormat)?.id ?? API_PROVIDER_ENDPOINT_MANUAL_ACU);
+        const matchedSavedEndpointId = computed(() => matchSavedApiEndpoint_ACU(savedEndpoints.value, draft.url, draft.customApiFormat)?.id ?? SAVED_API_ENDPOINT_MANUAL_ACU);
         /** 只填端点与接口协议；选「手填」不动已有内容。 */
-        function applyProvider(id) {
-            const provider = API_PROVIDER_ENDPOINTS_ACU.find(p => p.id === id);
-            if (!provider)
+        function applySavedEndpoint(id) {
+            const endpoint = savedEndpoints.value.find(e => e.id === id);
+            if (!endpoint)
                 return;
-            draft.url = provider.url;
-            draft.customApiFormat = provider.format;
+            draft.url = endpoint.url;
+            draft.customApiFormat = endpoint.format;
         }
         function setPromptPostProcessing(value) {
             draft.promptPostProcessing = value;
@@ -188463,14 +188475,14 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
             });
         });
         watch(() => store.activePresetName, () => syncActiveDraft(), { flush: 'sync' });
-        const __returned__ = { reasoningEffortOptions, customApiFormatOptions, promptPostProcessingOptions, clientPresetOptions, providerOptions, store, dialogStore, toast, formMode, draft, draftOriginalName, draftSnapshot, draftError, draftDirty, presetItems, modelSelectOptions, matchedClientPresetId, matchedProviderId, applyProvider, setPromptPostProcessing, applyClientPreset, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, validateDraft, saveActiveDraft, loadModelsForActive, UbButton, UbCallout, UbIconButton, UbInput, UbPresetPicker, UbRow, UbSection, UbSelect, UbSwitch, UbTextarea };
+        const __returned__ = { reasoningEffortOptions, customApiFormatOptions, promptPostProcessingOptions, clientPresetOptions, store, dialogStore, toast, formMode, draft, draftOriginalName, draftSnapshot, draftError, draftDirty, presetItems, modelSelectOptions, matchedClientPresetId, savedEndpoints, savedEndpointOptions, matchedSavedEndpointId, applySavedEndpoint, setPromptPostProcessing, applyClientPreset, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, validateDraft, saveActiveDraft, loadModelsForActive, UbButton, UbCallout, UbIconButton, UbInput, UbPresetPicker, UbRow, UbSection, UbSelect, UbSwitch, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-api[data-v-7e35edfa],\r\n.ub-api__form[data-v-7e35edfa] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-7e35edfa] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-7e35edfa] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-7e35edfa] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-7e35edfa] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-7e35edfa] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__danger-hint[data-v-7e35edfa] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-7e35edfa] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-7e35edfa]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-7e35edfa] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-7e35edfa] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-7e35edfa] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-7e35edfa] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-7e35edfa] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-7e35edfa");
-var ApiPresetEditor_vue_vue_type_style_index_0_scoped_7e35edfa_lang = null;
+injectSfcStyle("\n.ub-api[data-v-53d19630],\r\n.ub-api__form[data-v-53d19630] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-53d19630] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-53d19630] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-53d19630] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-53d19630] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-53d19630] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__danger-hint[data-v-53d19630] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-53d19630] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-53d19630]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-53d19630] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-53d19630] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-53d19630] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-53d19630] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-53d19630] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-53d19630");
+var ApiPresetEditor_vue_vue_type_style_index_0_scoped_53d19630_lang = null;
 
 const _hoisted_1$r = { class: "ub-api" };
 const _hoisted_2$p = { class: "ub-api__picker" };
@@ -188567,19 +188579,20 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					}),
-					createVNode($setup["UbRow"], {
-						label: "常用服务商",
-						hint: "选一家自动填好端点和接口协议，API 密钥和模型名仍需自己填。用中转站或列表里没有的服务商时选「手填」。",
+					$setup.savedEndpoints.length ? (openBlock(), createBlock($setup["UbRow"], {
+						key: 0,
+						label: "已保存的端点",
+						hint: "复用已保存预设里用过的端点，连同接口协议一起填好；API 密钥和模型名仍需自己填。用新地址时选「手填」。",
 						stack: ""
 					}, {
 						default: withCtx(() => [createVNode($setup["UbSelect"], {
-							options: $setup.providerOptions,
-							"model-value": $setup.matchedProviderId,
-							"aria-label": "常用服务商",
-							"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.applyProvider($event))
-						}, null, 8, ["model-value"])]),
+							options: $setup.savedEndpointOptions,
+							"model-value": $setup.matchedSavedEndpointId,
+							"aria-label": "已保存的端点",
+							"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.applySavedEndpoint($event))
+						}, null, 8, ["options", "model-value"])]),
 						_: 1
-					}),
+					})) : createCommentVNode("v-if", true),
 					createVNode($setup["UbRow"], {
 						label: "接口协议",
 						hint: "决定请求变形与上游端点：OpenAI→/chat/completions；OpenAI Responses→/responses；Claude Messages→/messages；Gemini Interactions→/interactions（自动补 /v1beta）。默认兼容 OpenAI。纯原生端点下「加载模型」可能失败，可手填模型名。",
@@ -188934,7 +188947,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION */
 	)) : createCommentVNode("v-if", true)]);
 }
-var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-7e35edfa"]]);
+var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-53d19630"]]);
 
 var _sfc_main$u = /*@__PURE__*/ defineComponent({
     __name: 'ApiPage',

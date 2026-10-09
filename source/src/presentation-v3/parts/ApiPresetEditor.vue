@@ -40,15 +40,16 @@
           <UbInput v-model="draft.name" autocomplete="off" aria-label="预设名称" />
         </UbRow>
         <UbRow
-          label="常用服务商"
-          hint="选一家自动填好端点和接口协议，API 密钥和模型名仍需自己填。用中转站或列表里没有的服务商时选「手填」。"
+          v-if="savedEndpoints.length"
+          label="已保存的端点"
+          hint="复用已保存预设里用过的端点，连同接口协议一起填好；API 密钥和模型名仍需自己填。用新地址时选「手填」。"
           stack
         >
           <UbSelect
-            :options="providerOptions"
-            :model-value="matchedProviderId"
-            aria-label="常用服务商"
-            @update:model-value="applyProvider($event)"
+            :options="savedEndpointOptions"
+            :model-value="matchedSavedEndpointId"
+            aria-label="已保存的端点"
+            @update:model-value="applySavedEndpoint($event)"
           />
         </UbRow>
         <UbRow
@@ -193,10 +194,10 @@ import {
   stripManagedClientHeaders_ACU,
 } from '../../presentation-v2/composables/client-header-presets';
 import {
-  API_PROVIDER_ENDPOINTS_ACU,
-  API_PROVIDER_ENDPOINT_MANUAL_ACU,
-  matchApiProviderEndpoint_ACU,
-} from '../../presentation-v2/composables/api-provider-endpoints';
+  SAVED_API_ENDPOINT_MANUAL_ACU,
+  collectSavedApiEndpoints_ACU,
+  matchSavedApiEndpoint_ACU,
+} from '../../presentation-v2/composables/saved-api-endpoints';
 import {
   apiPresetDraftFromPreset,
   apiPresetFromDraft,
@@ -256,11 +257,6 @@ const clientPresetOptions: UbSelectOption[] = [
   ...CLIENT_HEADER_PRESETS_ACU.map(p => ({ value: p.id, label: p.label })),
 ];
 
-const providerOptions: UbSelectOption[] = [
-  { value: API_PROVIDER_ENDPOINT_MANUAL_ACU, label: '手填（中转站 / 其他服务商）' },
-  ...API_PROVIDER_ENDPOINTS_ACU.map(p => ({ value: p.id, label: p.label })),
-];
-
 const store = useApiPresetStore();
 const dialogStore = useDialogStore();
 const toast = useToastStore();
@@ -286,15 +282,22 @@ const matchedClientPresetId = computed(() => {
   return hasManagedClientKeys_ACU(draft.requestHeaders) ? '' : CLIENT_HEADER_PRESET_NONE_ACU;
 });
 
+const savedEndpoints = computed(() => collectSavedApiEndpoints_ACU(store.presets));
+const savedEndpointOptions = computed<UbSelectOption[]>(() => [
+  { value: SAVED_API_ENDPOINT_MANUAL_ACU, label: '手填' },
+  ...savedEndpoints.value.map(e => ({ value: e.id, label: e.label })),
+]);
 // 按当前端点 + 协议回显；手改过端点或协议即显示「手填」
-const matchedProviderId = computed(() => matchApiProviderEndpoint_ACU(draft.url, draft.customApiFormat)?.id ?? API_PROVIDER_ENDPOINT_MANUAL_ACU);
+const matchedSavedEndpointId = computed(
+  () => matchSavedApiEndpoint_ACU(savedEndpoints.value, draft.url, draft.customApiFormat)?.id ?? SAVED_API_ENDPOINT_MANUAL_ACU,
+);
 
 /** 只填端点与接口协议；选「手填」不动已有内容。 */
-function applyProvider(id: string): void {
-  const provider = API_PROVIDER_ENDPOINTS_ACU.find(p => p.id === id);
-  if (!provider) return;
-  draft.url = provider.url;
-  draft.customApiFormat = provider.format;
+function applySavedEndpoint(id: string): void {
+  const endpoint = savedEndpoints.value.find(e => e.id === id);
+  if (!endpoint) return;
+  draft.url = endpoint.url;
+  draft.customApiFormat = endpoint.format;
 }
 
 function setPromptPostProcessing(value: string): void {
