@@ -57,6 +57,19 @@ describe('useVectorIndexConfig.deleteCurrentIndex（R10A-04）', () => {
   });
 });
 
+// 索引状态卡片：「身份健康」排在最后并占两格。11 项 = 10 + 1 宽 = 12 格，2/3/4 列下都整行排满，
+// 而且放在末尾时任何列数都无需打乱前面各项的顺序。
+describe('useVectorIndexConfig.statusStatsItems 排列', () => {
+  it('身份健康是最后一项且为宽项，其余项都不加宽', async () => {
+    const { useVectorIndexConfig } = await import('../../../src/presentation-v2/composables/useVectorIndexConfig');
+    const items = useVectorIndexConfig().statusStatsItems.value;
+
+    expect(items).toHaveLength(11);
+    expect(items[items.length - 1]).toMatchObject({ label: '身份健康', wide: true });
+    expect(items.filter(item => item.wide)).toHaveLength(1);
+  });
+});
+
 // R10A-12：关键词提示词是全局设置；保存向量 API 或切聊天触发的 refresh 不得重置未保存的编辑。
 describe('useVectorIndexConfig.refresh（R10A-12）', () => {
   it('提示词有未保存修改时 refresh 不重置编辑缓冲与 dirty', async () => {

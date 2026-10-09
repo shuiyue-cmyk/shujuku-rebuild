@@ -205896,16 +205896,16 @@ function useVectorIndexConfig() {
                 key: 'flushQueue',
             },
             {
-                label: '身份健康',
-                // 内容最长；占两格后 11 项正好 12 格，2/3/4 列都整行排满
-                wide: true,
-                value: `${healthReport.value?.status || 'unknown'} / ${healthReport.value?.identityMismatchCount || 0} identity / ${healthReport.value?.pathIdentityCollisionCount || 0} collision / ${healthReport.value?.checksumMismatchCount || 0} checksum`,
-            },
-            {
                 label: 'Legacy 待迁移',
                 value: healthReport.value?.legacyManifestCount || 0,
             },
             { label: '更新时间', value: formatTime(stats?.updatedAt || ''), key: 'updatedAt' },
+            {
+                label: '身份健康',
+                // 内容最长，放最后并占两格：11 项正好 12 格，2/3/4 列都整行排满，且不打乱前面各项顺序
+                wide: true,
+                value: `${healthReport.value?.status || 'unknown'} / ${healthReport.value?.identityMismatchCount || 0} identity / ${healthReport.value?.pathIdentityCollisionCount || 0} collision / ${healthReport.value?.checksumMismatchCount || 0} checksum`,
+            },
         ];
     });
     const promptTemplateMode = computed(() => promptFingerprint(promptSegments.value) === promptFingerprint(defaultKeywordPromptGroup())
