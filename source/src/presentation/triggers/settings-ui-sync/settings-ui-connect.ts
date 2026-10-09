@@ -184,6 +184,7 @@ import {
     intent: AutoFillIntent_ACU | undefined,
     scheduledChatKey: string,
     scheduledIsolationKey: string,
+    onGateSkipped: () => void,
   ): Promise<boolean> {
     try {
       await loadAllChatMessages_ACU();
@@ -215,7 +216,8 @@ import {
         && earlyResult.action !== 'optimize_manual'
         && earlyResult.action !== 'optimize_then_update') return false;
       logDebug_ACU('[MVU联动] 忽略MVU更新已开启，正文替换不等闸门直接开跑');
-      const earlyReplaceSucceeded = await executeContentOptimization_ACU(earlyResult.lastMessageIndex!);
+      // 判「不好」时不在这里填表：手动确认模式的填表要等 MVU 解析结束，由正常轮补跑
+      const earlyReplaceSucceeded = await executeContentOptimization_ACU(earlyResult.lastMessageIndex!, { onGateSkipped });
       if (earlyReplaceSucceeded !== true) {
         logDebug_ACU('[MVU联动] 早跑替换未成功，交由正常管线接管');
         return false;
@@ -275,8 +277,11 @@ import {
       const ignoreMvuUpdate_ACU = (settings_ACU as any)?.contentOptimizationSettings?.ignoreMvuUpdate === true;
       const isMvuRerun_ACU = eventType === 'MVU_ANALYSIS_ENDED';
       let earlyReplaceDone_ACU = false;
+      let earlyGateSkipped_ACU = false;
       if (ignoreMvuUpdate_ACU && !isMvuRerun_ACU) {
-        earlyReplaceDone_ACU = await runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey_ACU, scheduledIsolationKey_ACU);
+        earlyReplaceDone_ACU = await runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey_ACU, scheduledIsolationKey_ACU, () => {
+          earlyGateSkipped_ACU = true;
+        });
       }
       if (stopIfAutoFillRunStale_ACU('after_early_replace')) return;
       const skipReplace_ACU = (ignoreMvuUpdate_ACU && isMvuRerun_ACU) || earlyReplaceDone_ACU;
@@ -481,6 +486,13 @@ import {
 
           case 'optimize_manual':
               if (skipReplace_ACU) {
+                // 手动模式的填表本由确认流程收尾触发；早跑被替换前判定跳过时没有确认流程，在这里（MVU 解析后）补跑
+                if (earlyGateSkipped_ACU && !isMvuRerun_ACU) {
+                  logDebug_ACU('[MVU联动] 早跑替换被替换前判定跳过，手动模式在 MVU 解析后补跑填表');
+                  if (stopIfAutoFillRunStale_ACU('before_trigger')) break;
+                  await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
+                  break;
+                }
                 logDebug_ACU('[MVU联动] 忽略MVU更新已开启，W5 重跑跳过正文替换（手动模式本就不跑填表）');
                 break;
               }

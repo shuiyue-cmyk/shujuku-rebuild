@@ -284,6 +284,34 @@ describe('忽略MVU更新：替换早跑不等闸门，填表照旧等；W5 重�
     expect(m.triggerAutomaticUpdateIfNeeded).toHaveBeenCalledTimes(1);
   });
 
+  it('手动确认模式下早跑被决策判定跳过：填表不抢在 MVU 解析前，等 ended 后由正常轮补跑一次', async () => {
+    const mvu = installFakeMvu(true);
+    const es = createFakeEventSource();
+    attachMvuAnalysisGate_ACU({ eventSource: es });
+    m.settings.contentOptimizationSettings = { ignoreMvuUpdate: true };
+    m.evaluateNewMessageAction.mockReturnValue({ action: 'optimize_manual', reason: 'Manual', lastMessageIndex: 1 });
+    m.executeContentOptimization.mockImplementationOnce(async (_index: number, options: any) => {
+      options?.onGateSkipped?.();
+      return true;
+    });
+    try {
+      const promise = handleNewMessageDebounced_ACU('GENERATION_ENDED', { ...baseIntent });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(m.executeContentOptimization).toHaveBeenCalledTimes(1);
+      expect(m.triggerAutomaticUpdateIfNeeded).not.toHaveBeenCalled();
+
+      mvu.during = false;
+      es.emit(MVU_ANALYSIS_ENDED_EVENT_ACU);
+      await vi.advanceTimersByTimeAsync(0);
+      await promise;
+
+      expect(m.executeContentOptimization).toHaveBeenCalledTimes(1);
+      expect(m.triggerAutomaticUpdateIfNeeded).toHaveBeenCalledTimes(1);
+    } finally {
+      m.settings.contentOptimizationSettings = {};
+    }
+  });
+
   it('W5 重跑（MVU_ANALYSIS_ENDED）只跑填表，不再跑替换', async () => {
     const es = createFakeEventSource();
     attachMvuAnalysisGate_ACU({ eventSource: es });

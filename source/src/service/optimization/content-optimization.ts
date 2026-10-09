@@ -18,7 +18,8 @@ import {
 } from '../ai/api-call';
 import {
   applyOptimizationsWithStats_ACU,
-  filterOptimizationsByExcludeRules_ACU
+  filterOptimizationsByExcludeRules_ACU,
+  stripMvuUpdateBlocks_ACU
 } from '../../shared/text-optimization';
 import {
   logDebug_ACU,
@@ -190,7 +191,8 @@ import { createUntrustedTemplateGuard_ACU } from '../../shared/untrusted-templat
      // 不可信内容（正文与 $1/$5/$6/$7/$8/$U/$C 的值）先换成 nonce token，模板解释器跑完再一次性还原（R8-05）：
      // 原先先插入正文再逐个替换占位符，正文里的「$5」「$C级」被换成纪要/角色描述，`$&` `$'` 被展开，
      // 正文里的 <if>/随机数/{[sql…]} 标签还会被当成模板执行。占位符只在可信模板本身里扫描、单遍替换。
-     const untrustedValues: Record<string, string> = { $CONTENT: String(content ?? '') };
+     // MVU 变量块不送给替换模型：省字数和替换项名额，模型也就不会去改变量（写回时块另有保护）
+     const untrustedValues: Record<string, string> = { $CONTENT: stripMvuUpdateBlocks_ACU(String(content ?? '')) };
      for (const [key, value] of Object.entries(placeholders)) {
        if (value && typeof value === 'string') untrustedValues[key] = value;
      }
@@ -784,6 +786,18 @@ import { createUntrustedTemplateGuard_ACU } from '../../shared/untrusted-templat
       try { controller.abort(); } catch { /* 中断失败不影响取消标志 */ }
     }
     return { cancelled: true, reason };
+  }
+
+  /**
+   * 把一次外部请求（如替换前判定）挂到取消机制上：按「取消」时一并中断。用完必须 release。
+   */
+  export function trackContentOptimizationAbort_ACU(): { signal: AbortSignal; release: () => void } {
+    const controller = new AbortController();
+    activeContentOptimizationAbortControllers_ACU.add(controller);
+    return {
+      signal: controller.signal,
+      release: () => { activeContentOptimizationAbortControllers_ACU.delete(controller); },
+    };
   }
 
   /**

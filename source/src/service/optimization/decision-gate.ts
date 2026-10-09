@@ -11,11 +11,12 @@
  */
 import { settings_ACU } from '../runtime/state-manager';
 import { stripMvuUpdateBlocks_ACU } from '../../shared/text-optimization';
+import { DEFAULT_DECISION_MODEL_ACU, DEFAULT_DECISION_THRESHOLD_ACU } from '../../shared/decision-gate-defaults';
+
+export { DEFAULT_DECISION_MODEL_ACU } from '../../shared/decision-gate-defaults';
 
 export const DECISION_API_URL_ACU = 'https://openrouter.ai/api/alpha/decisions';
 export const DECISION_MODELS_URL_ACU = 'https://openrouter.ai/api/v1/models?output_modalities=decisions';
-/** 别名始终指向 Jev 最新版，用户只填 key 就能用。 */
-export const DEFAULT_DECISION_MODEL_ACU = '~typesafe/jev-latest';
 export const DECISION_GOOD_LABEL_ACU = '好';
 export const DECISION_BAD_LABEL_ACU = '不好';
 export const DECISION_TIMEOUT_MS_ACU = 20000;
@@ -44,17 +45,23 @@ export interface DecisionModelOption_ACU {
 interface DecisionFetchDeps_ACU {
   fetch?: typeof fetch;
   timeoutMs?: number;
+  /** 外部取消（正文优化的「取消」按钮）。 */
+  signal?: AbortSignal;
 }
 
 export function normalizeDecisionGateSettings_ACU(raw: unknown): DecisionGateSettings_ACU {
   const source: Record<string, any> = raw && typeof raw === 'object' ? raw as Record<string, any> : {};
-  const threshold = Number(source.threshold);
+  // 清空输入框得到 '' / null：Number 会把它们当成 0，门槛 0% 等于判定形同虚设，回到默认值
+  const rawThreshold = source.threshold;
+  const threshold = rawThreshold === null || rawThreshold === undefined || String(rawThreshold).trim() === ''
+    ? NaN
+    : Number(rawThreshold);
   const model = typeof source.model === 'string' ? source.model.trim() : '';
   return {
     enabled: source.enabled === true,
     apiKey: typeof source.apiKey === 'string' ? source.apiKey.trim() : '',
     model: model || DEFAULT_DECISION_MODEL_ACU,
-    threshold: Number.isFinite(threshold) ? Math.min(100, Math.max(0, Math.round(threshold))) : 50,
+    threshold: Number.isFinite(threshold) ? Math.min(100, Math.max(0, Math.round(threshold))) : DEFAULT_DECISION_THRESHOLD_ACU,
   };
 }
 
@@ -99,11 +106,39 @@ export function interpretDecisionResponse_ACU(payload: any, threshold: number): 
     ?? (choice === DECISION_GOOD_LABEL_ACU ? 1 : 0);
   return {
     kind: 'decided',
-    replace: goodProbability * 100 >= threshold,
+    // 0.57 * 100 = 56.999…：容差比较，恰好达到门槛也算
+    replace: goodProbability * 100 >= threshold - 1e-9,
     choice,
     goodProbability,
     model: String(payload?.model ?? ''),
   };
+}
+
+/** 带超时与外部取消的请求；超时与取消各自给出可读原因，供调用方区分。 */
+async function fetchWithDeadline_ACU(
+  url: string,
+  init: RequestInit,
+  deps: DecisionFetchDeps_ACU,
+): Promise<{ response?: Response; failure?: string; error?: unknown }> {
+  const fetchImpl = deps.fetch ?? globalThis.fetch;
+  const controller = new AbortController();
+  let reason = '';
+  const abortWith = (text: string) => {
+    if (!reason) reason = text;
+    controller.abort();
+  };
+  const timer = setTimeout(() => abortWith('超时未响应'), deps.timeoutMs ?? DECISION_TIMEOUT_MS_ACU);
+  const onExternalAbort = () => abortWith('已取消');
+  if (deps.signal?.aborted) onExternalAbort();
+  deps.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  try {
+    return { response: await fetchImpl(url, { ...init, signal: controller.signal }) };
+  } catch (error) {
+    return { failure: reason, error };
+  } finally {
+    clearTimeout(timer);
+    deps.signal?.removeEventListener('abort', onExternalAbort);
+  }
 }
 
 async function readErrorMessage_ACU(response: Response): Promise<string> {
@@ -121,50 +156,54 @@ export async function requestContentDecision_ACU(
   deps: DecisionFetchDeps_ACU = {},
 ): Promise<DecisionVerdict_ACU> {
   if (!settings.apiKey) return { kind: 'error', message: '未填写 OpenRouter Key' };
-  const fetchImpl = deps.fetch ?? globalThis.fetch;
-  const controller = new AbortController();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, deps.timeoutMs ?? DECISION_TIMEOUT_MS_ACU);
+  const { response, failure, error } = await fetchWithDeadline_ACU(DECISION_API_URL_ACU, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${settings.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(buildDecisionRequestBody_ACU(settings.model, text)),
+  }, deps);
+  if (!response) {
+    if (failure) return { kind: 'error', message: `决策模型${failure}` };
+    return { kind: 'error', message: `请求失败：${(error as any)?.message || error}` };
+  }
   try {
-    const response = await fetchImpl(DECISION_API_URL_ACU, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${settings.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(buildDecisionRequestBody_ACU(settings.model, text)),
-      signal: controller.signal,
-    });
     if (!response.ok) {
       const reason = await readErrorMessage_ACU(response);
       return { kind: 'error', message: `HTTP ${response.status}${reason ? `：${reason}` : ''}` };
     }
     return interpretDecisionResponse_ACU(await response.json(), settings.threshold);
-  } catch (error: any) {
-    if (timedOut) return { kind: 'error', message: '决策模型超时未响应' };
-    return { kind: 'error', message: `请求失败：${error?.message || error}` };
-  } finally {
-    clearTimeout(timer);
+  } catch (readError: any) {
+    return { kind: 'error', message: `读取判定结果失败：${readError?.message || readError}` };
   }
 }
 
-/** 自动替换入口：读设置，去掉 MVU 变量块后送去判定。开关关闭时不发请求。 */
+/**
+ * 自动替换入口：读设置，去掉 MVU 变量块后送去判定。
+ * 开关关闭或还没填 key 时不发请求、视同未开启（页面上会提示缺 key），免得每楼都弹失败提示。
+ */
 export async function judgeContentForAutoReplace_ACU(
   text: string,
   deps: DecisionFetchDeps_ACU = {},
 ): Promise<DecisionGateOutcome_ACU> {
   const settings = normalizeDecisionGateSettings_ACU(settings_ACU?.contentOptimizationSettings?.decisionGate);
-  if (!settings.enabled) return { kind: 'disabled' };
+  if (!settings.enabled || !settings.apiKey) return { kind: 'disabled' };
   return requestContentDecision_ACU(stripMvuUpdateBlocks_ACU(text), settings, deps);
 }
 
-/** OpenRouter 上当前可用的决策模型（公开列表，不需要 key）。失败时抛错由调用方提示。 */
+/** 价格字段都明确为 0 才算免费；缺失、空值或任何一项非 0（如按次收费）都不算。 */
+function isFreePricing_ACU(pricing: unknown): boolean {
+  if (!pricing || typeof pricing !== 'object') return false;
+  const record = pricing as Record<string, unknown>;
+  const isZero = (value: unknown) => value !== null && value !== undefined && String(value).trim() !== '' && Number(value) === 0;
+  return isZero(record.prompt) && Object.values(record).every(value => value === null || value === undefined || isZero(value));
+}
+
+/** OpenRouter 上当前可用的决策模型（公开列表，不需要 key）。失败或超时抛错，由调用方提示。 */
 export async function fetchDecisionModels_ACU(deps: DecisionFetchDeps_ACU = {}): Promise<DecisionModelOption_ACU[]> {
-  const fetchImpl = deps.fetch ?? globalThis.fetch;
-  const response = await fetchImpl(DECISION_MODELS_URL_ACU);
+  const { response, failure, error } = await fetchWithDeadline_ACU(DECISION_MODELS_URL_ACU, { method: 'GET' }, deps);
+  if (!response) throw new Error(failure || (error as any)?.message || String(error));
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const body: any = await response.json();
   const models = Array.isArray(body?.data) ? body.data : [];
@@ -175,6 +214,6 @@ export async function fetchDecisionModels_ACU(deps: DecisionFetchDeps_ACU = {}):
     .map((model: any) => ({
       id: model.id,
       name: typeof model.name === 'string' && model.name ? model.name : model.id,
-      free: Number(model?.pricing?.prompt) === 0,
+      free: isFreePricing_ACU(model?.pricing),
     }));
 }

@@ -52,6 +52,7 @@ import {
   contentOptimizationAbortRequested_ACU,
   ensureOptimizationNotCancelled_ACU,
   performContentOptimization_ACU,
+  trackContentOptimizationAbort_ACU,
   setLastOptimizationBase_ACU,
   shouldSkipDuplicateAutoContentOptimization_ACU,
   recordAutoContentOptimizationProcessed_ACU,
@@ -268,48 +269,75 @@ import {
   /**
    * 替换前判定：问决策模型「这篇文章写得好不好」，判「好」才继续替换（性价比模型的 AI 味正合它口味）。
    * 判「不好」保持原文，并登记本楼已处理，重复的生成结束事件不再重判；判定失败照常替换。
-   * 串行的手动确认链原本由确认流程收尾时触发填表，跳过替换时要在这里补触发（并行模式填表已在同时跑）。
-   * @returns 是否继续替换
+   * 串行的手动确认链原本由确认流程收尾时触发填表，跳过替换时要在这里补触发（并行模式填表已在同时跑）；
+   * 调用方传了 onGateSkipped（MVU 早跑）时改为通知调用方，由它在 MVU 解析结束后再填表。
+   * 判定请求挂在正文优化的取消机制上：按「取消」会中断请求，之后既不提示也不登记、不填表。
    */
-  async function passesDecisionGate_ACU(messageIndex: number, message: any, content: string, judgedText: string, config: any): Promise<boolean> {
-    if (config.decisionGate?.enabled !== true) return true;
+  async function runDecisionGate_ACU(
+    messageIndex: number,
+    message: any,
+    content: string,
+    judgedText: string,
+    config: any,
+    onGateSkipped?: () => void,
+  ): Promise<'continue' | 'skipped' | 'cancelled'> {
+    if (config.decisionGate?.enabled !== true) return 'continue';
     if (config.seamlessMode) {
       showOptimizationOverlay_ACU('正在判定正文...');
     } else {
       showOptimizationProgressToast_ACU('正在判定正文...');
     }
+    const abort = trackContentOptimizationAbort_ACU();
     let outcome: DecisionGateOutcome_ACU;
     try {
-      outcome = await judgeContentForAutoReplace_ACU(judgedText);
+      outcome = await judgeContentForAutoReplace_ACU(judgedText, { signal: abort.signal });
     } catch (error: any) {
       outcome = { kind: 'error', message: error?.message || String(error) };
+    } finally {
+      abort.release();
     }
-    if (outcome.kind === 'disabled') return true;
+    try {
+      ensureOptimizationNotCancelled_ACU();
+    } catch {
+      hideOptimizationOverlay_ACU();
+      hideOptimizationProgressToast_ACU();
+      logDebug_ACU('[正文优化] 替换前判定期间用户取消，本楼不再处理');
+      return 'cancelled';
+    }
+    if (outcome.kind === 'disabled') return 'continue';
     if (outcome.kind === 'error') {
       logError_ACU('[正文优化] 替换前判定失败，照常替换:', outcome.message);
       showToastr_ACU('warning', `决策判定失败（${outcome.message}），本楼照常替换`);
-      return true;
+      return 'continue';
     }
     const goodPercent = Math.round(outcome.goodProbability * 100);
     logDebug_ACU(`[正文优化] 替换前判定：${outcome.choice}（好 ${goodPercent}%，模型 ${outcome.model || '未知'}）→ ${outcome.replace ? '替换' : '不替换'}`);
-    if (outcome.replace) return true;
+    if (outcome.replace) return 'continue';
 
     hideOptimizationOverlay_ACU();
     hideOptimizationProgressToast_ACU();
-    recordAutoContentOptimizationProcessed_ACU({ messageIndex, messageId: message.message_id, content });
+    // 判定期间 MVU 可能往本楼追加了变量块：登记实际正文，下一次重复的生成结束事件才能判重命中。
+    // 被滑动或改写过就仍登记判定时的正文，不把别的 swipe 误登记为已处理。
+    const live = getChatArray_ACU()?.[messageIndex];
+    const liveContent = live && live.message_id === message.message_id && typeof live.mes === 'string'
+      && live.mes.startsWith(content.trimEnd()) ? live.mes : content;
+    recordAutoContentOptimizationProcessed_ACU({ messageIndex, messageId: message.message_id, content: liveContent });
     showToastr_ACU('info', `决策模型判定本楼「${outcome.choice}」（好 ${goodPercent}%），不替换`);
-    if (!config.parallelMode && !config.autoApply && !config.seamlessMode) {
+    if (onGateSkipped) {
+      onGateSkipped();
+    } else if (!config.parallelMode && !config.autoApply && !config.seamlessMode) {
       await triggerAutomaticUpdateIfNeeded_ACU();
     }
-    return false;
+    return 'skipped';
   }
 
   /**
    * 执行正文优化流程（在GENERATION_ENDED后调用）
    * @param {number} messageIndex - AI消息索引
+   * @param options.onGateSkipped - 替换前判定判「不好」时的回调；传了就由调用方负责之后的填表
    * @returns {Promise<boolean>} 是否成功
    */
-  export async function executeContentOptimization_ACU(messageIndex: number) {
+  export async function executeContentOptimization_ACU(messageIndex: number, options: { onGateSkipped?: () => void } = {}) {
     const config = settings_ACU.contentOptimizationSettings || {};
     _set_contentOptimizationAbortRequested_ACU(false);
     
@@ -375,9 +403,12 @@ import {
       return false;
     }
     
-    if (!(await passesDecisionGate_ACU(messageIndex, message, content, processedContent, config))) {
-      return true;
+    const gate = await runDecisionGate_ACU(messageIndex, message, content, processedContent, config, options.onGateSkipped);
+    if (gate === 'cancelled') {
+      _set_contentOptimizationAbortRequested_ACU(false);
+      return false;
     }
+    if (gate === 'skipped') return true;
     
     const loopCount = config.loopCount || 1;
     logDebug_ACU(`[正文优化] 开始优化消息 ${messageIndex}，原始长度 ${content.length}，处理后长度 ${processedContent.length}，循环次数: ${loopCount}`);

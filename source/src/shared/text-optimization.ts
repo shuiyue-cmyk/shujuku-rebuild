@@ -235,18 +235,19 @@ export function collectMvuUpdateBlockRanges_ACU(text: string): BoundaryRange_ACU
   return mergeBoundaryRanges_ACU(ranges);
 }
 
-/** 去掉 MVU 变量更新块后的正文（用于只关心剧情文字的场景，如替换前判定）。 */
+/**
+ * 去掉 MVU 变量更新块后的剧情正文（替换前判定、送给替换模型的 $CONTENT）。
+ * 夹在正文中间的块换成换行，免得前后两段粘成一句；没有块时原样返回。
+ */
 export function stripMvuUpdateBlocks_ACU(text: string): string {
   const source = String(text ?? '');
   const ranges = collectMvuUpdateBlockRanges_ACU(source);
   if (ranges.length === 0) return source;
-  let result = '';
-  let cursor = 0;
-  for (const range of ranges) {
-    result += source.slice(cursor, range.start);
-    cursor = range.end;
+  let result = source;
+  for (let index = ranges.length - 1; index >= 0; index--) {
+    result = result.slice(0, ranges[index].start) + '\n' + result.slice(ranges[index].end);
   }
-  return (result + source.slice(cursor)).trim();
+  return result.trim();
 }
 
 /**
@@ -347,12 +348,14 @@ export function applyOptimizationsWithStats_ACU(
   let failedCount = 0;
   const failedItems: any[] = [];
 
-  // 未配置规则且没有 MVU 变量块时过滤器零区间早退，结果与不过滤逐字一致
-  const effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(
-    originalContent,
-    Array.isArray(optimizations) ? optimizations : [],
-    options,
-  ).kept;
+  let effectiveOptimizations = Array.isArray(optimizations) ? optimizations : [];
+  if (hasExcludeRuleInput_ACU(options)) {
+    effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(
+      originalContent,
+      effectiveOptimizations,
+      options,
+    ).kept;
+  }
 
   for (let i = 0; i < effectiveOptimizations.length; i++) {
     const opt = effectiveOptimizations[i];
@@ -360,8 +363,15 @@ export function applyOptimizationsWithStats_ACU(
       let replaced = false;
 
       const match = findParagraphMatch_ACU(opt.original, result);
+      // 前面的建议改过正文后，同一段原文可能改为命中受保护区（MVU 变量块 / 排除段）里的同名文字：
+      // 按当前正文重新核对，落进去就不写（预过滤只核对了原文里的第一处命中）。
+      const hitProtected = match.start !== -1
+        && !!findOverlappingBoundaryRange_ACU(collectOptimizationExcludeRanges_ACU(result, options), match.start, match.end);
+      if (hitProtected) {
+        logDebug_ACU(`[正文优化] 优化项 ${i + 1} 在当前正文中命中受保护区（写回保护），跳过`);
+      }
 
-      if (match.start !== -1) {
+      if (match.start !== -1 && !hitProtected) {
         const matchedText = result.substring(match.start, match.end);
         const originalPunct = trimPunctuation_ACU(matchedText);
         const optimizedPunct = trimPunctuation_ACU(opt.optimized);

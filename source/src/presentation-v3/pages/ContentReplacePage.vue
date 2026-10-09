@@ -47,6 +47,9 @@
       <UbRow label="启用替换前判定" hint="只影响自动替换；手动「重新优化」和测试不经过判定。">
         <UbSwitch :model-value="store.decisionGate.enabled" aria-label="启用替换前判定" @update:model-value="setDecisionEnabled" />
       </UbRow>
+      <UbCallout v-if="store.decisionGate.enabled && !store.decisionGate.apiKey" kind="warning">
+        还没填 OpenRouter Key，判定暂不生效，正文照常替换。
+      </UbCallout>
       <UbRow label="OpenRouter Key" hint="在 openrouter.ai 的 Keys 页面创建，只用于决策判定。" stack>
         <UbInput
           :model-value="store.decisionGate.apiKey"
@@ -81,7 +84,7 @@
           :max="100"
           :step="5"
           aria-label="判定门槛"
-          @change="store.setDecisionGate({ threshold: Number($event) })"
+          @change="store.setDecisionGate({ threshold: $event })"
         />
       </UbRow>
     </UbSection>

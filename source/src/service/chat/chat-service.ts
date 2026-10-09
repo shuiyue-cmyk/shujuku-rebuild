@@ -21,6 +21,7 @@ export { purgeCurrentChatDatabaseState_ACU, type ChatDatabasePurgeResult_ACU } f
 
 import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostStrict_ACU, setChatMessages_ACU, emitMessageUpdated_ACU } from '../../data/gateways/chat-gateway';
 import { logDebug_ACU, logError_ACU, logWarn_ACU, isSummaryOrOutlineTable_ACU } from '../../shared/utils';
+import { collectMvuUpdateBlockRanges_ACU } from '../../shared/text-optimization';
 import { getLastOptimizationBase_ACU, setLastOptimizationBase_ACU } from '../optimization/content-optimization';
 import { settings_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
 import { sanitizeSheetForStorage_ACU } from '../template/chat-scope';
@@ -1134,6 +1135,14 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
  * 替换聊天消息内容（正文优化核心逻辑）
  * 从 presentation/components/optimization-ui/optimization-ui-exec.ts 搬迁
  */
+/** 旧正文里有 MVU 变量块而新正文一个都没有时，返回要接回的块（按原顺序空行分隔）；否则返回空串。 */
+function collectMissingMvuBlocks_ACU(oldContent: unknown, newContent: unknown): string {
+    const previous = typeof oldContent === 'string' ? oldContent : '';
+    const blocks = collectMvuUpdateBlockRanges_ACU(previous);
+    if (blocks.length === 0 || collectMvuUpdateBlockRanges_ACU(String(newContent ?? '')).length > 0) return '';
+    return blocks.map(range => previous.slice(range.start, range.end).trim()).join('\n\n');
+}
+
 export async function replaceChatMessage_ACU(
     messageIndex: number,
     newContent: string,
@@ -1155,11 +1164,17 @@ export async function replaceChatMessage_ACU(
                 logWarn_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间已变化，拒绝写回。`);
                 return false;
             }
-            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间被追加了 ${appendedTail.length} 字尾巴（如 MVU 变量块），写回时原样保留`);
+            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间被追加了 MVU 变量块，写回时原样保留`);
             newContent = String(newContent ?? '').trimEnd() + appendedTail;
         }
 
         const oldContent = chat[messageIndex].mes;
+        // 本楼现有的 MVU 变量块不能被替换抹掉：从块追加之前的原文重新优化时，新正文里没有块，接回末尾。
+        const missingMvuBlocks = collectMissingMvuBlocks_ACU(oldContent, newContent);
+        if (missingMvuBlocks) {
+            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼的新正文缺少现有 MVU 变量块，已接回末尾`);
+            newContent = `${String(newContent ?? '').trimEnd()}\n\n${missingMvuBlocks}`;
+        }
         logDebug_ACU(`[正文优化] 原内容长度: ${oldContent?.length || 0}, 新内容长度: ${newContent?.length || 0}`);
 
         // 保存原始内容到 extra 字段，用于"重新优化"功能

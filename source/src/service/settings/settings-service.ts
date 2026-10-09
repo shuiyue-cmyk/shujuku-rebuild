@@ -6,6 +6,7 @@
 // 属于 service 层（业务编排），不是纯 data 层。
 // ═══════════════════════════════════════════════════════════════
 
+import { buildDefaultDecisionGateSettings_ACU } from '../../shared/decision-gate-defaults';
 import { STORAGE_KEY_ALL_SETTINGS_ACU, STORAGE_KEY_CUSTOM_TEMPLATE_ACU, normalizeIsolationCode_ACU, isReservedIsolationCode_ACU, RESERVED_ISOLATION_CODE_MESSAGE_ACU } from '../../shared/data-constants';
 import { DEFAULT_BUILTIN_PLOT_PRESETS_ACU, DEFAULT_CHAR_CARD_PROMPT_SQL_ACU, DEFAULT_MERGE_SUMMARY_PROMPT_ACU, DEFAULT_PLOT_PROMPT_GROUP_ACU, DEFAULT_PLOT_SETTINGS_ACU, DEFAULT_TABLE_TEMPLATE_ACU, ORIGINAL_DEFAULT_TABLE_TEMPLATE_ACU, TABLE_TEMPLATE_ACU, _set_TABLE_TEMPLATE_ACU } from '../../shared/defaults-json.js';
 import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU, SUMMARY_INDEX_V2_WRITER_FORCE_ENABLE_VERSION_ACU, TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU, TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU, TEMPLATE_ASSISTANT_PROMPT_FORCE_DEFAULT_VERSION_ACU, USER_PREFILL_PROFILE_FORCE_DEFAULT_VERSION_ACU, USER_PREFILL_VECTOR_FORCE_DEFAULT_VERSION_ACU, VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU, VECTOR_MEMORY_RECALL_PARAM_KEYS_ACU, VECTOR_MEMORY_RECALL_PARAMS_FORCE_OVERRIDE_VERSION_ACU, buildDefaultAgentWorldbookControl_ACU, buildDefaultAgentWorldbookPromptTemplates_ACU, buildDefaultPlotWorldbookConfig_ACU, buildDefaultContentOptimizationPromptGroup_ACU, defaultWorldbookConfig_ACU, defaultVectorMemoryConfig_ACU } from '../../shared/defaults';
@@ -1193,12 +1194,7 @@ export   function buildDefaultSettings_ACU() {
             showDiff: true,                    // 是否显示优化对比（非无感模式下有效）
             parallelMode: false,               // 填表与正文替换并行执行（默认关闭）
             ignoreMvuUpdate: false,            // 忽略MVU更新：开后正文替换不等MVU解析、MVU结束后也不重跑（默认关闭）
-            decisionGate: {                    // 替换前判定：OpenRouter 决策模型判「好」才替换（service/optimization/decision-gate.ts）
-              enabled: false,
-              apiKey: '',
-              model: '~typesafe/jev-latest',
-              threshold: 50,
-            },
+            decisionGate: buildDefaultDecisionGateSettings_ACU(), // 替换前判定：OpenRouter 决策模型判「好」才替换
             minLength: 100,                    // 最小优化长度阈值
             maxOptimizations: 10,              // 单次最大优化项数
             loopCount: 1,                      // 循环优化次数

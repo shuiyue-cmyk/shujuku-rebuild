@@ -51,6 +51,10 @@ const h = vi.hoisted(() => {
     triggerAutoUpdate: vi.fn(async () => undefined),
     judge: vi.fn(async (_text: string): Promise<any> => ({ kind: 'disabled' })),
     showOverlay: vi.fn(),
+    hideOverlay: vi.fn(),
+    ensureNotCancelled: vi.fn(),
+    abortSignal: new AbortController().signal,
+    releaseAbort: vi.fn(),
   };
 });
 
@@ -90,7 +94,8 @@ vi.mock('../../src/presentation/triggers/settings-ui-sync', () => ({
 }));
 vi.mock('../../src/service/optimization/content-optimization', () => ({
   contentOptimizationAbortRequested_ACU: false,
-  ensureOptimizationNotCancelled_ACU: vi.fn(),
+  ensureOptimizationNotCancelled_ACU: (...args: any[]) => h.ensureNotCancelled(...(args as [])),
+  trackContentOptimizationAbort_ACU: () => ({ signal: h.abortSignal, release: h.releaseAbort }),
   performContentOptimization_ACU: (...args: any[]) => h.perform(...(args as [string, any])),
   setLastOptimizationBase_ACU: (...args: any[]) => h.setLastBase(...(args as [any])),
   shouldSkipDuplicateAutoContentOptimization_ACU: (...args: any[]) => h.shouldSkip(...(args as [any, any])),
@@ -103,7 +108,7 @@ vi.mock('../../src/service/runtime/helpers-remaining', () => ({
 }));
 vi.mock('../../src/presentation/components/optimization-ui/optimization-ui-overlay', () => ({
   showOptimizationOverlay_ACU: (...args: any[]) => h.showOverlay(...(args as [])),
-  hideOptimizationOverlay_ACU: vi.fn(),
+  hideOptimizationOverlay_ACU: (...args: any[]) => h.hideOverlay(...(args as [])),
   showOptimizationProgressToast_ACU: vi.fn(),
   hideOptimizationProgressToast_ACU: vi.fn(),
 }));
@@ -146,7 +151,8 @@ beforeEach(() => {
     { is_user: false, message_id: 11, mes: ORIGINAL },
   );
   h.processed.clear();
-  for (const fn of [h.perform, h.replace, h.record, h.shouldSkip, h.setLastBase, h.toast, h.triggerAutoUpdate, h.judge, h.showOverlay, h.showDiffDialogForLoop]) fn.mockClear();
+  for (const fn of [h.perform, h.replace, h.record, h.shouldSkip, h.setLastBase, h.toast, h.triggerAutoUpdate, h.judge, h.showOverlay, h.hideOverlay, h.showDiffDialogForLoop, h.releaseAbort]) fn.mockClear();
+  h.ensureNotCancelled.mockReset();
   h.perform.mockImplementation(async () => ({
     success: true,
     optimizations: [{ type: 'replace', original: '夜色漫过屋檐', optimized: '夜色漫过窗台', plan: '改写' }],
@@ -163,7 +169,7 @@ describe('替换前判定（executeContentOptimization_ACU）', () => {
 
     expect(await executeContentOptimization_ACU(1)).toBe(true);
 
-    expect(h.judge).toHaveBeenCalledWith(ORIGINAL);
+    expect(h.judge).toHaveBeenCalledWith(ORIGINAL, expect.anything());
     expect(h.perform).toHaveBeenCalledTimes(1);
     expect(h.replace).toHaveBeenCalledWith(1, OPTIMIZED, expect.anything());
   });
@@ -221,6 +227,44 @@ describe('替换前判定（executeContentOptimization_ACU）', () => {
 
     await executeContentOptimization_ACU(1);
 
+    expect(h.triggerAutoUpdate).not.toHaveBeenCalled();
+  });
+  it('判定期间 MVU 往本楼追加了变量块：登记的是追加后的实际正文，重复事件不会再判一次', async () => {
+    h.judge.mockImplementation(async () => {
+      h.chat[1].mes = `${ORIGINAL}
+
+<UpdateVariable>_.set("a", 1, 2);</UpdateVariable>`;
+      return { kind: 'decided', replace: false, choice: '不好', goodProbability: 0.2, model: 'm' };
+    });
+
+    await executeContentOptimization_ACU(1);
+
+    expect(h.record).toHaveBeenCalledWith(expect.objectContaining({ messageId: 11, content: h.chat[1].mes }));
+  });
+
+  it('判定时把取消信号交给请求；判定期间按了取消：不再继续替换、不提示、不触发填表，并撤掉遮罩', async () => {
+    useSettings({ seamlessMode: false, autoApply: false });
+    h.judge.mockResolvedValue({ kind: 'decided', replace: false, choice: '不好', goodProbability: 0.1, model: 'm' });
+    h.ensureNotCancelled.mockImplementation(() => { throw new Error('用户终止正文优化'); });
+
+    expect(await executeContentOptimization_ACU(1)).toBe(false);
+
+    expect(h.judge).toHaveBeenCalledWith(ORIGINAL, { signal: h.abortSignal });
+    expect(h.releaseAbort).toHaveBeenCalled();
+    expect(h.perform).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+    expect(h.toast).not.toHaveBeenCalled();
+    expect(h.triggerAutoUpdate).not.toHaveBeenCalled();
+  });
+
+  it('调用方接管填表时（MVU 早跑）：判「不好」只通知调用方，不自己触发填表', async () => {
+    useSettings({ seamlessMode: false, autoApply: false });
+    h.judge.mockResolvedValue({ kind: 'decided', replace: false, choice: '不好', goodProbability: 0.1, model: 'm' });
+    const onGateSkipped = vi.fn();
+
+    expect(await executeContentOptimization_ACU(1, { onGateSkipped })).toBe(true);
+
+    expect(onGateSkipped).toHaveBeenCalledTimes(1);
     expect(h.triggerAutoUpdate).not.toHaveBeenCalled();
   });
 });

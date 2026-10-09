@@ -59,6 +59,7 @@ import {
   applyOptimizationsWithStats_ACU,
   filterOptimizationsByExcludeRules_ACU,
   collectOptimizationExcludeRanges_ACU,
+  stripMvuUpdateBlocks_ACU,
 } from '../../src/shared/text-optimization';
 
 // ═══════════════════════════════════════════════════════════════
@@ -367,6 +368,20 @@ describe('MVU 变量更新块始终受写回保护', () => {
     const result = applyOptimizations_ACU(CONTENT, opts);
     expect(result).toContain('屋里静得出奇');
     expect(result).toContain(BLOCK);
+  });
+
+  it('前一条建议改掉正文里的出现位置后，后一条建议不会落到变量块里的同名文字上', () => {
+    const content = '好感度上升了。\n\n<UpdateVariable>_.set("好感度", 1, 2);</UpdateVariable>';
+    const opts = [makeOpt('好感度上升了', '她更信任他了'), makeOpt('好感度', '亲密度')];
+
+    const result = applyOptimizationsWithStats_ACU(content, opts);
+
+    expect(result.content).toBe('她更信任他了。\n\n<UpdateVariable>_.set("好感度", 1, 2);</UpdateVariable>');
+    expect(result.appliedCount).toBe(1);
+  });
+
+  it('stripMvuUpdateBlocks_ACU 去掉变量块，夹在中间的块换成换行', () => {
+    expect(stripMvuUpdateBlocks_ACU(`甲。<UpdateVariable>x</UpdateVariable>乙。\n\n<JSONPatch>[]</JSONPatch>`)).toBe('甲。\n乙。');
   });
 
   it('标签大小写不敏感、未闭合的块保护到正文末尾', () => {

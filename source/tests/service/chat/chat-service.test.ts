@@ -315,6 +315,34 @@ describe('replaceChatMessage_ACU', () => {
     );
   });
 
+  it('期间追加的不是 MVU 变量块（如「继续」续写）时仍拒绝写回，免得把续写拼到改写过的句子后面', async () => {
+    const { captureChatMessageWriteTarget_ACU } = await import('../../../src/service/chat/chat-message-write-target');
+    const chat = [{ is_user: false, mes: '她说：“我', message_id: 'msg1', swipe_id: 0, extra: {} }];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSetChatMessages.mockClear();
+    const expected = captureChatMessageWriteTarget_ACU(0);
+    chat[0].mes = '她说：“我知道了。”';
+    expect(await replaceChatMessage_ACU(0, '她低声说：“我明白', { expected })).toBe(false);
+
+    chat[0].mes = '她说：“我\n\n<UpdateVariable>_.set("a", 1, 2);</UpdateVariable>\n她又补了一句。';
+    expect(await replaceChatMessage_ACU(0, '她低声说：“我明白', { expected })).toBe(false);
+    expect(mockSetChatMessages).not.toHaveBeenCalled();
+  });
+
+  it('写入的正文缺少本楼现有的 MVU 变量块时（如从块追加前的原文重新优化），把块接回末尾', async () => {
+    const block = '<UpdateVariable>_.set("好感度", 1, 2);</UpdateVariable>';
+    const chat = [{ is_user: false, mes: `她推开门。\n\n${block}`, message_id: 'msg1', swipe_id: 0, extra: { _acu_original_content: '她推开门。' } }];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSetChatMessages.mockClear();
+    mockSetChatMessages.mockResolvedValue(true);
+
+    expect(await replaceChatMessage_ACU(0, '她轻轻推开门。')).toBe(true);
+    expect(mockSetChatMessages).toHaveBeenCalledWith(
+      [expect.objectContaining({ mes: `她轻轻推开门。\n\n${block}` })],
+      expect.anything(),
+    );
+  });
+
   it('追加尾巴之外原文也被改过时仍拒绝写回', async () => {
     const { captureChatMessageWriteTarget_ACU } = await import('../../../src/service/chat/chat-message-write-target');
     const chat = [{ is_user: false, mes: '她推开门。', message_id: 'msg1', swipe_id: 0, extra: {} }];

@@ -7,6 +7,7 @@
  */
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { currentChatFileIdentifier_ACU } from '../runtime/state-manager';
+import { stripMvuUpdateBlocks_ACU } from '../../shared/text-optimization';
 
 export interface ChatMessageWriteTarget_ACU {
   messageIndex: number;
@@ -44,9 +45,11 @@ export function isChatMessageWriteTargetCurrent_ACU(target: ChatMessageWriteTarg
 }
 
 /**
- * 读取正文之后本楼只被追加了一段尾巴时返回该尾巴，否则返回 null。
- * 典型来源是 MVU「额外模型解析」：解析结果按「最新正文去尾空白 + '\n\n' + 变量块」拼到本楼末尾。
- * 这不是滑动、删楼或改写，正文替换应写回原文部分并保留尾巴，而不是整轮作废。
+ * 读取正文之后本楼只被追加了 MVU 变量块时返回这段尾巴，否则返回 null。
+ * MVU「额外模型解析」把结果按「最新正文去尾空白 + '\n\n' + 变量块」拼到本楼末尾；这不是滑动、删楼或改写，
+ * 正文替换应写回原文部分并保留尾巴，而不是整轮作废。
+ * 只认「空白开头、去掉变量块后不剩文字」的尾巴：「继续」续写或手动补字同样是追加，
+ * 但拼到改写过的句子后面会出乱句，仍按楼层已修改拒绝写回。
  */
 export function findAppendedTailSinceCapture_ACU(target: ChatMessageWriteTarget_ACU | null | undefined): string | null {
   if (!target || typeof target.mes !== 'string') return null;
@@ -60,5 +63,6 @@ export function findAppendedTailSinceCapture_ACU(target: ChatMessageWriteTarget_
   const base = target.mes.trimEnd();
   if (typeof current !== 'string' || !base || current.length <= base.length || !current.startsWith(base)) return null;
   const tail = current.slice(base.length);
-  return tail.trim() ? tail : null;
+  if (!/^\s/.test(tail) || !tail.trim()) return null;
+  return stripMvuUpdateBlocks_ACU(tail) === '' ? tail : null;
 }

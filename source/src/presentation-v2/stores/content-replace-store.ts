@@ -17,6 +17,7 @@ import {
   type DecisionModelOption_ACU,
 } from '../../service/optimization/decision-gate';
 import { stripMvuUpdateBlocks_ACU } from '../../shared/text-optimization';
+import { applyContextTagFilters_ACU } from '../../service/runtime/helpers-context-tags';
 import { getLastOptimizedMessageIndex_ACU } from '../../service/plot/plot-logic';
 import { currentChatFileIdentifier_ACU, settings_ACU } from '../../service/runtime/state-manager';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
@@ -459,8 +460,8 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       this[key] = !!value;
       this.saveBasicSettings();
     },
-    /** 替换前判定的开关 / key / 模型 / 门槛：规整后与其它基础字段一起落盘。 */
-    setDecisionGate(patch: Partial<DecisionGateSettings_ACU>): void {
+    /** 替换前判定的开关 / key / 模型 / 门槛：规整后与其它基础字段一起落盘（门槛清空时回到默认值）。 */
+    setDecisionGate(patch: Partial<Record<keyof DecisionGateSettings_ACU, unknown>>): void {
       this.decisionGate = normalizeDecisionGateSettings_ACU({ ...this.decisionGate, ...patch });
       this.saveBasicSettings();
     },
@@ -477,9 +478,15 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         this.decisionModelsLoading = false;
       }
     },
-    /** 用测试文本问一次决策模型，不写回聊天。 */
+    /** 用测试文本问一次决策模型，不写回聊天；与自动判定同口径，先按提取/排除标签处理。 */
     async runDecisionTest(): Promise<void> {
-      const input = stripMvuUpdateBlocks_ACU(this.testInput).trim();
+      const filtered = applyContextTagFilters_ACU(this.testInput, {
+        extractTags: this.extractTags.trim(),
+        extractRules: this.extractRules,
+        excludeTags: this.excludeTags.trim(),
+        excludeRules: this.excludeRules,
+      });
+      const input = stripMvuUpdateBlocks_ACU(filtered).trim();
       if (input.length < 10) {
         setMessage(this, 'warning', '请输入至少 10 个字符的测试文本。');
         return;

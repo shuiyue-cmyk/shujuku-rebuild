@@ -3221,19 +3221,20 @@ function collectMvuUpdateBlockRanges_ACU(text) {
     }
     return mergeBoundaryRanges_ACU(ranges);
 }
-/** 去掉 MVU 变量更新块后的正文（用于只关心剧情文字的场景，如替换前判定）。 */
+/**
+ * 去掉 MVU 变量更新块后的剧情正文（替换前判定、送给替换模型的 $CONTENT）。
+ * 夹在正文中间的块换成换行，免得前后两段粘成一句；没有块时原样返回。
+ */
 function stripMvuUpdateBlocks_ACU(text) {
     const source = String(text ?? '');
     const ranges = collectMvuUpdateBlockRanges_ACU(source);
     if (ranges.length === 0)
         return source;
-    let result = '';
-    let cursor = 0;
-    for (const range of ranges) {
-        result += source.slice(cursor, range.start);
-        cursor = range.end;
+    let result = source;
+    for (let index = ranges.length - 1; index >= 0; index--) {
+        result = result.slice(0, ranges[index].start) + '\n' + result.slice(ranges[index].end);
     }
-    return (result + source.slice(cursor)).trim();
+    return result.trim();
 }
 /**
  * 计算原文中的排除区间集合（复用上下文标签的边界匹配器语义）。
@@ -3307,14 +3308,23 @@ function applyOptimizationsWithStats_ACU(originalContent, optimizations, options
     let appliedCount = 0;
     let failedCount = 0;
     const failedItems = [];
-    // 未配置规则且没有 MVU 变量块时过滤器零区间早退，结果与不过滤逐字一致
-    const effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(originalContent, Array.isArray(optimizations) ? optimizations : [], options).kept;
+    let effectiveOptimizations = Array.isArray(optimizations) ? optimizations : [];
+    if (hasExcludeRuleInput_ACU(options)) {
+        effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(originalContent, effectiveOptimizations, options).kept;
+    }
     for (let i = 0; i < effectiveOptimizations.length; i++) {
         const opt = effectiveOptimizations[i];
         if (opt.type === 'replace' && opt.original && opt.optimized) {
             let replaced = false;
             const match = findParagraphMatch_ACU(opt.original, result);
-            if (match.start !== -1) {
+            // 前面的建议改过正文后，同一段原文可能改为命中受保护区（MVU 变量块 / 排除段）里的同名文字：
+            // 按当前正文重新核对，落进去就不写（预过滤只核对了原文里的第一处命中）。
+            const hitProtected = match.start !== -1
+                && !!findOverlappingBoundaryRange_ACU(collectOptimizationExcludeRanges_ACU(result, options), match.start, match.end);
+            if (hitProtected) {
+                logDebug_ACU(`[正文优化] 优化项 ${i + 1} 在当前正文中命中受保护区（写回保护），跳过`);
+            }
+            if (match.start !== -1 && !hitProtected) {
                 const matchedText = result.substring(match.start, match.end);
                 const originalPunct = trimPunctuation_ACU(matchedText);
                 const optimizedPunct = trimPunctuation_ACU(opt.optimized);
@@ -4748,6 +4758,23 @@ function ensureProfileExists_ACU(code, { seedFromCurrent = true, settings = {} }
     }
 }
 // [已移到 service/settings/settings-service.ts] switchIsolationProfile_ACU（业务编排）
+
+/**
+ * shared/decision-gate-defaults.ts — 正文替换「替换前判定」的默认值（叶子模块，无依赖）。
+ * 设置默认值与 service/optimization/decision-gate.ts 的规整逻辑共用这一份，避免两处默认值漂移；
+ * 放在叶子模块里，state-manager 引用它也不会形成循环依赖。
+ */
+/** 别名始终指向 Jev 最新版，用户只填 key 就能用。 */
+const DEFAULT_DECISION_MODEL_ACU = '~typesafe/jev-latest';
+const DEFAULT_DECISION_THRESHOLD_ACU = 50;
+function buildDefaultDecisionGateSettings_ACU() {
+    return {
+        enabled: false,
+        apiKey: '',
+        model: DEFAULT_DECISION_MODEL_ACU,
+        threshold: DEFAULT_DECISION_THRESHOLD_ACU,
+    };
+}
 
 // ═══════════════════════════════════════════════════════════════
 // shared/template-preset-utils.ts — 模板预设纯工具函数 & 常量
@@ -87801,7 +87828,8 @@ async function performContentOptimization_ACU(content, options = {}) {
     // 不可信内容（正文与 $1/$5/$6/$7/$8/$U/$C 的值）先换成 nonce token，模板解释器跑完再一次性还原（R8-05）：
     // 原先先插入正文再逐个替换占位符，正文里的「$5」「$C级」被换成纪要/角色描述，`$&` `$'` 被展开，
     // 正文里的 <if>/随机数/{[sql…]} 标签还会被当成模板执行。占位符只在可信模板本身里扫描、单遍替换。
-    const untrustedValues = { $CONTENT: String(content ?? '') };
+    // MVU 变量块不送给替换模型：省字数和替换项名额，模型也就不会去改变量（写回时块另有保护）
+    const untrustedValues = { $CONTENT: stripMvuUpdateBlocks_ACU(String(content ?? '')) };
     for (const [key, value] of Object.entries(placeholders)) {
         if (value && typeof value === 'string')
             untrustedValues[key] = value;
@@ -88333,6 +88361,17 @@ function cancelContentOptimization_ACU(reason = '正文优化已由用户终止�
         catch { /* 中断失败不影响取消标志 */ }
     }
     return { cancelled: true, reason };
+}
+/**
+ * 把一次外部请求（如替换前判定）挂到取消机制上：按「取消」时一并中断。用完必须 release。
+ */
+function trackContentOptimizationAbort_ACU() {
+    const controller = new AbortController();
+    activeContentOptimizationAbortControllers_ACU.add(controller);
+    return {
+        signal: controller.signal,
+        release: () => { activeContentOptimizationAbortControllers_ACU.delete(controller); },
+    };
 }
 /**
  * 检查正文优化是否已被取消
@@ -92659,7 +92698,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261009-08"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261009-09"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92678,7 +92717,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261009-08";
+        const stamp = "20261009-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -102233,6 +102272,7 @@ let settings_ACU = {
         autoApply: true,
         showDiff: true,
         ignoreMvuUpdate: false,
+        decisionGate: buildDefaultDecisionGateSettings_ACU(),
         minLength: 100,
         maxOptimizations: 10,
         loopCount: 1,
@@ -103951,12 +103991,7 @@ function buildDefaultSettings_ACU() {
             showDiff: true, // 是否显示优化对比（非无感模式下有效）
             parallelMode: false, // 填表与正文替换并行执行（默认关闭）
             ignoreMvuUpdate: false, // 忽略MVU更新：开后正文替换不等MVU解析、MVU结束后也不重跑（默认关闭）
-            decisionGate: {
-                enabled: false,
-                apiKey: '',
-                model: '~typesafe/jev-latest',
-                threshold: 50,
-            },
+            decisionGate: buildDefaultDecisionGateSettings_ACU(), // 替换前判定：OpenRouter 决策模型判「好」才替换
             minLength: 100, // 最小优化长度阈值
             maxOptimizations: 10, // 单次最大优化项数
             loopCount: 1, // 循环优化次数
@@ -105444,9 +105479,11 @@ function isChatMessageWriteTargetCurrent_ACU(target) {
         && String(currentChatFileIdentifier_ACU || '') === target.chatIdentity;
 }
 /**
- * 读取正文之后本楼只被追加了一段尾巴时返回该尾巴，否则返回 null。
- * 典型来源是 MVU「额外模型解析」：解析结果按「最新正文去尾空白 + '\n\n' + 变量块」拼到本楼末尾。
- * 这不是滑动、删楼或改写，正文替换应写回原文部分并保留尾巴，而不是整轮作废。
+ * 读取正文之后本楼只被追加了 MVU 变量块时返回这段尾巴，否则返回 null。
+ * MVU「额外模型解析」把结果按「最新正文去尾空白 + '\n\n' + 变量块」拼到本楼末尾；这不是滑动、删楼或改写，
+ * 正文替换应写回原文部分并保留尾巴，而不是整轮作废。
+ * 只认「空白开头、去掉变量块后不剩文字」的尾巴：「继续」续写或手动补字同样是追加，
+ * 但拼到改写过的句子后面会出乱句，仍按楼层已修改拒绝写回。
  */
 function findAppendedTailSinceCapture_ACU(target) {
     if (!target || typeof target.mes !== 'string')
@@ -105463,7 +105500,9 @@ function findAppendedTailSinceCapture_ACU(target) {
     if (typeof current !== 'string' || !base || current.length <= base.length || !current.startsWith(base))
         return null;
     const tail = current.slice(base.length);
-    return tail.trim() ? tail : null;
+    if (!/^\s/.test(tail) || !tail.trim())
+        return null;
+    return stripMvuUpdateBlocks_ACU(tail) === '' ? tail : null;
 }
 
 /**
@@ -106572,6 +106611,14 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, boundaryAnchorInde
  * 替换聊天消息内容（正文优化核心逻辑）
  * 从 presentation/components/optimization-ui/optimization-ui-exec.ts 搬迁
  */
+/** 旧正文里有 MVU 变量块而新正文一个都没有时，返回要接回的块（按原顺序空行分隔）；否则返回空串。 */
+function collectMissingMvuBlocks_ACU(oldContent, newContent) {
+    const previous = typeof oldContent === 'string' ? oldContent : '';
+    const blocks = collectMvuUpdateBlockRanges_ACU(previous);
+    if (blocks.length === 0 || collectMvuUpdateBlockRanges_ACU(String(newContent ?? '')).length > 0)
+        return '';
+    return blocks.map(range => previous.slice(range.start, range.end).trim()).join('\n\n');
+}
 async function replaceChatMessage_ACU(messageIndex, newContent, options = {}) {
     try {
         logDebug_ACU(`[正文优化] replaceChatMessage_ACU 开始执行, messageIndex=${messageIndex}, newContent长度=${newContent?.length || 0}`);
@@ -106588,10 +106635,16 @@ async function replaceChatMessage_ACU(messageIndex, newContent, options = {}) {
                 logWarn_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间已变化，拒绝写回。`);
                 return false;
             }
-            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间被追加了 ${appendedTail.length} 字尾巴（如 MVU 变量块），写回时原样保留`);
+            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间被追加了 MVU 变量块，写回时原样保留`);
             newContent = String(newContent ?? '').trimEnd() + appendedTail;
         }
         const oldContent = chat[messageIndex].mes;
+        // 本楼现有的 MVU 变量块不能被替换抹掉：从块追加之前的原文重新优化时，新正文里没有块，接回末尾。
+        const missingMvuBlocks = collectMissingMvuBlocks_ACU(oldContent, newContent);
+        if (missingMvuBlocks) {
+            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼的新正文缺少现有 MVU 变量块，已接回末尾`);
+            newContent = `${String(newContent ?? '').trimEnd()}\n\n${missingMvuBlocks}`;
+        }
         logDebug_ACU(`[正文优化] 原内容长度: ${oldContent?.length || 0}, 新内容长度: ${newContent?.length || 0}`);
         // 保存原始内容到 extra 字段，用于"重新优化"功能
         // 只有当 extra._acu_original_content 不存在时才保存（避免覆盖最初的原始内容）
@@ -118957,21 +119010,23 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
  */
 const DECISION_API_URL_ACU = 'https://openrouter.ai/api/alpha/decisions';
 const DECISION_MODELS_URL_ACU = 'https://openrouter.ai/api/v1/models?output_modalities=decisions';
-/** 别名始终指向 Jev 最新版，用户只填 key 就能用。 */
-const DEFAULT_DECISION_MODEL_ACU = '~typesafe/jev-latest';
 const DECISION_GOOD_LABEL_ACU = '好';
 const DECISION_BAD_LABEL_ACU = '不好';
 const DECISION_TIMEOUT_MS_ACU = 20000;
 const DECISION_QUESTION_KEY_ACU = 'quality';
 function normalizeDecisionGateSettings_ACU(raw) {
     const source = raw && typeof raw === 'object' ? raw : {};
-    const threshold = Number(source.threshold);
+    // 清空输入框得到 '' / null：Number 会把它们当成 0，门槛 0% 等于判定形同虚设，回到默认值
+    const rawThreshold = source.threshold;
+    const threshold = rawThreshold === null || rawThreshold === undefined || String(rawThreshold).trim() === ''
+        ? NaN
+        : Number(rawThreshold);
     const model = typeof source.model === 'string' ? source.model.trim() : '';
     return {
         enabled: source.enabled === true,
         apiKey: typeof source.apiKey === 'string' ? source.apiKey.trim() : '',
         model: model || DEFAULT_DECISION_MODEL_ACU,
-        threshold: Number.isFinite(threshold) ? Math.min(100, Math.max(0, Math.round(threshold))) : 50,
+        threshold: Number.isFinite(threshold) ? Math.min(100, Math.max(0, Math.round(threshold))) : DEFAULT_DECISION_THRESHOLD_ACU,
     };
 }
 function buildDecisionRequestBody_ACU(model, text) {
@@ -119013,11 +119068,38 @@ function interpretDecisionResponse_ACU(payload, threshold) {
         ?? (choice === DECISION_GOOD_LABEL_ACU ? 1 : 0);
     return {
         kind: 'decided',
-        replace: goodProbability * 100 >= threshold,
+        // 0.57 * 100 = 56.999…：容差比较，恰好达到门槛也算
+        replace: goodProbability * 100 >= threshold - 1e-9,
         choice,
         goodProbability,
         model: String(payload?.model ?? ''),
     };
+}
+/** 带超时与外部取消的请求；超时与取消各自给出可读原因，供调用方区分。 */
+async function fetchWithDeadline_ACU(url, init, deps) {
+    const fetchImpl = deps.fetch ?? globalThis.fetch;
+    const controller = new AbortController();
+    let reason = '';
+    const abortWith = (text) => {
+        if (!reason)
+            reason = text;
+        controller.abort();
+    };
+    const timer = setTimeout(() => abortWith('超时未响应'), deps.timeoutMs ?? DECISION_TIMEOUT_MS_ACU);
+    const onExternalAbort = () => abortWith('已取消');
+    if (deps.signal?.aborted)
+        onExternalAbort();
+    deps.signal?.addEventListener('abort', onExternalAbort, { once: true });
+    try {
+        return { response: await fetchImpl(url, { ...init, signal: controller.signal }) };
+    }
+    catch (error) {
+        return { failure: reason, error };
+    }
+    finally {
+        clearTimeout(timer);
+        deps.signal?.removeEventListener('abort', onExternalAbort);
+    }
 }
 async function readErrorMessage_ACU(response) {
     try {
@@ -119031,49 +119113,53 @@ async function readErrorMessage_ACU(response) {
 async function requestContentDecision_ACU(text, settings, deps = {}) {
     if (!settings.apiKey)
         return { kind: 'error', message: '未填写 OpenRouter Key' };
-    const fetchImpl = deps.fetch ?? globalThis.fetch;
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-    }, deps.timeoutMs ?? DECISION_TIMEOUT_MS_ACU);
+    const { response, failure, error } = await fetchWithDeadline_ACU(DECISION_API_URL_ACU, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${settings.apiKey}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(buildDecisionRequestBody_ACU(settings.model, text)),
+    }, deps);
+    if (!response) {
+        if (failure)
+            return { kind: 'error', message: `决策模型${failure}` };
+        return { kind: 'error', message: `请求失败：${error?.message || error}` };
+    }
     try {
-        const response = await fetchImpl(DECISION_API_URL_ACU, {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${settings.apiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(buildDecisionRequestBody_ACU(settings.model, text)),
-            signal: controller.signal,
-        });
         if (!response.ok) {
             const reason = await readErrorMessage_ACU(response);
             return { kind: 'error', message: `HTTP ${response.status}${reason ? `：${reason}` : ''}` };
         }
         return interpretDecisionResponse_ACU(await response.json(), settings.threshold);
     }
-    catch (error) {
-        if (timedOut)
-            return { kind: 'error', message: '决策模型超时未响应' };
-        return { kind: 'error', message: `请求失败：${error?.message || error}` };
-    }
-    finally {
-        clearTimeout(timer);
+    catch (readError) {
+        return { kind: 'error', message: `读取判定结果失败：${readError?.message || readError}` };
     }
 }
-/** 自动替换入口：读设置，去掉 MVU 变量块后送去判定。开关关闭时不发请求。 */
+/**
+ * 自动替换入口：读设置，去掉 MVU 变量块后送去判定。
+ * 开关关闭或还没填 key 时不发请求、视同未开启（页面上会提示缺 key），免得每楼都弹失败提示。
+ */
 async function judgeContentForAutoReplace_ACU(text, deps = {}) {
     const settings = normalizeDecisionGateSettings_ACU(settings_ACU?.contentOptimizationSettings?.decisionGate);
-    if (!settings.enabled)
+    if (!settings.enabled || !settings.apiKey)
         return { kind: 'disabled' };
     return requestContentDecision_ACU(stripMvuUpdateBlocks_ACU(text), settings, deps);
 }
-/** OpenRouter 上当前可用的决策模型（公开列表，不需要 key）。失败时抛错由调用方提示。 */
+/** 价格字段都明确为 0 才算免费；缺失、空值或任何一项非 0（如按次收费）都不算。 */
+function isFreePricing_ACU(pricing) {
+    if (!pricing || typeof pricing !== 'object')
+        return false;
+    const record = pricing;
+    const isZero = (value) => value !== null && value !== undefined && String(value).trim() !== '' && Number(value) === 0;
+    return isZero(record.prompt) && Object.values(record).every(value => value === null || value === undefined || isZero(value));
+}
+/** OpenRouter 上当前可用的决策模型（公开列表，不需要 key）。失败或超时抛错，由调用方提示。 */
 async function fetchDecisionModels_ACU(deps = {}) {
-    const fetchImpl = deps.fetch ?? globalThis.fetch;
-    const response = await fetchImpl(DECISION_MODELS_URL_ACU);
+    const { response, failure, error } = await fetchWithDeadline_ACU(DECISION_MODELS_URL_ACU, { method: 'GET' }, deps);
+    if (!response)
+        throw new Error(failure || error?.message || String(error));
     if (!response.ok)
         throw new Error(`HTTP ${response.status}`);
     const body = await response.json();
@@ -119085,7 +119171,7 @@ async function fetchDecisionModels_ACU(deps = {}) {
         .map((model) => ({
         id: model.id,
         name: typeof model.name === 'string' && model.name ? model.name : model.id,
-        free: Number(model?.pricing?.prompt) === 0,
+        free: isFreePricing_ACU(model?.pricing),
     }));
 }
 
@@ -119388,51 +119474,74 @@ function recordAutoProcessedAfterWriteBack_ACU(messageIndex, fallbackContent) {
 /**
  * 替换前判定：问决策模型「这篇文章写得好不好」，判「好」才继续替换（性价比模型的 AI 味正合它口味）。
  * 判「不好」保持原文，并登记本楼已处理，重复的生成结束事件不再重判；判定失败照常替换。
- * 串行的手动确认链原本由确认流程收尾时触发填表，跳过替换时要在这里补触发（并行模式填表已在同时跑）。
- * @returns 是否继续替换
+ * 串行的手动确认链原本由确认流程收尾时触发填表，跳过替换时要在这里补触发（并行模式填表已在同时跑）；
+ * 调用方传了 onGateSkipped（MVU 早跑）时改为通知调用方，由它在 MVU 解析结束后再填表。
+ * 判定请求挂在正文优化的取消机制上：按「取消」会中断请求，之后既不提示也不登记、不填表。
  */
-async function passesDecisionGate_ACU(messageIndex, message, content, judgedText, config) {
+async function runDecisionGate_ACU(messageIndex, message, content, judgedText, config, onGateSkipped) {
     if (config.decisionGate?.enabled !== true)
-        return true;
+        return 'continue';
     if (config.seamlessMode) {
         showOptimizationOverlay_ACU('正在判定正文...');
     }
     else {
         showOptimizationProgressToast_ACU('正在判定正文...');
     }
+    const abort = trackContentOptimizationAbort_ACU();
     let outcome;
     try {
-        outcome = await judgeContentForAutoReplace_ACU(judgedText);
+        outcome = await judgeContentForAutoReplace_ACU(judgedText, { signal: abort.signal });
     }
     catch (error) {
         outcome = { kind: 'error', message: error?.message || String(error) };
     }
+    finally {
+        abort.release();
+    }
+    try {
+        ensureOptimizationNotCancelled_ACU();
+    }
+    catch {
+        hideOptimizationOverlay_ACU();
+        hideOptimizationProgressToast_ACU();
+        logDebug_ACU('[正文优化] 替换前判定期间用户取消，本楼不再处理');
+        return 'cancelled';
+    }
     if (outcome.kind === 'disabled')
-        return true;
+        return 'continue';
     if (outcome.kind === 'error') {
         logError_ACU('[正文优化] 替换前判定失败，照常替换:', outcome.message);
         showToastr_ACU('warning', `决策判定失败（${outcome.message}），本楼照常替换`);
-        return true;
+        return 'continue';
     }
     const goodPercent = Math.round(outcome.goodProbability * 100);
     logDebug_ACU(`[正文优化] 替换前判定：${outcome.choice}（好 ${goodPercent}%，模型 ${outcome.model || '未知'}）→ ${outcome.replace ? '替换' : '不替换'}`);
     if (outcome.replace)
-        return true;
+        return 'continue';
     hideOptimizationOverlay_ACU();
     hideOptimizationProgressToast_ACU();
-    recordAutoContentOptimizationProcessed_ACU({ messageIndex, messageId: message.message_id, content });
+    // 判定期间 MVU 可能往本楼追加了变量块：登记实际正文，下一次重复的生成结束事件才能判重命中。
+    // 被滑动或改写过就仍登记判定时的正文，不把别的 swipe 误登记为已处理。
+    const live = getChatArray_ACU()?.[messageIndex];
+    const liveContent = live && live.message_id === message.message_id && typeof live.mes === 'string'
+        && live.mes.startsWith(content.trimEnd()) ? live.mes : content;
+    recordAutoContentOptimizationProcessed_ACU({ messageIndex, messageId: message.message_id, content: liveContent });
     showToastr_ACU('info', `决策模型判定本楼「${outcome.choice}」（好 ${goodPercent}%），不替换`);
-    if (!config.parallelMode && !config.autoApply && !config.seamlessMode) {
+    if (onGateSkipped) {
+        onGateSkipped();
+    }
+    else if (!config.parallelMode && !config.autoApply && !config.seamlessMode) {
         await triggerAutomaticUpdateIfNeeded_ACU();
     }
-    return false;
+    return 'skipped';
 }
 /**
  * 执行正文优化流程（在GENERATION_ENDED后调用）
  * @param {number} messageIndex - AI消息索引
+ * @param options.onGateSkipped - 替换前判定判「不好」时的回调；传了就由调用方负责之后的填表
  * @returns {Promise<boolean>} 是否成功
  */
-async function executeContentOptimization_ACU(messageIndex) {
+async function executeContentOptimization_ACU(messageIndex, options = {}) {
     const config = settings_ACU.contentOptimizationSettings || {};
     _set_contentOptimizationAbortRequested_ACU(false);
     // 检查是否启用
@@ -119486,9 +119595,13 @@ async function executeContentOptimization_ACU(messageIndex) {
         logDebug_ACU(`[正文优化] 处理后正文长度 ${processedContent.length} 小于最小阈值 ${minLength}，跳过优化`);
         return false;
     }
-    if (!(await passesDecisionGate_ACU(messageIndex, message, content, processedContent, config))) {
-        return true;
+    const gate = await runDecisionGate_ACU(messageIndex, message, content, processedContent, config, options.onGateSkipped);
+    if (gate === 'cancelled') {
+        _set_contentOptimizationAbortRequested_ACU(false);
+        return false;
     }
+    if (gate === 'skipped')
+        return true;
     const loopCount = config.loopCount || 1;
     logDebug_ACU(`[正文优化] 开始优化消息 ${messageIndex}，原始长度 ${content.length}，处理后长度 ${processedContent.length}，循环次数: ${loopCount}`);
     if (config.seamlessMode) {
@@ -120514,7 +120627,7 @@ function attemptToLoadCoreApis_ACU() {
  * 只跑替换分支（填表仍走正常管线等 MVU）；解析/评估失败一律静默放弃，
  * 交由正常管线兜底。返回 true = 早跑已执行（正常轮不再重复跑替换）。
  */
-async function runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey, scheduledIsolationKey) {
+async function runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey, scheduledIsolationKey, onGateSkipped) {
     try {
         await loadAllChatMessages_ACU();
         if (currentChatFileIdentifier_ACU !== scheduledChatKey
@@ -120542,7 +120655,8 @@ async function runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey,
             && earlyResult.action !== 'optimize_then_update')
             return false;
         logDebug_ACU('[MVU联动] 忽略MVU更新已开启，正文替换不等闸门直接开跑');
-        const earlyReplaceSucceeded = await executeContentOptimization_ACU(earlyResult.lastMessageIndex);
+        // 判「不好」时不在这里填表：手动确认模式的填表要等 MVU 解析结束，由正常轮补跑
+        const earlyReplaceSucceeded = await executeContentOptimization_ACU(earlyResult.lastMessageIndex, { onGateSkipped });
         if (earlyReplaceSucceeded !== true) {
             logDebug_ACU('[MVU联动] 早跑替换未成功，交由正常管线接管');
             return false;
@@ -120602,8 +120716,11 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
             const ignoreMvuUpdate_ACU = settings_ACU?.contentOptimizationSettings?.ignoreMvuUpdate === true;
             const isMvuRerun_ACU = eventType === 'MVU_ANALYSIS_ENDED';
             let earlyReplaceDone_ACU = false;
+            let earlyGateSkipped_ACU = false;
             if (ignoreMvuUpdate_ACU && !isMvuRerun_ACU) {
-                earlyReplaceDone_ACU = await runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey_ACU, scheduledIsolationKey_ACU);
+                earlyReplaceDone_ACU = await runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey_ACU, scheduledIsolationKey_ACU, () => {
+                    earlyGateSkipped_ACU = true;
+                });
             }
             if (stopIfAutoFillRunStale_ACU('after_early_replace'))
                 return;
@@ -120792,6 +120909,14 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                     break;
                 case 'optimize_manual':
                     if (skipReplace_ACU) {
+                        // 手动模式的填表本由确认流程收尾触发；早跑被替换前判定跳过时没有确认流程，在这里（MVU 解析后）补跑
+                        if (earlyGateSkipped_ACU && !isMvuRerun_ACU) {
+                            logDebug_ACU('[MVU联动] 早跑替换被替换前判定跳过，手动模式在 MVU 解析后补跑填表');
+                            if (stopIfAutoFillRunStale_ACU('before_trigger'))
+                                break;
+                            await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
+                            break;
+                        }
                         logDebug_ACU('[MVU联动] 忽略MVU更新已开启，W5 重跑跳过正文替换（手动模式本就不跑填表）');
                         break;
                     }
@@ -152324,7 +152449,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261009-08";
+        const stamp = "20261009-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -192794,7 +192919,7 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
             this[key] = !!value;
             this.saveBasicSettings();
         },
-        /** 替换前判定的开关 / key / 模型 / 门槛：规整后与其它基础字段一起落盘。 */
+        /** 替换前判定的开关 / key / 模型 / 门槛：规整后与其它基础字段一起落盘（门槛清空时回到默认值）。 */
         setDecisionGate(patch) {
             this.decisionGate = normalizeDecisionGateSettings_ACU({ ...this.decisionGate, ...patch });
             this.saveBasicSettings();
@@ -192815,9 +192940,15 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
                 this.decisionModelsLoading = false;
             }
         },
-        /** 用测试文本问一次决策模型，不写回聊天。 */
+        /** 用测试文本问一次决策模型，不写回聊天；与自动判定同口径，先按提取/排除标签处理。 */
         async runDecisionTest() {
-            const input = stripMvuUpdateBlocks_ACU(this.testInput).trim();
+            const filtered = applyContextTagFilters_ACU(this.testInput, {
+                extractTags: this.extractTags.trim(),
+                extractRules: this.extractRules,
+                excludeTags: this.excludeTags.trim(),
+                excludeRules: this.excludeRules,
+            });
+            const input = stripMvuUpdateBlocks_ACU(filtered).trim();
             if (input.length < 10) {
                 setMessage$1(this, 'warning', '请输入至少 10 个字符的测试文本。');
                 return;
@@ -193319,8 +193450,8 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-cr__preset[data-v-109d7f6d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-109d7f6d] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-109d7f6d] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-109d7f6d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-109d7f6d] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-109d7f6d] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-109d7f6d] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-109d7f6d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-109d7f6d] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-109d7f6d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-109d7f6d] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-109d7f6d] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-109d7f6d] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-109d7f6d] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-109d7f6d");
-var ContentReplacePage_vue_vue_type_style_index_0_scoped_109d7f6d_lang = null;
+injectSfcStyle("\n.ub-cr__preset[data-v-88f35716] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-88f35716] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-88f35716] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-88f35716] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-88f35716] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-88f35716] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-88f35716] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-88f35716] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-88f35716] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-88f35716] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-88f35716] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-88f35716] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-88f35716] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-88f35716] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-88f35716");
+var ContentReplacePage_vue_vue_type_style_index_0_scoped_88f35716_lang = null;
 
 const _hoisted_1$j = { class: "ub-cr__picker" };
 const _hoisted_2$i = { class: "ub-cr__preset" };
@@ -193520,6 +193651,17 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
+					$setup.store.decisionGate.enabled && !$setup.store.decisionGate.apiKey ? (openBlock(), createBlock($setup["UbCallout"], {
+						key: 0,
+						kind: "warning"
+					}, {
+						default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+							" 还没填 OpenRouter Key，判定暂不生效，正文照常替换。 ",
+							-1
+							/* CACHED */
+						)])]),
+						_: 1
+					})) : createCommentVNode("v-if", true),
 					createVNode($setup["UbRow"], {
 						label: "OpenRouter Key",
 						hint: "在 openrouter.ai 的 Keys 页面创建，只用于决策判定。",
@@ -193563,7 +193705,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							max: 100,
 							step: 5,
 							"aria-label": "判定门槛",
-							onChange: _cache[6] || (_cache[6] = ($event) => $setup.store.setDecisionGate({ threshold: Number($event) }))
+							onChange: _cache[6] || (_cache[6] = ($event) => $setup.store.setDecisionGate({ threshold: $event }))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})
@@ -193586,7 +193728,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				}, 8, ["variant"])]),
 				default: withCtx(() => [createBaseVNode("div", _hoisted_2$i, [
 					createBaseVNode("p", _hoisted_3$h, [
-						_cache[16] || (_cache[16] = createTextVNode(
+						_cache[17] || (_cache[17] = createTextVNode(
 							"当前提示词：",
 							-1
 							/* CACHED */
@@ -193639,7 +193781,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						key: 0,
 						kind: "warning"
 					}, {
-						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 							" 正文替换提示词缺少 $CONTENT 占位符，运行时无法知道要检查哪段正文；请打开编辑器载入默认提示词或补回占位符。 ",
 							-1
 							/* CACHED */
@@ -193727,7 +193869,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						busy: $setup.store.busyAction === "decision-test",
 						onClick: $setup.store.runDecisionTest
 					}, {
-						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
+						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 							"测试决策判定",
 							-1
 							/* CACHED */
@@ -193739,7 +193881,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						busy: $setup.store.busyAction === "test",
 						onClick: $setup.store.runTest
 					}, {
-						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
+						default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
 							"执行优化测试",
 							-1
 							/* CACHED */
@@ -193779,7 +193921,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						icon: "fa-solid fa-plus",
 						onClick: $setup.store.createPresetFromDefault
 					}, {
-						default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
 							"从默认新建",
 							-1
 							/* CACHED */
@@ -193834,7 +193976,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						/* KEYED_FRAGMENT */
 					))])) : (openBlock(), createElementBlock("p", _hoisted_11$5, "暂无预设。点上方「从默认新建」，或在预设卡片里导入。")),
 					createVNode($setup["UbCallout"], { kind: "info" }, {
-						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+						default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 							"点「编辑提示词」会先把该预设载入为当前提示词，再打开编辑器；保存后同步更新这个预设。",
 							-1
 							/* CACHED */
@@ -193859,7 +194001,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				onDelete: _cache[14] || (_cache[14] = ($event) => $setup.store.deletePromptSegment($event)),
 				onUpdate: $setup.onPromptUpdate
 			}, {
-				lead: withCtx(() => [createBaseVNode("div", _hoisted_12$4, [_cache[22] || (_cache[22] = createBaseVNode(
+				lead: withCtx(() => [createBaseVNode("div", _hoisted_12$4, [_cache[23] || (_cache[23] = createBaseVNode(
 					"span",
 					null,
 					"可用占位符",
@@ -193891,7 +194033,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-109d7f6d"]]);
+var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-88f35716"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;

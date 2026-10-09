@@ -55,9 +55,11 @@ vi.mock('../../../src/service/ai/api-call', () => ({
   callAIWithPreset_ACU: vi.fn(),
 }));
 
-vi.mock('../../../src/shared/text-optimization', () => {
+vi.mock('../../../src/shared/text-optimization', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/shared/text-optimization')>();
   const mockApplyOptimizations = vi.fn((content: string) => content);
   return {
+    stripMvuUpdateBlocks_ACU: actual.stripMvuUpdateBlocks_ACU,
     applyOptimizations_ACU: mockApplyOptimizations,
     applyOptimizationsWithStats_ACU: vi.fn((content: string) => {
       const nextContent = mockApplyOptimizations(content);
@@ -435,6 +437,23 @@ describe('标签排除规则写回保护接线（performContentOptimization_ACU�
     );
     // 写回只喂保留下来的建议
     expect(vi.mocked(applyOptimizationsWithStats_ACU).mock.calls.some(call => call[1] === kept)).toBe(true);
+  });
+
+  it('送给替换模型的 $CONTENT 不含 MVU 变量块（省字数、免得模型去改变量）', async () => {
+    const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
+    const defaults = await import('../../../src/shared/defaults-json.js');
+    (defaults as any).DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU.splice(0, Infinity, { role: 'user', content: '正文：$CONTENT' });
+    mockSettings.contentOptimizationSettings = { maxOptimizations: 10, loopCount: 1, retryCount: 1 };
+    vi.mocked(callAIWithPreset_ACU).mockClear();
+    vi.mocked(callAIWithPreset_ACU).mockResolvedValue(JSON.stringify({ optimizations: [], summary: '无' }));
+
+    const { performContentOptimization_ACU } = await import('../../../src/service/optimization/content-optimization');
+    await performContentOptimization_ACU('她推开门。<UpdateVariable>_.set("a", 1, 2);</UpdateVariable>', { currentLoop: 1 });
+
+    const sent = JSON.stringify(vi.mocked(callAIWithPreset_ACU).mock.calls[0][0]);
+    expect(sent).toContain('她推开门。');
+    expect(sent).not.toContain('UpdateVariable');
+    (defaults as any).DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU.splice(0, Infinity);
   });
 
   it('未配置排除规则时行为不变：全部建议原样透传（回归锁）', async () => {

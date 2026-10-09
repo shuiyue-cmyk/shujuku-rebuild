@@ -170,3 +170,57 @@ describe('judgeContentForAutoReplace_ACU', () => {
     expect(body.model).toBe(DEFAULT_DECISION_MODEL_ACU);
   });
 });
+
+describe('复审修正', () => {
+  it('门槛清空 / 为 null 时回到 50，不会变成 0% 让判定形同虚设', () => {
+    expect(normalizeDecisionGateSettings_ACU({ threshold: '' }).threshold).toBe(50);
+    expect(normalizeDecisionGateSettings_ACU({ threshold: null }).threshold).toBe(50);
+    expect(normalizeDecisionGateSettings_ACU({ threshold: '  ' }).threshold).toBe(50);
+  });
+
+  it('概率恰好等于门槛时算达到（不受浮点误差影响）', () => {
+    expect(interpretDecisionResponse_ACU(choiceAnswer('好', 0.57), 57)).toMatchObject({ replace: true });
+    expect(interpretDecisionResponse_ACU(choiceAnswer('不好', 0.29), 29)).toMatchObject({ replace: true });
+    expect(interpretDecisionResponse_ACU(choiceAnswer('不好', 0.28), 29)).toMatchObject({ replace: false });
+  });
+
+  it('开启但没填 key 时视同未开启，不会每楼都报错', async () => {
+    h.settings.contentOptimizationSettings = { decisionGate: { enabled: true, apiKey: '' } };
+    const fetchImpl = vi.fn();
+    expect(await judgeContentForAutoReplace_ACU('正文', { fetch: fetchImpl })).toEqual({ kind: 'disabled' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('外部取消信号会中断在途判定', async () => {
+    const settings = normalizeDecisionGateSettings_ACU({ enabled: true, apiKey: 'sk-or-x' });
+    const hanging = vi.fn((_url: string, init: any) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    }));
+    const controller = new AbortController();
+    const pending = requestContentDecision_ACU('正文', settings, { fetch: hanging as any, signal: controller.signal });
+    controller.abort();
+    const verdict = await pending;
+    expect(verdict.kind).toBe('error');
+    expect((verdict as any).message).toContain('取消');
+  });
+
+  it('只有价格明确全为 0 才标免费；价格缺失或按次收费都不算', async () => {
+    const decisions = { output_modalities: ['decisions'] };
+    const fetchImpl = vi.fn(async () => jsonResponse(200, { data: [
+      { id: 'a/free', name: 'A', architecture: decisions, pricing: { prompt: '0', completion: '0' } },
+      { id: 'b/unknown', name: 'B', architecture: decisions, pricing: { prompt: null } },
+      { id: 'c/empty', name: 'C', architecture: decisions, pricing: { prompt: '' } },
+      { id: 'd/per-request', name: 'D', architecture: decisions, pricing: { prompt: '0', request: '0.001' } },
+      { id: 'e/none', name: 'E', architecture: decisions },
+    ] }));
+    const models = await fetchDecisionModels_ACU({ fetch: fetchImpl });
+    expect(models.filter(model => model.free).map(model => model.id)).toEqual(['a/free']);
+  });
+
+  it('拉取模型列表卡住时超时报错，而不是一直等', async () => {
+    const hanging = vi.fn((_url: string, init: any) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    }));
+    await expect(fetchDecisionModels_ACU({ fetch: hanging as any, timeoutMs: 5 })).rejects.toThrow('超时');
+  });
+});

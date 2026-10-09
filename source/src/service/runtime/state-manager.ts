@@ -7,6 +7,7 @@
 
 // ═══ 业务状态 + 门控逻辑（保留在本文件） ═══
 
+import { buildDefaultDecisionGateSettings_ACU } from '../../shared/decision-gate-defaults';
 import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
 import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU } from '../../shared/defaults';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
@@ -457,6 +458,7 @@ export let settings_ACU: any = {
       autoApply: true,
       showDiff: true,
       ignoreMvuUpdate: false,
+      decisionGate: buildDefaultDecisionGateSettings_ACU(),
       minLength: 100,
       maxOptimizations: 10,
       loopCount: 1,

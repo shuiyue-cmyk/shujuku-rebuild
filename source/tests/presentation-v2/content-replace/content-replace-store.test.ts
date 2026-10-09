@@ -182,6 +182,25 @@ describe('useContentReplaceStore', () => {
     expect(store.testOutput).toContain('会替换');
   });
 
+  it('测试判定与自动判定口径一致：先按提取/排除标签处理测试文本', async () => {
+    const { store } = await setupStore();
+    const fetchMock = vi.fn(async (_url: string, _init: any) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ answers: { quality: { type: 'choice', choice: '好', probabilities: { 好: 0.9 } } } }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    store.setDecisionGate({ apiKey: 'sk-or-x' });
+    store.setString('extractTags', 'content');
+    store.setString('testInput', '<thinking>先想一想这一段怎么写</thinking><content>夜色漫过屋檐，她收起最后一封信。</content>');
+
+    await store.runDecisionTest();
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.state).not.toContain('先想一想');
+    expect(body.state).toContain('夜色漫过屋檐');
+  });
+
   it('测试判定：没填 key 时提示，不发请求', async () => {
     const { store } = await setupStore();
     const fetchMock = vi.fn();
