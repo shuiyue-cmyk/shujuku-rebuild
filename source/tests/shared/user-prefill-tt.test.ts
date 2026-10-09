@@ -55,8 +55,9 @@ describe('默认组尾段 assistant→user 切换（与上游对齐、按本地�
     expect(tail.content).toBe('收到，天之音开始执行！');
   });
 
-  it('守卫：正文优化组尾段是整句 assistant 应答（上游未切），保持 assistant', () => {
-    const tail = DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU[DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU.length - 1];
-    expect(tail.role).toBe('assistant');
+  it('守卫：正文优化组的整句 assistant 应答（上游未切）保持 assistant；其后是用户要求追加的 SYSTEM 审核要求段', () => {
+    const group = DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU;
+    expect(group[group.length - 2].role).toBe('assistant');
+    expect(group[group.length - 1].role).toBe('SYSTEM');
   });
 });

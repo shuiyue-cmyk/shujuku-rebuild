@@ -202,6 +202,7 @@ vi.mock('../../../src/shared/defaults', () => ({
     maxEntriesPerChannel: { plot: 20, tableFill: 20, finalGeneration: 20 },
   }),
   buildDefaultContentOptimizationPromptGroup_ACU: () => [],
+  upgradeContentOptimizationDefaultPrompt_ACU: () => false,
 }));
 
 vi.mock('../../../src/data/repositories/isolation-repo', () => ({

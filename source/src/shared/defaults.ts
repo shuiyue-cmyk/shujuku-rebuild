@@ -348,3 +348,23 @@ export function buildDefaultContentOptimizationPromptGroup_ACU({ mainContent = '
 
     return base;
 }
+
+/** 只比角色与内容：存量提示词经过规整，其它标记字段不可靠。 */
+function promptGroupSignature_ACU(group: any[]): string {
+    return JSON.stringify(group.map((item: any) => [String(item?.role ?? '').toUpperCase(), String(item?.content ?? '')]));
+}
+
+/**
+ * 默认提示词末尾新增了 SYSTEM「审核要求」段。设置里存的是提示词副本，
+ * 只有仍是旧默认（新默认去掉末段、一字未改）的才升级为新默认；用户改过的保持原样。
+ * @returns 是否做了升级（调用方据此补存设置）
+ */
+export function upgradeContentOptimizationDefaultPrompt_ACU(settings: any): boolean {
+    const cfg = settings?.contentOptimizationSettings;
+    if (!cfg || !Array.isArray(cfg.promptGroup) || cfg.promptGroup.length === 0) return false;
+    const current = buildDefaultContentOptimizationPromptGroup_ACU();
+    const legacySignature = promptGroupSignature_ACU(current.slice(0, -1));
+    if (promptGroupSignature_ACU(cfg.promptGroup) !== legacySignature) return false;
+    cfg.promptGroup = current;
+    return true;
+}
