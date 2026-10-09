@@ -258,6 +258,14 @@ describe('callAIWithPreset_ACU', () => {
 
 // ═══ buildCustomApiRequestBody_ACU ═══
 describe('buildCustomApiRequestBody_ACU', () => {
+  it('插件请求一律标为后台请求：宿主把上游错误作为 502 返回，而不是包成一条「助手回复」', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', bodyParams: 'type: chat' },
+    );
+    expect(body.type).toBe('quiet');
+  });
+
   it('max_tokens=0 不被回退为 20000', () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],

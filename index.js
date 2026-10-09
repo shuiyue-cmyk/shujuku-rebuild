@@ -87029,6 +87029,10 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
             ? effectiveApiConfig.streamingEnabled === true
             : settings_ACU.streamingEnabled === true,
         chat_completion_source: 'custom',
+        // 后台请求：TT 对非后台请求会把上游错误（鉴权失败、协议不符等）包成 200 的「助手回复」，
+        // 插件会把「[API Error] …」当成模型输出去解析；标为 quiet 后宿主改回 502 + 错误原因，
+        // 走调用方既有的失败与重试路径。也不再触发宿主的「生成完成」通知。只给宿主看，不转发上游。
+        type: 'quiet',
         // 接口协议（预设级）：对齐 TT「自定义」选项（custom_api_format 契约，TT 现有五档）。
         // TT 后端按该值分流上游端点与请求/响应变形：openai_compat→/chat/completions、
         // openai_responses→/responses、claude_messages→/messages、gemini_interactions→/interactions；
@@ -92761,7 +92765,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261009-17"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261009-20"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92780,7 +92784,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261009-17";
+        const stamp = "20261009-20";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -152828,7 +152832,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261009-17";
+        const stamp = "20261009-20";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

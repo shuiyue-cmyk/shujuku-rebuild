@@ -436,6 +436,10 @@ export function buildCustomApiRequestBody_ACU(
       ? effectiveApiConfig.streamingEnabled === true
       : settings_ACU.streamingEnabled === true,
     chat_completion_source: 'custom',
+    // 后台请求：TT 对非后台请求会把上游错误（鉴权失败、协议不符等）包成 200 的「助手回复」，
+    // 插件会把「[API Error] …」当成模型输出去解析；标为 quiet 后宿主改回 502 + 错误原因，
+    // 走调用方既有的失败与重试路径。也不再触发宿主的「生成完成」通知。只给宿主看，不转发上游。
+    type: 'quiet',
     // 接口协议（预设级）：对齐 TT「自定义」选项（custom_api_format 契约，TT 现有五档）。
     // TT 后端按该值分流上游端点与请求/响应变形：openai_compat→/chat/completions、
     // openai_responses→/responses、claude_messages→/messages、gemini_interactions→/interactions；
