@@ -205897,6 +205897,8 @@ function useVectorIndexConfig() {
             },
             {
                 label: '身份健康',
+                // 内容最长；占两格后 11 项正好 12 格，2/3/4 列都整行排满
+                wide: true,
                 value: `${healthReport.value?.status || 'unknown'} / ${healthReport.value?.identityMismatchCount || 0} identity / ${healthReport.value?.pathIdentityCollisionCount || 0} collision / ${healthReport.value?.checksumMismatchCount || 0} checksum`,
             },
             {
@@ -205991,37 +205993,76 @@ var _sfc_main$6 = /*@__PURE__*/ defineComponent({
     },
     setup(__props, { expose: __expose }) {
         __expose();
-        const __returned__ = {};
+        const props = __props;
+        const root = ref(null);
+        /**
+         * 网格当前是否多列。列数由 auto-fill 按宽度决定，CSS 无法据此切换 span：
+         * 单列时 span 2 会凭空多出一条隐式列，后面的项被自动放进去。只在有宽项时才观察。
+         */
+        const multiColumn = ref(false);
+        let observer = null;
+        function measureColumns() {
+            const el = root.value;
+            const view = el?.ownerDocument?.defaultView;
+            if (!el || !view)
+                return;
+            const tracks = String(view.getComputedStyle(el).gridTemplateColumns || '').trim();
+            multiColumn.value = tracks !== '' && tracks !== 'none' && tracks.split(/\s+/).length >= 2;
+        }
+        onMounted(() => {
+            if (!props.items.some(item => item.wide))
+                return;
+            measureColumns();
+            const Observer = root.value?.ownerDocument?.defaultView?.ResizeObserver ?? globalThis.ResizeObserver;
+            if (!Observer || !root.value)
+                return;
+            observer = new Observer(() => measureColumns());
+            observer.observe(root.value);
+        });
+        onBeforeUnmount(() => {
+            observer?.disconnect();
+            observer = null;
+        });
+        const __returned__ = { props, root, multiColumn, get observer() { return observer; }, set observer(v) { observer = v; }, measureColumns };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-stats[data-v-bd763221] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--ub-u) * 180)), 1fr));\r\n  gap: 1px;\r\n  margin: 0;\r\n  background: var(--ub-line-soft);\n}\n.ub-stats__item[data-v-bd763221] {\r\n  min-width: 0;\r\n  padding: var(--ub-s2) var(--ub-s4);\r\n  background: var(--ub-panel);\n}\n.ub-stats__item dt[data-v-bd763221] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\n}\n.ub-stats__item dd[data-v-bd763221] {\r\n  margin: 2px 0 0;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-variant-numeric: tabular-nums;\r\n  overflow-wrap: anywhere;\n}\n.ub-stats--mono .ub-stats__item dd[data-v-bd763221] {\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\n}\r\n", "src/presentation-v3/ui/UbStats.vue#style-0-bd763221");
-var UbStats_vue_vue_type_style_index_0_scoped_bd763221_lang = null;
+injectSfcStyle("\n/*\n * 分隔线由每格自己在右侧、下方各画 1px（外投影不占布局），网格外缘那一圈被 overflow 裁掉。\n * 不用「gap + 线色背景」：那样网格末行的空位会露出一整块线色底。\n * 各格不铺底色，否则后面的格子会盖住前一格画在外侧的分隔线。\n */\n.ub-stats[data-v-05d62386] {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--ub-u) * 180)), 1fr));\n  grid-auto-flow: row dense;\n  margin: 0;\n  overflow: hidden;\n}\n.ub-stats__item[data-v-05d62386] {\n  min-width: 0;\n  padding: var(--ub-s2) var(--ub-s4);\n  box-shadow: 1px 0 0 var(--ub-line-soft), 0 1px 0 var(--ub-line-soft);\n}\n.ub-stats__item--wide[data-v-05d62386] {\n  grid-column: span 2;\n}\n.ub-stats__item dt[data-v-05d62386] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 700;\n}\n.ub-stats__item dd[data-v-05d62386] {\n  margin: 2px 0 0;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  font-variant-numeric: tabular-nums;\n  overflow-wrap: anywhere;\n}\n.ub-stats--mono .ub-stats__item dd[data-v-05d62386] {\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n}\n", "src/presentation-v3/ui/UbStats.vue#style-0-05d62386");
+var UbStats_vue_vue_type_style_index_0_scoped_05d62386_lang = null;
 
 function _sfc_render$6(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"dl",
-		{ class: normalizeClass(["ub-stats", { "ub-stats--mono": $props.mono }]) },
+		{
+			ref: "root",
+			class: normalizeClass(["ub-stats", { "ub-stats--mono": $props.mono }])
+		},
 		[(openBlock(true), createElementBlock(
 			Fragment,
 			null,
 			renderList($props.items, (item) => {
-				return openBlock(), createElementBlock("div", {
-					key: item.key ?? item.label,
-					class: "ub-stats__item"
-				}, [createBaseVNode(
-					"dt",
-					null,
-					toDisplayString(item.label),
-					1
-					/* TEXT */
-				), createBaseVNode("dd", null, [renderSlot(_ctx.$slots, item.key ?? item.label, { item }, () => [createTextVNode(
-					toDisplayString(item.value ?? "—"),
-					1
-					/* TEXT */
-				)], true)])]);
+				return openBlock(), createElementBlock(
+					"div",
+					{
+						key: item.key ?? item.label,
+						class: normalizeClass(["ub-stats__item", { "ub-stats__item--wide": item.wide && $setup.multiColumn }])
+					},
+					[createBaseVNode(
+						"dt",
+						null,
+						toDisplayString(item.label),
+						1
+						/* TEXT */
+					), createBaseVNode("dd", null, [renderSlot(_ctx.$slots, item.key ?? item.label, { item }, () => [createTextVNode(
+						toDisplayString(item.value ?? "—"),
+						1
+						/* TEXT */
+					)], true)])],
+					2
+					/* CLASS */
+				);
 			}),
 			128
 			/* KEYED_FRAGMENT */
@@ -206030,7 +206071,7 @@ function _sfc_render$6(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbStats = /* @__PURE__ */ _export_sfc(_sfc_main$6, [["render", _sfc_render$6], ["__scopeId", "data-v-bd763221"]]);
+var UbStats = /* @__PURE__ */ _export_sfc(_sfc_main$6, [["render", _sfc_render$6], ["__scopeId", "data-v-05d62386"]]);
 
 const FLUSH_ERROR_MAX_CHARS = 60;
 var _sfc_main$5 = /*@__PURE__*/ defineComponent({

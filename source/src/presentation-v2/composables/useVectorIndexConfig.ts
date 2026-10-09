@@ -112,6 +112,8 @@ export interface VectorIndexStatsItem {
   label: string;
   value: string | number;
   key?: string;
+  /** 多列时占两格（UbStats）。 */
+  wide?: boolean;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -640,6 +642,8 @@ export function useVectorIndexConfig() {
       },
       {
         label: '身份健康',
+        // 内容最长；占两格后 11 项正好 12 格，2/3/4 列都整行排满
+        wide: true,
         value: `${healthReport.value?.status || 'unknown'} / ${healthReport.value?.identityMismatchCount || 0} identity / ${healthReport.value?.pathIdentityCollisionCount || 0} collision / ${healthReport.value?.checksumMismatchCount || 0} checksum`,
       },
       {
