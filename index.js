@@ -209723,6 +209723,27 @@ function bootstrapAcuV2() {
     registerAcuV2MenuButton();
 }
 
+/** 去掉查询串与锚点：宿主可能带缓存参数加载脚本，调用链里的地址仍以这段开头。 */
+function normalizeScriptUrl_ACU(url) {
+    const text = String(url || '').trim();
+    if (!text)
+        return '';
+    return text.replace(/[?#].*$/, '');
+}
+/**
+ * @param detail 错误堆栈或出错文件名
+ * @param ownScriptUrl 本插件脚本地址（已去查询串）
+ * @returns own：调用链含本插件；foreign：有文件位置但都不是本插件；unknown：无从判断
+ */
+function classifyGlobalErrorOrigin_ACU(detail, ownScriptUrl) {
+    const text = String(detail || '');
+    if (!ownScriptUrl || !text)
+        return 'unknown';
+    if (text.includes(ownScriptUrl))
+        return 'own';
+    return /[a-z][a-z0-9+.-]*:\/\/|blob:/i.test(text) ? 'foreign' : 'unknown';
+}
+
 /**
  * src/entry-extension.ts — 酒馆插件入口（标准 SillyTavern / TauriTavern 扩展）
  *
@@ -209752,17 +209773,27 @@ function installGlobalErrorCapture() {
         return;
     g.__ACU_GLOBAL_ERROR_CAPTURE_INSTALLED__ = true;
     const fmt = (err) => err instanceof Error ? err.stack || `${err.name}: ${err.message}` : String(err);
+    const ownScriptUrl = normalizeScriptUrl_ACU(import.meta.url);
+    // 页面上所有未捕获异常都会到这里：调用链里一帧本插件代码都没有的，标成宿主 / 其他扩展，按警告记录备查
+    const record = (label, detail, origin) => {
+        if (classifyGlobalErrorOrigin_ACU(origin, ownScriptUrl) === 'foreign') {
+            logWarn_ACU(`[全局][宿主/其他扩展] ${label}（调用链不含本插件，仅记录备查）: ${detail}`);
+            return;
+        }
+        logError_ACU(`[全局] ${label}: ${detail}`);
+    };
     g.addEventListener?.('error', (event) => {
         try {
             // 优先取 event.error 保留堆栈；资源加载失败时 error 为 null，退化为 message
             const detail = event.error ? fmt(event.error) : `（资源加载失败）${event.message || event.filename || ''}`;
-            logError_ACU(`[全局] 未捕获异常: ${detail}`);
+            record('未捕获异常', detail, `${detail}\n${event.filename || ''}`);
         }
         catch { /* 捕获逻辑自身异常不递归 */ }
     });
     g.addEventListener?.('unhandledrejection', (event) => {
         try {
-            logError_ACU(`[全局] 未处理 Promise 拒绝: ${fmt(event.reason)}`);
+            const detail = fmt(event.reason);
+            record('未处理 Promise 拒绝', detail, detail);
         }
         catch { /* 捕获逻辑自身异常不递归 */ }
     });
