@@ -147,6 +147,53 @@ describe('useContentReplaceStore', () => {
     expect(store.ignoreMvuUpdate).toBe(false);
   });
 
+  it('替换前判定：开关、key、模型、门槛规整后写回 contentOptimizationSettings.decisionGate', async () => {
+    const { store, settings, saveSettings } = await setupStore();
+
+    expect(store.decisionGate).toEqual({ enabled: false, apiKey: '', model: '~typesafe/jev-latest', threshold: 50 });
+
+    store.setDecisionGate({ enabled: true, apiKey: ' sk-or-x ', threshold: 130 });
+    store.setDecisionGate({ model: 'inception/mercury-decide:free' });
+
+    expect(settings.contentOptimizationSettings.decisionGate).toEqual({
+      enabled: true, apiKey: 'sk-or-x', model: 'inception/mercury-decide:free', threshold: 100,
+    });
+    expect(saveSettings).toHaveBeenCalled();
+    store.refreshFromSettings();
+    expect(store.decisionGate.model).toBe('inception/mercury-decide:free');
+  });
+
+  it('测试判定：用测试文本直连决策接口，结果写进测试输出', async () => {
+    const { store } = await setupStore();
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ model: 'typesafe/jev-1.13', answers: { quality: { type: 'choice', choice: '好', probabilities: { 好: 0.83, 不好: 0.17 } } } }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    store.setDecisionGate({ apiKey: 'sk-or-x' });
+    store.setString('testInput', '夜色漫过屋檐，她收起最后一封信。');
+
+    await store.runDecisionTest();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.testOutput).toContain('好');
+    expect(store.testOutput).toContain('83%');
+    expect(store.testOutput).toContain('会替换');
+  });
+
+  it('测试判定：没填 key 时提示，不发请求', async () => {
+    const { store } = await setupStore();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    store.setString('testInput', '夜色漫过屋檐，她收起最后一封信。');
+
+    await store.runDecisionTest();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(store.message?.text).toContain('Key');
+  });
+
   it('新建、载入、删除正文替换提示词预设', async () => {
     const { store, settings } = await setupStore();
 

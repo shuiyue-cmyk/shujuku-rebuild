@@ -9,6 +9,14 @@ import { normalizeExcludeRules_ACU, normalizeExtractRules_ACU, logError_ACU } fr
 import { buildDefaultContentOptimizationPromptGroup_ACU } from '../../shared/defaults';
 import { getOriginalContent_ACU, replaceChatMessage_ACU } from '../../service/chat/chat-service';
 import { performContentOptimization_ACU } from '../../service/optimization/content-optimization';
+import {
+  fetchDecisionModels_ACU,
+  normalizeDecisionGateSettings_ACU,
+  requestContentDecision_ACU,
+  type DecisionGateSettings_ACU,
+  type DecisionModelOption_ACU,
+} from '../../service/optimization/decision-gate';
+import { stripMvuUpdateBlocks_ACU } from '../../shared/text-optimization';
 import { getLastOptimizedMessageIndex_ACU } from '../../service/plot/plot-logic';
 import { currentChatFileIdentifier_ACU, settings_ACU } from '../../service/runtime/state-manager';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
@@ -17,7 +25,7 @@ import { useToastStore } from './toast-store';
 import { downloadJsonToHost_ACU } from '../bootstrap/host-download';
 
 export type ContentReplaceMessageKind = 'info' | 'success' | 'warning' | 'error';
-export type ContentReplaceBusyAction = '' | 'test' | 'reoptimize' | 'import-presets' | 'export-preset';
+export type ContentReplaceBusyAction = '' | 'test' | 'decision-test' | 'reoptimize' | 'import-presets' | 'export-preset';
 
 export interface ContentReplaceMessage {
   kind: ContentReplaceMessageKind;
@@ -56,6 +64,9 @@ interface ContentReplaceState {
   showDiff: boolean;
   parallelMode: boolean;
   ignoreMvuUpdate: boolean;
+  decisionGate: DecisionGateSettings_ACU;
+  decisionModels: DecisionModelOption_ACU[];
+  decisionModelsLoading: boolean;
   minLength: number;
   maxOptimizations: number;
   loopCount: number;
@@ -144,6 +155,7 @@ function ensureSettingsShape(): Record<string, any> {
   cfg.showDiff = cfg.showDiff !== false;
   cfg.parallelMode = cfg.parallelMode === true;
   cfg.ignoreMvuUpdate = cfg.ignoreMvuUpdate === true;
+  cfg.decisionGate = normalizeDecisionGateSettings_ACU(cfg.decisionGate);
   cfg.minLength = normalizeInteger(cfg.minLength, 100, 0, 1000000);
   cfg.maxOptimizations = normalizeInteger(cfg.maxOptimizations, 10, 1, 100);
   cfg.loopCount = normalizeInteger(cfg.loopCount, 1, 1, 10);
@@ -290,6 +302,9 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
     showDiff: true,
     parallelMode: false,
     ignoreMvuUpdate: false,
+    decisionGate: normalizeDecisionGateSettings_ACU(null),
+    decisionModels: [],
+    decisionModelsLoading: false,
     minLength: 100,
     maxOptimizations: 10,
     loopCount: 1,
@@ -366,6 +381,7 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       this.showDiff = cfg.showDiff !== false;
       this.parallelMode = cfg.parallelMode === true;
       this.ignoreMvuUpdate = cfg.ignoreMvuUpdate === true;
+      this.decisionGate = { ...cfg.decisionGate };
       this.minLength = cfg.minLength;
       this.maxOptimizations = cfg.maxOptimizations;
       this.loopCount = cfg.loopCount;
@@ -413,6 +429,7 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       cfg.showDiff = this.showDiff;
       cfg.parallelMode = this.parallelMode;
       cfg.ignoreMvuUpdate = this.ignoreMvuUpdate;
+      cfg.decisionGate = normalizeDecisionGateSettings_ACU(this.decisionGate);
       cfg.minLength = normalizeInteger(this.minLength, 100, 0, 1000000);
       cfg.maxOptimizations = normalizeInteger(this.maxOptimizations, 10, 1, 100);
       cfg.loopCount = normalizeInteger(this.loopCount, 1, 1, 10);
@@ -441,6 +458,56 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
     setBoolean(key: 'enabled' | 'seamlessMode' | 'autoApply' | 'showDiff' | 'parallelMode' | 'ignoreMvuUpdate', value: boolean): void {
       this[key] = !!value;
       this.saveBasicSettings();
+    },
+    /** 替换前判定的开关 / key / 模型 / 门槛：规整后与其它基础字段一起落盘。 */
+    setDecisionGate(patch: Partial<DecisionGateSettings_ACU>): void {
+      this.decisionGate = normalizeDecisionGateSettings_ACU({ ...this.decisionGate, ...patch });
+      this.saveBasicSettings();
+    },
+    /** 拉取 OpenRouter 当前的决策模型列表（公开接口，不需要 key）。 */
+    async loadDecisionModels(): Promise<void> {
+      if (this.decisionModelsLoading) return;
+      this.decisionModelsLoading = true;
+      try {
+        this.decisionModels = await fetchDecisionModels_ACU();
+      } catch (e: any) {
+        logError_ACU('[ACU-V2] load decision models failed', e);
+        setMessage(this, 'warning', `读取决策模型列表失败（${e?.message || '未知错误'}），可稍后重试；当前所选模型不受影响。`);
+      } finally {
+        this.decisionModelsLoading = false;
+      }
+    },
+    /** 用测试文本问一次决策模型，不写回聊天。 */
+    async runDecisionTest(): Promise<void> {
+      const input = stripMvuUpdateBlocks_ACU(this.testInput).trim();
+      if (input.length < 10) {
+        setMessage(this, 'warning', '请输入至少 10 个字符的测试文本。');
+        return;
+      }
+      if (!this.decisionGate.apiKey) {
+        setMessage(this, 'warning', '请先填写 OpenRouter Key。');
+        return;
+      }
+      if (this.busyAction) return;
+      this.busyAction = 'decision-test';
+      this.testOutput = '正在请求决策模型...';
+      try {
+        const verdict = await requestContentDecision_ACU(input, this.decisionGate);
+        if (verdict.kind === 'error') {
+          this.testOutput = `判定失败：${verdict.message}\n（自动替换时遇到这种情况会照常替换）`;
+          setMessage(this, 'error', '上一次判定测试失败，请检查 Key 与网络。');
+          return;
+        }
+        const goodPercent = Math.round(verdict.goodProbability * 100);
+        this.testOutput = [
+          `决策模型判定：${verdict.choice}（好 ${goodPercent}%，门槛 ${this.decisionGate.threshold}%）`,
+          verdict.replace ? '→ 会替换这段正文' : '→ 不会替换这段正文',
+          verdict.model ? `模型：${verdict.model}` : '',
+        ].filter(Boolean).join('\n');
+        clearMessageAndToast(this, 'success', '判定测试完成。', { muteable: false });
+      } finally {
+        this.busyAction = '';
+      }
     },
     setString(key: 'apiPreset' | 'extractTags' | 'excludeTags' | 'testInput', value: string): void {
       this[key] = String(value ?? '');

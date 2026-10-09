@@ -348,3 +348,39 @@ describe('块 7 复审 R7-01：写回不改动引号', () => {
     expect(content).toBe("Tom's blade and Ann's shield were left behind.");
   });
 });
+
+// MVU 把变量更新写成 <UpdateVariable>/<JSONPatch> 块留在正文里，手动重试还会按标签裁掉旧块重解析。
+// 替换模型改了块内文字，变量与正文就对不上，所以无论用户配没配排除规则，块内都不许写回。
+describe('MVU 变量更新块始终受写回保护', () => {
+  const BODY = '她推开门，屋里一片寂静。';
+  const BLOCK = '<UpdateVariable>\n<JSONPatch>[{"op":"replace","path":"/好感度","value":12}]</JSONPatch>\n</UpdateVariable>';
+  const CONTENT = `${BODY}\n\n${BLOCK}`;
+  const makeOpt = (original: string, optimized: string) => ({ type: 'replace', original, optimized, plan: '测试' });
+
+  it('未配置任何排除规则时，块内建议也被丢弃，正文建议照常写回', () => {
+    const opts = [makeOpt('屋里一片寂静', '屋里静得出奇'), makeOpt('"value":12', '"value":99')];
+    const outcome = filterOptimizationsByExcludeRules_ACU(CONTENT, opts);
+
+    expect(outcome.kept.map((o: any) => o.original)).toEqual(['屋里一片寂静']);
+    expect(outcome.dropped).toHaveLength(1);
+
+    const result = applyOptimizations_ACU(CONTENT, opts);
+    expect(result).toContain('屋里静得出奇');
+    expect(result).toContain(BLOCK);
+  });
+
+  it('标签大小写不敏感、未闭合的块保护到正文末尾', () => {
+    const lower = `${BODY}<updatevariable>_.set('金钱', 10, 20);</updatevariable>`;
+    expect(collectOptimizationExcludeRanges_ACU(lower)).toEqual([{ start: BODY.length, end: lower.length }]);
+
+    const open = `${BODY}<UpdateVariable>_.set('金钱', 10, 20);`;
+    expect(collectOptimizationExcludeRanges_ACU(open)).toEqual([{ start: BODY.length, end: open.length }]);
+  });
+
+  it('与用户排除规则合并生效', () => {
+    const text = `<!-- 注 -->${BODY}${BLOCK}`;
+    const ranges = collectOptimizationExcludeRanges_ACU(text, { excludeRules: [{ start: '<!--', end: '-->' }] });
+    expect(ranges).toHaveLength(2);
+    expect(ranges[1]).toEqual({ start: text.indexOf(BLOCK), end: text.length });
+  });
+});

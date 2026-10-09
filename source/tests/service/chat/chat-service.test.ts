@@ -296,6 +296,37 @@ describe('replaceChatMessage_ACU', () => {
     expect(await replaceChatMessage_ACU(0, 'A 的优化版', { expected })).toBe(true);
   });
 
+  // MVU「额外模型解析」在替换途中把变量块追加到本楼末尾（重读最新正文 + '\n\n' + 块）。
+  // 这不是滑动/删楼：替换结果写回原文部分，追加的尾巴原样保留，不再整轮作废。
+  it('优化期间本楼只是被追加了尾巴（MVU 变量块）时，写回优化结果并保留尾巴', async () => {
+    const { captureChatMessageWriteTarget_ACU } = await import('../../../src/service/chat/chat-message-write-target');
+    const chat = [{ is_user: false, mes: '她推开门。\n', message_id: 'msg1', swipe_id: 0, extra: {} }];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSetChatMessages.mockClear();
+    mockSetChatMessages.mockResolvedValue(true);
+    const expected = captureChatMessageWriteTarget_ACU(0);
+    const tail = '\n\n<UpdateVariable>_.set("好感度", 1, 2);</UpdateVariable>';
+    chat[0].mes = '她推开门。' + tail;
+
+    expect(await replaceChatMessage_ACU(0, '她轻轻推开门。\n', { expected })).toBe(true);
+    expect(mockSetChatMessages).toHaveBeenCalledWith(
+      [expect.objectContaining({ mes: '她轻轻推开门。' + tail })],
+      expect.anything(),
+    );
+  });
+
+  it('追加尾巴之外原文也被改过时仍拒绝写回', async () => {
+    const { captureChatMessageWriteTarget_ACU } = await import('../../../src/service/chat/chat-message-write-target');
+    const chat = [{ is_user: false, mes: '她推开门。', message_id: 'msg1', swipe_id: 0, extra: {} }];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSetChatMessages.mockClear();
+    const expected = captureChatMessageWriteTarget_ACU(0);
+    chat[0].mes = '他推开门。\n\n<UpdateVariable></UpdateVariable>';
+
+    expect(await replaceChatMessage_ACU(0, '她轻轻推开门。', { expected })).toBe(false);
+    expect(mockSetChatMessages).not.toHaveBeenCalled();
+  });
+
   it('setChatMessages 不可用时使用降级方案', async () => {
     const chat = [
       { is_user: false, mes: '原始内容', message_id: 'msg1', extra: {} },

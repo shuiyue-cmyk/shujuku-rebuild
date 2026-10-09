@@ -43,6 +43,49 @@
       </UbRow>
     </UbSection>
 
+    <UbSection id="cr-decision" :title="copy.panels.decision.title" :description="copy.panels.decision.description" icon="fa-solid fa-scale-balanced">
+      <UbRow label="启用替换前判定" hint="只影响自动替换；手动「重新优化」和测试不经过判定。">
+        <UbSwitch :model-value="store.decisionGate.enabled" aria-label="启用替换前判定" @update:model-value="setDecisionEnabled" />
+      </UbRow>
+      <UbRow label="OpenRouter Key" hint="在 openrouter.ai 的 Keys 页面创建，只用于决策判定。" stack>
+        <UbInput
+          :model-value="store.decisionGate.apiKey"
+          type="password"
+          placeholder="sk-or-..."
+          autocomplete="off"
+          aria-label="OpenRouter Key"
+          @change="store.setDecisionGate({ apiKey: String($event) })"
+        />
+      </UbRow>
+      <UbRow label="决策模型" hint="默认 Jev 最新版；标「免费」的不扣费。">
+        <div class="ub-cr__picker">
+          <UbSelect
+            :options="decisionModelOptions"
+            :model-value="store.decisionGate.model"
+            aria-label="决策模型"
+            @update:model-value="store.setDecisionGate({ model: $event })"
+          />
+          <UbIconButton
+            icon="fa-solid fa-rotate"
+            title="刷新模型列表"
+            :disabled="store.decisionModelsLoading"
+            @click="store.loadDecisionModels"
+          />
+        </div>
+      </UbRow>
+      <UbRow label="判定门槛（%）" hint="「好」的概率达到这个值才替换；50 即按模型的选择。调高则更少替换。">
+        <UbInput
+          :model-value="store.decisionGate.threshold"
+          type="number"
+          :min="0"
+          :max="100"
+          :step="5"
+          aria-label="判定门槛"
+          @change="store.setDecisionGate({ threshold: Number($event) })"
+        />
+      </UbRow>
+    </UbSection>
+
     <UbSection id="cr-preset" :title="copy.panels.preset.title" description="下拉切换当前提示词预设。内置默认预设不能直接修改，请用「从默认新建」。" icon="fa-solid fa-scroll">
       <template #actions>
         <UbBadge :variant="store.promptTemplateMode === 'default' ? 'neutral' : 'accent'">
@@ -115,6 +158,7 @@
         @update:model-value="store.setString('testInput', $event)"
       />
       <div class="ub-cr__test-actions">
+        <UbButton icon="fa-solid fa-scale-balanced" :busy="store.busyAction === 'decision-test'" @click="store.runDecisionTest">测试决策判定</UbButton>
         <UbButton variant="primary" icon="fa-solid fa-play" :busy="store.busyAction === 'test'" @click="store.runTest">执行优化测试</UbButton>
       </div>
       <pre v-if="store.testOutput" class="ub-cr__output">{{ store.testOutput }}</pre>
@@ -212,6 +256,7 @@ const editingPresetName = ref('');
 const sections = [
   { id: 'cr-basic', label: copy.nav.basic },
   { id: 'cr-mode', label: copy.nav.mode },
+  { id: 'cr-decision', label: copy.nav.decision },
   { id: 'cr-preset', label: copy.nav.preset },
   { id: 'cr-filter', label: copy.nav.filter },
   { id: 'cr-test', label: copy.nav.test },
@@ -222,7 +267,11 @@ const modeToggles: Array<{ key: ModeKey; label: string; hint?: string }> = [
   { key: 'autoApply', label: '自动应用替换结果' },
   { key: 'showDiff', label: '显示优化对比', hint: '无感模式下完成提示里可点「查看对比」，否则直接弹出对比；开启静默提示框时也会显示。' },
   { key: 'parallelMode', label: '填表与正文替换并行执行' },
-  { key: 'ignoreMvuUpdate', label: '忽略MVU更新' },
+  {
+    key: 'ignoreMvuUpdate',
+    label: '忽略MVU更新',
+    hint: '开启后不等 MVU 变量解析就开始替换，少等一会儿；MVU 随后追加到正文末尾的变量块会原样保留。关闭则等解析完成再替换。',
+  },
 ];
 
 const presetItems = computed(() => {
@@ -249,6 +298,23 @@ const promptSegmentsForView = computed<UbPromptSegment[]>(() =>
     isMain2: segment.isMain2,
   })),
 );
+
+/** 列表还没拉到（或拉取失败）时，当前所选模型仍要能显示。 */
+const decisionModelOptions = computed(() => {
+  const options = store.decisionModels.map(model => ({
+    value: model.id,
+    label: model.free ? `${model.name}（免费）` : model.name,
+  }));
+  if (!options.some(option => option.value === store.decisionGate.model)) {
+    options.unshift({ value: store.decisionGate.model, label: store.decisionGate.model });
+  }
+  return options;
+});
+
+function setDecisionEnabled(value: boolean): void {
+  store.setDecisionGate({ enabled: value });
+  if (value && !store.decisionModels.length) void store.loadDecisionModels();
+}
 
 const promptGroupMissingContent = computed(() => !store.promptGroup.some(s => String(s.content || '').includes('$CONTENT')));
 const canEditCurrentPrompt = computed(() => store.selectedPresetName !== '');
@@ -340,7 +406,10 @@ function refreshAll(): void {
   apiStore.refreshFromSettings();
 }
 
-onMounted(refreshAll);
+onMounted(() => {
+  refreshAll();
+  if (store.decisionGate.enabled && !store.decisionModels.length) void store.loadDecisionModels();
+});
 watchChatChanged_ACU(refreshAll);
 useUiCloseGuard(() => {
   if (!promptSheetOpen.value || !store.promptDirty) return true;
@@ -378,7 +447,9 @@ useUiCloseGuard(() => {
 
 .ub-cr__test-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: var(--ub-s2);
 }
 
 .ub-cr__output {

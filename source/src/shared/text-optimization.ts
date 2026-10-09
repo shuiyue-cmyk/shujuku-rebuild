@@ -9,6 +9,7 @@ import { logDebug_ACU, normalizeExcludeRules_ACU } from './utils';
 import {
   collectExcludeRanges_ACU,
   findOverlappingBoundaryRange_ACU,
+  mergeBoundaryRanges_ACU,
   type BoundaryRange_ACU,
 } from './boundary-ranges';
 
@@ -218,20 +219,53 @@ function hasExcludeRuleInput_ACU(options?: OptimizationExcludeOptions_ACU | null
 }
 
 /**
+ * MVU 变量更新块（标签名与 MVU 解析器一致，大小写不敏感）。未闭合的块保护到正文末尾。
+ * MVU 把块留在正文里，手动重试还会按标签裁掉旧块重解析；块内被改写，变量就和正文对不上。
+ */
+const MVU_UPDATE_BLOCK_PATTERN_ACU = /<(updatevariable|variableupdate|jsonpatch)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi;
+
+/** 正文里 MVU 变量更新块的区间（已合并）；没有块时返回空数组。 */
+export function collectMvuUpdateBlockRanges_ACU(text: string): BoundaryRange_ACU[] {
+  const source = String(text ?? '');
+  if (!/<(?:updatevariable|variableupdate|jsonpatch)\b/i.test(source)) return [];
+  const ranges: BoundaryRange_ACU[] = [];
+  for (const match of source.matchAll(MVU_UPDATE_BLOCK_PATTERN_ACU)) {
+    ranges.push({ start: match.index!, end: match.index! + match[0].length });
+  }
+  return mergeBoundaryRanges_ACU(ranges);
+}
+
+/** 去掉 MVU 变量更新块后的正文（用于只关心剧情文字的场景，如替换前判定）。 */
+export function stripMvuUpdateBlocks_ACU(text: string): string {
+  const source = String(text ?? '');
+  const ranges = collectMvuUpdateBlockRanges_ACU(source);
+  if (ranges.length === 0) return source;
+  let result = '';
+  let cursor = 0;
+  for (const range of ranges) {
+    result += source.slice(cursor, range.start);
+    cursor = range.end;
+  }
+  return (result + source.slice(cursor)).trim();
+}
+
+/**
  * 计算原文中的排除区间集合（复用上下文标签的边界匹配器语义）。
- * 未配置规则或规则在本段文本里没有命中时返回空数组。
+ * MVU 变量更新块无论是否配置规则都算排除区间；两者都没有时返回空数组。
  */
 export function collectOptimizationExcludeRanges_ACU(
   originalContent: string,
   options?: OptimizationExcludeOptions_ACU | null,
 ): BoundaryRange_ACU[] {
-  if (!hasExcludeRuleInput_ACU(options)) return [];
   const source = String(originalContent ?? '');
   if (!source) return [];
 
+  const mvuRanges = collectMvuUpdateBlockRanges_ACU(source);
+  if (!hasExcludeRuleInput_ACU(options)) return mvuRanges;
   const rules = normalizeExcludeRules_ACU(options!.excludeRules ?? [], options!.excludeTags ?? '');
-  if (!Array.isArray(rules) || rules.length === 0) return [];
-  return collectExcludeRanges_ACU(source, rules);
+  if (!Array.isArray(rules) || rules.length === 0) return mvuRanges;
+  const userRanges = collectExcludeRanges_ACU(source, rules);
+  return mvuRanges.length === 0 ? userRanges : mergeBoundaryRanges_ACU([...userRanges, ...mvuRanges]);
 }
 
 /**
@@ -313,14 +347,12 @@ export function applyOptimizationsWithStats_ACU(
   let failedCount = 0;
   const failedItems: any[] = [];
 
-  let effectiveOptimizations = Array.isArray(optimizations) ? optimizations : [];
-  if (hasExcludeRuleInput_ACU(options)) {
-    effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(
-      originalContent,
-      effectiveOptimizations,
-      options,
-    ).kept;
-  }
+  // 未配置规则且没有 MVU 变量块时过滤器零区间早退，结果与不过滤逐字一致
+  const effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(
+    originalContent,
+    Array.isArray(optimizations) ? optimizations : [],
+    options,
+  ).kept;
 
   for (let i = 0; i < effectiveOptimizations.length; i++) {
     const opt = effectiveOptimizations[i];

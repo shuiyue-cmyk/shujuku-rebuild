@@ -30,7 +30,7 @@ import { LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU } from '../../data/storage/cha
 import { peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
 import { normalizeSummaryVectorIsolationKey_ACU } from '../../shared/summary-vector-index-scope';
 import { runTableUpdateCommit_ACU } from '../table/table-update-commit';
-import { isChatMessageWriteTargetCurrent_ACU, type ChatMessageWriteTarget_ACU } from './chat-message-write-target';
+import { findAppendedTailSinceCapture_ACU, isChatMessageWriteTargetCurrent_ACU, type ChatMessageWriteTarget_ACU } from './chat-message-write-target';
 import { reloadStorageProvider } from '../table/table-storage-strategy';
 import { isSqliteMode } from '../table/storage-mode';
 import { cleanupUnreachableSummaryVectorIndexFiles_ACU, deleteSummaryVectorIndexExternal_ACU } from '../vector/summary-vector-index-storage-service';
@@ -1148,9 +1148,15 @@ export async function replaceChatMessage_ACU(
             throw new Error('消息不存在');
         }
         // R9-01：调用方传入读取正文时的快照；楼层被滑动/删除/修改或聊天已切换时拒绝按下标写回。
+        // 例外：期间只是被追加了尾巴（MVU 额外模型解析拼上的变量块），写回优化结果并原样接上尾巴。
         if (options.expected !== undefined && !isChatMessageWriteTargetCurrent_ACU(options.expected)) {
-            logWarn_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间已变化，拒绝写回。`);
-            return false;
+            const appendedTail = findAppendedTailSinceCapture_ACU(options.expected);
+            if (appendedTail === null) {
+                logWarn_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间已变化，拒绝写回。`);
+                return false;
+            }
+            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间被追加了 ${appendedTail.length} 字尾巴（如 MVU 变量块），写回时原样保留`);
+            newContent = String(newContent ?? '').trimEnd() + appendedTail;
         }
 
         const oldContent = chat[messageIndex].mes;

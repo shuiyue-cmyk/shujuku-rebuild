@@ -61,6 +61,10 @@ import {
 import {
   applyContextTagFilters_ACU
 } from '../../../service/runtime/helpers-remaining';
+import {
+  judgeContentForAutoReplace_ACU,
+  type DecisionGateOutcome_ACU
+} from '../../../service/optimization/decision-gate';
 
 import {
   showOptimizationOverlay_ACU,
@@ -262,6 +266,45 @@ import {
   }
   
   /**
+   * 替换前判定：问决策模型「这篇文章写得好不好」，判「好」才继续替换（性价比模型的 AI 味正合它口味）。
+   * 判「不好」保持原文，并登记本楼已处理，重复的生成结束事件不再重判；判定失败照常替换。
+   * 串行的手动确认链原本由确认流程收尾时触发填表，跳过替换时要在这里补触发（并行模式填表已在同时跑）。
+   * @returns 是否继续替换
+   */
+  async function passesDecisionGate_ACU(messageIndex: number, message: any, content: string, judgedText: string, config: any): Promise<boolean> {
+    if (config.decisionGate?.enabled !== true) return true;
+    if (config.seamlessMode) {
+      showOptimizationOverlay_ACU('正在判定正文...');
+    } else {
+      showOptimizationProgressToast_ACU('正在判定正文...');
+    }
+    let outcome: DecisionGateOutcome_ACU;
+    try {
+      outcome = await judgeContentForAutoReplace_ACU(judgedText);
+    } catch (error: any) {
+      outcome = { kind: 'error', message: error?.message || String(error) };
+    }
+    if (outcome.kind === 'disabled') return true;
+    if (outcome.kind === 'error') {
+      logError_ACU('[正文优化] 替换前判定失败，照常替换:', outcome.message);
+      showToastr_ACU('warning', `决策判定失败（${outcome.message}），本楼照常替换`);
+      return true;
+    }
+    const goodPercent = Math.round(outcome.goodProbability * 100);
+    logDebug_ACU(`[正文优化] 替换前判定：${outcome.choice}（好 ${goodPercent}%，模型 ${outcome.model || '未知'}）→ ${outcome.replace ? '替换' : '不替换'}`);
+    if (outcome.replace) return true;
+
+    hideOptimizationOverlay_ACU();
+    hideOptimizationProgressToast_ACU();
+    recordAutoContentOptimizationProcessed_ACU({ messageIndex, messageId: message.message_id, content });
+    showToastr_ACU('info', `决策模型判定本楼「${outcome.choice}」（好 ${goodPercent}%），不替换`);
+    if (!config.parallelMode && !config.autoApply && !config.seamlessMode) {
+      await triggerAutomaticUpdateIfNeeded_ACU();
+    }
+    return false;
+  }
+
+  /**
    * 执行正文优化流程（在GENERATION_ENDED后调用）
    * @param {number} messageIndex - AI消息索引
    * @returns {Promise<boolean>} 是否成功
@@ -330,6 +373,10 @@ import {
     if (processedContent.length < minLength) {
       logDebug_ACU(`[正文优化] 处理后正文长度 ${processedContent.length} 小于最小阈值 ${minLength}，跳过优化`);
       return false;
+    }
+    
+    if (!(await passesDecisionGate_ACU(messageIndex, message, content, processedContent, config))) {
+      return true;
     }
     
     const loopCount = config.loopCount || 1;

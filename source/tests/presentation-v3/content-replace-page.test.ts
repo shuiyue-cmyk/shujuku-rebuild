@@ -112,7 +112,7 @@ const btn = (text: string, root: ParentNode = document) => Array.from(root.query
 describe('ContentReplacePage', () => {
   it('五个分节齐全，页面里不再有启用开关', async () => {
     const { app } = await mountContentReplacePage();
-    for (const id of ['cr-basic', 'cr-mode', 'cr-preset', 'cr-filter', 'cr-test']) {
+    for (const id of ['cr-basic', 'cr-mode', 'cr-decision', 'cr-preset', 'cr-filter', 'cr-test']) {
       expect(document.getElementById(id), id).not.toBeNull();
     }
     expect(page().textContent).not.toContain('启用开关在仪表盘');
@@ -254,6 +254,40 @@ describe('ContentReplacePage', () => {
     await tick();
     expect(performOptimization).toHaveBeenCalledWith('这是一段足够长的测试正文。', { currentLoop: 1, userMessage: '' });
     expect(document.querySelector('.ub-cr__output')?.textContent || '').toContain('优化完成：1 处建议');
+    app.unmount();
+  });
+  it('替换前判定：开启后拉取决策模型列表，填 key 后可用测试文本试判', async () => {
+    const fetchMock = vi.fn(async (url: string) => (url.includes('/models') ? {
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{ id: 'typesafe/jev-1.13', name: 'TypeSafe: Jev 1.13', architecture: { output_modalities: ['decisions'] }, pricing: { prompt: '0.00000004' } }] }),
+    } : {
+      ok: true,
+      status: 200,
+      json: async () => ({ answers: { quality: { type: 'choice', choice: '不好', probabilities: { 好: 0.3, 不好: 0.7 } } } }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { app, settings } = await mountContentReplacePage();
+
+    const section = document.getElementById('cr-decision')!;
+    section.querySelector<HTMLElement>('[role="switch"], input[type="checkbox"], button[aria-label="启用替换前判定"]')!.click();
+    await tick();
+    expect(settings.contentOptimizationSettings.decisionGate.enabled).toBe(true);
+    expect(fetchMock.mock.calls.some(call => String(call[0]).includes('output_modalities=decisions'))).toBe(true);
+
+    const key = section.querySelector<HTMLInputElement>('input[type="password"]')!;
+    key.value = 'sk-or-test';
+    key.dispatchEvent(new Event('change', { bubbles: true }));
+    const textarea = document.querySelector<HTMLTextAreaElement>('#cr-test textarea')!;
+    textarea.value = '这是一段足够长的测试正文。';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+    btn('测试决策判定')!.click();
+    await tick();
+    await tick();
+
+    expect(settings.contentOptimizationSettings.decisionGate.apiKey).toBe('sk-or-test');
+    expect(document.querySelector('.ub-cr__output')?.textContent || '').toContain('不会替换');
     app.unmount();
   });
 });

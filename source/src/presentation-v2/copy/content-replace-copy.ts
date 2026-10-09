@@ -4,6 +4,7 @@ export const contentReplaceCopy = {
   nav: {
     basic: "基础设置",
     mode: "替换模式",
+    decision: "替换前判定",
     preset: "预设",
     filter: "标签筛选",
     test: "手动测试",
@@ -17,6 +18,11 @@ export const contentReplaceCopy = {
       title: "替换模式",
       description:
         "无感模式：尽量将优化结果直接写回聊天，关闭则需手动确认。排查误替换时，建议关闭无感与自动应用，保留对比。",
+    },
+    decision: {
+      title: "替换前判定",
+      description:
+        "正文出来后先问 OpenRouter 上的决策模型「这篇文章写得好不好」，判为「好」才替换，判为「不好」保留原文。只需填 Key；每楼花费极低。判定失败或超时会照常替换。",
     },
     preset: {
       title: "正文替换预设",

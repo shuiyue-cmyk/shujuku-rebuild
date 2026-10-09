@@ -3206,19 +3206,51 @@ function hasExcludeRuleInput_ACU(options) {
     return typeof options.excludeTags === 'string' && options.excludeTags.trim() !== '';
 }
 /**
+ * MVU 变量更新块（标签名与 MVU 解析器一致，大小写不敏感）。未闭合的块保护到正文末尾。
+ * MVU 把块留在正文里，手动重试还会按标签裁掉旧块重解析；块内被改写，变量就和正文对不上。
+ */
+const MVU_UPDATE_BLOCK_PATTERN_ACU = /<(updatevariable|variableupdate|jsonpatch)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi;
+/** 正文里 MVU 变量更新块的区间（已合并）；没有块时返回空数组。 */
+function collectMvuUpdateBlockRanges_ACU(text) {
+    const source = String(text ?? '');
+    if (!/<(?:updatevariable|variableupdate|jsonpatch)\b/i.test(source))
+        return [];
+    const ranges = [];
+    for (const match of source.matchAll(MVU_UPDATE_BLOCK_PATTERN_ACU)) {
+        ranges.push({ start: match.index, end: match.index + match[0].length });
+    }
+    return mergeBoundaryRanges_ACU(ranges);
+}
+/** 去掉 MVU 变量更新块后的正文（用于只关心剧情文字的场景，如替换前判定）。 */
+function stripMvuUpdateBlocks_ACU(text) {
+    const source = String(text ?? '');
+    const ranges = collectMvuUpdateBlockRanges_ACU(source);
+    if (ranges.length === 0)
+        return source;
+    let result = '';
+    let cursor = 0;
+    for (const range of ranges) {
+        result += source.slice(cursor, range.start);
+        cursor = range.end;
+    }
+    return (result + source.slice(cursor)).trim();
+}
+/**
  * 计算原文中的排除区间集合（复用上下文标签的边界匹配器语义）。
- * 未配置规则或规则在本段文本里没有命中时返回空数组。
+ * MVU 变量更新块无论是否配置规则都算排除区间；两者都没有时返回空数组。
  */
 function collectOptimizationExcludeRanges_ACU(originalContent, options) {
-    if (!hasExcludeRuleInput_ACU(options))
-        return [];
     const source = String(originalContent ?? '');
     if (!source)
         return [];
+    const mvuRanges = collectMvuUpdateBlockRanges_ACU(source);
+    if (!hasExcludeRuleInput_ACU(options))
+        return mvuRanges;
     const rules = normalizeExcludeRules_ACU(options.excludeRules ?? [], options.excludeTags ?? '');
     if (!Array.isArray(rules) || rules.length === 0)
-        return [];
-    return collectExcludeRanges_ACU(source, rules);
+        return mvuRanges;
+    const userRanges = collectExcludeRanges_ACU(source, rules);
+    return mvuRanges.length === 0 ? userRanges : mergeBoundaryRanges_ACU([...userRanges, ...mvuRanges]);
 }
 /**
  * 用排除规则过滤优化建议：original 在原文中的命中区间与任一排除区间重叠（含完全包含与跨边界
@@ -3275,10 +3307,8 @@ function applyOptimizationsWithStats_ACU(originalContent, optimizations, options
     let appliedCount = 0;
     let failedCount = 0;
     const failedItems = [];
-    let effectiveOptimizations = Array.isArray(optimizations) ? optimizations : [];
-    if (hasExcludeRuleInput_ACU(options)) {
-        effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(originalContent, effectiveOptimizations, options).kept;
-    }
+    // 未配置规则且没有 MVU 变量块时过滤器零区间早退，结果与不过滤逐字一致
+    const effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(originalContent, Array.isArray(optimizations) ? optimizations : [], options).kept;
     for (let i = 0; i < effectiveOptimizations.length; i++) {
         const opt = effectiveOptimizations[i];
         if (opt.type === 'replace' && opt.original && opt.optimized) {
@@ -92629,7 +92659,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261009-07"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261009-08"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92648,7 +92678,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261009-07";
+        const stamp = "20261009-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -103921,6 +103951,12 @@ function buildDefaultSettings_ACU() {
             showDiff: true, // 是否显示优化对比（非无感模式下有效）
             parallelMode: false, // 填表与正文替换并行执行（默认关闭）
             ignoreMvuUpdate: false, // 忽略MVU更新：开后正文替换不等MVU解析、MVU结束后也不重跑（默认关闭）
+            decisionGate: {
+                enabled: false,
+                apiKey: '',
+                model: '~typesafe/jev-latest',
+                threshold: 50,
+            },
             minLength: 100, // 最小优化长度阈值
             maxOptimizations: 10, // 单次最大优化项数
             loopCount: 1, // 循环优化次数
@@ -105407,6 +105443,28 @@ function isChatMessageWriteTargetCurrent_ACU(target) {
         && message.mes === target.mes
         && String(currentChatFileIdentifier_ACU || '') === target.chatIdentity;
 }
+/**
+ * 读取正文之后本楼只被追加了一段尾巴时返回该尾巴，否则返回 null。
+ * 典型来源是 MVU「额外模型解析」：解析结果按「最新正文去尾空白 + '\n\n' + 变量块」拼到本楼末尾。
+ * 这不是滑动、删楼或改写，正文替换应写回原文部分并保留尾巴，而不是整轮作废。
+ */
+function findAppendedTailSinceCapture_ACU(target) {
+    if (!target || typeof target.mes !== 'string')
+        return null;
+    const message = getChatArray_ACU()?.[target.messageIndex];
+    if (!message
+        || message !== target.message
+        || message.message_id !== target.messageId
+        || message.swipe_id !== target.swipeId
+        || String(currentChatFileIdentifier_ACU || '') !== target.chatIdentity)
+        return null;
+    const current = message.mes;
+    const base = target.mes.trimEnd();
+    if (typeof current !== 'string' || !base || current.length <= base.length || !current.startsWith(base))
+        return null;
+    const tail = current.slice(base.length);
+    return tail.trim() ? tail : null;
+}
 
 /**
  * service/vector/summary-vector-mirror-fold.ts — compaction 时把 vector head 折到新锚点
@@ -106523,9 +106581,15 @@ async function replaceChatMessage_ACU(messageIndex, newContent, options = {}) {
             throw new Error('消息不存在');
         }
         // R9-01：调用方传入读取正文时的快照；楼层被滑动/删除/修改或聊天已切换时拒绝按下标写回。
+        // 例外：期间只是被追加了尾巴（MVU 额外模型解析拼上的变量块），写回优化结果并原样接上尾巴。
         if (options.expected !== undefined && !isChatMessageWriteTargetCurrent_ACU(options.expected)) {
-            logWarn_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间已变化，拒绝写回。`);
-            return false;
+            const appendedTail = findAppendedTailSinceCapture_ACU(options.expected);
+            if (appendedTail === null) {
+                logWarn_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间已变化，拒绝写回。`);
+                return false;
+            }
+            logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼在优化期间被追加了 ${appendedTail.length} 字尾巴（如 MVU 变量块），写回时原样保留`);
+            newContent = String(newContent ?? '').trimEnd() + appendedTail;
         }
         const oldContent = chat[messageIndex].mes;
         logDebug_ACU(`[正文优化] 原内容长度: ${oldContent?.length || 0}, 新内容长度: ${newContent?.length || 0}`);
@@ -118881,6 +118945,151 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
  */
 
 /**
+ * service/optimization/decision-gate.ts — 正文替换「替换前判定」（OpenRouter 决策模型）
+ *
+ * 思路（用户拍板）：RP 常用的性价比模型 AI 味重，而决策模型恰好偏爱这种写法。
+ * 所以正文出来后先问决策模型「这篇文章写得好不好」，判为「好」的才交给替换模型润色，
+ * 判为「不好」的保持原文。决策模型只回答预设选项并附概率，不生成文字，单次花费可忽略。
+ *
+ * 决策接口与聊天接口格式不同，宿主的 chat-completions 转发带不了它；OpenRouter 对任意来源放行跨域，
+ * 插件在 TT WebView 内直连（与向量 embedding / rerank 直连外部接口同一做法）。
+ * 判定失败一律返回 error，由调用方照常替换，判定永远不会卡住正文。
+ */
+const DECISION_API_URL_ACU = 'https://openrouter.ai/api/alpha/decisions';
+const DECISION_MODELS_URL_ACU = 'https://openrouter.ai/api/v1/models?output_modalities=decisions';
+/** 别名始终指向 Jev 最新版，用户只填 key 就能用。 */
+const DEFAULT_DECISION_MODEL_ACU = '~typesafe/jev-latest';
+const DECISION_GOOD_LABEL_ACU = '好';
+const DECISION_BAD_LABEL_ACU = '不好';
+const DECISION_TIMEOUT_MS_ACU = 20000;
+const DECISION_QUESTION_KEY_ACU = 'quality';
+function normalizeDecisionGateSettings_ACU(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const threshold = Number(source.threshold);
+    const model = typeof source.model === 'string' ? source.model.trim() : '';
+    return {
+        enabled: source.enabled === true,
+        apiKey: typeof source.apiKey === 'string' ? source.apiKey.trim() : '',
+        model: model || DEFAULT_DECISION_MODEL_ACU,
+        threshold: Number.isFinite(threshold) ? Math.min(100, Math.max(0, Math.round(threshold))) : 50,
+    };
+}
+function buildDecisionRequestBody_ACU(model, text) {
+    return {
+        model,
+        state: text,
+        questions: {
+            [DECISION_QUESTION_KEY_ACU]: {
+                type: 'choice',
+                instructions: '这篇文章写得好不好？',
+                criteria: {
+                    [DECISION_GOOD_LABEL_ACU]: '这篇文章写得好',
+                    [DECISION_BAD_LABEL_ACU]: '这篇文章写得不好',
+                },
+            },
+        },
+    };
+}
+/** 概率可能是 { 选项: p } 或 [{ choice, probability }]；读不到返回 null。 */
+function readOptionProbability_ACU(probabilities, label) {
+    if (Array.isArray(probabilities)) {
+        const entry = probabilities.find((item) => (item?.choice ?? item?.label ?? item?.option) === label);
+        const value = Number(entry?.probability ?? entry?.p);
+        return entry && Number.isFinite(value) ? value : null;
+    }
+    if (probabilities && typeof probabilities === 'object') {
+        const value = Number(probabilities[label]);
+        return Number.isFinite(value) ? value : null;
+    }
+    return null;
+}
+function interpretDecisionResponse_ACU(payload, threshold) {
+    const answer = payload?.answers?.[DECISION_QUESTION_KEY_ACU];
+    const choice = String(answer?.choice ?? '');
+    if (choice !== DECISION_GOOD_LABEL_ACU && choice !== DECISION_BAD_LABEL_ACU) {
+        return { kind: 'error', message: '决策模型没有给出「好 / 不好」的判断' };
+    }
+    const goodProbability = readOptionProbability_ACU(answer.probabilities, DECISION_GOOD_LABEL_ACU)
+        ?? (choice === DECISION_GOOD_LABEL_ACU ? 1 : 0);
+    return {
+        kind: 'decided',
+        replace: goodProbability * 100 >= threshold,
+        choice,
+        goodProbability,
+        model: String(payload?.model ?? ''),
+    };
+}
+async function readErrorMessage_ACU(response) {
+    try {
+        const body = await response.json();
+        return String(body?.error?.message ?? body?.message ?? '').trim();
+    }
+    catch {
+        return '';
+    }
+}
+async function requestContentDecision_ACU(text, settings, deps = {}) {
+    if (!settings.apiKey)
+        return { kind: 'error', message: '未填写 OpenRouter Key' };
+    const fetchImpl = deps.fetch ?? globalThis.fetch;
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, deps.timeoutMs ?? DECISION_TIMEOUT_MS_ACU);
+    try {
+        const response = await fetchImpl(DECISION_API_URL_ACU, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${settings.apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(buildDecisionRequestBody_ACU(settings.model, text)),
+            signal: controller.signal,
+        });
+        if (!response.ok) {
+            const reason = await readErrorMessage_ACU(response);
+            return { kind: 'error', message: `HTTP ${response.status}${reason ? `：${reason}` : ''}` };
+        }
+        return interpretDecisionResponse_ACU(await response.json(), settings.threshold);
+    }
+    catch (error) {
+        if (timedOut)
+            return { kind: 'error', message: '决策模型超时未响应' };
+        return { kind: 'error', message: `请求失败：${error?.message || error}` };
+    }
+    finally {
+        clearTimeout(timer);
+    }
+}
+/** 自动替换入口：读设置，去掉 MVU 变量块后送去判定。开关关闭时不发请求。 */
+async function judgeContentForAutoReplace_ACU(text, deps = {}) {
+    const settings = normalizeDecisionGateSettings_ACU(settings_ACU?.contentOptimizationSettings?.decisionGate);
+    if (!settings.enabled)
+        return { kind: 'disabled' };
+    return requestContentDecision_ACU(stripMvuUpdateBlocks_ACU(text), settings, deps);
+}
+/** OpenRouter 上当前可用的决策模型（公开列表，不需要 key）。失败时抛错由调用方提示。 */
+async function fetchDecisionModels_ACU(deps = {}) {
+    const fetchImpl = deps.fetch ?? globalThis.fetch;
+    const response = await fetchImpl(DECISION_MODELS_URL_ACU);
+    if (!response.ok)
+        throw new Error(`HTTP ${response.status}`);
+    const body = await response.json();
+    const models = Array.isArray(body?.data) ? body.data : [];
+    return models
+        .filter((model) => typeof model?.id === 'string'
+        && Array.isArray(model?.architecture?.output_modalities)
+        && model.architecture.output_modalities.includes('decisions'))
+        .map((model) => ({
+        id: model.id,
+        name: typeof model.name === 'string' && model.name ? model.name : model.id,
+        free: Number(model?.pricing?.prompt) === 0,
+    }));
+}
+
+/**
  * presentation/components/optimization-ui/optimization-ui-diff.ts
  * 优化 Diff 对话框
  */
@@ -119177,6 +119386,48 @@ function recordAutoProcessedAfterWriteBack_ACU(messageIndex, fallbackContent) {
     }
 }
 /**
+ * 替换前判定：问决策模型「这篇文章写得好不好」，判「好」才继续替换（性价比模型的 AI 味正合它口味）。
+ * 判「不好」保持原文，并登记本楼已处理，重复的生成结束事件不再重判；判定失败照常替换。
+ * 串行的手动确认链原本由确认流程收尾时触发填表，跳过替换时要在这里补触发（并行模式填表已在同时跑）。
+ * @returns 是否继续替换
+ */
+async function passesDecisionGate_ACU(messageIndex, message, content, judgedText, config) {
+    if (config.decisionGate?.enabled !== true)
+        return true;
+    if (config.seamlessMode) {
+        showOptimizationOverlay_ACU('正在判定正文...');
+    }
+    else {
+        showOptimizationProgressToast_ACU('正在判定正文...');
+    }
+    let outcome;
+    try {
+        outcome = await judgeContentForAutoReplace_ACU(judgedText);
+    }
+    catch (error) {
+        outcome = { kind: 'error', message: error?.message || String(error) };
+    }
+    if (outcome.kind === 'disabled')
+        return true;
+    if (outcome.kind === 'error') {
+        logError_ACU('[正文优化] 替换前判定失败，照常替换:', outcome.message);
+        showToastr_ACU('warning', `决策判定失败（${outcome.message}），本楼照常替换`);
+        return true;
+    }
+    const goodPercent = Math.round(outcome.goodProbability * 100);
+    logDebug_ACU(`[正文优化] 替换前判定：${outcome.choice}（好 ${goodPercent}%，模型 ${outcome.model || '未知'}）→ ${outcome.replace ? '替换' : '不替换'}`);
+    if (outcome.replace)
+        return true;
+    hideOptimizationOverlay_ACU();
+    hideOptimizationProgressToast_ACU();
+    recordAutoContentOptimizationProcessed_ACU({ messageIndex, messageId: message.message_id, content });
+    showToastr_ACU('info', `决策模型判定本楼「${outcome.choice}」（好 ${goodPercent}%），不替换`);
+    if (!config.parallelMode && !config.autoApply && !config.seamlessMode) {
+        await triggerAutomaticUpdateIfNeeded_ACU();
+    }
+    return false;
+}
+/**
  * 执行正文优化流程（在GENERATION_ENDED后调用）
  * @param {number} messageIndex - AI消息索引
  * @returns {Promise<boolean>} 是否成功
@@ -119234,6 +119485,9 @@ async function executeContentOptimization_ACU(messageIndex) {
     if (processedContent.length < minLength) {
         logDebug_ACU(`[正文优化] 处理后正文长度 ${processedContent.length} 小于最小阈值 ${minLength}，跳过优化`);
         return false;
+    }
+    if (!(await passesDecisionGate_ACU(messageIndex, message, content, processedContent, config))) {
+        return true;
     }
     const loopCount = config.loopCount || 1;
     logDebug_ACU(`[正文优化] 开始优化消息 ${messageIndex}，原始长度 ${content.length}，处理后长度 ${processedContent.length}，循环次数: ${loopCount}`);
@@ -152070,7 +152324,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261009-07";
+        const stamp = "20261009-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -179047,7 +179301,7 @@ const _hoisted_11$c = {
 	key: 2,
 	class: "ub-vai__diffs"
 };
-const _hoisted_12$a = { class: "ub-vai__diff-title" };
+const _hoisted_12$b = { class: "ub-vai__diff-title" };
 const _hoisted_13$a = { class: "ub-vai__list" };
 const _hoisted_14$8 = { class: "ub-vai__raw" };
 const _hoisted_15$8 = {
@@ -179279,7 +179533,7 @@ function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
 											},
 											[createBaseVNode(
 												"h4",
-												_hoisted_12$a,
+												_hoisted_12$b,
 												toDisplayString(group.title),
 												1
 												/* TEXT */
@@ -180748,7 +181002,7 @@ const _hoisted_8$i = { class: "ub-vcard__head" };
 const _hoisted_9$d = { class: "ub-vcard__no" };
 const _hoisted_10$c = { class: "ub-vcard__fields" };
 const _hoisted_11$b = ["data-ub-viz-line"];
-const _hoisted_12$9 = [
+const _hoisted_12$a = [
 	"data-ub-viz-field-layout",
 	"onPointerdown",
 	"onFocusin"
@@ -180986,7 +181240,7 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 											onPointerdown: withModifiers(($event) => $setup.startEditing(row.index, field.columnIndex), ["stop"]),
 											onClick: ($event) => $setup.startEditing(row.index, field.columnIndex),
 											onKeydown: [withKeys(withModifiers(($event) => $setup.startEditing(row.index, field.columnIndex), ["prevent"]), ["enter"]), withKeys(withModifiers(($event) => $setup.startEditing(row.index, field.columnIndex), ["prevent"]), ["space"])]
-										}, toDisplayString(field.value || "未填写"), 43, _hoisted_17$5))], 42, _hoisted_12$9);
+										}, toDisplayString(field.value || "未填写"), 43, _hoisted_17$5))], 42, _hoisted_12$a);
 									}),
 									128
 									/* KEYED_FRAGMENT */
@@ -181535,7 +181789,7 @@ const _hoisted_8$f = {
 const _hoisted_9$c = ["aria-expanded"];
 const _hoisted_10$b = { class: "ub-viz__switcher-name" };
 const _hoisted_11$a = { class: "ub-viz__titles" };
-const _hoisted_12$8 = { class: "ub-viz__title" };
+const _hoisted_12$9 = { class: "ub-viz__title" };
 const _hoisted_13$8 = { class: "ub-viz__sub" };
 const _hoisted_14$6 = {
 	key: 0,
@@ -181638,7 +181892,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 				], 8, _hoisted_9$c),
 				createBaseVNode("div", _hoisted_11$a, [createBaseVNode(
 					"h1",
-					_hoisted_12$8,
+					_hoisted_12$9,
 					toDisplayString($setup.headTitle),
 					1
 					/* TEXT */
@@ -183469,7 +183723,7 @@ const _hoisted_8$e = { class: "ub-at__table" };
 const _hoisted_9$b = { key: 0 };
 const _hoisted_10$a = ["colspan"];
 const _hoisted_11$9 = { class: "ub-at__meta" };
-const _hoisted_12$7 = {
+const _hoisted_12$8 = {
 	key: 0,
 	class: "ub-at__empty"
 };
@@ -183685,7 +183939,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 						"max-height": "260px",
 						onToggle: _cache[1] || (_cache[1] = ($event) => $setup.historyOpen = !$setup.historyOpen)
 					}, {
-						default: withCtx(() => [!$setup.sqlFlow.history.value.length ? (openBlock(), createElementBlock("p", _hoisted_12$7, "暂无执行历史")) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
+						default: withCtx(() => [!$setup.sqlFlow.history.value.length ? (openBlock(), createElementBlock("p", _hoisted_12$8, "暂无执行历史")) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
 							Fragment,
 							null,
 							renderList($setup.sqlFlow.history.value, (item, index) => {
@@ -186065,7 +186319,7 @@ const _hoisted_11$8 = {
 	key: 0,
 	class: "ub-wbe__skill-row"
 };
-const _hoisted_12$6 = {
+const _hoisted_12$7 = {
 	key: 1,
 	class: "ub-wbe__skill"
 };
@@ -186257,7 +186511,7 @@ function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 									)]),
 									_: 2
 								}, 1032, ["onClick"])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true),
-								$props.showSkillEditor && $setup.isSkillEditorOpen(entry) ? (openBlock(), createElementBlock("div", _hoisted_12$6, [
+								$props.showSkillEditor && $setup.isSkillEditorOpen(entry) ? (openBlock(), createElementBlock("div", _hoisted_12$7, [
 									createVNode($setup["UbTextarea"], {
 										"model-value": $setup.getSkillDraft(entry).description,
 										label: "Skill 描述",
@@ -187334,7 +187588,7 @@ const _hoisted_10$8 = {
 	class: "fa-solid fa-check"
 };
 const _hoisted_11$7 = { class: "ub-picker-panel__main" };
-const _hoisted_12$5 = { class: "ub-picker-panel__name" };
+const _hoisted_12$6 = { class: "ub-picker-panel__name" };
 const _hoisted_13$5 = {
 	key: 0,
 	class: "ub-picker-panel__meta"
@@ -187419,7 +187673,7 @@ function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 						createBaseVNode("span", _hoisted_9$9, [$setup.valueOf(item) === $props.modelValue ? (openBlock(), createElementBlock("i", _hoisted_10$8)) : createCommentVNode("v-if", true)]),
 						createBaseVNode("span", _hoisted_11$7, [createBaseVNode(
 							"span",
-							_hoisted_12$5,
+							_hoisted_12$6,
 							toDisplayString($setup.labelOf(item)),
 							1
 							/* TEXT */
@@ -189285,7 +189539,7 @@ const _hoisted_8$b = { class: "ub-pps-tasks" };
 const _hoisted_9$8 = ["onClick"];
 const _hoisted_10$7 = { class: "ub-pps-task__name" };
 const _hoisted_11$6 = { class: "ub-pps-task__meta" };
-const _hoisted_12$4 = { title: "阶段号 — 同阶段并发，跨阶段串行" };
+const _hoisted_12$5 = { title: "阶段号 — 同阶段并发，跨阶段串行" };
 const _hoisted_13$4 = {
 	key: 0,
 	class: "ub-pps-empty"
@@ -189512,7 +189766,7 @@ function _sfc_render$r(_ctx, _cache, $props, $setup, $data, $options) {
 							), createBaseVNode("span", _hoisted_11$6, [
 								createBaseVNode(
 									"span",
-									_hoisted_12$4,
+									_hoisted_12$5,
 									"阶段 " + toDisplayString(task.stage),
 									1
 									/* TEXT */
@@ -192149,6 +192403,7 @@ const contentReplaceCopy = {
     nav: {
         basic: "基础设置",
         mode: "替换模式",
+        decision: "替换前判定",
         preset: "预设",
         filter: "标签筛选",
         test: "手动测试",
@@ -192161,6 +192416,10 @@ const contentReplaceCopy = {
         mode: {
             title: "替换模式",
             description: "无感模式：尽量将优化结果直接写回聊天，关闭则需手动确认。排查误替换时，建议关闭无感与自动应用，保留对比。",
+        },
+        decision: {
+            title: "替换前判定",
+            description: "正文出来后先问 OpenRouter 上的决策模型「这篇文章写得好不好」，判为「好」才替换，判为「不好」保留原文。只需填 Key；每楼花费极低。判定失败或超时会照常替换。",
         },
         preset: {
             title: "正文替换预设",
@@ -192249,6 +192508,7 @@ function ensureSettingsShape() {
     cfg.showDiff = cfg.showDiff !== false;
     cfg.parallelMode = cfg.parallelMode === true;
     cfg.ignoreMvuUpdate = cfg.ignoreMvuUpdate === true;
+    cfg.decisionGate = normalizeDecisionGateSettings_ACU(cfg.decisionGate);
     cfg.minLength = normalizeInteger(cfg.minLength, 100, 0, 1000000);
     cfg.maxOptimizations = normalizeInteger(cfg.maxOptimizations, 10, 1, 100);
     cfg.loopCount = normalizeInteger(cfg.loopCount, 1, 1, 10);
@@ -192375,6 +192635,9 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         showDiff: true,
         parallelMode: false,
         ignoreMvuUpdate: false,
+        decisionGate: normalizeDecisionGateSettings_ACU(null),
+        decisionModels: [],
+        decisionModelsLoading: false,
         minLength: 100,
         maxOptimizations: 10,
         loopCount: 1,
@@ -192453,6 +192716,7 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
             this.showDiff = cfg.showDiff !== false;
             this.parallelMode = cfg.parallelMode === true;
             this.ignoreMvuUpdate = cfg.ignoreMvuUpdate === true;
+            this.decisionGate = { ...cfg.decisionGate };
             this.minLength = cfg.minLength;
             this.maxOptimizations = cfg.maxOptimizations;
             this.loopCount = cfg.loopCount;
@@ -192500,6 +192764,7 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
             cfg.showDiff = this.showDiff;
             cfg.parallelMode = this.parallelMode;
             cfg.ignoreMvuUpdate = this.ignoreMvuUpdate;
+            cfg.decisionGate = normalizeDecisionGateSettings_ACU(this.decisionGate);
             cfg.minLength = normalizeInteger(this.minLength, 100, 0, 1000000);
             cfg.maxOptimizations = normalizeInteger(this.maxOptimizations, 10, 1, 100);
             cfg.loopCount = normalizeInteger(this.loopCount, 1, 1, 10);
@@ -192528,6 +192793,61 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         setBoolean(key, value) {
             this[key] = !!value;
             this.saveBasicSettings();
+        },
+        /** 替换前判定的开关 / key / 模型 / 门槛：规整后与其它基础字段一起落盘。 */
+        setDecisionGate(patch) {
+            this.decisionGate = normalizeDecisionGateSettings_ACU({ ...this.decisionGate, ...patch });
+            this.saveBasicSettings();
+        },
+        /** 拉取 OpenRouter 当前的决策模型列表（公开接口，不需要 key）。 */
+        async loadDecisionModels() {
+            if (this.decisionModelsLoading)
+                return;
+            this.decisionModelsLoading = true;
+            try {
+                this.decisionModels = await fetchDecisionModels_ACU();
+            }
+            catch (e) {
+                logError_ACU('[ACU-V2] load decision models failed', e);
+                setMessage$1(this, 'warning', `读取决策模型列表失败（${e?.message || '未知错误'}），可稍后重试；当前所选模型不受影响。`);
+            }
+            finally {
+                this.decisionModelsLoading = false;
+            }
+        },
+        /** 用测试文本问一次决策模型，不写回聊天。 */
+        async runDecisionTest() {
+            const input = stripMvuUpdateBlocks_ACU(this.testInput).trim();
+            if (input.length < 10) {
+                setMessage$1(this, 'warning', '请输入至少 10 个字符的测试文本。');
+                return;
+            }
+            if (!this.decisionGate.apiKey) {
+                setMessage$1(this, 'warning', '请先填写 OpenRouter Key。');
+                return;
+            }
+            if (this.busyAction)
+                return;
+            this.busyAction = 'decision-test';
+            this.testOutput = '正在请求决策模型...';
+            try {
+                const verdict = await requestContentDecision_ACU(input, this.decisionGate);
+                if (verdict.kind === 'error') {
+                    this.testOutput = `判定失败：${verdict.message}\n（自动替换时遇到这种情况会照常替换）`;
+                    setMessage$1(this, 'error', '上一次判定测试失败，请检查 Key 与网络。');
+                    return;
+                }
+                const goodPercent = Math.round(verdict.goodProbability * 100);
+                this.testOutput = [
+                    `决策模型判定：${verdict.choice}（好 ${goodPercent}%，门槛 ${this.decisionGate.threshold}%）`,
+                    verdict.replace ? '→ 会替换这段正文' : '→ 不会替换这段正文',
+                    verdict.model ? `模型：${verdict.model}` : '',
+                ].filter(Boolean).join('\n');
+                clearMessageAndToast(this, 'success', '判定测试完成。', { muteable: false });
+            }
+            finally {
+                this.busyAction = '';
+            }
         },
         setString(key, value) {
             this[key] = String(value ?? '');
@@ -192838,6 +193158,7 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
         const sections = [
             { id: 'cr-basic', label: contentReplaceCopy.nav.basic },
             { id: 'cr-mode', label: contentReplaceCopy.nav.mode },
+            { id: 'cr-decision', label: contentReplaceCopy.nav.decision },
             { id: 'cr-preset', label: contentReplaceCopy.nav.preset },
             { id: 'cr-filter', label: contentReplaceCopy.nav.filter },
             { id: 'cr-test', label: contentReplaceCopy.nav.test },
@@ -192847,7 +193168,11 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             { key: 'autoApply', label: '自动应用替换结果' },
             { key: 'showDiff', label: '显示优化对比', hint: '无感模式下完成提示里可点「查看对比」，否则直接弹出对比；开启静默提示框时也会显示。' },
             { key: 'parallelMode', label: '填表与正文替换并行执行' },
-            { key: 'ignoreMvuUpdate', label: '忽略MVU更新' },
+            {
+                key: 'ignoreMvuUpdate',
+                label: '忽略MVU更新',
+                hint: '开启后不等 MVU 变量解析就开始替换，少等一会儿；MVU 随后追加到正文末尾的变量块会原样保留。关闭则等解析完成再替换。',
+            },
         ];
         const presetItems = computed(() => {
             const base = [
@@ -192870,6 +193195,22 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             isMain: segment.isMain,
             isMain2: segment.isMain2,
         })));
+        /** 列表还没拉到（或拉取失败）时，当前所选模型仍要能显示。 */
+        const decisionModelOptions = computed(() => {
+            const options = store.decisionModels.map(model => ({
+                value: model.id,
+                label: model.free ? `${model.name}（免费）` : model.name,
+            }));
+            if (!options.some(option => option.value === store.decisionGate.model)) {
+                options.unshift({ value: store.decisionGate.model, label: store.decisionGate.model });
+            }
+            return options;
+        });
+        function setDecisionEnabled(value) {
+            store.setDecisionGate({ enabled: value });
+            if (value && !store.decisionModels.length)
+                void store.loadDecisionModels();
+        }
         const promptGroupMissingContent = computed(() => !store.promptGroup.some(s => String(s.content || '').includes('$CONTENT')));
         const canEditCurrentPrompt = computed(() => store.selectedPresetName !== '');
         function setApiPreset(value) {
@@ -192956,7 +193297,11 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             store.refreshFromSettings();
             apiStore.refreshFromSettings();
         }
-        onMounted(refreshAll);
+        onMounted(() => {
+            refreshAll();
+            if (store.decisionGate.enabled && !store.decisionModels.length)
+                void store.loadDecisionModels();
+        });
         watchChatChanged_ACU(refreshAll);
         useUiCloseGuard(() => {
             if (!promptSheetOpen.value || !store.promptDirty)
@@ -192968,35 +193313,36 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 confirmVariant: 'danger',
             });
         });
-        const __returned__ = { PLACEHOLDERS, store, dialogStore, apiStore, followActiveApiLabel, apiOptions, contentReplaceStale, markContentReplaceConfirmed, presetSheetOpen, promptSheetOpen, editingPresetName, sections, modeToggles, presetItems, promptSegmentsForView, promptGroupMissingContent, canEditCurrentPrompt, setApiPreset, onDeletePreset, onRenamePreset, confirmLeaveCustomPrompt, onSelectPreset, onEditPreset, openPromptSheetForCurrent, closePromptSheet, onSavePromptGroup, onResetPromptGroup, onPromptUpdate, refreshAll, get copy() { return contentReplaceCopy; }, PromptSegmentsSheet, UbBadge, UbButton, UbCallout, UbFileButton, UbIconButton, UbInput, UbPage, UbPresetPicker, UbRow, UbRulePairs, UbSection, UbSelect, UbSheet, UbSwitch, UbTextarea };
+        const __returned__ = { PLACEHOLDERS, store, dialogStore, apiStore, followActiveApiLabel, apiOptions, contentReplaceStale, markContentReplaceConfirmed, presetSheetOpen, promptSheetOpen, editingPresetName, sections, modeToggles, presetItems, promptSegmentsForView, decisionModelOptions, setDecisionEnabled, promptGroupMissingContent, canEditCurrentPrompt, setApiPreset, onDeletePreset, onRenamePreset, confirmLeaveCustomPrompt, onSelectPreset, onEditPreset, openPromptSheetForCurrent, closePromptSheet, onSavePromptGroup, onResetPromptGroup, onPromptUpdate, refreshAll, get copy() { return contentReplaceCopy; }, PromptSegmentsSheet, UbBadge, UbButton, UbCallout, UbFileButton, UbIconButton, UbInput, UbPage, UbPresetPicker, UbRow, UbRulePairs, UbSection, UbSelect, UbSheet, UbSwitch, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-cr__preset[data-v-7f542341] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-7f542341] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-7f542341] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-7f542341] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-7f542341] {\r\n  display: flex;\r\n  justify-content: flex-end;\n}\n.ub-cr__output[data-v-7f542341] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-7f542341] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-7f542341] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-7f542341] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-7f542341] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-7f542341] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-7f542341] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-7f542341] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-7f542341] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-7f542341");
-var ContentReplacePage_vue_vue_type_style_index_0_scoped_7f542341_lang = null;
+injectSfcStyle("\n.ub-cr__preset[data-v-109d7f6d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-109d7f6d] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-109d7f6d] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-109d7f6d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-109d7f6d] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-109d7f6d] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-109d7f6d] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-109d7f6d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-109d7f6d] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-109d7f6d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-109d7f6d] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-109d7f6d] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-109d7f6d] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-109d7f6d] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-109d7f6d");
+var ContentReplacePage_vue_vue_type_style_index_0_scoped_109d7f6d_lang = null;
 
-const _hoisted_1$j = { class: "ub-cr__preset" };
-const _hoisted_2$i = { class: "ub-cr__meta" };
-const _hoisted_3$h = { class: "ub-cr__picker" };
-const _hoisted_4$g = { class: "ub-cr__test-actions" };
-const _hoisted_5$e = {
+const _hoisted_1$j = { class: "ub-cr__picker" };
+const _hoisted_2$i = { class: "ub-cr__preset" };
+const _hoisted_3$h = { class: "ub-cr__meta" };
+const _hoisted_4$g = { class: "ub-cr__picker" };
+const _hoisted_5$e = { class: "ub-cr__test-actions" };
+const _hoisted_6$c = {
 	key: 0,
 	class: "ub-cr__output"
 };
-const _hoisted_6$c = {
+const _hoisted_7$b = {
 	key: 1,
 	class: "ub-cr__list"
 };
-const _hoisted_7$b = { class: "ub-cr__list-info" };
-const _hoisted_8$a = { class: "ub-cr__list-name" };
-const _hoisted_9$7 = { class: "ub-cr__list-meta" };
-const _hoisted_10$6 = {
+const _hoisted_8$a = { class: "ub-cr__list-info" };
+const _hoisted_9$7 = { class: "ub-cr__list-name" };
+const _hoisted_10$6 = { class: "ub-cr__list-meta" };
+const _hoisted_11$5 = {
 	key: 2,
 	class: "ub-cr__meta"
 };
-const _hoisted_11$5 = { class: "ub-cr__placeholders" };
+const _hoisted_12$4 = { class: "ub-cr__placeholders" };
 function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		lead: "正文生成后自动检查并润色 AI 回复。下面从上到下依次是：调用参数、替换方式、提示词、标签筛选与手动测试。",
@@ -193141,7 +193487,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: $setup.store.lastOptimizedMessageIndex < 0,
 						onClick: $setup.store.reoptimizeLatest
 					}, {
-						default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
+						default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 							" 重新优化最近一次 ",
 							-1
 							/* CACHED */
@@ -193154,6 +193500,74 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 					])]),
 					_: 1
 				}, 8, ["hint"])]),
+				_: 1
+			}, 8, ["title", "description"]),
+			createVNode($setup["UbSection"], {
+				id: "cr-decision",
+				title: $setup.copy.panels.decision.title,
+				description: $setup.copy.panels.decision.description,
+				icon: "fa-solid fa-scale-balanced"
+			}, {
+				default: withCtx(() => [
+					createVNode($setup["UbRow"], {
+						label: "启用替换前判定",
+						hint: "只影响自动替换；手动「重新优化」和测试不经过判定。"
+					}, {
+						default: withCtx(() => [createVNode($setup["UbSwitch"], {
+							"model-value": $setup.store.decisionGate.enabled,
+							"aria-label": "启用替换前判定",
+							"onUpdate:modelValue": $setup.setDecisionEnabled
+						}, null, 8, ["model-value"])]),
+						_: 1
+					}),
+					createVNode($setup["UbRow"], {
+						label: "OpenRouter Key",
+						hint: "在 openrouter.ai 的 Keys 页面创建，只用于决策判定。",
+						stack: ""
+					}, {
+						default: withCtx(() => [createVNode($setup["UbInput"], {
+							"model-value": $setup.store.decisionGate.apiKey,
+							type: "password",
+							placeholder: "sk-or-...",
+							autocomplete: "off",
+							"aria-label": "OpenRouter Key",
+							onChange: _cache[4] || (_cache[4] = ($event) => $setup.store.setDecisionGate({ apiKey: String($event) }))
+						}, null, 8, ["model-value"])]),
+						_: 1
+					}),
+					createVNode($setup["UbRow"], {
+						label: "决策模型",
+						hint: "默认 Jev 最新版；标「免费」的不扣费。"
+					}, {
+						default: withCtx(() => [createBaseVNode("div", _hoisted_1$j, [createVNode($setup["UbSelect"], {
+							options: $setup.decisionModelOptions,
+							"model-value": $setup.store.decisionGate.model,
+							"aria-label": "决策模型",
+							"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.store.setDecisionGate({ model: $event }))
+						}, null, 8, ["options", "model-value"]), createVNode($setup["UbIconButton"], {
+							icon: "fa-solid fa-rotate",
+							title: "刷新模型列表",
+							disabled: $setup.store.decisionModelsLoading,
+							onClick: $setup.store.loadDecisionModels
+						}, null, 8, ["disabled", "onClick"])])]),
+						_: 1
+					}),
+					createVNode($setup["UbRow"], {
+						label: "判定门槛（%）",
+						hint: "「好」的概率达到这个值才替换；50 即按模型的选择。调高则更少替换。"
+					}, {
+						default: withCtx(() => [createVNode($setup["UbInput"], {
+							"model-value": $setup.store.decisionGate.threshold,
+							type: "number",
+							min: 0,
+							max: 100,
+							step: 5,
+							"aria-label": "判定门槛",
+							onChange: _cache[6] || (_cache[6] = ($event) => $setup.store.setDecisionGate({ threshold: Number($event) }))
+						}, null, 8, ["model-value"])]),
+						_: 1
+					})
+				]),
 				_: 1
 			}, 8, ["title", "description"]),
 			createVNode($setup["UbSection"], {
@@ -193170,9 +193584,9 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 					)]),
 					_: 1
 				}, 8, ["variant"])]),
-				default: withCtx(() => [createBaseVNode("div", _hoisted_1$j, [
-					createBaseVNode("p", _hoisted_2$i, [
-						_cache[13] || (_cache[13] = createTextVNode(
+				default: withCtx(() => [createBaseVNode("div", _hoisted_2$i, [
+					createBaseVNode("p", _hoisted_3$h, [
+						_cache[16] || (_cache[16] = createTextVNode(
 							"当前提示词：",
 							-1
 							/* CACHED */
@@ -193190,7 +193604,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							/* TEXT */
 						)
 					]),
-					createBaseVNode("div", _hoisted_3$h, [
+					createBaseVNode("div", _hoisted_4$g, [
 						createVNode($setup["UbPresetPicker"], {
 							title: "选择正文替换预设",
 							items: $setup.presetItems,
@@ -193198,7 +193612,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							"empty-text": "暂无正文替换预设",
 							placeholder: "自定义提示词",
 							"show-default-action": false,
-							"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.onSelectPreset($event))
+							"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.onSelectPreset($event))
 						}, null, 8, ["items", "model-value"]),
 						createVNode($setup["UbIconButton"], {
 							icon: "fa-solid fa-pen",
@@ -193218,14 +193632,14 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						createVNode($setup["UbIconButton"], {
 							icon: "fa-solid fa-gear",
 							title: "管理预设",
-							onClick: _cache[5] || (_cache[5] = ($event) => $setup.presetSheetOpen = true)
+							onClick: _cache[8] || (_cache[8] = ($event) => $setup.presetSheetOpen = true)
 						})
 					]),
 					$setup.promptGroupMissingContent ? (openBlock(), createBlock($setup["UbCallout"], {
 						key: 0,
 						kind: "warning"
 					}, {
-						default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
+						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
 							" 正文替换提示词缺少 $CONTENT 占位符，运行时无法知道要检查哪段正文；请打开编辑器载入默认提示词或补回占位符。 ",
 							-1
 							/* CACHED */
@@ -193251,7 +193665,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value": $setup.store.extractTags,
 							placeholder: "例如: content,正文",
 							"aria-label": "提取标签",
-							"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.store.setString("extractTags", String($event)))
+							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.store.setString("extractTags", String($event)))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -193264,7 +193678,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value": $setup.store.excludeTags,
 							placeholder: "例如: think,thinking",
 							"aria-label": "排除标签",
-							"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.store.setString("excludeTags", String($event)))
+							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.store.setString("excludeTags", String($event)))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -193306,15 +193720,26 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						rows: 5,
 						label: "测试文本",
 						placeholder: "输入一段模拟 AI 正文，验证提示词与返回格式。",
-						"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.store.setString("testInput", $event))
+						"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.store.setString("testInput", $event))
 					}, null, 8, ["model-value"]),
-					createBaseVNode("div", _hoisted_4$g, [createVNode($setup["UbButton"], {
+					createBaseVNode("div", _hoisted_5$e, [createVNode($setup["UbButton"], {
+						icon: "fa-solid fa-scale-balanced",
+						busy: $setup.store.busyAction === "decision-test",
+						onClick: $setup.store.runDecisionTest
+					}, {
+						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
+							"测试决策判定",
+							-1
+							/* CACHED */
+						)])]),
+						_: 1
+					}, 8, ["busy", "onClick"]), createVNode($setup["UbButton"], {
 						variant: "primary",
 						icon: "fa-solid fa-play",
 						busy: $setup.store.busyAction === "test",
 						onClick: $setup.store.runTest
 					}, {
-						default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 							"执行优化测试",
 							-1
 							/* CACHED */
@@ -193323,7 +193748,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 					}, 8, ["busy", "onClick"])]),
 					$setup.store.testOutput ? (openBlock(), createElementBlock(
 						"pre",
-						_hoisted_5$e,
+						_hoisted_6$c,
 						toDisplayString($setup.store.testOutput),
 						1
 						/* TEXT */
@@ -193335,7 +193760,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				"is-open": $setup.presetSheetOpen,
 				title: "管理正文替换预设",
 				width: "560px",
-				onClose: _cache[9] || (_cache[9] = ($event) => $setup.presetSheetOpen = false)
+				onClose: _cache[12] || (_cache[12] = ($event) => $setup.presetSheetOpen = false)
 			}, {
 				default: withCtx(() => [
 					$setup.store.message ? (openBlock(), createBlock($setup["UbCallout"], {
@@ -193354,14 +193779,14 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						icon: "fa-solid fa-plus",
 						onClick: $setup.store.createPresetFromDefault
 					}, {
-						default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+						default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
 							"从默认新建",
 							-1
 							/* CACHED */
 						)])]),
 						_: 1
 					}, 8, ["onClick"]),
-					$setup.store.promptPresets.length ? (openBlock(), createElementBlock("ul", _hoisted_6$c, [(openBlock(true), createElementBlock(
+					$setup.store.promptPresets.length ? (openBlock(), createElementBlock("ul", _hoisted_7$b, [(openBlock(true), createElementBlock(
 						Fragment,
 						null,
 						renderList($setup.store.promptPresets, (preset) => {
@@ -193369,15 +193794,15 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								key: preset.name,
 								class: "ub-cr__list-item"
 							}, [
-								createBaseVNode("div", _hoisted_7$b, [createBaseVNode(
+								createBaseVNode("div", _hoisted_8$a, [createBaseVNode(
 									"span",
-									_hoisted_8$a,
+									_hoisted_9$7,
 									toDisplayString(preset.name),
 									1
 									/* TEXT */
 								), createBaseVNode(
 									"span",
-									_hoisted_9$7,
+									_hoisted_10$6,
 									toDisplayString(preset.promptGroup.length) + " 段提示词",
 									1
 									/* TEXT */
@@ -193407,9 +193832,9 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						}),
 						128
 						/* KEYED_FRAGMENT */
-					))])) : (openBlock(), createElementBlock("p", _hoisted_10$6, "暂无预设。点上方「从默认新建」，或在预设卡片里导入。")),
+					))])) : (openBlock(), createElementBlock("p", _hoisted_11$5, "暂无预设。点上方「从默认新建」，或在预设卡片里导入。")),
 					createVNode($setup["UbCallout"], { kind: "info" }, {
-						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
 							"点「编辑提示词」会先把该预设载入为当前提示词，再打开编辑器；保存后同步更新这个预设。",
 							-1
 							/* CACHED */
@@ -193430,11 +193855,11 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				onClose: $setup.closePromptSheet,
 				onSave: $setup.onSavePromptGroup,
 				onReset: $setup.onResetPromptGroup,
-				onAdd: _cache[10] || (_cache[10] = ($event) => $setup.store.addPromptSegment($event)),
-				onDelete: _cache[11] || (_cache[11] = ($event) => $setup.store.deletePromptSegment($event)),
+				onAdd: _cache[13] || (_cache[13] = ($event) => $setup.store.addPromptSegment($event)),
+				onDelete: _cache[14] || (_cache[14] = ($event) => $setup.store.deletePromptSegment($event)),
 				onUpdate: $setup.onPromptUpdate
 			}, {
-				lead: withCtx(() => [createBaseVNode("div", _hoisted_11$5, [_cache[18] || (_cache[18] = createBaseVNode(
+				lead: withCtx(() => [createBaseVNode("div", _hoisted_12$4, [_cache[22] || (_cache[22] = createBaseVNode(
 					"span",
 					null,
 					"可用占位符",
@@ -193466,7 +193891,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-7f542341"]]);
+var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-109d7f6d"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;
