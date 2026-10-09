@@ -5,13 +5,14 @@
  *
  * 注册"打开新 UI"菜单按钮；点击时惰性挂载 Vue 应用。
  */
-import { registerUiSurface_ACU, type UiToastPayload_ACU } from '../../shared/ui-surface-registry';
-import { topLevelWindow_ACU } from '../../shared/env';
+import { registerUiSurface_ACU, showHostToast_ACU, type UiToastPayload_ACU } from '../../shared/ui-surface-registry';
 import { logWarn_ACU } from '../../shared/utils';
 import { registerAcuV2MenuButton } from './menu-button';
 import { getAcuV2PiniaForBridge } from './mount';
 import { useRootShellStore } from '../stores/root-shell-store';
 import { useToastStore } from '../stores/toast-store';
+import { readPersistedActiveTheme_ACU } from '../stores/theme-store';
+import { applyTheme } from '../theme/theme-injector';
 import {
   installAutoCardUpdaterV2Api_ACU,
   openAcuV2Shell_ACU,
@@ -25,7 +26,7 @@ export { openVisualizerSurface_ACU } from '../surfaces/visualizer/open-visualize
 
 /**
  * showToast 实现：V2 shell 已挂载且打开时走 Pinia toast-store（可携带
- * "打开数据管理"等 action）；否则回退宿主 toastr；再不可用只记日志。
+ * "打开数据管理"等 action）；否则用酒馆页面上的插件提示框；再不可用只记日志。
  * 绝不抛错——toast 通道不允许反向破坏调用方（加载/合并）流程。
  */
 function showAcuV2Toast_ACU(payload: UiToastPayload_ACU): void {
@@ -47,20 +48,23 @@ function showAcuV2Toast_ACU(payload: UiToastPayload_ACU): void {
       }
     }
   } catch (error) {
-    logWarn_ACU('[ACU-V2] toast-store 通道不可用，回退宿主 toastr:', error);
+    logWarn_ACU('[ACU-V2] toast-store 通道不可用，回退酒馆页面提示框:', error);
   }
-  try {
-    const toastr = (topLevelWindow_ACU as any)?.toastr;
-    if (toastr && typeof toastr[payload.kind] === 'function') {
-      toastr[payload.kind](payload.text, undefined, payload.action
-        ? { onclick: () => { void payload.action!.onClick(); } }
-        : undefined);
-      return;
-    }
-  } catch (_) {
-    // 宿主 toastr 不可用时落到下方日志。
-  }
+  // 面板没打开：用酒馆页面上的插件提示框（与面板内提示同一设计、跟随主题）。
+  if (showHostToast_ACU(payload)) return;
   logWarn_ACU(`[ACU toast:${payload.kind}] ${payload.text}`);
+}
+
+/**
+ * 启动即按已保存的主题输出 token：插件提示框等宿主浮层在面板打开前就会出现，
+ * 不能等首次挂载才上色。面板挂载后由 theme store 订阅接管后续切换。
+ */
+export function applySavedThemeToHostSurfaces_ACU(): void {
+  try {
+    applyTheme(readPersistedActiveTheme_ACU());
+  } catch (error) {
+    logWarn_ACU('[ACU-V2] 启动时应用主题失败，宿主浮层将使用默认配色:', error);
+  }
 }
 
 export function bootstrapAcuV2(): void {

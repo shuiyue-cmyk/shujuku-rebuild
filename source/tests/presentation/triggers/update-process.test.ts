@@ -77,6 +77,7 @@ describe('handleManualUpdate_ACU destructive refill confirmation', () => {
 
     expect(showCustomConfirm_ACU).toHaveBeenCalledTimes(1);
     expect(showCustomConfirm_ACU.mock.calls[0][0]).toBe('手动填表确认');
+    expect(showCustomConfirm_ACU.mock.calls[0][2]).toEqual(expect.objectContaining({ tone: 'danger' }));
     const message = showCustomConfirm_ACU.mock.calls[0][1];
     expect(message).toContain('会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志');
     expect(message).toContain('此前楼层的表格数据将无法恢复');

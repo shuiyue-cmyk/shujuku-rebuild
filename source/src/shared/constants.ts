@@ -16,6 +16,8 @@ export const UNIQUE_SCRIPT_ID = 'shujuku_v120';
 
 /** 脚本 ID 前缀（等同于 UNIQUE_SCRIPT_ID） */
 export const SCRIPT_ID_PREFIX_ACU = UNIQUE_SCRIPT_ID;
+/** 面板外的插件浮层（提示框、确认框、正文替换遮罩/对话框）挂这个类，主题注入器给它写主题 token。 */
+export const ACU_HOST_SURFACE_CLASS_ACU = 'acu-host-surface';
 
 /** 主弹窗 ID */
 export const POPUP_ID_ACU = `${SCRIPT_ID_PREFIX_ACU}-popup`;

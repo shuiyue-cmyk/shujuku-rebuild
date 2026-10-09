@@ -348,7 +348,7 @@ export async function handleManualUpdate_ACU() {
             '如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n' +
             '保留边界 checkpoint 会按 AI 回复楼层计数，在达到保留窗口和 20 个 AI 楼层缓冲后自动滚动建立。\n' +
             '范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或终止时会回滚到本次操作前的状态。',
-            { confirmLabel: '确认并继续', cancelLabel: '取消' }
+            { confirmLabel: '确认并继续', cancelLabel: '取消', tone: 'danger' }
         );
 
         if (!confirmed) {

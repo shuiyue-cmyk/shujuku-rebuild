@@ -9,7 +9,8 @@ const topLevelWindowMock_ACU = vi.hoisted(() => {
   } as Window & typeof globalThis;
 });
 
-vi.mock('../../src/shared/constants', () => ({
+vi.mock('../../src/shared/constants', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/shared/constants')>()),
   SCRIPT_ID_PREFIX_ACU: 'acu-test',
 }));
 
@@ -28,38 +29,67 @@ describe('custom confirm', () => {
     topLevelWindowMock_ACU.innerWidth = 1280;
   });
 
-  it('窄屏模式下确认框会下移并限制高度，按钮纵向堆叠', () => {
-    topLevelWindowMock_ACU.innerWidth = 768;
-
+  it('确认框用插件弹窗样式类而不是内联旧配色，并挂主题 token 类', () => {
     void showCustomConfirm_ACU('手动填表确认', '第一行\n第二行');
 
-    const dialog = topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm') as HTMLElement;
-    const buttons = topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm-ok')?.parentElement as HTMLElement;
-    const message = buttons.previousElementSibling as HTMLElement;
+    const doc = topLevelWindowMock_ACU.document;
+    const overlay = doc.getElementById('acu-test-custom-confirm-overlay') as HTMLElement;
+    const dialog = doc.getElementById('acu-test-custom-confirm') as HTMLElement;
+    const ok = doc.getElementById('acu-test-custom-confirm-ok') as HTMLElement;
+    const cancel = doc.getElementById('acu-test-custom-confirm-cancel') as HTMLElement;
 
-    expect(dialog).toBeTruthy();
-    expect(dialog.getAttribute('style') || '').toContain('top: max(calc(env(safe-area-inset-top, 0px) + 72px), 12svh)');
-    expect(dialog.getAttribute('style') || '').toContain('transform: translate(-50%, 0)');
-    expect(dialog.getAttribute('style') || '').toContain('max-height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 88px)');
-    expect(message.getAttribute('style') || '').toContain('overflow-y: auto');
-    expect(buttons.getAttribute('style') || '').toContain('flex-direction: column-reverse');
-    expect((topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm-ok') as HTMLElement).getAttribute('style') || '').toContain('width: 100%');
+    expect(overlay.classList.contains('acu-hd-layer')).toBe(true);
+    expect(overlay.classList.contains('acu-host-surface')).toBe(true);
+    expect(dialog.classList.contains('acu-hd-dialog')).toBe(true);
+    expect(ok.className).toContain('acu-hd-btn--primary');
+    expect(cancel.className).toContain('acu-hd-btn--ghost');
+    expect(doc.body.innerHTML).not.toContain('style=');
+    expect(doc.body.innerHTML).not.toContain('#2563eb');
+    expect(dialog.querySelector('.acu-hd-message')?.innerHTML).toContain('第一行<br>第二行');
   });
 
-  it('桌面模式下确认框保持居中布局与横向按钮', () => {
-    topLevelWindowMock_ACU.innerWidth = 1280;
+  it('样式表注入到主窗口一次：遮罩铺满并有底色，窄屏按钮纵向铺满', () => {
+    void showCustomConfirm_ACU('一', '甲');
+    void showCustomConfirm_ACU('二', '乙');
 
-    void showCustomConfirm_ACU('删除确认', '保持桌面模式');
+    const styles = topLevelWindowMock_ACU.document.querySelectorAll('#acu-host-dialog-styles');
+    expect(styles.length).toBe(1);
+    const css = styles[0].textContent || '';
+    expect(css).toMatch(/\.acu-hd-layer\s*\{[^}]*position:\s*fixed[^}]*inset:\s*0/);
+    expect(css).toMatch(/\.acu-hd-layer\s*\{[^}]*background:\s*var\(--acu-hd-scrim/);
+    expect(css).toContain('@media (max-width: 600px)');
+    expect(css).toContain('flex-direction: column-reverse');
+    expect(css).toContain('var(--acu-accent');
+    expect(css).not.toContain('acuWindowSlideIn');
+  });
 
-    const dialog = topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm') as HTMLElement;
-    const buttons = topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm-ok')?.parentElement as HTMLElement;
+  it('危险操作用危险色确认按钮与警示图标', () => {
+    void showCustomConfirm_ACU('手动填表确认', '高风险', { tone: 'danger' });
 
-    expect(dialog.getAttribute('style') || '').toContain('top: 50%');
-    expect(dialog.getAttribute('style') || '').toContain('transform: translate(-50%, -50%)');
-    expect(dialog.getAttribute('style') || '').toContain('max-height: calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 40px)');
-    expect(buttons.getAttribute('style') || '').toContain('justify-content: flex-end');
-    expect(buttons.getAttribute('style') || '').toContain('flex-direction: row');
-    expect((topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm-ok') as HTMLElement).getAttribute('style') || '').toContain('width: auto');
+    const doc = topLevelWindowMock_ACU.document;
+    expect(doc.getElementById('acu-test-custom-confirm-ok')!.className).toContain('acu-hd-btn--danger');
+    expect(doc.querySelector('.acu-hd-glyph')!.className).toContain('is-danger');
+    expect(doc.querySelector('.acu-hd-glyph i')!.className).toContain('fa-triangle-exclamation');
+  });
+
+  it('点击遮罩空白处按取消结束，点击弹窗内部不关闭', async () => {
+    const promise = showCustomConfirm_ACU('确认', '继续执行');
+    const doc = topLevelWindowMock_ACU.document;
+
+    (doc.getElementById('acu-test-custom-confirm') as HTMLElement).click();
+    expect(doc.getElementById('acu-test-custom-confirm-overlay')).not.toBeNull();
+
+    (doc.getElementById('acu-test-custom-confirm-overlay') as HTMLElement).click();
+    await expect(promise).resolves.toBe(false);
+    expect(doc.getElementById('acu-test-custom-confirm-overlay')).toBeNull();
+  });
+
+  it('标题与按钮文案转义', () => {
+    void showCustomConfirm_ACU('<b>x</b>', 'm', { confirmLabel: '<i>ok</i>', cancelLabel: '<i>no</i>' });
+    const doc = topLevelWindowMock_ACU.document;
+    expect(doc.querySelector('.acu-hd-title b')).toBeNull();
+    expect(doc.getElementById('acu-test-custom-confirm-ok')!.querySelector('i')).toBeNull();
+    expect(doc.getElementById('acu-test-custom-confirm-ok')!.textContent).toBe('<i>ok</i>');
   });
 
   it('点击确认后会 resolve true 并清理 DOM', async () => {

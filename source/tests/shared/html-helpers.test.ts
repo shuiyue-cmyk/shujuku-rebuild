@@ -92,3 +92,11 @@ describe('renderStopButton_ACU', () => {
     expect(result).toMatch(/<\/button>$/);
   });
 });
+
+describe('renderToastActionButton_ACU（新界面样式）', () => {
+  it('按钮靠样式类上色，不再内联写死颜色与鼠标事件', () => {
+    const html = renderStopButton_ACU('stop-1', '终止');
+    expect(html).toContain('class="acu-toast-action"');
+    expect(html).not.toMatch(/style=|onmouse/);
+  });
+});

@@ -155,3 +155,57 @@ describe('showToastr_ACU — repair 路径净化', () => {
     expect(messageEl.innerHTML).toBe(message);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// 新界面样式：提示框接主题 token、按类型取主题色、按钮走统一样式
+// ═══════════════════════════════════════════════════════════════
+describe('showToastr_ACU — 新界面样式', () => {
+  function captureOptions(type: string): { get: () => any } {
+    let captured: any = null;
+    _set_toastr_API_ACU({ [type]: (_m: string, _t: string, o: any) => { captured = o; return {} as any; } } as any);
+    return { get: () => captured };
+  }
+
+  it('提示框挂宿主浮层类以拿到主题 token；调用方自带 toastClass 时也补上', () => {
+    const plain = captureOptions('success');
+    showToastr_ACU('success', '数据库已加载！', '数据库');
+    expect(plain.get().toastClass.split(' ')).toEqual(expect.arrayContaining(['toast', 'acu-toast', 'acu-toast--success', 'acu-host-surface']));
+
+    const custom = captureOptions('info');
+    showToastr_ACU('info', '正在规划', { toastClass: 'toast acu-toast acu-toast--info' });
+    expect(custom.get().toastClass.split(' ')).toContain('acu-host-surface');
+  });
+
+  it('样式按类型取主题色、不再用旧的「达/知/警/误」方块与写死的蓝色', () => {
+    captureOptions('warning');
+    showToastr_ACU('warning', '注意');
+    const css = document.getElementById('acu_shujuku-acu-toast-style')?.textContent
+      || Array.from(document.querySelectorAll('style')).map(s => s.textContent).join('\n');
+    expect(css).toContain('var(--acu-success');
+    expect(css).toContain('var(--acu-warning');
+    expect(css).toContain('var(--acu-danger');
+    expect(css).toContain('.acu-toast-action');
+    expect(css).not.toMatch(/content:\s*"(达|知|警|误)"/);
+    expect(css).not.toContain('#2563eb');
+  });
+});
+
+describe('插件提示框作为宿主提示框渲染器', () => {
+  it('注册到共享入口：带操作的提示渲染为按钮，不受静默提示框拦截', async () => {
+    const { showHostToast_ACU } = await import('../../../src/shared/ui-surface-registry');
+    const state = await import('../../../src/service/runtime/state-manager');
+    (state.settings_ACU as any).toastMuteEnabled = true;
+    let captured: { message: string; options: any } | null = null;
+    _set_toastr_API_ACU({ info: (m: string, _t: string, o: any) => { captured = { message: m, options: o }; return {} as any; } } as any);
+    const onClick = vi.fn();
+
+    expect(showHostToast_ACU({ kind: 'info', text: '旧历史 <需要> 处理', action: { label: '打开数据管理', onClick } })).toBe(true);
+    expect(captured).not.toBeNull();
+    expect(captured!.message).toContain('旧历史 &lt;需要&gt; 处理');
+    expect(captured!.message).toContain('class="acu-toast-action"');
+    expect(captured!.message).toContain('打开数据管理');
+    captured!.options.onclick();
+    expect(onClick).toHaveBeenCalledTimes(1);
+    (state.settings_ACU as any).toastMuteEnabled = false;
+  });
+});

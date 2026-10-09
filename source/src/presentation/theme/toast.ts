@@ -2,10 +2,12 @@
 // 核心逻辑原位于 service/runtime/toast-service.ts，已搬回 presentation 层
 
 import { toastr_API_ACU } from '../../shared/host-api';
-import { SCRIPT_ID_PREFIX_ACU, ACU_TOAST_CATEGORY_ACU } from '../../shared/constants';
+import { SCRIPT_ID_PREFIX_ACU, ACU_TOAST_CATEGORY_ACU, ACU_HOST_SURFACE_CLASS_ACU } from '../../shared/constants';
 import { topLevelWindow_ACU } from '../../shared/env';
 import { logDebug_ACU } from '../../shared/utils';
 import { settings_ACU } from '../../service/runtime/state-manager';
+import { escapeHtml_ACU, renderToastActionButton_ACU } from '../../shared/html-helpers';
+import { registerHostToastRenderer_ACU, type UiToastPayload_ACU } from '../../shared/ui-surface-registry';
 
 // toast 相关状态
 export const ACU_TOAST_TITLE_ACU = 'UnbirthDB';
@@ -24,160 +26,161 @@ function ensureAcuToastStylesInjected_ACU() {
     const style = doc.createElement('style');
     style.id = styleId;
     style.textContent = `
-      /* ACU Toast Theme — 使用新主题系统的变量 */
-      #toast-container .acu-toast.toast {
-        --toast-accent: var(--acu-accent, #2563eb);
-        --toast-bg: var(--acu-bg-1, #ffffff);
-        --toast-text: var(--acu-text-1, #1a2332);
-        --toast-border: var(--acu-border, #e0e4ea);
-        --toast-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      }
-      .acu-toast.toast {
-        font-family: var(--toast-font) !important;
-        font-weight: 500 !important;
-        font-size: 14px !important;
-        letter-spacing: 0.2px;
-        --acu-toast-accent: var(--toast-accent);
-        background: var(--toast-bg) !important;
-        color: var(--toast-text) !important;
-        border: 1px solid var(--toast-border) !important;
-        border-radius: 8px !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08) !important;
-        padding: 12px 14px 12px 50px !important;
-        width: min(420px, calc(100vw - 24px)) !important;
-        opacity: 1 !important;
-        backdrop-filter: none;
-        -webkit-backdrop-filter: none;
+      /* UnbirthDB 插件提示框：与新界面提示框同一套设计，颜色取当前主题 token
+         （主题注入器给 .acu-host-surface 写 token；未注入时回退默认浅色）。 */
+      #toast-container > .acu-toast.toast {
+        --acu-toast-tone: var(--acu-accent, #2F5FD0);
+        --acu-toast-font: var(--acu-font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
         position: relative !important;
+        width: min(420px, calc(100vw - 24px)) !important;
+        margin: 0 0 8px !important;
+        padding: 10px 36px 10px 42px !important;
+        border: 1px solid var(--acu-border, rgba(28, 27, 24, 0.08)) !important;
+        border-radius: 14px !important;
+        background: color-mix(in srgb, var(--acu-bg-1, #FFFFFF) 94%, transparent) !important;
+        background-image: none !important;
+        color: var(--acu-text-1, #1C1B18) !important;
+        box-shadow: var(--acu-shadow, 0 12px 32px rgba(28, 27, 24, 0.12)) !important;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        opacity: 1 !important;
         overflow: hidden !important;
-        border-left: 3px solid var(--toast-accent) !important;
+        font-family: var(--acu-toast-font) !important;
+        font-size: 13.5px !important;
+        font-weight: 400 !important;
+        line-height: 1.5 !important;
+        letter-spacing: normal !important;
+        text-shadow: none !important;
       }
-      #toast-container .acu-toast.toast,
-      #toast-container .acu-toast.toast.toast-success,
-      #toast-container .acu-toast.toast.toast-info,
-      #toast-container .acu-toast.toast.toast-warning,
-      #toast-container .acu-toast.toast.toast-error {
-        background: var(--toast-bg) !important;
+      #toast-container > .acu-toast.toast:not(:has(> .toast-close-button)) {
+        padding-right: 14px !important;
+      }
+      #toast-container > .acu-toast.toast:hover {
+        box-shadow: var(--acu-shadow, 0 12px 32px rgba(28, 27, 24, 0.12)) !important;
         opacity: 1 !important;
       }
-      #toast-container .acu-toast.toast .toast-title,
-      #toast-container .acu-toast.toast .toast-message {
+      #toast-container > .acu-toast.acu-toast--success { --acu-toast-tone: var(--acu-success, #3F7A55); }
+      #toast-container > .acu-toast.acu-toast--warning { --acu-toast-tone: var(--acu-warning, #8F6420); }
+      #toast-container > .acu-toast.acu-toast--error { --acu-toast-tone: var(--acu-danger, #B4483F); }
+
+      /* 类型图标：与新界面相同的 Font Awesome 实心图标，取类型色 */
+      #toast-container > .acu-toast.toast::before {
+        content: "\\f05a";
+        position: absolute;
+        left: 15px;
+        top: 11px;
+        width: 16px;
+        text-align: center;
+        font-family: "Font Awesome 6 Free", "Font Awesome 5 Free", "FontAwesome";
+        font-weight: 900;
+        font-style: normal;
+        font-size: 15px;
+        line-height: 21px;
+        color: var(--acu-toast-tone);
+        -webkit-font-smoothing: antialiased;
+      }
+      #toast-container > .acu-toast.acu-toast--success::before { content: "\\f058"; }
+      #toast-container > .acu-toast.acu-toast--warning::before { content: "\\f071"; }
+      #toast-container > .acu-toast.acu-toast--error::before { content: "\\f06a"; }
+
+      /* 标题（默认 UnbirthDB）做成小号来源标签，正文为主 */
+      #toast-container > .acu-toast .toast-title {
+        margin: 0 0 1px !important;
+        color: var(--acu-text-3, #8A8780) !important;
+        font: 600 11.5px/1.45 var(--acu-toast-font) !important;
+        letter-spacing: 0.02em !important;
+        text-shadow: none !important;
         background: transparent !important;
       }
-      .acu-toast.toast,
-      .acu-toast.toast.toast-success,
-      .acu-toast.toast.toast-info,
-      .acu-toast.toast.toast-warning,
-      .acu-toast.toast.toast-error {
-        background: var(--toast-bg) !important;
-        background-repeat: repeat !important;
-        background-position: 0 0 !important;
+      #toast-container > .acu-toast .toast-message {
+        color: var(--acu-text-1, #1C1B18) !important;
+        font: 400 13.5px/1.5 var(--acu-toast-font) !important;
+        overflow-wrap: anywhere;
+        text-shadow: none !important;
+        background: transparent !important;
       }
-      #toast-container .acu-toast.toast::before {
-        content: "i" !important;
-        position: absolute;
-        left: 10px;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 26px;
-        height: 26px;
-        border-radius: 2px;
-        display: flex;
+      #toast-container > .acu-toast .toast-message a {
+        color: color-mix(in srgb, var(--acu-accent, #2F5FD0) 82%, var(--acu-text-1, #1C1B18)) !important;
+      }
+      #toast-container > .acu-toast .toast-close-button {
+        position: absolute !important;
+        top: 8px !important;
+        right: 8px !important;
+        float: none !important;
+        display: inline-flex !important;
         align-items: center;
         justify-content: center;
-        font-weight: 400;
-        font-size: 14px;
-        font-family: var(--toast-font);
-        color: var(--toast-bg);
-        background: var(--toast-accent);
-        border: none;
-        box-shadow: none;
-      }
-      #toast-container .acu-toast.acu-toast--success::before { content: "达" !important; }
-      #toast-container .acu-toast.acu-toast--info::before { content: "知" !important; }
-      #toast-container .acu-toast.acu-toast--warning::before { content: "警" !important; }
-      #toast-container .acu-toast.acu-toast--error::before { content: "误" !important; }
-      .acu-toast.acu-toast--success { --acu-toast-accent: #5a8a5a; }
-      .acu-toast.acu-toast--info { --acu-toast-accent: #8a6b5e; }
-      .acu-toast.acu-toast--warning { --acu-toast-accent: #b08a5a; }
-      .acu-toast.acu-toast--error { --acu-toast-accent: #8a5a5a; }
-      .acu-toast.toast .toast-title {
-        font-weight: 650 !important;
-        letter-spacing: 0.4px;
-        margin-bottom: 4px !important;
-        opacity: 1;
-        text-shadow: none;
-        font-family: var(--toast-font);
-      }
-      .acu-toast.toast .toast-message {
-        line-height: 1.55;
-        color: var(--toast-text) !important;
-        text-shadow: none;
-        font-family: var(--toast-font);
-        font-weight: 500 !important;
-        font-size: 13px !important;
-      }
-      .acu-toast.toast .toast-close-button {
-        color: var(--toast-text) !important;
-        text-shadow: none !important;
-        opacity: 0.6 !important;
-        font-size: 18px;
-        right: 8px;
-        top: 8px;
-      }
-      .acu-toast.toast .toast-close-button:hover {
-        opacity: 1 !important;
-      }
-      .acu-toast.toast .toast-progress {
-        background: var(--toast-accent) !important;
-      }
-      .acu-toast.acu-toast--success { border-color: rgba(90,138,90,0.5) !important; }
-      .acu-toast.acu-toast--info { border-color: rgba(138,107,94,0.5) !important; }
-      .acu-toast.acu-toast--warning { border-color: rgba(176,138,90,0.5) !important; }
-      .acu-toast.acu-toast--error { border-color: rgba(138,90,90,0.5) !important; }
-      .acu-toast .qrf-abort-btn {
-        padding: 4px 12px !important;
-        border-radius: 1px !important;
-        border: 1px solid var(--toast-accent) !important;
+        width: 22px !important;
+        height: 22px !important;
+        padding: 0 !important;
+        border: 0 !important;
+        border-radius: 7px !important;
         background: transparent !important;
-        color: var(--toast-text) !important;
-        font-weight: 600 !important;
-        font-family: var(--toast-font) !important;
-        cursor: pointer !important;
-        font-size: 0.85em;
+        color: var(--acu-text-3, #8A8780) !important;
+        font: 400 17px/1 var(--acu-toast-font) !important;
+        opacity: 1 !important;
+        text-shadow: none !important;
+        cursor: pointer;
+      }
+      #toast-container > .acu-toast .toast-close-button:hover {
+        background: var(--acu-hover-overlay, rgba(28, 27, 24, 0.05)) !important;
+        color: var(--acu-text-1, #1C1B18) !important;
+      }
+      #toast-container > .acu-toast .toast-progress {
+        left: 0 !important;
+        bottom: 0 !important;
+        height: 2px !important;
+        border-radius: 0 !important;
+        background: var(--acu-toast-tone) !important;
+        opacity: 0.5 !important;
+      }
+
+      /* 提示框里的操作按钮（终止 / 取消优化 / 规划中止） */
+      #toast-container > .acu-toast .toast-message > div:has(> .acu-toast-action),
+      #toast-container > .acu-toast .toast-message > div:has(> .qrf-abort-btn) {
+        display: flex !important;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      #toast-container > .acu-toast .acu-toast-action,
+      #toast-container > .acu-toast .qrf-abort-btn {
+        float: right;
+        flex: 0 0 auto;
+        margin: 0 0 0 10px !important;
+        min-height: 26px;
+        padding: 3px 11px !important;
+        border: 1px solid color-mix(in srgb, var(--acu-toast-tone) 42%, transparent) !important;
+        border-radius: 9px !important;
+        background: color-mix(in srgb, var(--acu-toast-tone) 12%, transparent) !important;
+        color: color-mix(in srgb, var(--acu-toast-tone) 78%, var(--acu-text-1, #1C1B18)) !important;
+        font: 600 12.5px/1.4 var(--acu-toast-font) !important;
         box-shadow: none !important;
+        text-shadow: none !important;
+        cursor: pointer !important;
+        transition: background-color 0.15s ease;
       }
-      .acu-toast .qrf-abort-btn:hover {
-        background: var(--toast-accent) !important;
-        color: var(--toast-bg) !important;
+      #toast-container > .acu-toast .acu-toast-action:hover,
+      #toast-container > .acu-toast .qrf-abort-btn:hover {
+        background: color-mix(in srgb, var(--acu-toast-tone) 22%, transparent) !important;
       }
+      #toast-container > .acu-toast .acu-toast-action:disabled {
+        opacity: 0.55;
+        cursor: default !important;
+      }
+
       @media (max-width: 520px) {
-        #toast-container .acu-toast.toast {
-          width: min(320px, calc(100vw - 16px)) !important;
-          padding: 10px 12px 10px 42px !important;
+        #toast-container > .acu-toast.toast {
+          width: min(380px, calc(100vw - 16px)) !important;
+          padding: 9px 34px 9px 38px !important;
         }
-        #toast-container .acu-toast.toast::before {
-          left: 9px;
-          width: 22px;
-          height: 22px;
-          font-size: 12px;
+        #toast-container > .acu-toast.toast::before {
+          left: 13px;
+          top: 10px;
+          font-size: 14px;
         }
-        .acu-toast.toast .toast-title {
+        #toast-container > .acu-toast .toast-message {
           font-size: 13px !important;
-          margin-bottom: 3px !important;
-        }
-        .acu-toast.toast .toast-message {
-          font-size: 12px !important;
-          line-height: 1.45 !important;
-        }
-        .acu-toast.toast .toast-close-button {
-          font-size: 16px;
-          right: 6px;
-          top: 6px;
-        }
-        .acu-toast .qrf-abort-btn {
-          padding: 3px 10px !important;
-          font-size: 12px !important;
         }
       }
     `;
@@ -186,6 +189,15 @@ function ensureAcuToastStylesInjected_ACU() {
   } catch (e) {
     _acuToastStyleInjected_ACU = true;
   }
+}
+
+/** 调用方可自带 toastClass；样式与主题 token 依赖的类必须始终在场。 */
+function withRequiredToastClasses_ACU(toastClass: unknown, type: unknown): string {
+  const classes = String(toastClass || '').split(/\s+/).filter(Boolean);
+  const required = ['toast', 'acu-toast', ACU_HOST_SURFACE_CLASS_ACU];
+  if (!classes.some(c => c.startsWith('acu-toast--'))) required.push(`acu-toast--${String(type)}`);
+  for (const c of required) if (!classes.includes(c)) classes.push(c);
+  return classes.join(' ');
 }
 
 function _acuNormalizeToastArgs_ACU(type: any, message: any, titleOrOptions: any = {}, maybeOptions: any = {}) {
@@ -223,12 +235,14 @@ function _acuNormalizeToastArgs_ACU(type: any, message: any, titleOrOptions: any
     positionClass: isNarrow ? 'toast-top-center' : 'toast-top-right',
     ...options,
   };
+  finalOptions.toastClass = withRequiredToastClasses_ACU(finalOptions.toastClass, type);
   return { title, finalOptions };
 }
 
 function _acuShouldShowToast_ACU(type: any, title: any, message: any, options: any = {}) {
   try {
     if (!settings_ACU?.toastMuteEnabled) return true;
+    if (options?.acuBypassMute === true) return true;
     if (String(type).toLowerCase() === 'error') return true;
     const cat = options?.acuToastCategory || null;
     const allow = new Set([
@@ -398,3 +412,27 @@ export function showToastr_ACU(type: string, message: string, titleOrOptions: an
   }
   return (toastr_API_ACU as unknown as Record<string, (message: string, title: string, options: Record<string, unknown>) => JQuery<HTMLElement> | null>)[type]?.(message, title, finalOptions) ?? null;
 }
+
+let hostToastActionSeq_ACU = 0;
+
+/**
+ * 面板未打开时的统一提示（加载失败引导、回放告警等）走插件提示框：与新界面同一设计、跟随主题；
+ * 带操作的提示渲染为按钮（点提示框任意处同样触发）。这些提示原本直接调宿主 toastr，从不被静默。
+ */
+export function showHostSurfaceToast_ACU(payload: UiToastPayload_ACU): void {
+  const action = payload.action;
+  const text = escapeHtml_ACU(String(payload.text ?? ''));
+  if (!action) {
+    showToastr_ACU(payload.kind, text, { escapeHtml: false, acuBypassMute: true });
+    return;
+  }
+  const buttonId = `acu-toast-action-${++hostToastActionSeq_ACU}`;
+  showToastr_ACU(payload.kind, `<div><span>${text}</span>${renderToastActionButton_ACU(buttonId, action.label)}</div>`, {
+    escapeHtml: false,
+    acuBypassMute: true,
+    timeOut: 8000,
+    onclick: () => { void action.onClick(); },
+  });
+}
+
+registerHostToastRenderer_ACU(showHostSurfaceToast_ACU);

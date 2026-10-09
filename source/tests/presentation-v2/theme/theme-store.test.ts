@@ -544,6 +544,30 @@ describe('theme-store', () => {
 });
 
 describe('theme-injector', () => {
+  it('面板外的宿主浮层（提示框/旧弹窗）同样拿到主题 token 与配色方案', async () => {
+    const m = await freshImport();
+    const dark = (await import('../../../src/presentation-v2/theme/builtin-themes')).ACU_V2_BUILTIN_THEMES
+      .find(t => t.id === 'default-dark')!;
+    m.injector.applyTheme(dark);
+    const css = document.getElementById(STYLE_NODE_ID)!.textContent!;
+    const rule = css.slice(css.indexOf(`.${m.injector.HOST_SURFACE_CLASS}`));
+    expect(rule).toContain(`--acu-bg-1: ${dark.tokens.bg1};`);
+    expect(rule).toContain(`--acu-accent: ${dark.tokens.accent};`);
+    expect(css).toContain(`.${m.injector.HOST_SURFACE_CLASS} {\n  color-scheme: dark;`);
+  });
+
+  it('不建 store 也能读出已保存的主题（供启动时给宿主浮层上色）', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ theme: { activeId: 'creamy-minimal' } }));
+    const m = await freshImport();
+    expect(m.themeStore.readPersistedActiveTheme_ACU().id).toBe('creamy-minimal');
+  });
+
+  it('没有保存过主题时回退默认主题', async () => {
+    const m = await freshImport();
+    const { ACU_V2_DEFAULT_THEME_ID } = await import('../../../src/presentation-v2/theme/builtin-themes');
+    expect(m.themeStore.readPersistedActiveTheme_ACU().id).toBe(ACU_V2_DEFAULT_THEME_ID);
+  });
+
   it('applyTheme 把内置主题分别写入同一个 <style id="acu-v2-theme">', async () => {
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());

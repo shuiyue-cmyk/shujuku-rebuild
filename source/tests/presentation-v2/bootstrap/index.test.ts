@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
@@ -23,6 +24,18 @@ vi.mock('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surfac
   requestVisualizerExternalRefresh_ACU: h.refreshVisualizer,
   isVisualizerSurfaceActive_ACU: h.isVisualizerActive,
 }));
+
+describe('applySavedThemeToHostSurfaces_ACU', () => {
+  it('启动时把已保存的主题写进主题样式节点，宿主浮层不必等面板打开', async () => {
+    localStorage.setItem('acu_v2_ui_state', JSON.stringify({ theme: { activeId: 'creamy-minimal' } }));
+    const { applySavedThemeToHostSurfaces_ACU } = await import('../../../src/presentation-v2/bootstrap');
+    applySavedThemeToHostSurfaces_ACU();
+    const css = document.getElementById('acu-v2-theme')?.textContent || '';
+    expect(css).toContain('.acu-host-surface');
+    expect(css).toContain('color-scheme: light;');
+    localStorage.clear();
+  });
+});
 
 describe('bootstrapAcuV2', () => {
   beforeEach(() => {

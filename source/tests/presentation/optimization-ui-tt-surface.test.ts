@@ -110,7 +110,10 @@ import {
   showOptimizationOverlay_ACU,
   hideOptimizationOverlay_ACU,
 } from '../../src/presentation/components/optimization-ui/optimization-ui-overlay';
-import { showOptimizationDiffDialogForLoop_ACU } from '../../src/presentation/components/optimization-ui/optimization-ui-diff';
+import {
+  showOptimizationDiffDialogForLoop_ACU,
+  showOptimizationResultDialog_ACU,
+} from '../../src/presentation/components/optimization-ui/optimization-ui-diff';
 import { _set_jQuery_API_ACU } from '../../src/shared/host-api';
 
 function makeResult(currentLoop: number, totalLoops: number) {
@@ -129,6 +132,7 @@ function makeResult(currentLoop: number, totalLoops: number) {
 describe('optimization-ui TT surface 打标', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
+    document.getElementById('acu-host-dialog-styles')?.remove();
     _set_jQuery_API_ACU(miniJQuery_ACU as any);
   });
 
@@ -164,9 +168,70 @@ describe('optimization-ui TT surface 打标', () => {
     showOptimizationDiffDialogForLoop_ACU(3, makeResult(1, 2), vi.fn());
 
     const dialog = document.querySelector<HTMLElement>('.acu-optimization-dialog');
-    const style = dialog!.getAttribute('style') || '';
-    expect(style).toContain('--tt-inset-top');
-    expect(style).toContain('safe-area-inset-top');
-    expect(style).not.toMatch(/top:\s*10px\s*;/);
+    expect(dialog!.classList.contains('acu-hd-dialog--floating')).toBe(true);
+    const css = document.getElementById('acu-host-dialog-styles')?.textContent || '';
+    const rule = css.slice(css.indexOf('.acu-hd-dialog--floating {'), css.indexOf('}', css.indexOf('.acu-hd-dialog--floating {')));
+    expect(rule).toContain('--tt-inset-top');
+    expect(rule).toContain('safe-area-inset-top');
+    expect(rule).not.toMatch(/top:\s*10px\s*;/);
+  });
+
+  it('Diff 对话框用插件弹窗样式类：无内联旧配色，挂主题 token 类，按钮分主次', () => {
+    showOptimizationDiffDialogForLoop_ACU(3, makeResult(1, 2), vi.fn());
+
+    const dialog = document.querySelector<HTMLElement>('.acu-optimization-dialog')!;
+    const backdrop = document.getElementById('acu-opt-backdrop')!;
+    expect(dialog.classList.contains('acu-hd-dialog')).toBe(true);
+    expect(dialog.classList.contains('acu-host-surface')).toBe(true);
+    expect(backdrop.classList.contains('acu-hd-scrim')).toBe(true);
+    expect(backdrop.classList.contains('acu-host-surface')).toBe(true);
+    expect(document.body.innerHTML).not.toContain('style=');
+    expect(document.body.innerHTML).not.toContain('#7d4940');
+    expect(document.body.innerHTML).not.toContain('🔄');
+    expect(document.getElementById('acu-opt-apply')!.className).toContain('acu-hd-btn--primary');
+    expect(document.getElementById('acu-opt-reoptimize')!.className).toContain('acu-hd-btn--soft');
+    expect(document.getElementById('acu-opt-cancel')!.className).toContain('acu-hd-btn--ghost');
+    expect(document.getElementById('acu-opt-skip')!.className).toContain('acu-hd-btn--ghost');
+    expect(dialog.querySelector('.acu-hd-meta')?.textContent).toContain('第 1/2 轮');
+    expect(dialog.querySelectorAll('.acu-hd-item').length).toBe(1);
+    expect(dialog.querySelector('.acu-hd-item__plan')?.textContent).toContain('修改方案');
+  });
+
+  it('最后一轮不显示跳过按钮与进度', () => {
+    showOptimizationDiffDialogForLoop_ACU(3, makeResult(1, 1), vi.fn());
+    expect(document.getElementById('acu-opt-skip')).toBeNull();
+    expect(document.querySelector('.acu-hd-meta')).toBeNull();
+    expect(document.getElementById('acu-opt-apply')!.textContent).toContain('应用并完成');
+  });
+
+  it('结果对话框同样使用插件弹窗样式，关闭按钮与遮罩都能关', () => {
+    showOptimizationResultDialog_ACU(3, makeResult(1, 1));
+
+    const dialog = document.querySelector<HTMLElement>('.acu-optimization-dialog')!;
+    expect(dialog.classList.contains('acu-hd-dialog')).toBe(true);
+    expect(dialog.getAttribute('data-tt-mobile-surface')).toBe('free-window');
+    expect(document.getElementById('acu-opt-backdrop')!.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
+    expect(document.body.innerHTML).not.toContain('style=');
+    expect(document.getElementById('acu-opt-result-close')!.className).toContain('acu-hd-btn--primary');
+    expect(dialog.textContent).toContain('共 1 处改进');
+
+    document.getElementById('acu-opt-backdrop')!.click();
+    expect(document.querySelector('.acu-optimization-dialog')).toBeNull();
+  });
+
+  it('优化遮罩为主题化卡片：强调色转圈、次级取消按钮，无旧配色', () => {
+    showOptimizationOverlay_ACU('正在优化正文...');
+
+    const overlay = document.getElementById('acu-optimization-overlay')!;
+    expect(overlay.classList.contains('acu-hd-layer')).toBe(true);
+    expect(overlay.classList.contains('acu-host-surface')).toBe(true);
+    expect(overlay.querySelector('.acu-hd-spinner')).not.toBeNull();
+    expect(overlay.textContent).toContain('正在优化正文...');
+    expect(document.getElementById('acu-optimization-overlay-cancel')!.className).toContain('acu-hd-btn--ghost');
+    expect(document.body.innerHTML).not.toContain('style=');
+    expect(document.body.innerHTML).not.toContain('#7bb7ff');
+    expect(document.body.innerHTML).not.toContain('#ffc107');
+    const css = document.getElementById('acu-host-dialog-styles')?.textContent || '';
+    expect(css).toMatch(/\.acu-hd-spinner\s*\{[^}]*var\(--acu-accent/);
   });
 });

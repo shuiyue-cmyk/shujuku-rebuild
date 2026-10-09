@@ -82,6 +82,8 @@ const DEBUG_MODE_ACU = false;
 const UNIQUE_SCRIPT_ID = 'shujuku_v120';
 /** 脚本 ID 前缀（等同于 UNIQUE_SCRIPT_ID） */
 const SCRIPT_ID_PREFIX_ACU = UNIQUE_SCRIPT_ID;
+/** 面板外的插件浮层（提示框、确认框、正文替换遮罩/对话框）挂这个类，主题注入器给它写主题 token。 */
+const ACU_HOST_SURFACE_CLASS_ACU = 'acu-host-surface';
 /** 主弹窗 ID */
 const POPUP_ID_ACU = `${SCRIPT_ID_PREFIX_ACU}-popup`;
 /** 菜单项 ID */
@@ -2909,12 +2911,11 @@ function renderOption_ACU(value, text, selected = false) {
  * 生成 toast 中的操作按钮 HTML（终止/取消/重新优化等）
  * @param id - 按钮的 DOM id
  * @param label - 按钮文本
- * @param accent - 按钮强调色（border/文字/hover 背景）
- * @param radius - 圆角
- * @param fontSize - 字号
+ *
+ * 外观由插件提示框样式的 .acu-toast-action 统一提供（颜色跟随提示框类型与主题）。
  */
-function renderToastActionButton_ACU(id, label, accent = '#ffc107', radius = '4px', fontSize = '0.9em') {
-    return `<button id="${escapeHtml_ACU(id)}" style="border: 1px solid ${escapeHtml_ACU(accent)}; color: ${escapeHtml_ACU(accent)}; background: transparent; padding: 5px 10px; border-radius: ${escapeHtml_ACU(radius)}; cursor: pointer; float: right; margin-left: 15px; font-size: ${escapeHtml_ACU(fontSize)}; font-family: inherit;" onmouseover="this.style.backgroundColor='${escapeHtml_ACU(accent)}'; this.style.color='#1a1d24';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='${escapeHtml_ACU(accent)}';">${escapeHtml_ACU(label)}</button>`;
+function renderToastActionButton_ACU(id, label) {
+    return `<button id="${escapeHtml_ACU(id)}" class="acu-toast-action" type="button">${escapeHtml_ACU(label)}</button>`;
 }
 /**
  * 生成 toast 中的终止/取消按钮 HTML
@@ -44375,6 +44376,39 @@ function _resetTableWriteTransactionLocksForTest_ACU() {
 }
 
 let registeredUiSurface_ACU = null;
+let hostToastRenderer_ACU = null;
+/**
+ * 面板未打开时的提示由插件自己的提示框渲染（与新界面同一设计、跟随主题），
+ * 由 presentation 层的 toast 模块在加载时注册。
+ */
+function registerHostToastRenderer_ACU(renderer) {
+    hostToastRenderer_ACU = renderer;
+}
+/** 在酒馆页面上显示提示：优先插件提示框，未注册时退回宿主 toastr。返回是否已显示。绝不抛错。 */
+function showHostToast_ACU(payload) {
+    try {
+        if (hostToastRenderer_ACU) {
+            hostToastRenderer_ACU(payload);
+            return true;
+        }
+    }
+    catch (_) {
+        // 渲染器抛错时继续尝试宿主 toastr。
+    }
+    try {
+        const toastr = topLevelWindow_ACU?.toastr;
+        if (toastr && typeof toastr[payload.kind] === 'function') {
+            toastr[payload.kind](payload.text, undefined, payload.action
+                ? { onclick: () => { void payload.action.onClick(); } }
+                : undefined);
+            return true;
+        }
+    }
+    catch (_) {
+        // 宿主 toastr 不可用：静默，不让提示通道反过来破坏调用方流程。
+    }
+    return false;
+}
 function registerUiSurface_ACU(handlers) {
     registeredUiSurface_ACU = handlers;
 }
@@ -44383,7 +44417,7 @@ function getUiSurface_ACU() {
 }
 /**
  * 统一 toast 入口：优先走已注册 UI surface 的 showToast；未注册或抛错时
- * 回退宿主 toastr；两者都不可用时静默（调用方自行负责日志）。绝不抛错。
+ * 回退酒馆页面上的插件提示框；都不可用时静默（调用方自行负责日志）。绝不抛错。
  */
 function showUiSurfaceToast_ACU(payload) {
     try {
@@ -44394,22 +44428,13 @@ function showUiSurfaceToast_ACU(payload) {
         }
     }
     catch (_) {
-        // 已注册 handler 抛错时继续尝试宿主 toastr。
+        // 已注册 handler 抛错时继续尝试酒馆页面上的提示框。
     }
-    try {
-        const toastr = topLevelWindow_ACU?.toastr;
-        if (toastr && typeof toastr[payload.kind] === 'function') {
-            toastr[payload.kind](payload.text, undefined, payload.action
-                ? { onclick: () => { void payload.action.onClick(); } }
-                : undefined);
-        }
-    }
-    catch (_) {
-        // 宿主 toastr 不可用：静默，不让提示通道反过来破坏调用方流程。
-    }
+    showHostToast_ACU(payload);
 }
 function resetUiSurfaceRegistryForTests_ACU() {
     registeredUiSurface_ACU = null;
+    hostToastRenderer_ACU = null;
 }
 
 /**
@@ -92604,7 +92629,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261008-19"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261009-00"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92623,7 +92648,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261008-19";
+        const stamp = "20261009-00";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -108230,160 +108255,161 @@ function ensureAcuToastStylesInjected_ACU() {
         const style = doc.createElement('style');
         style.id = styleId;
         style.textContent = `
-      /* ACU Toast Theme — 使用新主题系统的变量 */
-      #toast-container .acu-toast.toast {
-        --toast-accent: var(--acu-accent, #2563eb);
-        --toast-bg: var(--acu-bg-1, #ffffff);
-        --toast-text: var(--acu-text-1, #1a2332);
-        --toast-border: var(--acu-border, #e0e4ea);
-        --toast-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      }
-      .acu-toast.toast {
-        font-family: var(--toast-font) !important;
-        font-weight: 500 !important;
-        font-size: 14px !important;
-        letter-spacing: 0.2px;
-        --acu-toast-accent: var(--toast-accent);
-        background: var(--toast-bg) !important;
-        color: var(--toast-text) !important;
-        border: 1px solid var(--toast-border) !important;
-        border-radius: 8px !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08) !important;
-        padding: 12px 14px 12px 50px !important;
-        width: min(420px, calc(100vw - 24px)) !important;
-        opacity: 1 !important;
-        backdrop-filter: none;
-        -webkit-backdrop-filter: none;
+      /* UnbirthDB 插件提示框：与新界面提示框同一套设计，颜色取当前主题 token
+         （主题注入器给 .acu-host-surface 写 token；未注入时回退默认浅色）。 */
+      #toast-container > .acu-toast.toast {
+        --acu-toast-tone: var(--acu-accent, #2F5FD0);
+        --acu-toast-font: var(--acu-font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
         position: relative !important;
+        width: min(420px, calc(100vw - 24px)) !important;
+        margin: 0 0 8px !important;
+        padding: 10px 36px 10px 42px !important;
+        border: 1px solid var(--acu-border, rgba(28, 27, 24, 0.08)) !important;
+        border-radius: 14px !important;
+        background: color-mix(in srgb, var(--acu-bg-1, #FFFFFF) 94%, transparent) !important;
+        background-image: none !important;
+        color: var(--acu-text-1, #1C1B18) !important;
+        box-shadow: var(--acu-shadow, 0 12px 32px rgba(28, 27, 24, 0.12)) !important;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        opacity: 1 !important;
         overflow: hidden !important;
-        border-left: 3px solid var(--toast-accent) !important;
+        font-family: var(--acu-toast-font) !important;
+        font-size: 13.5px !important;
+        font-weight: 400 !important;
+        line-height: 1.5 !important;
+        letter-spacing: normal !important;
+        text-shadow: none !important;
       }
-      #toast-container .acu-toast.toast,
-      #toast-container .acu-toast.toast.toast-success,
-      #toast-container .acu-toast.toast.toast-info,
-      #toast-container .acu-toast.toast.toast-warning,
-      #toast-container .acu-toast.toast.toast-error {
-        background: var(--toast-bg) !important;
+      #toast-container > .acu-toast.toast:not(:has(> .toast-close-button)) {
+        padding-right: 14px !important;
+      }
+      #toast-container > .acu-toast.toast:hover {
+        box-shadow: var(--acu-shadow, 0 12px 32px rgba(28, 27, 24, 0.12)) !important;
         opacity: 1 !important;
       }
-      #toast-container .acu-toast.toast .toast-title,
-      #toast-container .acu-toast.toast .toast-message {
+      #toast-container > .acu-toast.acu-toast--success { --acu-toast-tone: var(--acu-success, #3F7A55); }
+      #toast-container > .acu-toast.acu-toast--warning { --acu-toast-tone: var(--acu-warning, #8F6420); }
+      #toast-container > .acu-toast.acu-toast--error { --acu-toast-tone: var(--acu-danger, #B4483F); }
+
+      /* 类型图标：与新界面相同的 Font Awesome 实心图标，取类型色 */
+      #toast-container > .acu-toast.toast::before {
+        content: "\\f05a";
+        position: absolute;
+        left: 15px;
+        top: 11px;
+        width: 16px;
+        text-align: center;
+        font-family: "Font Awesome 6 Free", "Font Awesome 5 Free", "FontAwesome";
+        font-weight: 900;
+        font-style: normal;
+        font-size: 15px;
+        line-height: 21px;
+        color: var(--acu-toast-tone);
+        -webkit-font-smoothing: antialiased;
+      }
+      #toast-container > .acu-toast.acu-toast--success::before { content: "\\f058"; }
+      #toast-container > .acu-toast.acu-toast--warning::before { content: "\\f071"; }
+      #toast-container > .acu-toast.acu-toast--error::before { content: "\\f06a"; }
+
+      /* 标题（默认 UnbirthDB）做成小号来源标签，正文为主 */
+      #toast-container > .acu-toast .toast-title {
+        margin: 0 0 1px !important;
+        color: var(--acu-text-3, #8A8780) !important;
+        font: 600 11.5px/1.45 var(--acu-toast-font) !important;
+        letter-spacing: 0.02em !important;
+        text-shadow: none !important;
         background: transparent !important;
       }
-      .acu-toast.toast,
-      .acu-toast.toast.toast-success,
-      .acu-toast.toast.toast-info,
-      .acu-toast.toast.toast-warning,
-      .acu-toast.toast.toast-error {
-        background: var(--toast-bg) !important;
-        background-repeat: repeat !important;
-        background-position: 0 0 !important;
+      #toast-container > .acu-toast .toast-message {
+        color: var(--acu-text-1, #1C1B18) !important;
+        font: 400 13.5px/1.5 var(--acu-toast-font) !important;
+        overflow-wrap: anywhere;
+        text-shadow: none !important;
+        background: transparent !important;
       }
-      #toast-container .acu-toast.toast::before {
-        content: "i" !important;
-        position: absolute;
-        left: 10px;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 26px;
-        height: 26px;
-        border-radius: 2px;
-        display: flex;
+      #toast-container > .acu-toast .toast-message a {
+        color: color-mix(in srgb, var(--acu-accent, #2F5FD0) 82%, var(--acu-text-1, #1C1B18)) !important;
+      }
+      #toast-container > .acu-toast .toast-close-button {
+        position: absolute !important;
+        top: 8px !important;
+        right: 8px !important;
+        float: none !important;
+        display: inline-flex !important;
         align-items: center;
         justify-content: center;
-        font-weight: 400;
-        font-size: 14px;
-        font-family: var(--toast-font);
-        color: var(--toast-bg);
-        background: var(--toast-accent);
-        border: none;
-        box-shadow: none;
-      }
-      #toast-container .acu-toast.acu-toast--success::before { content: "达" !important; }
-      #toast-container .acu-toast.acu-toast--info::before { content: "知" !important; }
-      #toast-container .acu-toast.acu-toast--warning::before { content: "警" !important; }
-      #toast-container .acu-toast.acu-toast--error::before { content: "误" !important; }
-      .acu-toast.acu-toast--success { --acu-toast-accent: #5a8a5a; }
-      .acu-toast.acu-toast--info { --acu-toast-accent: #8a6b5e; }
-      .acu-toast.acu-toast--warning { --acu-toast-accent: #b08a5a; }
-      .acu-toast.acu-toast--error { --acu-toast-accent: #8a5a5a; }
-      .acu-toast.toast .toast-title {
-        font-weight: 650 !important;
-        letter-spacing: 0.4px;
-        margin-bottom: 4px !important;
-        opacity: 1;
-        text-shadow: none;
-        font-family: var(--toast-font);
-      }
-      .acu-toast.toast .toast-message {
-        line-height: 1.55;
-        color: var(--toast-text) !important;
-        text-shadow: none;
-        font-family: var(--toast-font);
-        font-weight: 500 !important;
-        font-size: 13px !important;
-      }
-      .acu-toast.toast .toast-close-button {
-        color: var(--toast-text) !important;
-        text-shadow: none !important;
-        opacity: 0.6 !important;
-        font-size: 18px;
-        right: 8px;
-        top: 8px;
-      }
-      .acu-toast.toast .toast-close-button:hover {
-        opacity: 1 !important;
-      }
-      .acu-toast.toast .toast-progress {
-        background: var(--toast-accent) !important;
-      }
-      .acu-toast.acu-toast--success { border-color: rgba(90,138,90,0.5) !important; }
-      .acu-toast.acu-toast--info { border-color: rgba(138,107,94,0.5) !important; }
-      .acu-toast.acu-toast--warning { border-color: rgba(176,138,90,0.5) !important; }
-      .acu-toast.acu-toast--error { border-color: rgba(138,90,90,0.5) !important; }
-      .acu-toast .qrf-abort-btn {
-        padding: 4px 12px !important;
-        border-radius: 1px !important;
-        border: 1px solid var(--toast-accent) !important;
+        width: 22px !important;
+        height: 22px !important;
+        padding: 0 !important;
+        border: 0 !important;
+        border-radius: 7px !important;
         background: transparent !important;
-        color: var(--toast-text) !important;
-        font-weight: 600 !important;
-        font-family: var(--toast-font) !important;
-        cursor: pointer !important;
-        font-size: 0.85em;
+        color: var(--acu-text-3, #8A8780) !important;
+        font: 400 17px/1 var(--acu-toast-font) !important;
+        opacity: 1 !important;
+        text-shadow: none !important;
+        cursor: pointer;
+      }
+      #toast-container > .acu-toast .toast-close-button:hover {
+        background: var(--acu-hover-overlay, rgba(28, 27, 24, 0.05)) !important;
+        color: var(--acu-text-1, #1C1B18) !important;
+      }
+      #toast-container > .acu-toast .toast-progress {
+        left: 0 !important;
+        bottom: 0 !important;
+        height: 2px !important;
+        border-radius: 0 !important;
+        background: var(--acu-toast-tone) !important;
+        opacity: 0.5 !important;
+      }
+
+      /* 提示框里的操作按钮（终止 / 取消优化 / 规划中止） */
+      #toast-container > .acu-toast .toast-message > div:has(> .acu-toast-action),
+      #toast-container > .acu-toast .toast-message > div:has(> .qrf-abort-btn) {
+        display: flex !important;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      #toast-container > .acu-toast .acu-toast-action,
+      #toast-container > .acu-toast .qrf-abort-btn {
+        float: right;
+        flex: 0 0 auto;
+        margin: 0 0 0 10px !important;
+        min-height: 26px;
+        padding: 3px 11px !important;
+        border: 1px solid color-mix(in srgb, var(--acu-toast-tone) 42%, transparent) !important;
+        border-radius: 9px !important;
+        background: color-mix(in srgb, var(--acu-toast-tone) 12%, transparent) !important;
+        color: color-mix(in srgb, var(--acu-toast-tone) 78%, var(--acu-text-1, #1C1B18)) !important;
+        font: 600 12.5px/1.4 var(--acu-toast-font) !important;
         box-shadow: none !important;
+        text-shadow: none !important;
+        cursor: pointer !important;
+        transition: background-color 0.15s ease;
       }
-      .acu-toast .qrf-abort-btn:hover {
-        background: var(--toast-accent) !important;
-        color: var(--toast-bg) !important;
+      #toast-container > .acu-toast .acu-toast-action:hover,
+      #toast-container > .acu-toast .qrf-abort-btn:hover {
+        background: color-mix(in srgb, var(--acu-toast-tone) 22%, transparent) !important;
       }
+      #toast-container > .acu-toast .acu-toast-action:disabled {
+        opacity: 0.55;
+        cursor: default !important;
+      }
+
       @media (max-width: 520px) {
-        #toast-container .acu-toast.toast {
-          width: min(320px, calc(100vw - 16px)) !important;
-          padding: 10px 12px 10px 42px !important;
+        #toast-container > .acu-toast.toast {
+          width: min(380px, calc(100vw - 16px)) !important;
+          padding: 9px 34px 9px 38px !important;
         }
-        #toast-container .acu-toast.toast::before {
-          left: 9px;
-          width: 22px;
-          height: 22px;
-          font-size: 12px;
+        #toast-container > .acu-toast.toast::before {
+          left: 13px;
+          top: 10px;
+          font-size: 14px;
         }
-        .acu-toast.toast .toast-title {
+        #toast-container > .acu-toast .toast-message {
           font-size: 13px !important;
-          margin-bottom: 3px !important;
-        }
-        .acu-toast.toast .toast-message {
-          font-size: 12px !important;
-          line-height: 1.45 !important;
-        }
-        .acu-toast.toast .toast-close-button {
-          font-size: 16px;
-          right: 6px;
-          top: 6px;
-        }
-        .acu-toast .qrf-abort-btn {
-          padding: 3px 10px !important;
-          font-size: 12px !important;
         }
       }
     `;
@@ -108393,6 +108419,17 @@ function ensureAcuToastStylesInjected_ACU() {
     catch (e) {
         _acuToastStyleInjected_ACU = true;
     }
+}
+/** 调用方可自带 toastClass；样式与主题 token 依赖的类必须始终在场。 */
+function withRequiredToastClasses_ACU(toastClass, type) {
+    const classes = String(toastClass || '').split(/\s+/).filter(Boolean);
+    const required = ['toast', 'acu-toast', ACU_HOST_SURFACE_CLASS_ACU];
+    if (!classes.some(c => c.startsWith('acu-toast--')))
+        required.push(`acu-toast--${String(type)}`);
+    for (const c of required)
+        if (!classes.includes(c))
+            classes.push(c);
+    return classes.join(' ');
 }
 function _acuNormalizeToastArgs_ACU(type, message, titleOrOptions = {}, maybeOptions = {}) {
     let title = ACU_TOAST_TITLE_ACU;
@@ -108432,11 +108469,14 @@ function _acuNormalizeToastArgs_ACU(type, message, titleOrOptions = {}, maybeOpt
         positionClass: isNarrow ? 'toast-top-center' : 'toast-top-right',
         ...options,
     };
+    finalOptions.toastClass = withRequiredToastClasses_ACU(finalOptions.toastClass, type);
     return { title, finalOptions };
 }
 function _acuShouldShowToast_ACU(type, title, message, options = {}) {
     try {
         if (!settings_ACU?.toastMuteEnabled)
+            return true;
+        if (options?.acuBypassMute === true)
             return true;
         if (String(type).toLowerCase() === 'error')
             return true;
@@ -108629,6 +108669,437 @@ function showToastr_ACU(type, message, titleOrOptions = {}, maybeOptions = {}) {
     }
     return toastr_API_ACU[type]?.(message, title, finalOptions) ?? null;
 }
+let hostToastActionSeq_ACU = 0;
+/**
+ * 面板未打开时的统一提示（加载失败引导、回放告警等）走插件提示框：与新界面同一设计、跟随主题；
+ * 带操作的提示渲染为按钮（点提示框任意处同样触发）。这些提示原本直接调宿主 toastr，从不被静默。
+ */
+function showHostSurfaceToast_ACU(payload) {
+    const action = payload.action;
+    const text = escapeHtml_ACU(String(payload.text ?? ''));
+    if (!action) {
+        showToastr_ACU(payload.kind, text, { escapeHtml: false, acuBypassMute: true });
+        return;
+    }
+    const buttonId = `acu-toast-action-${++hostToastActionSeq_ACU}`;
+    showToastr_ACU(payload.kind, `<div><span>${text}</span>${renderToastActionButton_ACU(buttonId, action.label)}</div>`, {
+        escapeHtml: false,
+        acuBypassMute: true,
+        timeOut: 8000,
+        onclick: () => { void action.onClick(); },
+    });
+}
+registerHostToastRenderer_ACU(showHostSurfaceToast_ACU);
+
+/**
+ * presentation/theme/host-dialog.ts
+ *
+ * 面板外插件弹窗（手动填表确认框、正文替换遮罩、正文替换对比/结果对话框）的统一样式与模板。
+ * 与新界面的对话框（UbDialogHost / UbButton）同一套设计；颜色取当前主题 token：
+ * 主题注入器给 .acu-host-surface 写 --acu-* 变量，未注入时回退默认浅色。
+ *
+ * 这些弹窗挂在酒馆主窗口的 body 上，样式表也注入主窗口，只注入一次。
+ */
+const HOST_DIALOG_STYLE_ID_ACU = 'acu-host-dialog-styles';
+const HOST_DIALOG_CSS_ACU = `
+  .acu-hd-layer,
+  .acu-hd-scrim,
+  .acu-hd-dialog {
+    --acu-hd-font: var(--acu-font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
+    --acu-hd-scrim: rgba(6, 8, 12, 0.52);
+    --acu-hd-safe-top: max(env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));
+    --acu-hd-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px));
+    --acu-hd-r-card: max(var(--acu-radius-lg, 12px), 14px);
+    --acu-hd-r-control: max(var(--acu-radius-sm, 8px), 9px);
+    --acu-hd-accent-soft: color-mix(in srgb, var(--acu-accent, #2F5FD0) 14%, transparent);
+    --acu-hd-accent-ink: color-mix(in srgb, var(--acu-accent, #2F5FD0) 82%, var(--acu-text-1, #1C1B18));
+    --acu-hd-danger-soft: color-mix(in srgb, var(--acu-danger, #B4483F) 14%, transparent);
+    box-sizing: border-box;
+    font-family: var(--acu-hd-font);
+    -webkit-font-smoothing: antialiased;
+  }
+  .acu-hd-layer *,
+  .acu-hd-dialog * {
+    box-sizing: border-box;
+  }
+
+  /* 铺满的遮罩层：确认框与优化遮罩把内容放在层内居中 */
+  .acu-hd-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: max(var(--acu-hd-safe-top), 16px) 16px max(var(--acu-hd-safe-bottom), 16px);
+    background: var(--acu-hd-scrim);
+    animation: acu-hd-fade-in 0.15s ease-out both;
+  }
+  /* 与对话框同级的遮罩（正文替换对比/结果对话框沿用此结构） */
+  .acu-hd-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    background: var(--acu-hd-scrim);
+    animation: acu-hd-fade-in 0.15s ease-out both;
+  }
+
+  .acu-hd-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(440px, 100%);
+    max-height: 100%;
+    margin: 0;
+    padding: 20px;
+    border: 1px solid var(--acu-border, rgba(28, 27, 24, 0.08));
+    border-radius: var(--acu-hd-r-card);
+    background: var(--acu-bg-1, #FFFFFF);
+    color: var(--acu-text-1, #1C1B18);
+    box-shadow: var(--acu-shadow, 0 12px 32px rgba(28, 27, 24, 0.12));
+    font-size: 14px;
+    line-height: 1.5;
+    text-align: left;
+    overflow: hidden;
+    animation: acu-hd-pop-in 0.18s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  /* 浮在页面顶部的大对话框：free-window 不受宿主几何钳制，安全区自己吃 */
+  .acu-hd-dialog--floating {
+    position: fixed;
+    top: max(16px, env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));
+    left: 0;
+    right: 0;
+    z-index: 100000;
+    width: min(720px, calc(100vw - 24px));
+    max-height: calc(100vh - max(16px, env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px)) - max(16px, env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px)));
+    max-height: calc(100dvh - max(16px, env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px)) - max(16px, env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px)));
+    margin: 0 auto;
+  }
+
+  .acu-hd-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .acu-hd-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--acu-hd-accent-soft);
+    color: var(--acu-hd-accent-ink);
+    font-size: 15px;
+  }
+  .acu-hd-glyph.is-danger {
+    background: var(--acu-hd-danger-soft);
+    color: var(--acu-danger, #B4483F);
+  }
+  .acu-hd-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    color: var(--acu-text-1, #1C1B18);
+    font: 700 16.5px/1.35 var(--acu-hd-font);
+    letter-spacing: normal;
+  }
+  .acu-hd-meta {
+    flex: 0 0 auto;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: var(--acu-hd-accent-soft);
+    color: var(--acu-hd-accent-ink);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .acu-hd-message {
+    flex: 0 1 auto;
+    min-height: 0;
+    margin: 0;
+    color: var(--acu-text-2, #4A4842);
+    font-size: 13.5px;
+    line-height: 1.65;
+    overflow-wrap: anywhere;
+    overflow-y: auto;
+  }
+
+  /* 正文替换条目 */
+  .acu-hd-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .acu-hd-item {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 0 0 auto;
+    padding: 12px;
+    border: 1px solid var(--acu-border, rgba(28, 27, 24, 0.08));
+    border-radius: var(--acu-hd-r-control);
+    background: color-mix(in srgb, var(--acu-bg-2, #EBE9E3) 70%, var(--acu-bg-0, #F2F1ED));
+    font-size: 13px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+  .acu-hd-item__row,
+  .acu-hd-item__plan {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+  .acu-hd-item__row--before {
+    color: var(--acu-text-3, #75726A);
+  }
+  .acu-hd-item__row--before .acu-hd-item__text {
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in srgb, var(--acu-text-3, #75726A) 60%, transparent);
+  }
+  .acu-hd-item__row--after {
+    color: var(--acu-text-1, #1C1B18);
+  }
+  .acu-hd-item__plan {
+    padding: 8px 10px;
+    border-radius: var(--acu-hd-r-control);
+    background: var(--acu-hd-accent-soft);
+    color: var(--acu-text-2, #4A4842);
+    font-size: 12.5px;
+  }
+  .acu-hd-item__text {
+    min-width: 0;
+  }
+  .acu-hd-tag {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border-radius: 6px;
+    background: var(--acu-hover-overlay, rgba(28, 27, 24, 0.06));
+    color: var(--acu-text-3, #75726A);
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 1.6;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .acu-hd-tag--accent {
+    background: transparent;
+    color: var(--acu-hd-accent-ink);
+    padding-left: 0;
+    padding-right: 0;
+  }
+  .acu-hd-tag--ok {
+    background: color-mix(in srgb, var(--acu-success, #3F7A55) 15%, transparent);
+    color: var(--acu-success, #3F7A55);
+  }
+
+  .acu-hd-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+    flex: 0 0 auto;
+    margin-top: 4px;
+  }
+  .acu-hd-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 0;
+    height: 36px;
+    margin: 0;
+    padding: 0 16px;
+    border: 1px solid transparent;
+    border-radius: var(--acu-hd-r-control);
+    background: transparent;
+    color: var(--acu-text-1, #1C1B18);
+    font: 600 13.5px/1 var(--acu-hd-font);
+    letter-spacing: normal;
+    white-space: nowrap;
+    text-shadow: none;
+    box-shadow: none;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease, transform 0.08s ease;
+  }
+  .acu-hd-btn:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+  .acu-hd-btn:focus-visible {
+    outline: 2px solid var(--acu-accent, #2F5FD0);
+    outline-offset: 2px;
+  }
+  .acu-hd-btn:disabled {
+    opacity: 0.55;
+    cursor: progress;
+  }
+  .acu-hd-btn--primary {
+    background: var(--acu-accent, #2F5FD0);
+    color: var(--acu-on-accent, #FFFFFF);
+  }
+  .acu-hd-btn--primary:hover:not(:disabled) {
+    background: var(--acu-accent-2, #264FB0);
+  }
+  .acu-hd-btn--soft {
+    background: var(--acu-hd-accent-soft);
+    color: var(--acu-hd-accent-ink);
+  }
+  .acu-hd-btn--soft:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--acu-accent, #2F5FD0) 24%, transparent);
+  }
+  .acu-hd-btn--ghost {
+    color: var(--acu-text-2, #4A4842);
+  }
+  .acu-hd-btn--ghost:hover:not(:disabled) {
+    background: var(--acu-hover-overlay, rgba(28, 27, 24, 0.06));
+    color: var(--acu-text-1, #1C1B18);
+  }
+  .acu-hd-btn--danger {
+    background: var(--acu-hd-danger-soft);
+    color: var(--acu-danger, #B4483F);
+  }
+  .acu-hd-btn--danger:hover:not(:disabled) {
+    background: var(--acu-danger, #B4483F);
+    color: var(--acu-on-accent, #FFFFFF);
+  }
+
+  /* 正文替换进行中的遮罩卡片 */
+  .acu-hd-busy {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    width: min(320px, 100%);
+    padding: 24px 20px 18px;
+    border: 1px solid var(--acu-border, rgba(28, 27, 24, 0.08));
+    border-radius: var(--acu-hd-r-card);
+    background: var(--acu-bg-1, #FFFFFF);
+    color: var(--acu-text-1, #1C1B18);
+    box-shadow: var(--acu-shadow, 0 12px 32px rgba(28, 27, 24, 0.12));
+    text-align: center;
+    animation: acu-hd-pop-in 0.18s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .acu-hd-spinner {
+    width: 34px;
+    height: 34px;
+    border: 3px solid color-mix(in srgb, var(--acu-accent, #2F5FD0) 18%, transparent);
+    border-top-color: var(--acu-accent, #2F5FD0);
+    border-radius: 50%;
+    animation: acu-hd-spin 0.9s linear infinite;
+  }
+  .acu-hd-busy__text {
+    color: var(--acu-text-1, #1C1B18);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  @keyframes acu-hd-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes acu-hd-pop-in {
+    from { opacity: 0; transform: translateY(6px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes acu-hd-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* 窄屏：按钮纵向铺满，主操作在上，便于触控 */
+  @media (max-width: 600px) {
+    .acu-hd-dialog {
+      padding: 18px 16px 16px;
+    }
+    .acu-hd-dialog--floating {
+      width: calc(100vw - 16px);
+    }
+    .acu-hd-actions {
+      flex-direction: column-reverse;
+      flex-wrap: nowrap;
+    }
+    .acu-hd-actions .acu-hd-btn {
+      width: 100%;
+      height: 40px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .acu-hd-layer,
+    .acu-hd-scrim,
+    .acu-hd-dialog,
+    .acu-hd-busy {
+      animation: none;
+    }
+  }
+`;
+function getHostDialogDocument_ACU() {
+    return topLevelWindow_ACU?.document || document;
+}
+/** 把插件弹窗样式表注入酒馆主窗口（已存在则只同步内容）。 */
+function ensureHostDialogStylesInjected_ACU() {
+    try {
+        const doc = getHostDialogDocument_ACU();
+        let style = doc.getElementById(HOST_DIALOG_STYLE_ID_ACU);
+        if (!style) {
+            style = doc.createElement('style');
+            style.id = HOST_DIALOG_STYLE_ID_ACU;
+            (doc.head || doc.body).appendChild(style);
+        }
+        if (style.textContent !== HOST_DIALOG_CSS_ACU)
+            style.textContent = HOST_DIALOG_CSS_ACU;
+    }
+    catch (_) {
+        // 注入失败时弹窗仍可用（只是没有样式），不阻断调用方流程。
+    }
+}
+function renderHostDialogButton_ACU(button) {
+    const icon = button.icon ? `<i class="${escapeHtml_ACU(button.icon)}" aria-hidden="true"></i>` : '';
+    return `<button id="${escapeHtml_ACU(button.id)}" class="acu-hd-btn acu-hd-btn--${button.variant}" type="button">${icon}${escapeHtml_ACU(button.label)}</button>`;
+}
+/** 对话框头部：圆形图标 + 标题（+ 可选的进度标签），title/meta 由本函数转义。 */
+function renderHostDialogHead_ACU(title, options = {}) {
+    const icon = options.icon || (options.danger ? 'fa-solid fa-triangle-exclamation' : 'fa-solid fa-circle-question');
+    const meta = options.meta ? `<span class="acu-hd-meta">${escapeHtml_ACU(options.meta)}</span>` : '';
+    return `<div class="acu-hd-head">`
+        + `<span class="acu-hd-glyph${options.danger ? ' is-danger' : ''}"><i class="${escapeHtml_ACU(icon)}" aria-hidden="true"></i></span>`
+        + `<h3 class="acu-hd-title">${escapeHtml_ACU(title)}</h3>${meta}</div>`;
+}
+function truncateForPreview_ACU(value) {
+    const text = String(value ?? '');
+    return `${escapeHtml_ACU(text.substring(0, 200))}${text.length > 200 ? '...' : ''}`;
+}
+/**
+ * 正文替换对比/结果对话框：对话框 .acu-optimization-dialog（free-window）+ 同级遮罩 #acu-opt-backdrop（backdrop）。
+ * 条目里的原文/方案/优化文本全部转义。
+ */
+function renderOptimizationReviewDialog_ACU(dialog) {
+    const items = (Array.isArray(dialog.optimizations) ? dialog.optimizations : []).map((opt) => `
+          <div class="acu-hd-item optimization-item">
+            <div class="acu-hd-item__row acu-hd-item__row--before"><span class="acu-hd-tag">原文</span><span class="acu-hd-item__text">${truncateForPreview_ACU(opt?.original)}</span></div>
+            <div class="acu-hd-item__plan"><span class="acu-hd-tag acu-hd-tag--accent">修改方案</span><span class="acu-hd-item__text">${escapeHtml_ACU(String(opt?.plan || opt?.reason || '未说明'))}</span></div>
+            <div class="acu-hd-item__row acu-hd-item__row--after"><span class="acu-hd-tag acu-hd-tag--ok">优化</span><span class="acu-hd-item__text">${truncateForPreview_ACU(opt?.optimized)}</span></div>
+          </div>`).join('');
+    return `
+      <div class="acu-optimization-dialog acu-hd-dialog acu-hd-dialog--floating ${ACU_HOST_SURFACE_CLASS_ACU}" data-tt-mobile-surface="free-window" role="dialog" aria-modal="true">
+        ${renderHostDialogHead_ACU(dialog.title, { icon: dialog.icon || 'fa-solid fa-wand-magic-sparkles', meta: dialog.meta })}
+        ${dialog.summaryHtml ? `<p class="acu-hd-message">${dialog.summaryHtml}</p>` : ''}
+        <div class="acu-hd-list optimization-list">${items}
+        </div>
+        <div class="acu-hd-actions">${dialog.buttons.map(renderHostDialogButton_ACU).join('')}</div>
+      </div>
+      <div id="acu-opt-backdrop" class="acu-hd-scrim ${ACU_HOST_SURFACE_CLASS_ACU}" data-tt-mobile-surface="backdrop"></div>
+    `;
+}
 
 /**
  * presentation/theme/custom-confirm.ts
@@ -108636,8 +109107,7 @@ function showToastr_ACU(type, message, titleOrOptions = {}, maybeOptions = {}) {
  * 与插件 UI 风格一致的自定义确认框，替代原生 confirm()。
  * 返回 Promise<boolean>，调用方在 async 函数中使用 await 即可。
  *
- * 样式复用窗口系统的 CSS 变量（--acu-panel-bg 等）和遮罩层（.acu-window-overlay），
- * 自动兼容双主题（墨色/素纱）。
+ * 样式来自 host-dialog（与新界面对话框同一设计），颜色跟随当前主题。
  *
  * 重要：DOM 挂载到 topLevelWindow_ACU.document（酒馆主窗口），
  * 而非当前 iframe 的 document，与窗口系统（window-system.ts）保持一致。
@@ -108660,95 +109130,26 @@ let pendingConfirmResolve_ACU = null;
  * @param options 可选配置
  */
 function showCustomConfirm_ACU(title, message, options = {}) {
-    const { confirmLabel = '确定', cancelLabel = '取消', } = options;
+    const { confirmLabel = '确定', cancelLabel = '取消', tone = 'default', } = options;
+    const danger = tone === 'danger';
     const targetDoc = getTargetDoc();
-    const targetWindow = targetDoc.defaultView || topLevelWindow_ACU || window;
-    const viewportWidth = Number(targetWindow?.innerWidth || window.innerWidth || 0);
-    const isNarrowScreen = viewportWidth > 0 && viewportWidth <= 899;
     // 移除可能残留的旧确认框（防止重复）；旧弹框的 await 按取消结束
     const supersededResolve = pendingConfirmResolve_ACU;
     pendingConfirmResolve_ACU = null;
     supersededResolve?.(false);
     removeExistingConfirm();
+    ensureHostDialogStylesInjected_ACU();
     const confirmId = `${SCRIPT_ID_PREFIX_ACU}-custom-confirm`;
     // 将 \n 转为 <br>，HTML 转义防止 XSS
     const safeMessage = escapeHtml_ACU(message).replace(/\n/g, '<br>');
     const html = `
-    <div class="acu-window-overlay" id="${confirmId}-overlay" data-tt-mobile-surface="backdrop" style="z-index: 100000;">
-      <div id="${confirmId}" data-tt-mobile-surface="free-window" style="
-        position: fixed;
-        top: ${isNarrowScreen ? 'max(calc(env(safe-area-inset-top, 0px) + 72px), 12svh)' : '50%'};
-        left: 50%;
-        transform: translate(-50%, ${isNarrowScreen ? '0' : '-50%'});
-        min-width: ${isNarrowScreen ? 'min(280px, calc(100vw - 24px))' : '320px'};
-        width: min(420px, calc(100vw - ${isNarrowScreen ? '24px' : '40px'}));
-        max-width: min(420px, calc(100vw - ${isNarrowScreen ? '24px' : '40px'}));
-        max-height: calc(${isNarrowScreen ? '100dvh' : '100vh'} - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - ${isNarrowScreen ? '88px' : '40px'});
-        background-color: var(--acu-confirm-bg, var(--acu-bg-1, #ffffff));
-        border: 1px solid var(--acu-confirm-border, var(--acu-border, #e0e4ea));
-        border-radius: 10px;
-        box-shadow: var(--acu-shadow, 0 24px 60px rgba(0, 0, 0, 0.18));
-        animation: acuWindowSlideIn 0.25s ease-out;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-        color: var(--acu-confirm-title, var(--acu-text-1, #1a2332));
-        padding: 0;
-        overflow: hidden;
-        display: flex;
-        flex-direction: column;
-      ">
-        <div style="
-          padding: 16px 20px 12px 20px;
-          font-size: 14px;
-          font-weight: 600;
-          letter-spacing: 0.3px;
-          color: var(--acu-confirm-title, var(--acu-text-1, #1a2332));
-          border-bottom: 1px solid var(--acu-confirm-border, var(--acu-border, #e0e4ea));
-        ">${escapeHtml_ACU(title)}</div>
-        <div style="
-          padding: 16px 20px;
-          font-size: 13px;
-          line-height: 1.7;
-          color: var(--acu-confirm-text, var(--acu-text-2, #4a5568));
-          overflow-y: auto;
-          max-height: ${isNarrowScreen ? 'min(50dvh, calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 180px))' : 'none'};
-        ">${safeMessage}</div>
-        <div style="
-          padding: 12px 20px calc(16px + env(safe-area-inset-bottom, 0px)) 20px;
-          display: flex;
-          justify-content: ${isNarrowScreen ? 'stretch' : 'flex-end'};
-          flex-direction: ${isNarrowScreen ? 'column-reverse' : 'row'};
-          gap: 10px;
-        ">
-          <button id="${confirmId}-cancel" style="
-            padding: 10px 18px;
-            border: 1px solid var(--acu-confirm-cancel-border, var(--acu-border-2, #c8cdd5)) !important;
-            border-radius: 6px;
-            background: var(--acu-confirm-cancel-bg, transparent) !important;
-            color: var(--acu-confirm-cancel-text, var(--acu-text-2, #4a5568)) !important;
-            cursor: pointer;
-            font-family: inherit;
-            font-size: 13px;
-            font-weight: 500;
-            letter-spacing: 0.3px;
-            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-            box-shadow: none !important;
-            width: ${isNarrowScreen ? '100%' : 'auto'};
-          ">${escapeHtml_ACU(cancelLabel)}</button>
-          <button id="${confirmId}-ok" style="
-            padding: 10px 18px;
-            border: 1px solid var(--acu-confirm-ok-border, rgba(37, 99, 235, 0.30)) !important;
-            border-radius: 6px;
-            background: var(--acu-confirm-ok-bg, rgba(37, 99, 235, 0.08)) !important;
-            color: var(--acu-confirm-ok-text, var(--acu-accent, #2563eb)) !important;
-            cursor: pointer;
-            font-family: inherit;
-            font-size: 13px;
-            font-weight: 600;
-            letter-spacing: 0.3px;
-            transition: background 0.15s ease, border-color 0.15s ease;
-            box-shadow: none !important;
-            width: ${isNarrowScreen ? '100%' : 'auto'};
-          ">${escapeHtml_ACU(confirmLabel)}</button>
+    <div class="acu-hd-layer ${ACU_HOST_SURFACE_CLASS_ACU}" id="${confirmId}-overlay" data-tt-mobile-surface="backdrop">
+      <div class="acu-hd-dialog" id="${confirmId}" data-tt-mobile-surface="free-window" role="alertdialog" aria-modal="true">
+        ${renderHostDialogHead_ACU(title, { danger })}
+        <div class="acu-hd-message">${safeMessage}</div>
+        <div class="acu-hd-actions">
+          ${renderHostDialogButton_ACU({ id: `${confirmId}-cancel`, label: cancelLabel, variant: 'ghost' })}
+          ${renderHostDialogButton_ACU({ id: `${confirmId}-ok`, label: confirmLabel, variant: danger ? 'danger' : 'primary' })}
         </div>
       </div>
     </div>
@@ -108759,29 +109160,6 @@ function showCustomConfirm_ACU(title, message, options = {}) {
     const $ok = targetDoc.getElementById(`${confirmId}-ok`);
     const $cancel = targetDoc.getElementById(`${confirmId}-cancel`);
     const $overlay = targetDoc.getElementById(`${confirmId}-overlay`);
-    // 给按钮加 hover 效果（用 JS 而非 CSS 类，避免污染全局样式）
-    if ($ok) {
-        $ok.addEventListener('mouseenter', () => {
-            $ok.style.background = 'var(--acu-confirm-ok-hover-bg, rgba(37, 99, 235, 0.14))';
-            $ok.style.borderColor = 'var(--acu-confirm-ok-hover-border, rgba(37, 99, 235, 0.45))';
-        });
-        $ok.addEventListener('mouseleave', () => {
-            $ok.style.background = 'var(--acu-confirm-ok-bg, rgba(37, 99, 235, 0.08))';
-            $ok.style.borderColor = 'var(--acu-confirm-ok-border, rgba(37, 99, 235, 0.30))';
-        });
-    }
-    if ($cancel) {
-        $cancel.addEventListener('mouseenter', () => {
-            $cancel.style.background = 'var(--acu-confirm-cancel-hover-bg, var(--acu-bg-2, rgba(0, 0, 0, 0.03)))';
-            $cancel.style.borderColor = 'var(--acu-confirm-cancel-hover-border, var(--acu-border, #e0e4ea))';
-            $cancel.style.color = 'var(--acu-confirm-cancel-hover-text, var(--acu-text-1, #1a2332))';
-        });
-        $cancel.addEventListener('mouseleave', () => {
-            $cancel.style.background = 'var(--acu-confirm-cancel-bg, transparent)';
-            $cancel.style.borderColor = 'var(--acu-confirm-cancel-border, var(--acu-border-2, #c8cdd5))';
-            $cancel.style.color = 'var(--acu-confirm-cancel-text, var(--acu-text-2, #4a5568))';
-        });
-    }
     return new Promise((resolve) => {
         let settled = false;
         const settle = (result) => {
@@ -116416,7 +116794,7 @@ async function handleManualUpdate_ACU() {
             '高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n' +
             '如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n' +
             '保留边界 checkpoint 会按 AI 回复楼层计数，在达到保留窗口和 20 个 AI 楼层缓冲后自动滚动建立。\n' +
-            '范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或终止时会回滚到本次操作前的状态。', { confirmLabel: '确认并继续', cancelLabel: '取消' });
+            '范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或终止时会回滚到本次操作前的状态。', { confirmLabel: '确认并继续', cancelLabel: '取消', tone: 'danger' });
         if (!confirmed) {
             logDebug_ACU('[更新流程] 用户取消了手动填表确认框');
             showToastr_ACU('info', '已取消手动填表。');
@@ -117735,51 +118113,15 @@ function showOptimizationOverlay_ACU(message = '正在优化正文...') {
     // 移除已存在的遮罩
     hideOptimizationOverlay_ACU();
     const overlayHtml = `
-      <div id="acu-optimization-overlay" data-tt-mobile-surface="backdrop" style="
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.7);
-        backdrop-filter: blur(4px);
-        -webkit-backdrop-filter: blur(4px);
-        z-index: 99999;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-direction: column;
-        gap: 16px;
-      ">
-        <div style="
-          width: 50px;
-          height: 50px;
-          border: 3px solid rgba(255, 255, 255, 0.3);
-          border-top-color: #7bb7ff;
-          border-radius: 50%;
-          animation: acu-spin 1s linear infinite;
-        "></div>
-        <div style="
-          color: rgba(255, 255, 255, 0.9);
-          font-size: 16px;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        ">${message}</div>
-        <button id="acu-optimization-overlay-cancel" style="
-          padding: 10px 18px;
-          border: 1px solid rgba(255, 193, 7, 0.7);
-          background: transparent;
-          color: #ffc107;
-          border-radius: 6px;
-          cursor: pointer;
-          font-size: 14px;
-        ">取消优化</button>
+      <div id="acu-optimization-overlay" class="acu-hd-layer ${ACU_HOST_SURFACE_CLASS_ACU}" data-tt-mobile-surface="backdrop">
+        <div class="acu-hd-busy" role="status" aria-live="polite">
+          <div class="acu-hd-spinner" aria-hidden="true"></div>
+          <div class="acu-hd-busy__text">${escapeHtml_ACU(String(message))}</div>
+          ${renderHostDialogButton_ACU({ id: 'acu-optimization-overlay-cancel', label: '取消优化', variant: 'ghost' })}
+        </div>
       </div>
-      <style>
-        @keyframes acu-spin {
-          to { transform: rotate(360deg); }
-        }
-      </style>
     `;
+    ensureHostDialogStylesInjected_ACU();
     jQuery_API_ACU('body').append(overlayHtml);
     jQuery_API_ACU('#acu-optimization-overlay-cancel').off('click.acu_opt_cancel').on('click.acu_opt_cancel', function (e) {
         e.preventDefault();
@@ -118546,107 +118888,19 @@ function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
     const isLastLoop = result.currentLoop >= result.totalLoops;
     const applyButtonText = isLastLoop ? '应用并完成' : '应用并继续';
     const originalContent = getOriginalContent_ACU(messageIndex) || result.optimizedContent;
-    const dialogHtml = `
-      <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
-        position: fixed;
-        top: max(10px, env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));
-        left: 50%;
-        transform: translateX(-50%);
-        background: var(--acu-bg-0, #24221f);
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-        border: 1px solid var(--acu-border, #36332e);
-        border-radius: 2px;
-        padding: 20px;
-        max-width: 800px;
-        width: calc(100% - 20px);
-        max-height: calc(90vh - 20px);
-        overflow-y: auto;
-        z-index: 100000;
-        color: var(--acu-text, #c1b9ad);
-        font-family: "Noto Serif SC", "Source Han Serif CN", "Songti SC", "STSong", "SimSun", serif;
-        box-sizing: border-box;
-      ">
-        <h3 style="margin: 0 0 8px 0; color: var(--acu-accent, #7d4940); font-size: 1.1em; letter-spacing: 1px;">正文替换建议</h3>
-        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">${escapeHtml_ACU(String(result.summary || ''))}</p>
-        ${result.totalLoops > 1 ? `<p style="margin: 0 0 12px 0; color: var(--acu-text-mute, #6a6055); font-size: 12px;">进度: 第 ${result.currentLoop}/${result.totalLoops} 轮</p>` : ''}
-        <div class="optimization-list" style="margin-bottom: 16px; max-height: 400px; overflow-y: auto;">
-          ${result.optimizations.map((opt, i) => `
-            <div class="optimization-item" style="
-              background: rgba(0, 0, 0, 0.2);
-              border-radius: 1px;
-              padding: 12px;
-              margin-bottom: 8px;
-              border-left: 2px solid var(--acu-border, #36332e);
-            ">
-              <div style="color: var(--acu-text-dim, #8a8075); margin-bottom: 8px; text-decoration: line-through; opacity: 0.7;">
-                <strong>原文：</strong>${escapeHtml_ACU(opt.original.substring(0, 200))}${opt.original.length > 200 ? '...' : ''}
-              </div>
-              <div style="color: var(--acu-text, #c1b9ad); font-size: 12px; margin-bottom: 8px; padding: 8px; background: rgba(125, 73, 64, 0.1); border-radius: 1px; border-left: 2px solid var(--acu-accent, #7d4940);">
-                <strong>修改方案：</strong>${escapeHtml_ACU(opt.plan || opt.reason || '未说明')}
-              </div>
-              <div style="color: #6a8a6a;">
-                <strong>优化：</strong>${escapeHtml_ACU(opt.optimized.substring(0, 200))}${opt.optimized.length > 200 ? '...' : ''}
-              </div>
-            </div>
-          `).join('')}
-        </div>
-        <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding-bottom: 10px;">
-          <button id="acu-opt-cancel" style="
-            padding: 8px 16px;
-            border: 1px solid var(--acu-border, #36332e);
-            background: transparent;
-            color: var(--acu-text-dim, #8a8075);
-            border-radius: 1px;
-            cursor: pointer;
-            min-width: 80px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">取消优化</button>
-          ${!isLastLoop ? `
-          <button id="acu-opt-skip" style="
-            padding: 8px 16px;
-            border: 1px solid var(--acu-border, #36332e);
-            background: transparent;
-            color: var(--acu-text-dim, #8a8075);
-            border-radius: 1px;
-            cursor: pointer;
-            min-width: 80px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">跳过本轮</button>
-          ` : ''}
-          <button id="acu-opt-reoptimize" style="
-            padding: 8px 16px;
-            border: 1px solid var(--acu-accent, #7d4940);
-            background: transparent;
-            color: var(--acu-accent, #7d4940);
-            border-radius: 1px;
-            cursor: pointer;
-            min-width: 100px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">🔄 重新优化</button>
-          <button id="acu-opt-apply" style="
-            padding: 8px 16px;
-            border: none;
-            background: var(--acu-accent, #7d4940);
-            color: var(--acu-bg-0, #24221f);
-            border-radius: 1px;
-            cursor: pointer;
-            font-weight: 600;
-            min-width: 100px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">${applyButtonText}</button>
-        </div>
-      </div>
-      <div id="acu-opt-backdrop" data-tt-mobile-surface="backdrop" style="
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0, 0, 0, 0.6);
-        z-index: 99999;
-      "></div>
-    `;
+    const dialogHtml = renderOptimizationReviewDialog_ACU({
+        title: '正文替换建议',
+        summaryHtml: escapeHtml_ACU(String(result.summary || '')),
+        meta: result.totalLoops > 1 ? `第 ${result.currentLoop}/${result.totalLoops} 轮` : undefined,
+        optimizations: result.optimizations,
+        buttons: [
+            { id: 'acu-opt-cancel', label: '取消优化', variant: 'ghost' },
+            ...(!isLastLoop ? [{ id: 'acu-opt-skip', label: '跳过本轮', variant: 'ghost' }] : []),
+            { id: 'acu-opt-reoptimize', label: '重新优化', variant: 'soft', icon: 'fa-solid fa-rotate-right' },
+            { id: 'acu-opt-apply', label: applyButtonText, variant: 'primary' },
+        ],
+    });
+    ensureHostDialogStylesInjected_ACU();
     jQuery_API_ACU('body').append(dialogHtml);
     // 绑定取消事件
     jQuery_API_ACU('#acu-opt-cancel, #acu-opt-backdrop').on('click', function () {
@@ -118711,82 +118965,18 @@ function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
  */
 function showOptimizationResultDialog_ACU(messageIndex, result) {
     const optimizations = Array.isArray(result?.optimizations) ? result.optimizations : [];
-    const dialogHtml = `
-      <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
-        position: fixed;
-        top: max(10px, env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));
-        left: 50%;
-        transform: translateX(-50%);
-        background: var(--acu-bg-0, #24221f);
-        border: 1px solid var(--acu-border, #36332e);
-        border-radius: 2px;
-        padding: 20px;
-        max-width: 800px;
-        width: calc(100% - 20px);
-        max-height: calc(90vh - 20px);
-        overflow-y: auto;
-        z-index: 100000;
-        color: var(--acu-text, #c1b9ad);
-        font-family: "Noto Serif SC", "Source Han Serif CN", "Songti SC", "STSong", "SimSun", serif;
-        box-sizing: border-box;
-      ">
-        <h3 style="margin: 0 0 8px 0; color: var(--acu-accent, #7d4940); font-size: 1.1em; letter-spacing: 1px;">正文替换完成</h3>
-        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">共 ${optimizations.length} 处改进${result?.summary ? `，${escapeHtml_ACU(String(result.summary))}` : ''}</p>
-        <div class="optimization-list" style="margin-bottom: 16px; max-height: 400px; overflow-y: auto;">
-          ${optimizations.map((opt) => `
-            <div class="optimization-item" style="
-              background: rgba(0, 0, 0, 0.2);
-              border-radius: 1px;
-              padding: 12px;
-              margin-bottom: 8px;
-              border-left: 2px solid var(--acu-border, #36332e);
-            ">
-              <div style="color: var(--acu-text-dim, #8a8075); margin-bottom: 8px; text-decoration: line-through; opacity: 0.7;">
-                <strong>原文：</strong>${escapeHtml_ACU(String(opt?.original || '').substring(0, 200))}${String(opt?.original || '').length > 200 ? '...' : ''}
-              </div>
-              <div style="color: var(--acu-text, #c1b9ad); font-size: 12px; margin-bottom: 8px; padding: 8px; background: rgba(125, 73, 64, 0.1); border-radius: 1px; border-left: 2px solid var(--acu-accent, #7d4940);">
-                <strong>修改方案：</strong>${escapeHtml_ACU(String(opt?.plan || opt?.reason || '未说明'))}
-              </div>
-              <div style="color: #6a8a6a;">
-                <strong>优化：</strong>${escapeHtml_ACU(String(opt?.optimized || '').substring(0, 200))}${String(opt?.optimized || '').length > 200 ? '...' : ''}
-              </div>
-            </div>
-          `).join('')}
-        </div>
-        <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding-bottom: 10px;">
-          <button id="acu-opt-result-reoptimize" style="
-            padding: 8px 16px;
-            border: 1px solid var(--acu-accent, #7d4940);
-            background: transparent;
-            color: var(--acu-accent, #7d4940);
-            border-radius: 1px;
-            cursor: pointer;
-            min-width: 100px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">🔄 重新优化</button>
-          <button id="acu-opt-result-close" style="
-            padding: 8px 16px;
-            border: none;
-            background: var(--acu-accent, #7d4940);
-            color: var(--acu-bg-0, #24221f);
-            border-radius: 1px;
-            cursor: pointer;
-            font-weight: 600;
-            min-width: 100px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">关闭</button>
-        </div>
-      </div>
-      <div id="acu-opt-backdrop" data-tt-mobile-surface="backdrop" style="
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0, 0, 0, 0.6);
-        z-index: 99999;
-      "></div>
-    `;
+    const dialogHtml = renderOptimizationReviewDialog_ACU({
+        title: '正文替换完成',
+        icon: 'fa-solid fa-circle-check',
+        summaryHtml: `共 ${optimizations.length} 处改进${result?.summary ? `，${escapeHtml_ACU(String(result.summary))}` : ''}`,
+        optimizations,
+        buttons: [
+            { id: 'acu-opt-result-reoptimize', label: '重新优化', variant: 'soft', icon: 'fa-solid fa-rotate-right' },
+            { id: 'acu-opt-result-close', label: '关闭', variant: 'primary' },
+        ],
+    });
     jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+    ensureHostDialogStylesInjected_ACU();
     jQuery_API_ACU('body').append(dialogHtml);
     jQuery_API_ACU('#acu-opt-result-close, #acu-opt-backdrop').on('click', function () {
         jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
@@ -118894,93 +119084,18 @@ async function reoptimizeMessage_ACU(messageIndex) {
  * @param {string} originalContent - 原始内容
  */
 function showReoptimizationDialog_ACU(messageIndex, result, originalContent, writeTarget) {
-    const dialogHtml = `
-      <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
-        position: fixed;
-        top: max(10px, env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));
-        left: 50%;
-        transform: translateX(-50%);
-        background: var(--acu-bg-0, #24221f);
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-        border: 1px solid var(--acu-border, #36332e);
-        border-radius: 2px;
-        padding: 20px;
-        max-width: 800px;
-        width: calc(100% - 20px);
-        max-height: calc(90vh - 20px);
-        overflow-y: auto;
-        z-index: 100000;
-        color: var(--acu-text, #c1b9ad);
-        font-family: "Noto Serif SC", "Source Han Serif CN", "Songti SC", "STSong", "SimSun", serif;
-        box-sizing: border-box;
-      ">
-        <h3 style="margin: 0 0 8px 0; color: var(--acu-accent, #7d4940); font-size: 1.1em; letter-spacing: 1px;">🔄 重新优化结果</h3>
-        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">${escapeHtml_ACU(String(result.summary || ''))}</p>
-        <div class="optimization-list" style="margin-bottom: 16px; max-height: 400px; overflow-y: auto;">
-          ${result.optimizations.map((opt, i) => `
-            <div class="optimization-item" style="
-              background: rgba(0, 0, 0, 0.2);
-              border-radius: 1px;
-              padding: 12px;
-              margin-bottom: 8px;
-              border-left: 2px solid var(--acu-border, #36332e);
-            ">
-              <div style="color: var(--acu-text-dim, #8a8075); margin-bottom: 8px; text-decoration: line-through; opacity: 0.7;">
-                <strong>原文：</strong>${escapeHtml_ACU(opt.original.substring(0, 200))}${opt.original.length > 200 ? '...' : ''}
-              </div>
-              <div style="color: var(--acu-text, #c1b9ad); font-size: 12px; margin-bottom: 8px; padding: 8px; background: rgba(125, 73, 64, 0.1); border-radius: 1px; border-left: 2px solid var(--acu-accent, #7d4940);">
-                <strong>修改方案：</strong>${escapeHtml_ACU(opt.plan || opt.reason || '未说明')}
-              </div>
-              <div style="color: #6a8a6a;">
-                <strong>优化：</strong>${escapeHtml_ACU(opt.optimized.substring(0, 200))}${opt.optimized.length > 200 ? '...' : ''}
-              </div>
-            </div>
-          `).join('')}
-        </div>
-        <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding-bottom: 10px;">
-          <button id="acu-opt-cancel" style="
-            padding: 8px 16px;
-            border: 1px solid var(--acu-border, #36332e);
-            background: transparent;
-            color: var(--acu-text-dim, #8a8075);
-            border-radius: 1px;
-            cursor: pointer;
-            min-width: 80px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">取消</button>
-          <button id="acu-opt-reoptimize" style="
-            padding: 8px 16px;
-            border: 1px solid var(--acu-accent, #7d4940);
-            background: transparent;
-            color: var(--acu-accent, #7d4940);
-            border-radius: 1px;
-            cursor: pointer;
-            min-width: 100px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">🔄 再次优化</button>
-          <button id="acu-opt-apply" style="
-            padding: 8px 16px;
-            border: none;
-            background: var(--acu-accent, #7d4940);
-            color: var(--acu-bg-0, #24221f);
-            border-radius: 1px;
-            cursor: pointer;
-            font-weight: 600;
-            min-width: 100px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">应用优化</button>
-        </div>
-      </div>
-      <div id="acu-opt-backdrop" data-tt-mobile-surface="backdrop" style="
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0, 0, 0, 0.6);
-        z-index: 99999;
-      "></div>
-    `;
+    const dialogHtml = renderOptimizationReviewDialog_ACU({
+        title: '重新优化结果',
+        icon: 'fa-solid fa-rotate-right',
+        summaryHtml: escapeHtml_ACU(String(result.summary || '')),
+        optimizations: result.optimizations,
+        buttons: [
+            { id: 'acu-opt-cancel', label: '取消', variant: 'ghost' },
+            { id: 'acu-opt-reoptimize', label: '再次优化', variant: 'soft', icon: 'fa-solid fa-rotate-right' },
+            { id: 'acu-opt-apply', label: '应用优化', variant: 'primary' },
+        ],
+    });
+    ensureHostDialogStylesInjected_ACU();
     jQuery_API_ACU('body').append(dialogHtml);
     // 绑定取消事件
     jQuery_API_ACU('#acu-opt-cancel, #acu-opt-backdrop').on('click', function () {
@@ -151935,7 +152050,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261008-19";
+        const stamp = "20261009-00";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -171529,6 +171644,11 @@ function readInitialThemeState() {
     const { customThemes, builtinOverridesByCustomId } = sanitizePersistedCustomThemes(persisted?.customThemes);
     const activeId = normalizePersistedActiveThemeId(persisted?.activeId, customThemes, builtinOverridesByCustomId);
     return { activeId, customThemes };
+}
+/** 不建 store 直接读出已保存的生效主题：启动时给面板外的宿主浮层上色用。 */
+function readPersistedActiveTheme_ACU() {
+    const { activeId, customThemes } = readInitialThemeState();
+    return findThemeById(activeId, customThemes) ?? ACU_V2_BUILTIN_THEMES[0];
 }
 function buildPersistedTheme(state) {
     const payload = { activeId: state.activeId };
@@ -207733,6 +207853,7 @@ var App = /* @__PURE__ */ _export_sfc(_sfc_main, [["render", _sfc_render], ["__s
 
 const THEME_STYLE_NODE_ID = 'acu-v2-theme';
 const APP_ROOT_ID = 'acu-app-v2';
+const HOST_SURFACE_CLASS = ACU_HOST_SURFACE_CLASS_ACU;
 function buildCss$1(theme) {
     const lines = [];
     const keys = Object.keys(TOKEN_VAR_MAP);
@@ -207742,8 +207863,16 @@ function buildCss$1(theme) {
     // CSS custom properties inherit from the app root. Avoid a universal
     // descendant selector here; it expands style recalculation on every UI
     // state change and is especially expensive on mobile WebViews.
-    return `#${APP_ROOT_ID} {
+    return `#${APP_ROOT_ID},
+.${HOST_SURFACE_CLASS} {
 ${lines.join('\n')}
+}
+
+.${HOST_SURFACE_CLASS} {
+  color-scheme: ${theme.colorScheme};
+}
+
+#${APP_ROOT_ID} {
   scrollbar-color: color-mix(in srgb, var(--acu-text-3) 55%, transparent) transparent;
   scrollbar-width: thin;
 }
@@ -208438,7 +208567,7 @@ function isMenuVisible_ACU(menu) {
  */
 /**
  * showToast 实现：V2 shell 已挂载且打开时走 Pinia toast-store（可携带
- * "打开数据管理"等 action）；否则回退宿主 toastr；再不可用只记日志。
+ * "打开数据管理"等 action）；否则用酒馆页面上的插件提示框；再不可用只记日志。
  * 绝不抛错——toast 通道不允许反向破坏调用方（加载/合并）流程。
  */
 function showAcuV2Toast_ACU(payload) {
@@ -208461,21 +208590,24 @@ function showAcuV2Toast_ACU(payload) {
         }
     }
     catch (error) {
-        logWarn_ACU('[ACU-V2] toast-store 通道不可用，回退宿主 toastr:', error);
+        logWarn_ACU('[ACU-V2] toast-store 通道不可用，回退酒馆页面提示框:', error);
     }
-    try {
-        const toastr = topLevelWindow_ACU?.toastr;
-        if (toastr && typeof toastr[payload.kind] === 'function') {
-            toastr[payload.kind](payload.text, undefined, payload.action
-                ? { onclick: () => { void payload.action.onClick(); } }
-                : undefined);
-            return;
-        }
-    }
-    catch (_) {
-        // 宿主 toastr 不可用时落到下方日志。
-    }
+    // 面板没打开：用酒馆页面上的插件提示框（与面板内提示同一设计、跟随主题）。
+    if (showHostToast_ACU(payload))
+        return;
     logWarn_ACU(`[ACU toast:${payload.kind}] ${payload.text}`);
+}
+/**
+ * 启动即按已保存的主题输出 token：插件提示框等宿主浮层在面板打开前就会出现，
+ * 不能等首次挂载才上色。面板挂载后由 theme store 订阅接管后续切换。
+ */
+function applySavedThemeToHostSurfaces_ACU() {
+    try {
+        applyTheme(readPersistedActiveTheme_ACU());
+    }
+    catch (error) {
+        logWarn_ACU('[ACU-V2] 启动时应用主题失败，宿主浮层将使用默认配色:', error);
+    }
 }
 function bootstrapAcuV2() {
     registerUiSurface_ACU({
@@ -208556,6 +208688,8 @@ async function extensionMain() {
         return;
     }
     logDebug_ACU('[插件启动] 宿主 API 已就绪，开始初始化...');
+    // 初始化过程会弹插件提示框（如「数据库已加载」），先把用户主题铺到面板外的浮层上
+    applySavedThemeToHostSurfaces_ACU();
     mainInitialize_ACU();
     bootstrapAcuV2();
 }

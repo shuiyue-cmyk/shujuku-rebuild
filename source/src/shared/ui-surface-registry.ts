@@ -21,6 +21,39 @@ export interface UiSurfaceHandlers_ACU {
 }
 
 let registeredUiSurface_ACU: UiSurfaceHandlers_ACU | null = null;
+let hostToastRenderer_ACU: ((payload: UiToastPayload_ACU) => void) | null = null;
+
+/**
+ * 面板未打开时的提示由插件自己的提示框渲染（与新界面同一设计、跟随主题），
+ * 由 presentation 层的 toast 模块在加载时注册。
+ */
+export function registerHostToastRenderer_ACU(renderer: (payload: UiToastPayload_ACU) => void): void {
+    hostToastRenderer_ACU = renderer;
+}
+
+/** 在酒馆页面上显示提示：优先插件提示框，未注册时退回宿主 toastr。返回是否已显示。绝不抛错。 */
+export function showHostToast_ACU(payload: UiToastPayload_ACU): boolean {
+    try {
+        if (hostToastRenderer_ACU) {
+            hostToastRenderer_ACU(payload);
+            return true;
+        }
+    } catch (_) {
+        // 渲染器抛错时继续尝试宿主 toastr。
+    }
+    try {
+        const toastr = (topLevelWindow_ACU as any)?.toastr;
+        if (toastr && typeof toastr[payload.kind] === 'function') {
+            toastr[payload.kind](payload.text, undefined, payload.action
+                ? { onclick: () => { void payload.action!.onClick(); } }
+                : undefined);
+            return true;
+        }
+    } catch (_) {
+        // 宿主 toastr 不可用：静默，不让提示通道反过来破坏调用方流程。
+    }
+    return false;
+}
 
 export function registerUiSurface_ACU(handlers: UiSurfaceHandlers_ACU): void {
     registeredUiSurface_ACU = handlers;
@@ -32,7 +65,7 @@ export function getUiSurface_ACU(): UiSurfaceHandlers_ACU | null {
 
 /**
  * 统一 toast 入口：优先走已注册 UI surface 的 showToast；未注册或抛错时
- * 回退宿主 toastr；两者都不可用时静默（调用方自行负责日志）。绝不抛错。
+ * 回退酒馆页面上的插件提示框；都不可用时静默（调用方自行负责日志）。绝不抛错。
  */
 export function showUiSurfaceToast_ACU(payload: UiToastPayload_ACU): void {
     try {
@@ -42,20 +75,12 @@ export function showUiSurfaceToast_ACU(payload: UiToastPayload_ACU): void {
             return;
         }
     } catch (_) {
-        // 已注册 handler 抛错时继续尝试宿主 toastr。
+        // 已注册 handler 抛错时继续尝试酒馆页面上的提示框。
     }
-    try {
-        const toastr = (topLevelWindow_ACU as any)?.toastr;
-        if (toastr && typeof toastr[payload.kind] === 'function') {
-            toastr[payload.kind](payload.text, undefined, payload.action
-                ? { onclick: () => { void payload.action!.onClick(); } }
-                : undefined);
-        }
-    } catch (_) {
-        // 宿主 toastr 不可用：静默，不让提示通道反过来破坏调用方流程。
-    }
+    showHostToast_ACU(payload);
 }
 
 export function resetUiSurfaceRegistryForTests_ACU(): void {
     registeredUiSurface_ACU = null;
+    hostToastRenderer_ACU = null;
 }

@@ -68,7 +68,7 @@ import './presentation/triggers/settings-ui-sync';
 // ═══════════════════════════════════════════════════════════════
 import { mainInitialize_ACU } from './presentation/bootstrap/init';
 import { installGlobalBuildBadge_ACU } from './presentation/bootstrap/install-build-badge';
-import { bootstrapAcuV2 } from './presentation-v2/bootstrap';
+import { applySavedThemeToHostSurfaces_ACU, bootstrapAcuV2 } from './presentation-v2/bootstrap';
 import { logDebug_ACU, logError_ACU, logWarn_ACU } from './shared/utils';
 import { waitForAcuHostReady } from './shared/host-bridge';
 
@@ -128,6 +128,8 @@ async function extensionMain() {
     }
 
     logDebug_ACU('[插件启动] 宿主 API 已就绪，开始初始化...');
+    // 初始化过程会弹插件提示框（如「数据库已加载」），先把用户主题铺到面板外的浮层上
+    applySavedThemeToHostSurfaces_ACU();
     mainInitialize_ACU();
     bootstrapAcuV2();
 }

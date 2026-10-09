@@ -3,14 +3,18 @@
  *
  * - 单一 <style id="acu-v2-theme">；切主题 = 替换 textContent，不增删节点
  * - 作用域 #acu-app-v2，与旧主题节点物理隔离
+ * - 面板外的宿主浮层（插件提示框、确认框、正文替换遮罩/对话框）挂 HOST_SURFACE_CLASS，
+ *   同样拿到主题 token：它们挂在酒馆页面上，不在面板根节点之内
  * - 同时把 colorScheme 写到根容器的 style.colorScheme，让浏览器原生表单跟随
  */
 import type { AcuV2Theme } from './theme-types';
 import { TOKEN_VAR_MAP } from './theme-types';
 import { getAcuHostDocument } from '../bootstrap/host-document';
+import { ACU_HOST_SURFACE_CLASS_ACU } from '../../shared/constants';
 
 export const THEME_STYLE_NODE_ID = 'acu-v2-theme';
 export const APP_ROOT_ID = 'acu-app-v2';
+export const HOST_SURFACE_CLASS = ACU_HOST_SURFACE_CLASS_ACU;
 
 function buildCss(theme: AcuV2Theme): string {
   const lines: string[] = [];
@@ -21,8 +25,16 @@ function buildCss(theme: AcuV2Theme): string {
   // CSS custom properties inherit from the app root. Avoid a universal
   // descendant selector here; it expands style recalculation on every UI
   // state change and is especially expensive on mobile WebViews.
-  return `#${APP_ROOT_ID} {
+  return `#${APP_ROOT_ID},
+.${HOST_SURFACE_CLASS} {
 ${lines.join('\n')}
+}
+
+.${HOST_SURFACE_CLASS} {
+  color-scheme: ${theme.colorScheme};
+}
+
+#${APP_ROOT_ID} {
   scrollbar-color: color-mix(in srgb, var(--acu-text-3) 55%, transparent) transparent;
   scrollbar-width: thin;
 }

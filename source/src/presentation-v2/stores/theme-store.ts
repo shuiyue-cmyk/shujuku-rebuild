@@ -222,6 +222,12 @@ function readInitialThemeState(): InitialThemeState {
   return { activeId, customThemes };
 }
 
+/** 不建 store 直接读出已保存的生效主题：启动时给面板外的宿主浮层上色用。 */
+export function readPersistedActiveTheme_ACU(): AcuV2Theme {
+  const { activeId, customThemes } = readInitialThemeState();
+  return findThemeById(activeId, customThemes) ?? ACU_V2_BUILTIN_THEMES[0];
+}
+
 function buildPersistedTheme(state: ThemeState): PersistedTheme {
   const payload: PersistedTheme = { activeId: state.activeId };
   if (state.customThemes.length > 0) {

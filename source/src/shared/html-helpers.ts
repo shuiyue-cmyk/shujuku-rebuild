@@ -34,12 +34,11 @@ export function renderOption_ACU(value: string, text: string, selected = false):
  * 生成 toast 中的操作按钮 HTML（终止/取消/重新优化等）
  * @param id - 按钮的 DOM id
  * @param label - 按钮文本
- * @param accent - 按钮强调色（border/文字/hover 背景）
- * @param radius - 圆角
- * @param fontSize - 字号
+ *
+ * 外观由插件提示框样式的 .acu-toast-action 统一提供（颜色跟随提示框类型与主题）。
  */
-export function renderToastActionButton_ACU(id: string, label: string, accent = '#ffc107', radius = '4px', fontSize = '0.9em'): string {
-  return `<button id="${escapeHtml_ACU(id)}" style="border: 1px solid ${escapeHtml_ACU(accent)}; color: ${escapeHtml_ACU(accent)}; background: transparent; padding: 5px 10px; border-radius: ${escapeHtml_ACU(radius)}; cursor: pointer; float: right; margin-left: 15px; font-size: ${escapeHtml_ACU(fontSize)}; font-family: inherit;" onmouseover="this.style.backgroundColor='${escapeHtml_ACU(accent)}'; this.style.color='#1a1d24';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='${escapeHtml_ACU(accent)}';">${escapeHtml_ACU(label)}</button>`;
+export function renderToastActionButton_ACU(id: string, label: string): string {
+  return `<button id="${escapeHtml_ACU(id)}" class="acu-toast-action" type="button">${escapeHtml_ACU(label)}</button>`;
 }
 
 /**

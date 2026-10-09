@@ -53,11 +53,13 @@ describe('TT Layout ABI — 浮层 surface 声明', () => {
     const execSource = readSource(
       'src/presentation/components/optimization-ui/optimization-ui-exec.ts',
     );
-    expect(execSource).toContain(
-      '<div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="',
+    expect(execSource).toContain('renderOptimizationReviewDialog_ACU({');
+    const dialogSource = readSource('src/presentation/theme/host-dialog.ts');
+    expect(dialogSource).toMatch(
+      /<div class="acu-optimization-dialog [^"]*" data-tt-mobile-surface="free-window"/,
     );
-    expect(execSource).toContain(
-      '<div id="acu-opt-backdrop" data-tt-mobile-surface="backdrop" style="',
+    expect(dialogSource).toMatch(
+      /<div id="acu-opt-backdrop" class="[^"]*" data-tt-mobile-surface="backdrop"/,
     );
   });
 });

@@ -21,8 +21,16 @@ import {
 
 
 import {
+  escapeHtml_ACU,
   renderStopButton_ACU
 } from '../../../shared/html-helpers';
+import {
+  ACU_HOST_SURFACE_CLASS_ACU
+} from '../../../shared/constants';
+import {
+  ensureHostDialogStylesInjected_ACU,
+  renderHostDialogButton_ACU
+} from '../../theme/host-dialog';
 
 import {
   cancelContentOptimization_ACU,
@@ -38,52 +46,16 @@ import {
     hideOptimizationOverlay_ACU();
     
     const overlayHtml = `
-      <div id="acu-optimization-overlay" data-tt-mobile-surface="backdrop" style="
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.7);
-        backdrop-filter: blur(4px);
-        -webkit-backdrop-filter: blur(4px);
-        z-index: 99999;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        flex-direction: column;
-        gap: 16px;
-      ">
-        <div style="
-          width: 50px;
-          height: 50px;
-          border: 3px solid rgba(255, 255, 255, 0.3);
-          border-top-color: #7bb7ff;
-          border-radius: 50%;
-          animation: acu-spin 1s linear infinite;
-        "></div>
-        <div style="
-          color: rgba(255, 255, 255, 0.9);
-          font-size: 16px;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        ">${message}</div>
-        <button id="acu-optimization-overlay-cancel" style="
-          padding: 10px 18px;
-          border: 1px solid rgba(255, 193, 7, 0.7);
-          background: transparent;
-          color: #ffc107;
-          border-radius: 6px;
-          cursor: pointer;
-          font-size: 14px;
-        ">取消优化</button>
+      <div id="acu-optimization-overlay" class="acu-hd-layer ${ACU_HOST_SURFACE_CLASS_ACU}" data-tt-mobile-surface="backdrop">
+        <div class="acu-hd-busy" role="status" aria-live="polite">
+          <div class="acu-hd-spinner" aria-hidden="true"></div>
+          <div class="acu-hd-busy__text">${escapeHtml_ACU(String(message))}</div>
+          ${renderHostDialogButton_ACU({ id: 'acu-optimization-overlay-cancel', label: '取消优化', variant: 'ghost' })}
+        </div>
       </div>
-      <style>
-        @keyframes acu-spin {
-          to { transform: rotate(360deg); }
-        }
-      </style>
     `;
     
+    ensureHostDialogStylesInjected_ACU();
     jQuery_API_ACU('body').append(overlayHtml);
     jQuery_API_ACU('#acu-optimization-overlay-cancel').off('click.acu_opt_cancel').on('click.acu_opt_cancel', function(e) {
       e.preventDefault();
