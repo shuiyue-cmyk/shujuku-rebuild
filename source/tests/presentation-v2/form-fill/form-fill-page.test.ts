@@ -103,6 +103,7 @@ async function mountFormFillPage(
   const abortAllActiveRequests = vi.fn();
   const setWasStoppedByUser = vi.fn();
   const setIsAutoUpdatingCard = vi.fn();
+  const requestTableFillStop = vi.fn();
   const openVisualizer = vi.fn(async () => {});
 
   const worldbookConfig: any = {
@@ -122,6 +123,7 @@ async function mountFormFillPage(
     abortAllActiveRequests_ACU: abortAllActiveRequests,
     _set_wasStoppedByUser_ACU: setWasStoppedByUser,
     _set_isAutoUpdatingCard_ACU: setIsAutoUpdatingCard,
+    requestTableFillStop_ACU: requestTableFillStop,
   }));
   vi.doMock('../../../src/service/settings/settings-service', () => ({
     saveSettings_ACU: saveSettings,
@@ -266,6 +268,7 @@ async function mountFormFillPage(
     abortAllActiveRequests,
     setWasStoppedByUser,
     setIsAutoUpdatingCard,
+    requestTableFillStop,
     openVisualizer,
   };
 }
@@ -699,7 +702,7 @@ describe('FormFillPage · 手动填表面板', () => {
   });
 
   it('手动填表进度 toast 提供终止按钮并触发中止链路', async () => {
-    const { mount, orchestrate, abortAllActiveRequests, setWasStoppedByUser, setIsAutoUpdatingCard } = await mountFormFillPage();
+    const { mount, orchestrate, requestTableFillStop, setIsAutoUpdatingCard } = await mountFormFillPage();
     let releaseOrchestrate = () => {};
     orchestrate.mockImplementation(async () => {
       await new Promise<void>(resolve => {
@@ -721,10 +724,9 @@ describe('FormFillPage · 手动填表面板', () => {
     stopButton!.click();
     await Promise.resolve();
 
-    expect(setWasStoppedByUser).toHaveBeenCalledWith(false);
-    expect(setWasStoppedByUser).toHaveBeenCalledWith(true);
-    expect(abortAllActiveRequests).toHaveBeenCalledTimes(1);
-    expect(setIsAutoUpdatingCard).toHaveBeenCalledWith(false);
+    // 终止走统一的停止入口（锁存终止 + 中止请求），不再当场释放「正在填表」标记
+    expect(requestTableFillStop).toHaveBeenCalledTimes(1);
+    expect(setIsAutoUpdatingCard).not.toHaveBeenCalledWith(false);
     expect(document.querySelector('.ub-toasts')?.textContent || '').toContain('手动填表已终止');
 
     releaseOrchestrate();
@@ -812,7 +814,7 @@ describe('FormFillPage · 手动填表面板', () => {
   });
 
   it('追平运行与普通手填互斥，终止仅中止当前 controller', async () => {
-    const { mount, orchestrateCatchUp, orchestrate, abortAllActiveRequests, setWasStoppedByUser, setIsAutoUpdatingCard } = await mountFormFillPage();
+    const { mount, orchestrateCatchUp, orchestrate, abortAllActiveRequests, setWasStoppedByUser, setIsAutoUpdatingCard, requestTableFillStop } = await mountFormFillPage();
     let releaseCatchUp = () => {};
     let capturedController: AbortController | undefined;
     orchestrateCatchUp.mockImplementation(async (_keys: string[], _refresh: any, options: any) => {
@@ -842,6 +844,7 @@ describe('FormFillPage · 手动填表面板', () => {
     expect(abortAllActiveRequests).not.toHaveBeenCalled();
     expect(setWasStoppedByUser).not.toHaveBeenCalled();
     expect(setIsAutoUpdatingCard).not.toHaveBeenCalled();
+    expect(requestTableFillStop).not.toHaveBeenCalled();
     expect(orchestrate).not.toHaveBeenCalled();
 
     releaseCatchUp();

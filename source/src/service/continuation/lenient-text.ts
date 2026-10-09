@@ -151,6 +151,18 @@ export function parseJsonLenient_ACU(text: string): unknown {
   }
 }
 
+/** 正文里几乎不会出现的控制字符（换行、回车除外）：多半是 C:\temp 这类单层转义被多解了一层。 */
+const SUSPICIOUS_CONTROL_CHAR_ACU = /[\u0000-\u0009\u000B\u000C\u000E-\u001F]/;
+
+function containsSuspiciousControlChar_ACU(value: unknown): boolean {
+  if (typeof value === 'string') return SUSPICIOUS_CONTROL_CHAR_ACU.test(value);
+  if (Array.isArray(value)) return value.some(containsSuspiciousControlChar_ACU);
+  if (value && typeof value === 'object') {
+    return Object.entries(value).some(([key, item]) => SUSPICIOUS_CONTROL_CHAR_ACU.test(key) || containsSuspiciousControlChar_ACU(item));
+  }
+  return false;
+}
+
 /** SQL 字段值的格式归一化：只解码完整 JSON，不补内容；失败保留原值交给领域校验。 */
 export function parseSqlJsonValue_ACU(value: string | number | null): unknown {
   if (typeof value !== 'string') return value;
@@ -169,7 +181,10 @@ export function parseSqlJsonValue_ACU(value: string | number | null): unknown {
         try {
           escaped = JSON.parse(`"${escaped}"`);
           const decoded: unknown = JSON.parse(escaped);
-          if (decoded !== null && typeof decoded === 'object') return decoded;
+          // 引号多转义、路径反斜杠只转义一层时，解码会把 \t、\b 变成控制字符：宁可保留原值，不悄悄改坏正文。
+          if (decoded !== null && typeof decoded === 'object') {
+            return containsSuspiciousControlChar_ACU(decoded) ? value : decoded;
+          }
         } catch { /* 无法完整解码时不猜测；仍可尝试剩余的完整编码层。 */ }
       }
       break;

@@ -61,7 +61,7 @@ let mockSettings: any = {
 let mockCurrentJsonTableData: any = null;
 let mockIsAutoUpdating = false;
 let mockWasStopped = false;
-let mockFillStopEpoch = 0;
+let mockFillStopLatched = false;
 let mockCoreApisReady = true;
 let mockPendingFinalGenerationGreenlights: any[] = [];
 
@@ -71,7 +71,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   get currentChatFileIdentifier_ACU() { return 'test-chat'; },
   get isAutoUpdatingCard_ACU() { return mockIsAutoUpdating; },
   get wasStoppedByUser_ACU() { return mockWasStopped; },
-  getAutoFillStopEpoch_ACU: () => mockFillStopEpoch,
+  isTableFillStopRequested_ACU: () => mockWasStopped || mockFillStopLatched,
   get coreApisAreReady_ACU() { return mockCoreApisReady; },
   get pendingFinalGenerationGreenlights_ACU() { return mockPendingFinalGenerationGreenlights; },
   independentTableStates_ACU: mockIndependentTableStates,
@@ -1109,13 +1109,14 @@ describe('processUpdatesBatch_ACU', () => {
     ]);
     mockCurrentJsonTableData = { sheet_0: { name: '测试' } };
     const mockExecute = vi.fn().mockImplementation(async () => {
-      // 第一批请求返回后才点终止（请求已无可中止），紧接着标记被别处复位
-      mockFillStopEpoch += 1;
+      // 第一批请求返回后才点终止（请求已无可中止），紧接着一次性标记被别处复位，只剩本轮锁存
+      mockFillStopLatched = true;
       mockWasStopped = false;
       return { success: true, modifiedKeys: ['sheet_0'] } as CardUpdateResult;
     });
 
-    const result = await processUpdatesBatch_ACU([1, 3], 'auto_independent', { batchSize: 1 }, mockExecute);
+    const result = await processUpdatesBatch_ACU([1, 3], 'auto_independent', { batchSize: 1 }, mockExecute)
+      .finally(() => { mockFillStopLatched = false; });
 
     expect(mockExecute).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(false);
@@ -6771,14 +6772,14 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
     // 第一个 bucket 的请求已返回、正在写回时点终止（无在途请求可中止），随后标记被别处复位
     mockPersistTablesToChatMessage.mockImplementationOnce(async () => {
-      mockFillStopEpoch += 1;
+      mockFillStopLatched = true;
       mockWasStopped = false;
       return { saved: true, messageIndex: 1 };
     });
 
     const result = await processGroupedRuntimeChunk_ACU([
       { key: 'group_a', groupId: 0, indices: [1, 3], batchSize: 1, sheetKeys: ['sheet_0'], requestOptions: null },
-    ], 'manual_independent');
+    ], 'manual_independent').finally(() => { mockFillStopLatched = false; });
 
     expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(false);
@@ -6866,6 +6867,45 @@ describe('processGroupedRuntimeChunk_ACU', () => {
       expect(savePayload.tableData.sheet_0.content).toEqual([['row_id', 'value'], ['1', '黑泽刹那'], ['2', '星野桃']]);
     } finally {
       vi.mocked(isSqliteMode).mockReturnValue(false);
+    }
+  });
+
+  it('SQLite 模式：等待存储就绪期间目标楼层被滑动，守卫基线与提示词正文同一时刻冻结，旧结果不写回', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    const inventoryDDL = 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL UNIQUE);';
+    const template = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { uid: 'inventory', name: '表A', sourceData: { ddl: inventoryDDL }, content: [['row_id', 'value']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
+    } as any;
+    const chat: any[] = [{ is_user: true, mes: '选择开局' }, { is_user: false, mes: '开局正文', swipe_id: 0 }];
+    const originalEnsure = mockEnsureStorageProviderReady.getMockImplementation();
+    try {
+      vi.mocked(isSqliteMode).mockReturnValue(true);
+      vi.mocked(parseTableTemplateJson_ACU).mockReturnValue(template);
+      vi.mocked(getChatArray_ACU).mockReturnValue(chat);
+      mockCurrentJsonTableData = structuredClone(template);
+      let swiped = false;
+      mockEnsureStorageProviderReady.mockImplementation(async (...args: any[]) => {
+        if (!swiped) {
+          swiped = true;
+          chat[1].swipe_id = 1;
+          chat[1].mes = '另一条回复';
+        }
+        return originalEnsure!(...args);
+      });
+      mockCallCustomOpenAI.mockResolvedValueOnce("<tableEdit>INSERT INTO inventory (value) VALUES ('星野桃');</tableEdit>");
+
+      const result = await processGroupedRuntimeChunk_ACU([
+        { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
+      ], 'manual_independent');
+
+      expect(result.success).toBe(false);
+      expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(isSqliteMode).mockReturnValue(false);
+      mockEnsureStorageProviderReady.mockImplementation(originalEnsure!);
     }
   });
 

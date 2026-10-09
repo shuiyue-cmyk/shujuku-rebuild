@@ -50,6 +50,12 @@ import {
   shouldProcessPlotForGeneration_ACU,
   shouldProcessAutoTableUpdateForGenerationEnded_ACU,
   markChatChangedForEndedGate_ACU,
+  requestTableFillStop_ACU,
+  isTableFillStopRequested_ACU,
+  isAutoUpdatingCard_ACU,
+  markStoppedSendForRetry_ACU,
+  clearStoppedSendRetry_ACU,
+  isRetryOfStoppedSend_ACU,
   getCurrentIsolationKey_ACU,
   settings_ACU,
   _set_settings_ACU,
@@ -255,6 +261,24 @@ describe('isRecentUserSend_ACU', () => {
 // ═══ shouldProcessPlotForGeneration_ACU ═══
 describe('shouldProcessPlotForGeneration_ACU', () => {
 
+  it('本库停掉的那次发送：同一聊天的下一次「重新生成」补跑剧情推进；换了聊天或已清除则不补跑', () => {
+    _set_settings_ACU({ plotSettings: { enabled: true } });
+    mockGetChatArray.mockReturnValue([]);
+    generationGate_ACU.lastUserMessageAt = 0;
+    generationGate_ACU.lastUserSendIntentAt = 0;
+    _set_currentChatFileIdentifier_ACU('chat-a');
+    expect(shouldProcessPlotForGeneration_ACU('regenerate', {}, false)).toBe(false);
+    markStoppedSendForRetry_ACU();
+    expect(isRetryOfStoppedSend_ACU('regenerate')).toBe(true);
+    expect(isRetryOfStoppedSend_ACU('normal')).toBe(false);
+    expect(shouldProcessPlotForGeneration_ACU('regenerate', {}, false)).toBe(true);
+    _set_currentChatFileIdentifier_ACU('chat-b');
+    expect(shouldProcessPlotForGeneration_ACU('regenerate', {}, false)).toBe(false);
+    _set_currentChatFileIdentifier_ACU('chat-a');
+    clearStoppedSendRetry_ACU();
+    expect(shouldProcessPlotForGeneration_ACU('regenerate', {}, false)).toBe(false);
+  });
+
   it('无新鲜消息也无新鲜 intent 时返回 false', () => {
     _set_settings_ACU({ plotSettings: { enabled: true } });
     mockGetChatArray.mockReturnValue([]);
@@ -309,6 +333,18 @@ describe('shouldProcessAutoTableUpdateForGenerationEnded_ACU 无配对 ENDED 的
     expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(5, 30));
     expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(5, 30))).toBe(false);
     expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(6, 32))).toBe(true);
+  });
+
+  it('切聊天后宿主没派发载入时的 ENDED：等基线过期作废，之后的真实回复不会被吞', () => {
+    vi.useFakeTimers();
+    try {
+      generationGate_ACU.lastEndedFloorSignature_ACU = signature(2, 9);
+      markChatChangedForEndedGate_ACU();
+      vi.advanceTimersByTime(60_000);
+      expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(6, 32))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('切换聊天后有配对的真实生成照常放行，并结束「等基线」状态', () => {
@@ -493,6 +529,48 @@ describe('AbortController 管理', () => {
     abortAllActiveRequests_ACU();
     expect(plot.abort).toHaveBeenCalled();
     expect(activeAbortControllers_ACU.size).toBe(0);
+  });
+
+  it('终止填表锁存到本轮结束：一次性停止标记被复位后仍算已终止；本轮放开「正在填表」才解除', () => {
+    const fill = { abort: vi.fn() };
+    const plot = { abort: vi.fn() };
+    trackAbortController_ACU(fill);
+    trackAbortController_ACU(plot, 'plot');
+    _set_isAutoUpdatingCard_ACU(true);
+    requestTableFillStop_ACU();
+    expect(fill.abort).toHaveBeenCalled();
+    expect(plot.abort).not.toHaveBeenCalled();
+    // 新一轮填表开跑 / 宿主新生成会复位一次性标记
+    _set_wasStoppedByUser_ACU(false);
+    expect(isTableFillStopRequested_ACU()).toBe(true);
+    // 「终止」不再立即放开「正在填表」，旧轮收尾期间新一轮进不来
+    expect(isAutoUpdatingCard_ACU).toBe(true);
+    _set_isAutoUpdatingCard_ACU(false);
+    expect(isTableFillStopRequested_ACU()).toBe(false);
+    abortAllActiveRequests_ACU();
+  });
+
+  it('终止后本轮迟迟不结束：30 秒后仍是同一轮就强制放开；期间已换新一轮则不动', () => {
+    vi.useFakeTimers();
+    try {
+      _set_isAutoUpdatingCard_ACU(true);
+      requestTableFillStop_ACU();
+      vi.advanceTimersByTime(29_000);
+      expect(isAutoUpdatingCard_ACU).toBe(true);
+      vi.advanceTimersByTime(2_000);
+      expect(isAutoUpdatingCard_ACU).toBe(false);
+
+      _set_isAutoUpdatingCard_ACU(true);
+      requestTableFillStop_ACU();
+      _set_isAutoUpdatingCard_ACU(false);
+      _set_isAutoUpdatingCard_ACU(true); // 新一轮
+      vi.advanceTimersByTime(31_000);
+      expect(isAutoUpdatingCard_ACU).toBe(true);
+      _set_isAutoUpdatingCard_ACU(false);
+    } finally {
+      vi.useRealTimers();
+      _set_wasStoppedByUser_ACU(false);
+    }
   });
 
   it('abortAllActiveRequests_ACU 中止失败不影响其他', () => {

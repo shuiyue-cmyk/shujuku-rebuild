@@ -165,8 +165,6 @@ function currentAutoUpdateScopeKey_ACU(): string {
       return;
     }
     autoUpdateTriggerInFlight_ACU = true;
-    // 新一轮自动填表开跑前清掉上一轮「终止」残留，避免 isStopped() 立刻把新任务掐死。
-    _set_wasStoppedByUser_ACU(false);
     const performanceSpan = startRuntimePerformanceSpan_ACU('auto-update-trigger', {
       ...performanceContext,
       settings: settings_ACU,
@@ -190,6 +188,9 @@ function currentAutoUpdateScopeKey_ACU(): string {
       });
       return;
     }
+    // 新一轮自动填表开跑前清掉上一轮「终止」残留，避免 isStopped() 立刻把新任务掐死。
+    // 必须在「已有填表在跑」的前置检查之后：否则被拦下的这一轮也会把还在收尾的旧轮「解除终止」。
+    _set_wasStoppedByUser_ACU(false);
 
     let liveChat = getChatArray_ACU();
     if (!liveChat || liveChat.length === 0) {

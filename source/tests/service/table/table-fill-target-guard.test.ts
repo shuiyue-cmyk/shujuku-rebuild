@@ -41,6 +41,28 @@ describe('填表目标楼层守卫', () => {
     expect(guard.isCurrent(2, live)).toBe(true);
   });
 
+  it('宿主「继续」续写原地改写了发送时间与生成开始时间：仍是同一条回复，不算变化', () => {
+    const live = chat();
+    const guard = captureTableFillTargetGuard_ACU(live);
+    live[2].mes = '第一版回复，续写的后半段';
+    live[2].send_date = 'd2-continued';
+    live[2].gen_started = '2026-10-09T12:05:00.000Z';
+    expect(guard.isCurrent(2, live)).toBe(true);
+  });
+
+  it('目标为 -1 时与写回层同口径：末尾的隐藏楼 / 工具楼不算最新 AI 楼', () => {
+    const live: any[] = [...chat(), { is_user: false, is_system: true, mes: '/comment 备注', send_date: 'd3' }];
+    const guard = captureTableFillTargetGuard_ACU(live);
+    // 真正的最新 AI 楼（#2）被滑动：必须判为已变化
+    live[2].swipe_id = 1;
+    expect(guard.isCurrent(-1, live)).toBe(false);
+    // 反方向：填表期间追加了工具楼，最新 AI 楼没变，不能误判
+    const live2: any[] = chat();
+    const guard2 = captureTableFillTargetGuard_ACU(live2);
+    live2.push({ is_user: false, role: 'tool', mes: '工具结果', send_date: 'd4' });
+    expect(guard2.isCurrent(-1, live2)).toBe(true);
+  });
+
   it('消息对象被整体重建（JSON 往返）不算变化', () => {
     const live = chat();
     const guard = captureTableFillTargetGuard_ACU(live);

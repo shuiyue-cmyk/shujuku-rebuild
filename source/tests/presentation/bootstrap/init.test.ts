@@ -4,6 +4,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 const m = vi.hoisted(() => ({
   markChatChangedForEndedGate: vi.fn(),
+  markStoppedSendForRetry: vi.fn(),
+  isRetryOfStoppedSend: vi.fn(() => false),
   chatChanged: undefined as undefined | ((name: string) => Promise<void>),
   chatMutationHandler: undefined as undefined | ((data: any) => Promise<void>),
   chatDeletedHandler: undefined as undefined | (() => void),
@@ -72,6 +74,7 @@ vi.mock('../../../src/service/table/runtime-only-pending-flush', () => ({ flushR
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   chatMutationDebounceTimer_ACU: null, _set_chatMutationDebounceTimer_ACU: m.setChatMutationTimer, generationGate_ACU: m.gate,
   markChatChangedForEndedGate_ACU: m.markChatChangedForEndedGate,
+  markStoppedSendForRetry_ACU: m.markStoppedSendForRetry, clearStoppedSendRetry_ACU: vi.fn(), isRetryOfStoppedSend_ACU: (...args: any[]) => m.isRetryOfStoppedSend(...args),
   get currentChatFileIdentifier_ACU() { return m.currentChatKey; }, currentJsonTableData_ACU: null,
   resolveGenerationContextForEnded_ACU: (...args: any[]) => {
     const context = m.consumeGenerationContext(...args);
@@ -522,6 +525,56 @@ describe('mainInitialize_ACU 交火召回失败停发与发送租约（移植上
     expect(leaseActiveAfterStop).toBe(false);
     expect(stop).not.toHaveBeenCalled();
     expect(m.orchestrate).not.toHaveBeenCalled();
+  });
+
+  it('召回失败停发后标记「重新生成」补跑；本库自己停宿主触发的 GENERATION_STOPPED 不记成用户终止（不掐在跑的填表）', async () => {
+    m.markStoppedSendForRetry.mockClear();
+    m.setWasStoppedByUser.mockClear();
+    const stop = await runWithStop(() => m.processBeforeGen.mockResolvedValueOnce({ success: false, reason: 'query_embedding_failed' }));
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(m.markStoppedSendForRetry).toHaveBeenCalledTimes(1);
+    m.generationStoppedHandler!();
+    expect(m.setWasStoppedByUser).not.toHaveBeenCalledWith(true);
+    // 用户自己按停止仍记为终止
+    m.generationStoppedHandler!();
+    expect(m.setWasStoppedByUser).toHaveBeenCalledWith(true);
+  });
+
+  it('召回期间聊天被切换或重载（不是用户停止）：停掉宿主生成，不再跑剧情推进', async () => {
+    const stop = await runWithStop(() => m.processBeforeGen.mockImplementationOnce(async () => {
+      void m.chatChanged!('chat-a');
+      return { success: false, skipped: true, reason: 'send_cancelled' };
+    }));
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(m.orchestrate).not.toHaveBeenCalled();
+  });
+
+  it('租约在建 seed 的等待之前捕获：等待期间用户停止生成，召回拿到的租约已失效', async () => {
+    let leaseActive: boolean | undefined;
+    m.ensureSeedCheckpoint.mockImplementationOnce(async () => { m.generationStoppedHandler!(); return { success: true }; });
+    await runWithStop(() => {
+      m.isRecentUserSendIntent?.mockReturnValue?.(true);
+      m.processBeforeGen.mockImplementationOnce(async (options: any) => {
+        leaseActive = options.isActive();
+        return { success: true, injectedCount: 1 };
+      });
+    });
+    expect(leaseActive).toBe(false);
+  });
+
+  it('「重新生成」重试被本库停掉的那次发送：剧情推进照常补跑', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(true);
+    m.isRetryOfStoppedSend.mockReturnValue(true);
+    m.api.chat = [{ is_user: true, mes: '问' }];
+    m.currentChatKey = 'chat-a';
+    m.orchestrate.mockResolvedValueOnce({ action: 'skipped' });
+    try {
+      await m.afterCommandsHandler!('regenerate', {}, false);
+    } finally {
+      m.isRetryOfStoppedSend.mockReturnValue(false);
+    }
+    expect(m.orchestrate).toHaveBeenCalledTimes(1);
   });
 });
 

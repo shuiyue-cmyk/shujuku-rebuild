@@ -118,7 +118,7 @@ export async function rebuildOutdatedSummaryVectorIndexInBackground_ACU(): Promi
 /**
  * 包装交火发送前处理，显示“正在召回记忆”进度提示。
  */
-export const SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU = '交火记忆召回失败，本次生成已停止。请检查向量接口后重新生成。';
+export const SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU = '交火记忆召回失败，本次生成已停止。请检查向量接口后点「重新生成」重试（会重新召回）。';
 
 /** 召回真的失败了（不是关闭、无可召回内容、已去重等跳过）：发送层据此停止这次生成。 */
 export function isSummaryVectorRecallFailure_ACU(result: SummaryVectorIndexRuntimeResult_ACU | null | undefined): boolean {
@@ -170,9 +170,12 @@ export async function processSummaryVectorIndexBeforeGenerationWithUI_ACU(
     let rebuilt = false;
     try {
       const rebuildResult = await rebuildCurrentSummaryVectorIndexWithUI_ACU();
-      rebuilt = rebuildResult.success && !rebuildResult.skipped;
+      // 用户已确认重建却没建成：这一轮没有可用记忆，按召回失败处理，由发送层停止这次生成
+      if (!rebuildResult.success) return { success: false, reason: 'rebuild_failed' };
+      rebuilt = !rebuildResult.skipped;
     } catch (error) {
-      logDebug_ACU(`[交火模式纪要索引] 失效索引已删除，但普通重建路径执行失败；继续原始生成：${error instanceof Error ? error.message : String(error)}`);
+      logWarn_ACU(`[交火模式纪要索引] 失效索引已删除，但普通重建路径执行失败：${error instanceof Error ? error.message : String(error)}`);
+      return { success: false, reason: 'rebuild_failed' };
     }
     // 重建成功后在同一次发送里补跑一次召回，否则这一轮目录沿用上一轮的内容。
     if (rebuilt) {

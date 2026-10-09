@@ -393,7 +393,9 @@ function collectMutationColumnReplacements_ACU(
 ): Array<{ token: Token_ACU; value: string }> {
   const replacements: Array<{ token: Token_ACU; value: string }> = [];
   const handledStarts = new Set<number>();
-  const addIfAlias = (token: Token_ACU | undefined, isInsertColumn: boolean): void => {
+  /** INSERT 列清单里已占用的物理列（小写）：前缀纠正不得纠正成其中之一。 */
+  const insertColumnTargets = new Set<string>();
+  const addIfAlias =(token: Token_ACU | undefined, isInsertColumn: boolean): void => {
     if (!token) return;
     const key = decodeSqlIdentifier_ACU(token.value).toLowerCase();
     if (ambiguous.has(key)) {
@@ -415,7 +417,9 @@ function collectMutationColumnReplacements_ACU(
         const prefixMatches = key.length >= 3
           ? [...new Set(aliases.values())].filter(value => value.toLowerCase().startsWith(key))
           : [];
-        if (prefixMatches.length === 1) {
+        // 纠正后会与列清单里已有的列（或另一个已纠正的短名）重复时不纠正，照旧拒绝。
+        if (prefixMatches.length === 1 && !insertColumnTargets.has(prefixMatches[0].toLowerCase())) {
+          insertColumnTargets.add(prefixMatches[0].toLowerCase());
           if (!handledStarts.has(token.start)) {
             handledStarts.add(token.start);
             replacements.push({ token, value: prefixMatches[0] });
@@ -491,15 +495,22 @@ function collectMutationColumnReplacements_ACU(
       ? columnListIndex
       : -1;
     if (openIndex >= 0) {
+      const columnTokens: Token_ACU[] = [];
       let cursor = openIndex;
       while (cursor < values.length && values[cursor].depth >= actionDepth + 1) {
         const token = values[cursor];
         if (token.depth === actionDepth + 1) {
           if (token.value === ')') break;
-          addIfAlias(token, true);
+          columnTokens.push(token);
         }
         cursor += 1;
       }
+      for (const token of columnTokens) {
+        const key = decodeSqlIdentifier_ACU(token.value).toLowerCase();
+        const known = aliases.get(key);
+        if (known) insertColumnTargets.add(known.toLowerCase());
+      }
+      for (const token of columnTokens) addIfAlias(token, true);
     }
   }
 

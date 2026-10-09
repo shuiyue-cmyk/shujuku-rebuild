@@ -101,11 +101,17 @@ export const generationGate_ACU = {
   // 切换 / 新建聊天后为 true，直到立起新聊天的签名基线：宿主载入聊天时收起停止按钮也会派发无配对 ENDED，
   // 此时拿旧聊天的签名比对必然「有新楼」，会对新聊天的最新楼误开自动链（填表 + 正文替换）。
   awaitingChatBaseline_ACU: false,
+  // 等基线只在切聊天后很短的窗口内有效：宿主载入时的那条 ENDED 若没来，过期作废，
+  // 不能把很久之后一次真实回复（上下文过期变成无配对）误当基线吞掉。
+  awaitingChatBaselineUntil_ACU: 0,
 };
+
+const CHAT_BASELINE_WINDOW_MS_ACU = 10_000;
 
 /** CHAT_CHANGED 时调用：下一条无配对 ENDED 只用来立新聊天的签名基线，不放行。 */
 export function markChatChangedForEndedGate_ACU(): void {
   generationGate_ACU.awaitingChatBaseline_ACU = true;
+  generationGate_ACU.awaitingChatBaselineUntil_ACU = Date.now() + CHAT_BASELINE_WINDOW_MS_ACU;
   generationGate_ACU.lastEndedFloorSignature_ACU = null;
 }
 
@@ -210,11 +216,32 @@ function hasFreshUserGenerationTrigger_ACU() {
   return { hasFreshUserMessage, hasFreshIntent, result: hasFreshUserMessage || hasFreshIntent };
 }
 
+// ═══ 被本库停发的那次发送 ═══
+// 召回或剧情规划失败时本库停掉发送、保留用户楼并提示「重新生成」。重新生成默认不跑召回与规划
+// （那是对同一条输入重抽回复），但这一次输入从未真正拿到记忆与规划，必须补跑，否则重试照样残缺。
+let stoppedSendRetryChatKey_ACU: string | null = null;
+
+export function markStoppedSendForRetry_ACU(): void {
+  stoppedSendRetryChatKey_ACU = String(currentChatFileIdentifier_ACU ?? '');
+}
+
+export function clearStoppedSendRetry_ACU(): void {
+  stoppedSendRetryChatKey_ACU = null;
+}
+
+/** 本次重新生成是否是在重试本库刚停掉的那次发送（同一聊天）。 */
+export function isRetryOfStoppedSend_ACU(type: any): boolean {
+  return type === 'regenerate'
+    && stoppedSendRetryChatKey_ACU !== null
+    && stoppedSendRetryChatKey_ACU === String(currentChatFileIdentifier_ACU ?? '');
+}
+
 export function shouldProcessPlotForGeneration_ACU(type: any, params: any, dryRun: any) {
   if (dryRun) return false;
   if (!settings_ACU?.plotSettings?.enabled) return false;
   if (isQuietLikeGeneration_ACU(type, params)) return false;
   if (params?.automatic_trigger) return false;
+  if (isRetryOfStoppedSend_ACU(type)) return true;
   const fresh = hasFreshUserGenerationTrigger_ACU();
   logDebug_ACU(`[状态管理] shouldProcessPlot: type=${type}, dryRun=${dryRun}, freshMsg=${fresh.hasFreshUserMessage}, freshIntent=${fresh.hasFreshIntent}, result=${fresh.result}`);
   return fresh.result;
@@ -222,7 +249,8 @@ export function shouldProcessPlotForGeneration_ACU(type: any, params: any, dryRu
 
 export function shouldProcessSummaryVectorIndexForGeneration_ACU(type: any, params: any, dryRun: any) {
   if (dryRun) return false;
-  if (type === 'regenerate') return false;
+  const retryOfStoppedSend = isRetryOfStoppedSend_ACU(type);
+  if (type === 'regenerate' && !retryOfStoppedSend) return false;
   if (isQuietLikeGeneration_ACU(type, params)) return false;
   if (params?.automatic_trigger) return false;
   const worldbookConfig = getCurrentWorldbookConfig_ACU();
@@ -232,6 +260,7 @@ export function shouldProcessSummaryVectorIndexForGeneration_ACU(type: any, para
     logDebug_ACU(`[状态管理] shouldProcessSummaryVectorIndex: type=${type}, dryRun=${dryRun}, globalEnabled=false, worldbookProjection=${worldbookProjectionEnabled}, result=false`);
     return false;
   }
+  if (retryOfStoppedSend) return true;
   const fresh = hasFreshUserGenerationTrigger_ACU();
   logDebug_ACU(`[状态管理] shouldProcessSummaryVectorIndex: type=${type}, dryRun=${dryRun}, globalEnabled=${globalEnabled}, worldbookProjection=${worldbookProjectionEnabled}, freshMsg=${fresh.hasFreshUserMessage}, freshIntent=${fresh.hasFreshIntent}, result=${fresh.result}`);
   return fresh.result;
@@ -373,6 +402,9 @@ export function shouldProcessAutoTableUpdateForGenerationEnded_ACU(
     // 生成上下文，此前一律放行去拉自动链（填表 + 正文替换），而 W1/W3 判重拦不住「该楼未处理过 / 首轮在飞」，
     // 于是查看器一开就白烧一轮 AI。现在要求「新 AI 楼证据」：签名与上次放行完全相同即零产出 → 源头丢弃。
     // 签名缺失（启动后首次、调用方未读聊天数组）继续保守放行；配对上下文（g 存在）的判定路径一字不动。
+    if (generationGate_ACU.awaitingChatBaseline_ACU && Date.now() > generationGate_ACU.awaitingChatBaselineUntil_ACU) {
+      generationGate_ACU.awaitingChatBaseline_ACU = false;
+    }
     if (currentSignature && generationGate_ACU.awaitingChatBaseline_ACU) {
       generationGate_ACU.awaitingChatBaseline_ACU = false;
       rememberEndedFloorSignature_ACU(currentSignature);
@@ -568,7 +600,39 @@ export function abortOnChatMutation_ACU() {
 }
 
 export function _set_currentAbortController_ACU(v: any) { currentAbortController_ACU = v; }
-export function _set_isAutoUpdatingCard_ACU(v: any) { isAutoUpdatingCard_ACU = v; }
+export function _set_isAutoUpdatingCard_ACU(v: any) {
+  if (v && !isAutoUpdatingCard_ACU) fillRunSeq_ACU += 1;
+  // 本轮结束（「正在填表」被持有者放开）才解除终止锁存
+  if (!v) tableFillStopLatched_ACU = false;
+  isAutoUpdatingCard_ACU = v;
+}
+
+// 「终止填表」锁存：wasStoppedByUser_ACU 会被新一轮填表开跑、宿主新生成复位，单靠它，被终止的那轮
+// 可能在批次 / 分组 / 重试之间「复活」。锁存只在本轮结束时解除。
+let tableFillStopLatched_ACU = false;
+let fillRunSeq_ACU = 0;
+const TABLE_FILL_STOP_FORCE_RELEASE_MS_ACU = 30_000;
+
+/** 用户点「终止」填表：终止本轮当前与后续全部批次。不立即放开「正在填表」，免得旧轮收尾时新一轮叠进来。 */
+export function requestTableFillStop_ACU(): void {
+  _set_wasStoppedByUser_ACU(true);
+  if (isAutoUpdatingCard_ACU) tableFillStopLatched_ACU = true;
+  // R10A-19：只终止填表请求，不连带中止正在进行的剧情推进规划
+  abortAllActiveRequests_ACU({ keepPlot: true });
+  // 兜底：请求不响应中止时，过一段时间仍是同一轮就强制放开，避免填表永久锁死直到刷新页面
+  const runSeqAtStop = fillRunSeq_ACU;
+  setTimeout(() => {
+    if (isAutoUpdatingCard_ACU && fillRunSeq_ACU === runSeqAtStop) {
+      logWarn_ACU('[状态管理] 终止填表后本轮迟迟未结束，已强制放开「正在填表」状态。');
+      _set_isAutoUpdatingCard_ACU(false);
+    }
+  }, TABLE_FILL_STOP_FORCE_RELEASE_MS_ACU);
+}
+
+/** 填表是否已被要求终止（宿主停止生成的一次性信号，或本轮内用户点过「终止」）。 */
+export function isTableFillStopRequested_ACU(): boolean {
+  return wasStoppedByUser_ACU || tableFillStopLatched_ACU;
+}
 export function _set_manualExtraHint_ACU(v: any) { manualExtraHint_ACU = v; }
 export function getAutoFillStopEpoch_ACU(): number { return autoFillStopEpoch_ACU; }
 export function _set_wasStoppedByUser_ACU(v: any) {

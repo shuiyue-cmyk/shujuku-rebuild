@@ -2,8 +2,7 @@ import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import {
   settings_ACU,
   currentChatFileIdentifier_ACU,
-  abortAllActiveRequests_ACU,
-  _set_isAutoUpdatingCard_ACU,
+  requestTableFillStop_ACU,
   _set_manualExtraHint_ACU,
   _set_wasStoppedByUser_ACU,
   getCurrentIsolationKey_ACU,
@@ -313,10 +312,8 @@ export function useManualUpdate(): ManualUpdateState {
   function requestAbort(): void {
     if (abortRequested) return;
     abortRequested = true;
-    _set_wasStoppedByUser_ACU(true);
-    // R10A-19：只终止填表请求，不连带中止正在进行的剧情推进规划
-    abortAllActiveRequests_ACU({ keepPlot: true });
-    _set_isAutoUpdatingCard_ACU(false);
+    // 终止锁存到本轮结束；只终止填表请求，不连带中止剧情推进规划（R10A-19）
+    requestTableFillStop_ACU();
     if (progressToastId) {
       toast.update(progressToastId, 'warning', '手动填表已终止，正在停止当前任务与后续批次...', {
         durationMs: 0,

@@ -2,7 +2,7 @@
 // service 层只返回结果，presentation 层根据返回值自行决定 UI 操作。
 
 import {
-  _set_isAutoUpdatingCard_ACU,
+  requestTableFillStop_ACU,
   _set_manualExtraHint_ACU,
   _set_wasStoppedByUser_ACU,
   currentJsonTableData_ACU,
@@ -44,9 +44,6 @@ import {
 import {
   refreshMergedDataAndNotifyWithUI_ACU
 } from '../components/pipeline-ui-helpers';
-import {
-  abortAllActiveRequests_ACU
-} from '../../service/runtime/state-manager';
 import {
     processUpdatesBatch_ACU,
     executeCardUpdateCore_ACU,
@@ -236,9 +233,7 @@ export async function proceedWithCardUpdate_ACU(
             onShown: function () {
                 if (typeof bindTableFillStopButton_ACU === 'function') {
                     bindTableFillStopButton_ACU(stopButtonId, () => {
-                        _set_wasStoppedByUser_ACU(true);
-                        abortAllActiveRequests_ACU({ keepPlot: true });
-                        _set_isAutoUpdatingCard_ACU(false);
+                        requestTableFillStop_ACU();
                         updateLoadingToastMessage(loadingToast, '填表任务已终止，正在停止当前任务与后续批次...');
                         showToastr_ACU('warning', '填表任务已由用户终止，当前任务与后续批次将立即停止。');
                     });
@@ -371,9 +366,7 @@ export async function handleManualUpdate_ACU() {
             onShown: function () {
                 if (typeof bindTableFillStopButton_ACU === 'function') {
                     bindTableFillStopButton_ACU(stopButtonId, () => {
-                        _set_wasStoppedByUser_ACU(true);
-                        abortAllActiveRequests_ACU({ keepPlot: true });
-                        _set_isAutoUpdatingCard_ACU(false);
+                        requestTableFillStop_ACU();
                         updateLoadingToastMessage(manualProgressToast, '填表任务已终止，正在停止当前任务与后续批次...');
                         showToastr_ACU('warning', '填表任务已由用户终止，当前任务与后续批次将立即停止。');
                     });

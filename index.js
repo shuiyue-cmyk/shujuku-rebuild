@@ -41798,6 +41798,8 @@ requireKnownInsertColumns,
 targetTableName) {
     const replacements = [];
     const handledStarts = new Set();
+    /** INSERT 列清单里已占用的物理列（小写）：前缀纠正不得纠正成其中之一。 */
+    const insertColumnTargets = new Set();
     const addIfAlias = (token, isInsertColumn) => {
         if (!token)
             return;
@@ -41818,7 +41820,9 @@ targetTableName) {
                 const prefixMatches = key.length >= 3
                     ? [...new Set(aliases.values())].filter(value => value.toLowerCase().startsWith(key))
                     : [];
-                if (prefixMatches.length === 1) {
+                // 纠正后会与列清单里已有的列（或另一个已纠正的短名）重复时不纠正，照旧拒绝。
+                if (prefixMatches.length === 1 && !insertColumnTargets.has(prefixMatches[0].toLowerCase())) {
+                    insertColumnTargets.add(prefixMatches[0].toLowerCase());
                     if (!handledStarts.has(token.start)) {
                         handledStarts.add(token.start);
                         replacements.push({ token, value: prefixMatches[0] });
@@ -41900,16 +41904,25 @@ targetTableName) {
             ? columnListIndex
             : -1;
         if (openIndex >= 0) {
+            const columnTokens = [];
             let cursor = openIndex;
             while (cursor < values.length && values[cursor].depth >= actionDepth + 1) {
                 const token = values[cursor];
                 if (token.depth === actionDepth + 1) {
                     if (token.value === ')')
                         break;
-                    addIfAlias(token, true);
+                    columnTokens.push(token);
                 }
                 cursor += 1;
             }
+            for (const token of columnTokens) {
+                const key = decodeSqlIdentifier_ACU(token.value).toLowerCase();
+                const known = aliases.get(key);
+                if (known)
+                    insertColumnTargets.add(known.toLowerCase());
+            }
+            for (const token of columnTokens)
+                addIfAlias(token, true);
         }
     }
     // WHERE / RETURNING 裸标识符（含 UPDATE SET 的值、DELETE WHERE）：全语句扫描，
@@ -92748,7 +92761,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261009-13"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261009-16"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92767,7 +92780,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261009-13";
+        const stamp = "20261009-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -101988,10 +102001,15 @@ const generationGate_ACU = {
     // 切换 / 新建聊天后为 true，直到立起新聊天的签名基线：宿主载入聊天时收起停止按钮也会派发无配对 ENDED，
     // 此时拿旧聊天的签名比对必然「有新楼」，会对新聊天的最新楼误开自动链（填表 + 正文替换）。
     awaitingChatBaseline_ACU: false,
+    // 等基线只在切聊天后很短的窗口内有效：宿主载入时的那条 ENDED 若没来，过期作废，
+    // 不能把很久之后一次真实回复（上下文过期变成无配对）误当基线吞掉。
+    awaitingChatBaselineUntil_ACU: 0,
 };
+const CHAT_BASELINE_WINDOW_MS_ACU = 10000;
 /** CHAT_CHANGED 时调用：下一条无配对 ENDED 只用来立新聊天的签名基线，不放行。 */
 function markChatChangedForEndedGate_ACU() {
     generationGate_ACU.awaitingChatBaseline_ACU = true;
+    generationGate_ACU.awaitingChatBaselineUntil_ACU = Date.now() + CHAT_BASELINE_WINDOW_MS_ACU;
     generationGate_ACU.lastEndedFloorSignature_ACU = null;
 }
 function markUserSendIntent_ACU() {
@@ -102092,6 +102110,22 @@ function hasFreshUserGenerationTrigger_ACU() {
     const hasFreshIntent = isRecentUserSendIntent_ACU();
     return { hasFreshUserMessage, hasFreshIntent, result: hasFreshUserMessage || hasFreshIntent };
 }
+// ═══ 被本库停发的那次发送 ═══
+// 召回或剧情规划失败时本库停掉发送、保留用户楼并提示「重新生成」。重新生成默认不跑召回与规划
+// （那是对同一条输入重抽回复），但这一次输入从未真正拿到记忆与规划，必须补跑，否则重试照样残缺。
+let stoppedSendRetryChatKey_ACU = null;
+function markStoppedSendForRetry_ACU() {
+    stoppedSendRetryChatKey_ACU = String(currentChatFileIdentifier_ACU ?? '');
+}
+function clearStoppedSendRetry_ACU() {
+    stoppedSendRetryChatKey_ACU = null;
+}
+/** 本次重新生成是否是在重试本库刚停掉的那次发送（同一聊天）。 */
+function isRetryOfStoppedSend_ACU(type) {
+    return type === 'regenerate'
+        && stoppedSendRetryChatKey_ACU !== null
+        && stoppedSendRetryChatKey_ACU === String(currentChatFileIdentifier_ACU ?? '');
+}
 function shouldProcessPlotForGeneration_ACU(type, params, dryRun) {
     if (dryRun)
         return false;
@@ -102101,6 +102135,8 @@ function shouldProcessPlotForGeneration_ACU(type, params, dryRun) {
         return false;
     if (params?.automatic_trigger)
         return false;
+    if (isRetryOfStoppedSend_ACU(type))
+        return true;
     const fresh = hasFreshUserGenerationTrigger_ACU();
     logDebug_ACU(`[状态管理] shouldProcessPlot: type=${type}, dryRun=${dryRun}, freshMsg=${fresh.hasFreshUserMessage}, freshIntent=${fresh.hasFreshIntent}, result=${fresh.result}`);
     return fresh.result;
@@ -102108,7 +102144,8 @@ function shouldProcessPlotForGeneration_ACU(type, params, dryRun) {
 function shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun) {
     if (dryRun)
         return false;
-    if (type === 'regenerate')
+    const retryOfStoppedSend = isRetryOfStoppedSend_ACU(type);
+    if (type === 'regenerate' && !retryOfStoppedSend)
         return false;
     if (isQuietLikeGeneration_ACU(type, params))
         return false;
@@ -102121,6 +102158,8 @@ function shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun) 
         logDebug_ACU(`[状态管理] shouldProcessSummaryVectorIndex: type=${type}, dryRun=${dryRun}, globalEnabled=false, worldbookProjection=${worldbookProjectionEnabled}, result=false`);
         return false;
     }
+    if (retryOfStoppedSend)
+        return true;
     const fresh = hasFreshUserGenerationTrigger_ACU();
     logDebug_ACU(`[状态管理] shouldProcessSummaryVectorIndex: type=${type}, dryRun=${dryRun}, globalEnabled=${globalEnabled}, worldbookProjection=${worldbookProjectionEnabled}, freshMsg=${fresh.hasFreshUserMessage}, freshIntent=${fresh.hasFreshIntent}, result=${fresh.result}`);
     return fresh.result;
@@ -102235,6 +102274,9 @@ function shouldProcessAutoTableUpdateForGenerationEnded_ACU(context, currentSign
         // 生成上下文，此前一律放行去拉自动链（填表 + 正文替换），而 W1/W3 判重拦不住「该楼未处理过 / 首轮在飞」，
         // 于是查看器一开就白烧一轮 AI。现在要求「新 AI 楼证据」：签名与上次放行完全相同即零产出 → 源头丢弃。
         // 签名缺失（启动后首次、调用方未读聊天数组）继续保守放行；配对上下文（g 存在）的判定路径一字不动。
+        if (generationGate_ACU.awaitingChatBaseline_ACU && Date.now() > generationGate_ACU.awaitingChatBaselineUntil_ACU) {
+            generationGate_ACU.awaitingChatBaseline_ACU = false;
+        }
         if (currentSignature && generationGate_ACU.awaitingChatBaseline_ACU) {
             generationGate_ACU.awaitingChatBaseline_ACU = false;
             rememberEndedFloorSignature_ACU(currentSignature);
@@ -102432,7 +102474,39 @@ function abortOnChatMutation_ACU() {
     abortAllActiveRequests_ACU();
 }
 function _set_currentAbortController_ACU(v) { currentAbortController_ACU = v; }
-function _set_isAutoUpdatingCard_ACU(v) { isAutoUpdatingCard_ACU = v; }
+function _set_isAutoUpdatingCard_ACU(v) {
+    if (v && !isAutoUpdatingCard_ACU)
+        fillRunSeq_ACU += 1;
+    // 本轮结束（「正在填表」被持有者放开）才解除终止锁存
+    if (!v)
+        tableFillStopLatched_ACU = false;
+    isAutoUpdatingCard_ACU = v;
+}
+// 「终止填表」锁存：wasStoppedByUser_ACU 会被新一轮填表开跑、宿主新生成复位，单靠它，被终止的那轮
+// 可能在批次 / 分组 / 重试之间「复活」。锁存只在本轮结束时解除。
+let tableFillStopLatched_ACU = false;
+let fillRunSeq_ACU = 0;
+const TABLE_FILL_STOP_FORCE_RELEASE_MS_ACU = 30000;
+/** 用户点「终止」填表：终止本轮当前与后续全部批次。不立即放开「正在填表」，免得旧轮收尾时新一轮叠进来。 */
+function requestTableFillStop_ACU() {
+    _set_wasStoppedByUser_ACU(true);
+    if (isAutoUpdatingCard_ACU)
+        tableFillStopLatched_ACU = true;
+    // R10A-19：只终止填表请求，不连带中止正在进行的剧情推进规划
+    abortAllActiveRequests_ACU({ keepPlot: true });
+    // 兜底：请求不响应中止时，过一段时间仍是同一轮就强制放开，避免填表永久锁死直到刷新页面
+    const runSeqAtStop = fillRunSeq_ACU;
+    setTimeout(() => {
+        if (isAutoUpdatingCard_ACU && fillRunSeq_ACU === runSeqAtStop) {
+            logWarn_ACU('[状态管理] 终止填表后本轮迟迟未结束，已强制放开「正在填表」状态。');
+            _set_isAutoUpdatingCard_ACU(false);
+        }
+    }, TABLE_FILL_STOP_FORCE_RELEASE_MS_ACU);
+}
+/** 填表是否已被要求终止（宿主停止生成的一次性信号，或本轮内用户点过「终止」）。 */
+function isTableFillStopRequested_ACU() {
+    return wasStoppedByUser_ACU || tableFillStopLatched_ACU;
+}
 function _set_manualExtraHint_ACU(v) { manualExtraHint_ACU = v; }
 function getAutoFillStopEpoch_ACU() { return autoFillStopEpoch_ACU; }
 function _set_wasStoppedByUser_ACU(v) {
@@ -111540,26 +111614,41 @@ function normalizeTime_ACU(value) {
     const time = value instanceof Date ? value.getTime() : new Date(value).getTime();
     return Number.isFinite(time) ? time : String(value);
 }
+function swipeId_ACU(message) {
+    return typeof message?.swipe_id === 'number' ? message.swipe_id : 0;
+}
 function fingerprint_ACU(message) {
     if (!message || typeof message !== 'object')
         return 'missing';
     return JSON.stringify([
         message.is_user === true,
-        typeof message.swipe_id === 'number' ? message.swipe_id : 0,
+        swipeId_ACU(message),
         normalizeTime_ACU(message.gen_started ?? message.extra?.gen_started),
         String(message.send_date ?? ''),
     ]);
 }
+function isSameReply_ACU(captured, live) {
+    if (!live || typeof live !== 'object')
+        return false;
+    if (live === captured.message)
+        return swipeId_ACU(live) === captured.swipeId;
+    return fingerprint_ACU(live) === captured.fingerprint;
+}
+/** 与写回层同口径（isAiFloor_ACU）：隐藏楼、工具楼不算 AI 楼。 */
 function findLastAiIndex_ACU(chat) {
     for (let index = chat.length - 1; index >= 0; index--) {
-        if (chat[index] && !chat[index].is_user)
+        if (isAiFloor_ACU(chat[index]))
             return index;
     }
     return -1;
 }
 function captureTableFillTargetGuard_ACU(chat, readLiveChat = () => getChatArray_ACU() || []) {
     const source = Array.isArray(chat) ? chat : [];
-    const fingerprints = source.map(fingerprint_ACU);
+    const snapshots = source.map(message => ({
+        message,
+        swipeId: swipeId_ACU(message),
+        fingerprint: fingerprint_ACU(message),
+    }));
     const capturedLastAiIndex = findLastAiIndex_ACU(source);
     return {
         isCurrent(targetIndex, liveChat = readLiveChat()) {
@@ -111572,9 +111661,9 @@ function captureTableFillTargetGuard_ACU(chat, readLiveChat = () => getChatArray
                 index = capturedLastAiIndex;
             }
             // 填表开始后才出现的楼层没有可比证据，交给下游既有校验
-            if (index < 0 || index >= fingerprints.length)
+            if (index < 0 || index >= snapshots.length)
                 return true;
-            return fingerprint_ACU(live[index]) === fingerprints[index];
+            return isSameReply_ACU(snapshots[index], live[index]);
         },
     };
 }
@@ -111903,6 +111992,8 @@ async function captureFillExecutionScope_ACU(performanceContext) {
     const isolationKey = getCurrentIsolationKey_ACU();
     const liveChat = getChatArray_ACU() || [];
     const promptMessages = capturePromptMessageSnapshot_ACU(liveChat);
+    // 与 promptMessages 同一时刻（下面的 await 之前）冻结：否则等待期间滑动，基线会变成新回复
+    const targetGuard = captureTableFillTargetGuard_ACU(liveChat, () => getChatArray_ACU() || []);
     let sqlApplyScope;
     if (isSqliteMode()) {
         let runtimeData = null;
@@ -111930,7 +112021,6 @@ async function captureFillExecutionScope_ACU(performanceContext) {
     const templateScope = sqlApplyScope
         ? buildTemplateScopeFromData_ACU(sqlApplyScope.templateData)
         : resolveTemplateScope_ACU(isolationKey);
-    const targetGuard = captureTableFillTargetGuard_ACU(liveChat, () => getChatArray_ACU() || []);
     const result = { chatKey, isolationKey, promptMessages, targetGuard, templateScope, sqlApplyScope };
     performanceSpan.end({ messageCount: liveChat.length });
     return result;
@@ -111939,14 +112029,6 @@ const SQL_ERROR_MARKER_ACU = '\n\n<!-- SQL_ERROR_FEEDBACK -->\n';
 const UNIFIED_GROUP_ERROR_MARKER_ACU = '\n\n<!-- UNIFIED_GROUP_ERROR_FEEDBACK -->\n';
 const MAX_RETRY_FEEDBACK_LENGTH_ACU = 500;
 const MAX_WARN_ERROR_LENGTH_ACU = 800;
-/**
- * 本轮填表的「是否已被终止」探针。wasStoppedByUser_ACU 会被新一轮填表开跑、宿主新生成复位，
- * 单看它，被终止的旧轮可能在两批之间「复活」接着跑；终止代次只增不减，开跑后变过就是本轮已被终止。
- */
-function captureFillStopProbe_ACU() {
-    const epochAtStart = getAutoFillStopEpoch_ACU();
-    return () => wasStoppedByUser_ACU || getAutoFillStopEpoch_ACU() !== epochAtStart;
-}
 class ModelOutputRetryError_ACU extends Error {
     constructor(message) {
         super(message);
@@ -112627,8 +112709,7 @@ function resolveUpdateMode_ACU(mode) {
 }
 async function collectGroupFillResponse_ACU(job, feedback, abortController = new AbortController(), options = {}) {
     const effectiveAbortController = abortController || new AbortController();
-    const isRunStopped = captureFillStopProbe_ACU();
-    const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && isRunStopped());
+    const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && isTableFillStopRequested_ACU());
     const maxRetries = options.maxRetriesOverride || settings_ACU.tableMaxRetries || 3;
     // 准备期诊断（移植上游 ece65f80）：仅自动填表链路开启时留痕，不记业务载荷。
     const diagnoseInput = (diagnosticCode, attempt = 0) => {
@@ -113682,8 +113763,7 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
             totalBatches: orderedBuckets.length,
         });
     };
-    const isRunStopped = captureFillStopProbe_ACU();
-    const isStopped = () => options.abortController?.signal.aborted === true || (options.respectGlobalStop !== false && isRunStopped());
+    const isStopped = () => options.abortController?.signal.aborted === true || (options.respectGlobalStop !== false && isTableFillStopRequested_ACU());
     let committedBucketCount = 0;
     // 与 committedBucketCount 分开计数：伪提交（帧只落进度/事件，modifiedKeys 为空）会推进前者
     // 但不产生任何表数据，UI 与编排器只有后者能证明「真的写了数据」。
@@ -114706,7 +114786,7 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
             catch (error) {
                 const safeError = sanitizeRetryFeedback_ACU(error?.message || String(error), MAX_WARN_ERROR_LENGTH_ACU);
                 logWarn_ACU(`第 ${attempt} 次尝试失败: ${safeError}`);
-                if (error?.name === 'AbortError' || String(error?.message || '').toLowerCase().includes('aborted') || wasStoppedByUser_ACU) {
+                if (error?.name === 'AbortError' || String(error?.message || '').toLowerCase().includes('aborted') || isTableFillStopRequested_ACU()) {
                     return { success: false, modifiedKeys: [], aborted: true };
                 }
                 const errorCategory = error instanceof UpdateAttemptError_ACU
@@ -114802,7 +114882,6 @@ async function processUpdatesBatch_ACU(indicesToUpdate, mode, options, executeUp
         _set_wasStoppedByUser_ACU(false);
         _set_isAutoUpdatingCard_ACU(true);
     }
-    const isRunStopped = captureFillStopProbe_ACU();
     try {
         const isSummaryMode = (mode && (mode.includes('summary') || mode === 'manual_summary')) || false;
         const batchSize = specificBatchSize || (settings_ACU.updateBatchSize || 2);
@@ -114822,7 +114901,7 @@ async function processUpdatesBatch_ACU(indicesToUpdate, mode, options, executeUp
             const batchIndices = batches[i];
             const batchNumber = i + 1;
             // 「终止」作用于本轮当前与后续全部批次：上一批请求已返回、无可中止时点的终止也要拦住下一批
-            if (isRunStopped()) {
+            if (isTableFillStopRequested_ACU()) {
                 return { success: false, failedBatch: batchNumber, error: '填表任务已由用户终止。' };
             }
             const firstMessageIndexOfBatch = batchIndices[0];
@@ -116483,13 +116562,12 @@ async function orchestrateManualUpdate_ACU(targetKeys, refreshData, options = {}
             }
         }
         _set_isAutoUpdatingCard_ACU(true);
-        const isRunStopped = captureFillStopProbe_ACU();
         const maxConcurrentGroups = Math.max(1, Number(settings_ACU.maxConcurrentGroups) || 1);
         const totalChunks = Math.max(1, Math.ceil(groupKeys.length / maxConcurrentGroups));
         const failedGroups = [];
         logDebug_ACU(`[Manual Update] 分组计划：选中 ${targetKeys.length} 张表，生成 ${groupKeys.length} 个组，最大并发组数 ${maxConcurrentGroups}。`);
         for (let start = 0; start < groupKeys.length; start += maxConcurrentGroups) {
-            if (isRunStopped())
+            if (isTableFillStopRequested_ACU())
                 break;
             const chunkIndex = Math.floor(start / maxConcurrentGroups) + 1;
             const chunkKeys = groupKeys.slice(start, start + maxConcurrentGroups);
@@ -116730,7 +116808,7 @@ async function orchestrateManualUpdate_ACU(targetKeys, refreshData, options = {}
             const failureError = firstFailure.error || '手动更新失败或被终止。';
             return await failManualRefillSession(failureError);
         }
-        if (isRunStopped()) {
+        if (isTableFillStopRequested_ACU()) {
             return await failManualRefillSession('手动更新已终止。');
         }
         if (manualRefillEnabled) {
@@ -116987,9 +117065,7 @@ async function proceedWithCardUpdate_ACU(messagesToUse, batchToastMessage = '正
             onShown: function () {
                 if (typeof bindTableFillStopButton_ACU === 'function') {
                     bindTableFillStopButton_ACU(stopButtonId, () => {
-                        _set_wasStoppedByUser_ACU(true);
-                        abortAllActiveRequests_ACU({ keepPlot: true });
-                        _set_isAutoUpdatingCard_ACU(false);
+                        requestTableFillStop_ACU();
                         updateLoadingToastMessage(loadingToast, '填表任务已终止，正在停止当前任务与后续批次...');
                         showToastr_ACU('warning', '填表任务已由用户终止，当前任务与后续批次将立即停止。');
                     });
@@ -117084,9 +117160,7 @@ async function handleManualUpdate_ACU() {
             onShown: function () {
                 if (typeof bindTableFillStopButton_ACU === 'function') {
                     bindTableFillStopButton_ACU(stopButtonId, () => {
-                        _set_wasStoppedByUser_ACU(true);
-                        abortAllActiveRequests_ACU({ keepPlot: true });
-                        _set_isAutoUpdatingCard_ACU(false);
+                        requestTableFillStop_ACU();
                         updateLoadingToastMessage(manualProgressToast, '填表任务已终止，正在停止当前任务与后续批次...');
                         showToastr_ACU('warning', '填表任务已由用户终止，当前任务与后续批次将立即停止。');
                     });
@@ -119895,8 +119969,6 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
         return;
     }
     autoUpdateTriggerInFlight_ACU = true;
-    // 新一轮自动填表开跑前清掉上一轮「终止」残留，避免 isStopped() 立刻把新任务掐死。
-    _set_wasStoppedByUser_ACU(false);
     const performanceSpan = startRuntimePerformanceSpan_ACU('auto-update-trigger', {
         ...performanceContext,
         settings: settings_ACU,
@@ -119913,6 +119985,9 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
             });
             return;
         }
+        // 新一轮自动填表开跑前清掉上一轮「终止」残留，避免 isStopped() 立刻把新任务掐死。
+        // 必须在「已有填表在跑」的前置检查之后：否则被拦下的这一轮也会把还在收尾的旧轮「解除终止」。
+        _set_wasStoppedByUser_ACU(false);
         let liveChat = getChatArray_ACU();
         if (!liveChat || liveChat.length === 0) {
             logAutoFillSkip_ACU('empty_chat');
@@ -123171,6 +123246,18 @@ function parseJsonLenient_ACU(text) {
         return undefined;
     }
 }
+/** 正文里几乎不会出现的控制字符（换行、回车除外）：多半是 C:\temp 这类单层转义被多解了一层。 */
+const SUSPICIOUS_CONTROL_CHAR_ACU = /[\u0000-\u0009\u000B\u000C\u000E-\u001F]/;
+function containsSuspiciousControlChar_ACU(value) {
+    if (typeof value === 'string')
+        return SUSPICIOUS_CONTROL_CHAR_ACU.test(value);
+    if (Array.isArray(value))
+        return value.some(containsSuspiciousControlChar_ACU);
+    if (value && typeof value === 'object') {
+        return Object.entries(value).some(([key, item]) => SUSPICIOUS_CONTROL_CHAR_ACU.test(key) || containsSuspiciousControlChar_ACU(item));
+    }
+    return false;
+}
 /** SQL 字段值的格式归一化：只解码完整 JSON，不补内容；失败保留原值交给领域校验。 */
 function parseSqlJsonValue_ACU(value) {
     if (typeof value !== 'string')
@@ -123192,8 +123279,10 @@ function parseSqlJsonValue_ACU(value) {
                 try {
                     escaped = JSON.parse(`"${escaped}"`);
                     const decoded = JSON.parse(escaped);
-                    if (decoded !== null && typeof decoded === 'object')
-                        return decoded;
+                    // 引号多转义、路径反斜杠只转义一层时，解码会把 \t、\b 变成控制字符：宁可保留原值，不悄悄改坏正文。
+                    if (decoded !== null && typeof decoded === 'object') {
+                        return containsSuspiciousControlChar_ACU(decoded) ? value : decoded;
+                    }
                 }
                 catch { /* 无法完整解码时不猜测；仍可尝试剩余的完整编码层。 */ }
             }
@@ -128823,7 +128912,7 @@ function triggerHostGenerate_ACU(type) {
  *   - { skipped: true, reason: string }: 未执行规划（关闭 / 在途去重 / 没有任务 / 已切走聊天），继续宿主发送
  *   - { aborted: true, manual: true, restoreText: string }: 用户中止
  */
-const PLOT_FAILED_STOP_SUFFIX_ACU = '本次发送已停止，输入已保留。';
+const PLOT_FAILED_STOP_SUFFIX_ACU = '本次发送已停止，可重新发送或点「重新生成」重试（会重新规划）。';
 /** 不算规划失败、照常发送的情形：没有可执行任务、规划期间已切走聊天（停发会误伤新聊天）。 */
 const PLOT_NON_FAILURE_ERROR_TYPES_ACU = new Set(['no_tasks', 'scope_changed']);
 async function runOptimizationLogicWithUI_ACU(userMessage, options = {}) {
@@ -129765,7 +129854,23 @@ async function materializeSummaryVectorMirrorHead_ACU(head, live) {
     }
     return { rows, chunks, incompleteRowIds, contentMismatchedRowIds };
 }
+// 向量模型上下文较小（如 512 token）时，长消息整段送去会被拒；截短后重试一次。
+const EMBEDDING_QUERY_RETRY_MAX_CHARS_ACU = 300;
 async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
+    try {
+        const result = await runSummaryVectorRecall_ACU(options);
+        // 失败或这次发送已作废：放掉 8 秒去重签名，否则马上重发同一句会被当成「已召回过」直接放行
+        if ((result.success !== true && result.skipped !== true) || result.reason === 'send_cancelled') {
+            resetSummaryVectorIndexRuntimeDedupeState_ACU();
+        }
+        return result;
+    }
+    catch (error) {
+        resetSummaryVectorIndexRuntimeDedupeState_ACU();
+        throw error;
+    }
+}
+async function runSummaryVectorRecall_ACU(options) {
     const isActive = () => options.isActive?.() !== false;
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
     const globalEnabled = globalMeta_ACU?.summaryVectorIndexModeGlobal === true;
@@ -129903,13 +130008,23 @@ async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
     try {
         keywords = await generateKeywords_ACU(config, userInput);
         queryText = [userInput, keywords.join('，')].filter(Boolean).join('\n关键词：');
-        const embeddings = await createEmbeddings_ACU({
+        const embedQuery = async (input) => (await createEmbeddings_ACU({
             endpoint: config.embeddingEndpoint,
             apiKey: config.embeddingApiKey,
             model: config.embeddingModel,
-            input: [queryText],
-        });
-        queryVector = embeddings[0]?.embedding || [];
+            input: [input],
+        }))[0]?.embedding || [];
+        try {
+            queryVector = await embedQuery(queryText);
+        }
+        catch (error) {
+            // 输入本身过长被向量模型拒绝时，同一条长消息每次都会失败、永远发不出去：截短重试一次
+            if (queryText.length <= EMBEDDING_QUERY_RETRY_MAX_CHARS_ACU || !isActive())
+                throw error;
+            logWarn_ACU('[交火模式纪要索引] query embedding 失败，截短查询后重试一次:', error);
+            const shortQuery = [userInput.slice(0, EMBEDDING_QUERY_RETRY_MAX_CHARS_ACU), keywords.join('，')].filter(Boolean).join('\n关键词：');
+            queryVector = await embedQuery(shortQuery);
+        }
         if (queryVector.length === 0) {
             logWarn_ACU('[交火模式纪要索引] query embedding 返回空向量，本次召回失败:', userInput);
             return { success: false, reason: 'empty_query_embedding' };
@@ -130105,7 +130220,7 @@ async function rebuildOutdatedSummaryVectorIndexInBackground_ACU() {
 /**
  * 包装交火发送前处理，显示“正在召回记忆”进度提示。
  */
-const SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU = '交火记忆召回失败，本次生成已停止。请检查向量接口后重新生成。';
+const SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU = '交火记忆召回失败，本次生成已停止。请检查向量接口后点「重新生成」重试（会重新召回）。';
 /** 召回真的失败了（不是关闭、无可召回内容、已去重等跳过）：发送层据此停止这次生成。 */
 function isSummaryVectorRecallFailure_ACU(result) {
     return !!result && result.success !== true && result.skipped !== true;
@@ -130148,10 +130263,14 @@ async function processSummaryVectorIndexBeforeGenerationWithUI_ACU(options = {})
         let rebuilt = false;
         try {
             const rebuildResult = await rebuildCurrentSummaryVectorIndexWithUI_ACU();
-            rebuilt = rebuildResult.success && !rebuildResult.skipped;
+            // 用户已确认重建却没建成：这一轮没有可用记忆，按召回失败处理，由发送层停止这次生成
+            if (!rebuildResult.success)
+                return { success: false, reason: 'rebuild_failed' };
+            rebuilt = !rebuildResult.skipped;
         }
         catch (error) {
-            logDebug_ACU(`[交火模式纪要索引] 失效索引已删除，但普通重建路径执行失败；继续原始生成：${error instanceof Error ? error.message : String(error)}`);
+            logWarn_ACU(`[交火模式纪要索引] 失效索引已删除，但普通重建路径执行失败：${error instanceof Error ? error.message : String(error)}`);
+            return { success: false, reason: 'rebuild_failed' };
         }
         // 重建成功后在同一次发送里补跑一次召回，否则这一轮目录沿用上一轮的内容。
         if (rebuilt) {
@@ -146690,18 +146809,39 @@ let mainInitializeDone_ACU = false;
 // 不能只靠数组身份判断「还是不是这次发送」。
 let hostGenerationStopSeq_ACU = 0;
 let chatChangeEpoch_ACU = 0;
-/** 捕获「这次发送」的租约：之后停止过生成、切换过聊天或隔离标识，租约即失效。 */
+/** 捕获「这次发送」的租约。 */
 function captureSendLease_ACU() {
     const stopSeq = hostGenerationStopSeq_ACU;
     const chatEpoch = chatChangeEpoch_ACU;
     const chatKey = currentChatFileIdentifier_ACU;
     const isolationKey = getCurrentIsolationKey_ACU();
-    return () => hostGenerationStopSeq_ACU === stopSeq
-        && chatChangeEpoch_ACU === chatEpoch
-        && currentChatFileIdentifier_ACU === chatKey
-        && getCurrentIsolationKey_ACU() === isolationKey;
+    return {
+        isActive: () => hostGenerationStopSeq_ACU === stopSeq
+            && chatChangeEpoch_ACU === chatEpoch
+            && currentChatFileIdentifier_ACU === chatKey
+            && getCurrentIsolationKey_ACU() === isolationKey,
+        stoppedByHost: () => hostGenerationStopSeq_ACU !== stopSeq,
+    };
+}
+// 本库自己停掉宿主生成（召回 / 规划失败）时宿主照样派发 GENERATION_STOPPED。那不是用户终止：
+// 不能把它记成「用户终止」，否则会连带掐掉正在跑的、与这次发送无关的填表。
+let selfHostStopAt_ACU = 0;
+const SELF_HOST_STOP_WINDOW_MS_ACU = 2000;
+/**
+ * 召回期间这次发送已失效。用户按了停止：宿主已停，无需再做；
+ * 其它原因（切聊天、宿主重载当前聊天、隔离标识变化）：宿主生成并未被中止，记忆不可信，停掉它。
+ */
+function stopSendAfterLostLease_ACU(lease) {
+    if (lease.stoppedByHost()) {
+        logDebug_ACU('[交火模式纪要索引] 召回期间用户已停止生成，本次发送不再继续后续处理。');
+        return;
+    }
+    logWarn_ACU('[交火模式纪要索引] 召回期间聊天已切换或重载，本次生成已停止。');
+    stopHostGeneration_ACU();
+    showToastr_ACU('warning', '召回期间聊天已切换或重载，本次生成已停止，请重新发送。', '交火召回');
 }
 function stopHostGeneration_ACU() {
+    selfHostStopAt_ACU = Date.now();
     try {
         if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function')
             SillyTavern_API_ACU.stopGeneration();
@@ -146936,7 +147076,11 @@ function mainInitialize_ACU() {
                 SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_STOPPED, () => {
                     try {
                         // TT 的 GENERATION_STOPPED 是本轮停止事实：立即使已排队的旧自动填表回调失效。
-                        _set_wasStoppedByUser_ACU(true);
+                        // 本库自己停掉的（召回 / 规划失败）不算用户终止，不连带掐掉在跑的填表。
+                        const selfInitiated = Date.now() - selfHostStopAt_ACU <= SELF_HOST_STOP_WINDOW_MS_ACU;
+                        selfHostStopAt_ACU = 0;
+                        if (!selfInitiated)
+                            _set_wasStoppedByUser_ACU(true);
                         hostGenerationStopSeq_ACU += 1;
                         const discarded = discardLatestGenerationContext_ACU();
                         // 被中止的生成不会再有 GENERATION_ENDED；通知桥把等待中的续写轮转为可重试，避免卡死。
@@ -147063,8 +147207,15 @@ function mainInitialize_ACU() {
                         // 前置过滤（纯 UI/宿主层判断）
                         if (params?._qrf_processed_by_hook)
                             return;
+                        // 租约在任何 await 之前捕获：等待期间的停止 / 切聊天也要算进来
+                        const sendLease = captureSendLease_ACU();
                         const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
                         const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
+                        // 「重新生成」是否在重试本库刚停掉的那次发送（门控已据此放行召回与规划）；任何一次用户发送都消费掉标记
+                        const retryOfStoppedSend = isRetryOfStoppedSend_ACU(type);
+                        if (!dryRun && !params?.automatic_trigger && !isQuietLikeGeneration_ACU(type, params)) {
+                            clearStoppedSendRetry_ACU();
+                        }
                         const plotScope_ACU = shouldProcessPlot ? capturePlotRuntimeScope_ACU() : null;
                         const plotScopeStillCurrent_ACU = () => {
                             if (!plotScope_ACU)
@@ -147092,7 +147243,6 @@ function mainInitialize_ACU() {
                         // 本 try 的任何 return/throw 都经 finally 把文本交还发送框，宿主随后按原生流程入楼并生成。
                         const chatAtStart = SillyTavern_API_ACU.chat;
                         const lastAtStart = chatAtStart?.length ? chatAtStart[chatAtStart.length - 1] : null;
-                        const sendLease = captureSendLease_ACU();
                         const pendingTextInBox = String(getSendTextareaValue_ACU() || '');
                         const pendingDisguiseEnabled = settings_ACU?.plotSettings?.pendingDisguiseEnabled === true;
                         let disguise = null;
@@ -147112,33 +147262,37 @@ function mainInitialize_ACU() {
                                         disguise = beginPlotPendingDisguise_ACU(pendingTextInBox, { notice: SUMMARY_RECALL_PENDING_NOTICE_ACU });
                                     }
                                     const summaryVectorResult = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({
-                                        userInput: lastUserText, source: 'generation_after_commands', isActive: sendLease,
+                                        userInput: lastUserText, source: 'generation_after_commands', isActive: sendLease.isActive,
                                     });
                                     logDebug_ACU(`[交火模式纪要索引] GENERATION_AFTER_COMMANDS 发送前处理完成：success=${summaryVectorResult.success}, skipped=${summaryVectorResult.skipped === true}, reason=${summaryVectorResult.reason || 'none'}, keywords=${summaryVectorResult.keywordCount ?? 0}, injected=${summaryVectorResult.injectedCount ?? 0}`);
-                                    if (!sendLease()) {
-                                        logDebug_ACU('[交火模式纪要索引] 召回期间已停止生成或切换聊天，本次发送不再继续后续处理。');
+                                    if (!sendLease.isActive()) {
+                                        stopSendAfterLostLease_ACU(sendLease);
                                         return;
                                     }
                                     if (isSummaryVectorRecallFailure_ACU(summaryVectorResult)) {
-                                        // 宁可不发，也不带着残缺的记忆发（移植上游 2adf068b）；用户楼保留，可直接重新生成
+                                        // 宁可不发，也不带着残缺的记忆发（移植上游 2adf068b）；用户楼保留，「重新生成」会补跑召回与规划
                                         logWarn_ACU(`[交火模式纪要索引] 发送前召回失败（${summaryVectorResult.reason || 'unknown'}），本次生成已停止。`);
                                         stopHostGeneration_ACU();
+                                        markStoppedSendForRetry_ACU();
                                         showToastr_ACU('error', SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU, '交火召回失败');
                                         return;
                                     }
                                 }
                                 catch (error) {
-                                    if (!sendLease())
+                                    if (!sendLease.isActive()) {
+                                        stopSendAfterLostLease_ACU(sendLease);
                                         return;
+                                    }
                                     logWarn_ACU('[交火模式纪要索引] 发送前召回失败，本次生成已停止:', error);
                                     stopHostGeneration_ACU();
+                                    markStoppedSendForRetry_ACU();
                                     showToastr_ACU('error', SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU, '交火召回失败');
                                     return;
                                 }
                             }
                             if (!shouldProcessPlot)
                                 return;
-                            if (type === 'regenerate' || isProcessing_Plot_ACU)
+                            if ((type === 'regenerate' && !retryOfStoppedSend) || isProcessing_Plot_ACU)
                                 return;
                             const chat = SillyTavern_API_ACU.chat;
                             if (!chat || chat.length === 0)
@@ -147246,6 +147400,8 @@ function mainInitialize_ACU() {
                                     // 超出本批口径，保持现状。
                                     if (s2.manual || s2.apiRetriesExhausted === true || s2.blocked === true) {
                                         stopHostGeneration_ACU();
+                                        // 宿主随后仍会按输入框入楼（无发送门控）：标记给「重新生成」补跑规划
+                                        markStoppedSendForRetry_ACU();
                                     }
                                     break;
                                 }
@@ -152672,7 +152828,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261009-13";
+        const stamp = "20261009-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -203919,10 +204075,8 @@ function useManualUpdate() {
         if (abortRequested)
             return;
         abortRequested = true;
-        _set_wasStoppedByUser_ACU(true);
-        // R10A-19：只终止填表请求，不连带中止正在进行的剧情推进规划
-        abortAllActiveRequests_ACU({ keepPlot: true });
-        _set_isAutoUpdatingCard_ACU(false);
+        // 终止锁存到本轮结束；只终止填表请求，不连带中止剧情推进规划（R10A-19）
+        requestTableFillStop_ACU();
         if (progressToastId) {
             toast.update(progressToastId, 'warning', '手动填表已终止，正在停止当前任务与后续批次...', {
                 durationMs: 0,

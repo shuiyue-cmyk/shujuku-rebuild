@@ -681,6 +681,27 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     expect(h.createEntries).not.toHaveBeenCalled();
   });
 
+  it('召回失败后放掉 8 秒去重：马上重发同一句会重新召回，而不是被当成「已召回过」直接放行', async () => {
+    h.createEmbeddings.mockRejectedValueOnce(new Error('Embedding 请求失败 401'));
+    const failed = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 'dedupe-1' });
+    expect(failed).toMatchObject({ success: false, reason: 'query_embedding_failed' });
+
+    const retried = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 'dedupe-2' });
+    expect(retried.reason).not.toBe('deduped');
+    expect(retried.success).toBe(true);
+  });
+
+  it('长消息被向量模型拒绝（输入过长）：截短查询重试一次后照常召回', async () => {
+    const longInput = `find secret relic ${'很长的正文'.repeat(200)}`;
+    h.createEmbeddings.mockRejectedValueOnce(new Error('Embedding 请求失败 400: input too long'));
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: longInput, source: 'long-input' });
+
+    expect(result.success).toBe(true);
+    const retryInput = h.createEmbeddings.mock.calls.at(-1)[0].input[0];
+    expect(retryInput.length).toBeLessThan(longInput.length);
+  });
+
   it('T5：query embedding 返回空向量同样判召回失败（非跳过）', async () => {
     h.config.summaryIndexRecentFixedInjectCount = 1;
     h.createEmbeddings.mockResolvedValueOnce([{ index: 0, embedding: [] }]);

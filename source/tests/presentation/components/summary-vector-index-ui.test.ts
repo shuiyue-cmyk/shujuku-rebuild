@@ -62,7 +62,7 @@ describe('summary vector index UI recovery', () => {
     expect(h.remove).toHaveBeenCalledTimes(2);
   });
 
-  it('重建进行中保留进度提示，失败后清理提示且不阻断原始生成', async () => {
+  it('重建进行中保留进度提示，用户确认后重建抛错按失败返回（发送层据此停发）', async () => {
     const pending = deferred<any>();
     h.rebuild.mockReturnValue(pending.promise);
 
@@ -75,7 +75,9 @@ describe('summary vector index UI recovery', () => {
     expect(h.remove).toHaveBeenCalledTimes(1);
 
     pending.reject(new Error('rebuild failed'));
-    await expect(operation).resolves.toMatchObject({ reason: 'legacy_vector_scheme_rebuild_required' });
+    const result = await operation;
+    expect(result).toMatchObject({ success: false, reason: 'rebuild_failed' });
+    expect(result.skipped).not.toBe(true);
     expect(h.toast).toHaveBeenCalledWith('error', '交火索引快照重建失败：rebuild failed');
     expect(h.clear).toHaveBeenCalledTimes(2);
     expect(h.remove).toHaveBeenCalledTimes(2);
@@ -88,7 +90,9 @@ describe('summary vector index UI recovery', () => {
       errors: ['Embedding 请求失败（retryable）: Embedding 请求网络失败（Failed to fetch）：API 提供商未允许跨源访问（CORS）：请求被浏览器拦下，未拿到任何响应。请为该 embedding/rerank 服务配置允许跨源访问（Access-Control-Allow-Origin），或改用支持 CORS 的中转地址。'],
     });
 
-    await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
+    const result = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
+    expect(result).toMatchObject({ success: false, reason: 'rebuild_failed' });
+    expect(result.skipped).not.toBe(true);
 
     const errorToast = h.toast.mock.calls.find(call => call[0] === 'error');
     expect(errorToast).toBeDefined();
@@ -139,7 +143,16 @@ describe('summary vector index UI recovery', () => {
     expect(result.skipped).not.toBe(true);
   });
 
-  it('自愈重建失败或被跳过时不补跑召回，沿用首轮结果', async () => {
+  it('用户拒绝重建：不重建，沿用首轮跳过结果继续生成', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => false));
+
+    const result = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
+
+    expect(h.rebuild).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ skipped: true, reason: 'legacy_vector_scheme_rebuild_required' });
+  });
+
+  it('自愈重建无可重建内容（成功但跳过）时不补跑召回，沿用首轮结果', async () => {
     h.process.mockResolvedValue({ success: false, skipped: true, reason: 'legacy_vector_scheme_rebuild_required' });
     h.rebuild.mockResolvedValue({ success: true, skipped: true, indexedRowCount: 0, chunkCount: 0, errors: [] });
 

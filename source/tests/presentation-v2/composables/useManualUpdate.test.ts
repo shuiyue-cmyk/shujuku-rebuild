@@ -42,12 +42,14 @@ async function importManualUpdate() {
   const setWasStoppedByUser = vi.fn();
   const saveSettings_ACU = vi.fn();
   const abortAllActiveRequests = vi.fn();
+  const requestTableFillStop = vi.fn();
 
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
     currentJsonTableData_ACU: currentJsonTableData,
     get currentChatFileIdentifier_ACU() { return currentChatIdentity; },
     settings_ACU: settings,
     abortAllActiveRequests_ACU: abortAllActiveRequests,
+    requestTableFillStop_ACU: requestTableFillStop,
     _set_isAutoUpdatingCard_ACU: vi.fn(),
     _set_manualExtraHint_ACU: vi.fn(),
     _set_wasStoppedByUser_ACU: setWasStoppedByUser,
@@ -114,6 +116,7 @@ async function importManualUpdate() {
     refreshMergedDataAndNotify_ACU,
     setWasStoppedByUser,
     abortAllActiveRequests,
+    requestTableFillStop,
     setChatIdentity: (value: string) => { currentChatIdentity = value; },
   };
 }
@@ -270,8 +273,8 @@ describe('useManualUpdate destructive refill confirmation', () => {
     __resetToastStoreForTests();
   });
 
-  it('R10A-19：终止手动填表只中止填表请求，不连带中止剧情推进', async () => {
-    const { useManualUpdate, dialog, toast, orchestrateManualUpdate_ACU, abortAllActiveRequests, __resetToastStoreForTests } = await importManualUpdate();
+  it('终止手动填表走统一的「终止填表」入口（锁存到本轮结束、只中止填表请求）', async () => {
+    const { useManualUpdate, dialog, toast, orchestrateManualUpdate_ACU, requestTableFillStop, __resetToastStoreForTests } = await importManualUpdate();
     let release!: (value: unknown) => void;
     orchestrateManualUpdate_ACU.mockImplementation(() => new Promise(resolve => { release = resolve; }));
     const manual = useManualUpdate();
@@ -286,7 +289,7 @@ describe('useManualUpdate destructive refill confirmation', () => {
     release({ success: false, error: 'aborted' });
     await pending;
 
-    expect(abortAllActiveRequests).toHaveBeenCalledWith({ keepPlot: true });
+    expect(requestTableFillStop).toHaveBeenCalledTimes(1);
     __resetToastStoreForTests();
   });
 

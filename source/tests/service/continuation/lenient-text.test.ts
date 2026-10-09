@@ -42,6 +42,11 @@ describe('lenient-text', () => {
       String.raw`正文里的 \"引号\" 和 C:\线索`, '  普通正文  ']) {
       expect(parseSqlJsonValue_ACU(raw)).toBe(raw);
     }
+    // 引号多转义一层、路径反斜杠只转义一层：按额外编码层解码会把 \t 变成制表符，宁可保留原值
+    for (const raw of [String.raw`[{\"name\":\"角色\",\"knows\":\"C:\\temp\\file\"}]`,
+      String.raw`{\"path\":\"D:\\backup\\figure\"}`]) {
+      expect(parseSqlJsonValue_ACU(raw)).toBe(raw);
+    }
     expect(parseSqlJsonValue_ACU(null)).toBeNull();
     expect(parseSqlJsonValue_ACU(2)).toBe(2);
     expect(parseSqlJsonValue_ACU('true')).toBe(true);

@@ -641,6 +641,22 @@ describe('sql mutation column rebind', () => {
       aliases,
       { requireKnownInsertColumns: true },
     )).toThrow('SQL_INSERT_UNKNOWN_COLUMN_ACU');
+    // 纠正后会与列清单里已有的列重复（含两个写短的列指向同一列）：不纠正，照旧拒绝
+    expect(() => rebindSqlMutationColumnsByTarget_ACU(
+      ["REPLACE INTO juesezhuangtaibiao (row_id, posture, post) VALUES ('1', '站立', '坐下')"],
+      aliases,
+      { requireKnownInsertColumns: true },
+    )).toThrow('SQL_INSERT_UNKNOWN_COLUMN_ACU');
+    expect(() => rebindSqlMutationColumnsByTarget_ACU(
+      ["INSERT INTO juesezhuangtaibiao (row_id, post, posture) VALUES ('1', '站立', '坐下')"],
+      aliases,
+      { requireKnownInsertColumns: true },
+    )).toThrow('SQL_INSERT_UNKNOWN_COLUMN_ACU');
+    expect(() => rebindSqlMutationColumnsByTarget_ACU(
+      ["INSERT INTO juesezhuangtaibiao (row_id, pos, post) VALUES ('1', '站立', '坐下')"],
+      aliases,
+      { requireKnownInsertColumns: true },
+    )).toThrow('SQL_INSERT_UNKNOWN_COLUMN_ACU');
   });
 
   it('INSERT 列清单命中 registry 未知列时，requireKnownInsertColumns 抛 SQL_INSERT_UNKNOWN_COLUMN_ACU 且不含 VALUES', () => {

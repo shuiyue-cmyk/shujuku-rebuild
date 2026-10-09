@@ -164,6 +164,51 @@ describe('runTableUpdateCommit_ACU migration gate', () => {
     expect(mocks.persist).not.toHaveBeenCalled();
   });
 
+  it('目标楼层在事务内（应用期间）才被滑动：写回前的核对拦下，不调持久化', async () => {
+    const chat: any[] = [
+      { is_user: true, mes: '你好' },
+      { is_user: false, mes: '第一版', swipe_id: 0, send_date: 'd1' },
+    ];
+    const targetGuard = captureTableFillTargetGuard_ACU(chat, () => chat);
+    mocks.migration.mockResolvedValue({ success: true, migrated: false });
+    mocks.transaction.mockImplementation(async (_options: any, task: any) => task({ runCommit: async (commitTask: any) => commitTask() }, null));
+
+    const result = await runTableUpdateCommit_ACU({
+      ...options('test_target_swiped_in_apply'),
+      targetMessageIndex: 1,
+      targetGuard,
+    }, async () => {
+      chat[1].swipe_id = 1;
+      return { success: true, tableData: { mate: { type: 'acu', version: 1 } } as any };
+    });
+
+    expect(result).toMatchObject({ success: false, errorCategory: 'precondition', error: expect.stringContaining('持久化前') });
+    expect(mocks.persist).not.toHaveBeenCalled();
+  });
+
+  it('apply 改写了写回目标楼层（persist.targetMessageIndex）：核对的是实际写回的那一楼', async () => {
+    const chat: any[] = [
+      { is_user: false, mes: '旧楼', swipe_id: 0, send_date: 'd0' },
+      { is_user: true, mes: '你好' },
+      { is_user: false, mes: '目标', swipe_id: 0, send_date: 'd2' },
+    ];
+    const targetGuard = captureTableFillTargetGuard_ACU(chat, () => chat);
+    mocks.migration.mockResolvedValue({ success: true, migrated: false });
+    mocks.transaction.mockImplementation(async (_options: any, task: any) => task({ runCommit: async (commitTask: any) => commitTask() }, null));
+
+    const result = await runTableUpdateCommit_ACU({
+      ...options('test_target_override'),
+      targetMessageIndex: 2,
+      targetGuard,
+    }, async () => {
+      chat[0].swipe_id = 1; // 实际写回的是 #0，它被滑动了；#2 没变
+      return { success: true, tableData: { mate: { type: 'acu', version: 1 } } as any, persist: { targetMessageIndex: 0 } };
+    });
+
+    expect(result).toMatchObject({ success: false, errorCategory: 'precondition' });
+    expect(mocks.persist).not.toHaveBeenCalled();
+  });
+
   it('RuntimeRevision 错误不再分类为 conflict，未知提交错误统一归为 infrastructure', async () => {
     mocks.migration.mockResolvedValue({ success: true, migrated: false });
     mocks.transaction.mockRejectedValueOnce(Object.assign(new Error('[RuntimeRevision] 表 sheet_0 已变化'), {

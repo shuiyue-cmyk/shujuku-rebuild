@@ -19,7 +19,7 @@ import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
  *   - { skipped: true, reason: string }: 未执行规划（关闭 / 在途去重 / 没有任务 / 已切走聊天），继续宿主发送
  *   - { aborted: true, manual: true, restoreText: string }: 用户中止
  */
-const PLOT_FAILED_STOP_SUFFIX_ACU = '本次发送已停止，输入已保留。';
+const PLOT_FAILED_STOP_SUFFIX_ACU = '本次发送已停止，可重新发送或点「重新生成」重试（会重新规划）。';
 /** 不算规划失败、照常发送的情形：没有可执行任务、规划期间已切走聊天（停发会误伤新聊天）。 */
 const PLOT_NON_FAILURE_ERROR_TYPES_ACU = new Set(['no_tasks', 'scope_changed']);
 

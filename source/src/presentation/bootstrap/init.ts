@@ -36,6 +36,9 @@ import {
   settings_ACU,
   shouldProcessAutoTableUpdateForGenerationEnded_ACU,
   markChatChangedForEndedGate_ACU,
+  markStoppedSendForRetry_ACU,
+  clearStoppedSendRetry_ACU,
+  isRetryOfStoppedSend_ACU,
   shouldProcessPlotForGeneration_ACU,
   shouldProcessSummaryVectorIndexForGeneration_ACU,
   _set_allChatMessages_ACU,
@@ -607,19 +610,49 @@ let mainInitializeDone_ACU = false;
 let hostGenerationStopSeq_ACU = 0;
 let chatChangeEpoch_ACU = 0;
 
-/** 捕获「这次发送」的租约：之后停止过生成、切换过聊天或隔离标识，租约即失效。 */
-function captureSendLease_ACU(): () => boolean {
+interface SendLease_ACU {
+  /** 这次发送仍有效：之后没停止过生成、没切换过聊天或隔离标识。 */
+  isActive: () => boolean;
+  /** 失效原因是宿主停止了生成（用户按了停止）。 */
+  stoppedByHost: () => boolean;
+}
+
+/** 捕获「这次发送」的租约。 */
+function captureSendLease_ACU(): SendLease_ACU {
   const stopSeq = hostGenerationStopSeq_ACU;
   const chatEpoch = chatChangeEpoch_ACU;
   const chatKey = currentChatFileIdentifier_ACU;
   const isolationKey = getCurrentIsolationKey_ACU();
-  return () => hostGenerationStopSeq_ACU === stopSeq
-    && chatChangeEpoch_ACU === chatEpoch
-    && currentChatFileIdentifier_ACU === chatKey
-    && getCurrentIsolationKey_ACU() === isolationKey;
+  return {
+    isActive: () => hostGenerationStopSeq_ACU === stopSeq
+      && chatChangeEpoch_ACU === chatEpoch
+      && currentChatFileIdentifier_ACU === chatKey
+      && getCurrentIsolationKey_ACU() === isolationKey,
+    stoppedByHost: () => hostGenerationStopSeq_ACU !== stopSeq,
+  };
+}
+
+// 本库自己停掉宿主生成（召回 / 规划失败）时宿主照样派发 GENERATION_STOPPED。那不是用户终止：
+// 不能把它记成「用户终止」，否则会连带掐掉正在跑的、与这次发送无关的填表。
+let selfHostStopAt_ACU = 0;
+const SELF_HOST_STOP_WINDOW_MS_ACU = 2_000;
+
+/**
+ * 召回期间这次发送已失效。用户按了停止：宿主已停，无需再做；
+ * 其它原因（切聊天、宿主重载当前聊天、隔离标识变化）：宿主生成并未被中止，记忆不可信，停掉它。
+ */
+function stopSendAfterLostLease_ACU(lease: SendLease_ACU): void {
+  if (lease.stoppedByHost()) {
+    logDebug_ACU('[交火模式纪要索引] 召回期间用户已停止生成，本次发送不再继续后续处理。');
+    return;
+  }
+  logWarn_ACU('[交火模式纪要索引] 召回期间聊天已切换或重载，本次生成已停止。');
+  stopHostGeneration_ACU();
+  showToastr_ACU('warning', '召回期间聊天已切换或重载，本次生成已停止，请重新发送。', '交火召回');
 }
 
 function stopHostGeneration_ACU(): void {
+  selfHostStopAt_ACU = Date.now();
   try {
     if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function') SillyTavern_API_ACU.stopGeneration();
     else if ((window as any).SillyTavern?.stopGeneration) (window as any).SillyTavern.stopGeneration();
@@ -859,7 +892,10 @@ export   function mainInitialize_ACU() {
           SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_STOPPED, () => {
             try {
               // TT 的 GENERATION_STOPPED 是本轮停止事实：立即使已排队的旧自动填表回调失效。
-              _set_wasStoppedByUser_ACU(true);
+              // 本库自己停掉的（召回 / 规划失败）不算用户终止，不连带掐掉在跑的填表。
+              const selfInitiated = Date.now() - selfHostStopAt_ACU <= SELF_HOST_STOP_WINDOW_MS_ACU;
+              selfHostStopAt_ACU = 0;
+              if (!selfInitiated) _set_wasStoppedByUser_ACU(true);
               hostGenerationStopSeq_ACU += 1;
               const discarded = discardLatestGenerationContext_ACU();
               // 被中止的生成不会再有 GENERATION_ENDED；通知桥把等待中的续写轮转为可重试，避免卡死。
@@ -984,8 +1020,15 @@ export   function mainInitialize_ACU() {
             try {
             // 前置过滤（纯 UI/宿主层判断）
             if (params?._qrf_processed_by_hook) return;
+            // 租约在任何 await 之前捕获：等待期间的停止 / 切聊天也要算进来
+            const sendLease = captureSendLease_ACU();
             const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
             const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
+            // 「重新生成」是否在重试本库刚停掉的那次发送（门控已据此放行召回与规划）；任何一次用户发送都消费掉标记
+            const retryOfStoppedSend = isRetryOfStoppedSend_ACU(type);
+            if (!dryRun && !params?.automatic_trigger && !isQuietLikeGeneration_ACU(type, params)) {
+              clearStoppedSendRetry_ACU();
+            }
             const plotScope_ACU = shouldProcessPlot ? capturePlotRuntimeScope_ACU() : null;
             const plotScopeStillCurrent_ACU = (): boolean => {
               if (!plotScope_ACU) return true;
@@ -1011,7 +1054,6 @@ export   function mainInitialize_ACU() {
             // 本 try 的任何 return/throw 都经 finally 把文本交还发送框，宿主随后按原生流程入楼并生成。
             const chatAtStart = SillyTavern_API_ACU.chat;
             const lastAtStart = chatAtStart?.length ? (chatAtStart as any)[chatAtStart.length - 1] : null;
-            const sendLease = captureSendLease_ACU();
             const pendingTextInBox = String(getSendTextareaValue_ACU() || '');
             const pendingDisguiseEnabled = settings_ACU?.plotSettings?.pendingDisguiseEnabled === true;
             let disguise: PlotPendingDisguiseHandle_ACU | null = null;
@@ -1031,30 +1073,35 @@ export   function mainInitialize_ACU() {
                   disguise = beginPlotPendingDisguise_ACU(pendingTextInBox, { notice: SUMMARY_RECALL_PENDING_NOTICE_ACU });
                 }
                 const summaryVectorResult = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({
-                  userInput: lastUserText, source: 'generation_after_commands', isActive: sendLease,
+                  userInput: lastUserText, source: 'generation_after_commands', isActive: sendLease.isActive,
                 });
                 logDebug_ACU(`[交火模式纪要索引] GENERATION_AFTER_COMMANDS 发送前处理完成：success=${summaryVectorResult.success}, skipped=${summaryVectorResult.skipped === true}, reason=${summaryVectorResult.reason || 'none'}, keywords=${summaryVectorResult.keywordCount ?? 0}, injected=${summaryVectorResult.injectedCount ?? 0}`);
-                if (!sendLease()) {
-                  logDebug_ACU('[交火模式纪要索引] 召回期间已停止生成或切换聊天，本次发送不再继续后续处理。');
+                if (!sendLease.isActive()) {
+                  stopSendAfterLostLease_ACU(sendLease);
                   return;
                 }
                 if (isSummaryVectorRecallFailure_ACU(summaryVectorResult)) {
-                  // 宁可不发，也不带着残缺的记忆发（移植上游 2adf068b）；用户楼保留，可直接重新生成
+                  // 宁可不发，也不带着残缺的记忆发（移植上游 2adf068b）；用户楼保留，「重新生成」会补跑召回与规划
                   logWarn_ACU(`[交火模式纪要索引] 发送前召回失败（${summaryVectorResult.reason || 'unknown'}），本次生成已停止。`);
                   stopHostGeneration_ACU();
+                  markStoppedSendForRetry_ACU();
                   showToastr_ACU('error', SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU, '交火召回失败');
                   return;
                 }
               } catch (error) {
-                if (!sendLease()) return;
+                if (!sendLease.isActive()) {
+                  stopSendAfterLostLease_ACU(sendLease);
+                  return;
+                }
                 logWarn_ACU('[交火模式纪要索引] 发送前召回失败，本次生成已停止:', error);
                 stopHostGeneration_ACU();
+                markStoppedSendForRetry_ACU();
                 showToastr_ACU('error', SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU, '交火召回失败');
                 return;
               }
             }
             if (!shouldProcessPlot) return;
-            if (type === 'regenerate' || isProcessing_Plot_ACU) return;
+            if ((type === 'regenerate' && !retryOfStoppedSend) || isProcessing_Plot_ACU) return;
 
             const chat = SillyTavern_API_ACU.chat;
             if (!chat || chat.length === 0) return;
@@ -1168,6 +1215,8 @@ export   function mainInitialize_ACU() {
                 // 超出本批口径，保持现状。
                 if (s2.manual || s2.apiRetriesExhausted === true || s2.blocked === true) {
                   stopHostGeneration_ACU();
+                  // 宿主随后仍会按输入框入楼（无发送门控）：标记给「重新生成」补跑规划
+                  markStoppedSendForRetry_ACU();
                 }
                 break;
               }

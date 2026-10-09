@@ -4,7 +4,7 @@
  * service 层不驱动 UI，只返回结果/状态，presentation 层根据返回值自行决定 UI 操作。
  */
 
-import { currentChatFileIdentifier_ACU, getAutoFillStopEpoch_ACU, isAutoUpdatingCard_ACU, pendingFinalGenerationGreenlights_ACU, wasStoppedByUser_ACU, _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
+import { currentChatFileIdentifier_ACU, isAutoUpdatingCard_ACU, isTableFillStopRequested_ACU, pendingFinalGenerationGreenlights_ACU, _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
 import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { callCustomOpenAI_ACU, RetryableAiResponseError_ACU } from '../ai/prompt-builder';
 import { clearManualRefillSheetDataInRange_ACU, cleanupCheckpointVectorIndexManifestsAfterCommit_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU, ensureManualCatchUpAnchorBeforeTarget_ACU, ensureV2BoundaryCheckpointForRetainedBuffer_ACU, establishManualRefillTemplateRoot_ACU, getChatArray_ACU, rollbackManualRefillRangeSnapshotAtomic_ACU, shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU } from '../chat/chat-service';
@@ -582,6 +582,8 @@ async function captureFillExecutionScope_ACU(
     const isolationKey = getCurrentIsolationKey_ACU();
     const liveChat = getChatArray_ACU() || [];
     const promptMessages = capturePromptMessageSnapshot_ACU(liveChat);
+    // 与 promptMessages 同一时刻（下面的 await 之前）冻结：否则等待期间滑动，基线会变成新回复
+    const targetGuard = captureTableFillTargetGuard_ACU(liveChat, () => getChatArray_ACU() || []);
     let sqlApplyScope: SqlTableApplyScope_ACU | undefined;
     if (isSqliteMode()) {
         let runtimeData: TableDataObject_ACU | null = null;
@@ -607,7 +609,6 @@ async function captureFillExecutionScope_ACU(
     const templateScope = sqlApplyScope
         ? buildTemplateScopeFromData_ACU(sqlApplyScope.templateData)
         : resolveTemplateScope_ACU(isolationKey);
-    const targetGuard = captureTableFillTargetGuard_ACU(liveChat, () => getChatArray_ACU() || []);
     const result = { chatKey, isolationKey, promptMessages, targetGuard, templateScope, sqlApplyScope };
     performanceSpan.end({ messageCount: liveChat.length });
     return result;
@@ -650,15 +651,6 @@ const SQL_ERROR_MARKER_ACU = '\n\n<!-- SQL_ERROR_FEEDBACK -->\n';
 const UNIFIED_GROUP_ERROR_MARKER_ACU = '\n\n<!-- UNIFIED_GROUP_ERROR_FEEDBACK -->\n';
 const MAX_RETRY_FEEDBACK_LENGTH_ACU = 500;
 const MAX_WARN_ERROR_LENGTH_ACU = 800;
-
-/**
- * 本轮填表的「是否已被终止」探针。wasStoppedByUser_ACU 会被新一轮填表开跑、宿主新生成复位，
- * 单看它，被终止的旧轮可能在两批之间「复活」接着跑；终止代次只增不减，开跑后变过就是本轮已被终止。
- */
-function captureFillStopProbe_ACU(): () => boolean {
-    const epochAtStart = getAutoFillStopEpoch_ACU();
-    return () => wasStoppedByUser_ACU || getAutoFillStopEpoch_ACU() !== epochAtStart;
-}
 
 class ModelOutputRetryError_ACU extends Error {
     constructor(message: string) {
@@ -1412,8 +1404,7 @@ export async function collectGroupFillResponse_ACU(
     } = {}
 ): Promise<GroupFillResponse_ACU> {
     const effectiveAbortController = abortController || new AbortController();
-    const isRunStopped = captureFillStopProbe_ACU();
-    const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && isRunStopped());
+    const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && isTableFillStopRequested_ACU());
     const maxRetries = options.maxRetriesOverride || settings_ACU.tableMaxRetries || 3;
     // 准备期诊断（移植上游 ece65f80）：仅自动填表链路开启时留痕，不记业务载荷。
     const diagnoseInput = (diagnosticCode: string, attempt = 0): void => {
@@ -2585,8 +2576,7 @@ async function processGroupedRuntimeChunkCore_ACU(
             totalBatches: orderedBuckets.length,
         });
     };
-    const isRunStopped = captureFillStopProbe_ACU();
-    const isStopped = () => options.abortController?.signal.aborted === true || (options.respectGlobalStop !== false && isRunStopped());
+    const isStopped = () => options.abortController?.signal.aborted === true || (options.respectGlobalStop !== false && isTableFillStopRequested_ACU());
     let committedBucketCount = 0;
     // 与 committedBucketCount 分开计数：伪提交（帧只落进度/事件，modifiedKeys 为空）会推进前者
     // 但不产生任何表数据，UI 与编排器只有后者能证明「真的写了数据」。
@@ -3733,7 +3723,7 @@ export async function executeCardUpdateCore_ACU(
                 const safeError = sanitizeRetryFeedback_ACU(error?.message || String(error), MAX_WARN_ERROR_LENGTH_ACU);
                 logWarn_ACU(`第 ${attempt} 次尝试失败: ${safeError}`);
 
-                if (error?.name === 'AbortError' || String(error?.message || '').toLowerCase().includes('aborted') || wasStoppedByUser_ACU) {
+                if (error?.name === 'AbortError' || String(error?.message || '').toLowerCase().includes('aborted') || isTableFillStopRequested_ACU()) {
                     return { success: false, modifiedKeys: [], aborted: true };
                 }
 
@@ -3851,7 +3841,6 @@ export async function processUpdatesBatch_ACU(
         _set_wasStoppedByUser_ACU(false);
         _set_isAutoUpdatingCard_ACU(true);
     }
-    const isRunStopped = captureFillStopProbe_ACU();
 
     try {
         const isSummaryMode = (mode && (mode.includes('summary') || mode === 'manual_summary')) || false;
@@ -3876,7 +3865,7 @@ export async function processUpdatesBatch_ACU(
             const batchIndices = batches[i];
             const batchNumber = i + 1;
             // 「终止」作用于本轮当前与后续全部批次：上一批请求已返回、无可中止时点的终止也要拦住下一批
-            if (isRunStopped()) {
+            if (isTableFillStopRequested_ACU()) {
                 return { success: false, failedBatch: batchNumber, error: '填表任务已由用户终止。' };
             }
             const firstMessageIndexOfBatch = batchIndices[0];
@@ -5642,7 +5631,6 @@ export async function orchestrateManualUpdate_ACU(
         }
 
         _set_isAutoUpdatingCard_ACU(true);
-        const isRunStopped = captureFillStopProbe_ACU();
         const maxConcurrentGroups = Math.max(1, Number(settings_ACU.maxConcurrentGroups) || 1);
         const totalChunks = Math.max(1, Math.ceil(groupKeys.length / maxConcurrentGroups));
         const failedGroups: Array<{ key: string; error?: string }> = [];
@@ -5650,7 +5638,7 @@ export async function orchestrateManualUpdate_ACU(
         logDebug_ACU(`[Manual Update] 分组计划：选中 ${targetKeys.length} 张表，生成 ${groupKeys.length} 个组，最大并发组数 ${maxConcurrentGroups}。`);
 
         for (let start = 0; start < groupKeys.length; start += maxConcurrentGroups) {
-            if (isRunStopped()) break;
+            if (isTableFillStopRequested_ACU()) break;
             const chunkIndex = Math.floor(start / maxConcurrentGroups) + 1;
             const chunkKeys = groupKeys.slice(start, start + maxConcurrentGroups);
             const groupedChunk: GroupedRuntimeUpdateGroup_ACU[] = chunkKeys.map((gKey): GroupedRuntimeUpdateGroup_ACU => {
@@ -5895,7 +5883,7 @@ export async function orchestrateManualUpdate_ACU(
             return await failManualRefillSession(failureError);
         }
 
-        if (isRunStopped()) {
+        if (isTableFillStopRequested_ACU()) {
             return await failManualRefillSession('手动更新已终止。');
         }
 

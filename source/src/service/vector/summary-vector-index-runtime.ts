@@ -509,8 +509,27 @@ async function materializeSummaryVectorMirrorHead_ACU(
     return { rows, chunks, incompleteRowIds, contentMismatchedRowIds };
 }
 
+// 向量模型上下文较小（如 512 token）时，长消息整段送去会被拒；截短后重试一次。
+const EMBEDDING_QUERY_RETRY_MAX_CHARS_ACU = 300;
+
 export async function processSummaryVectorIndexBeforeGeneration_ACU(
     options: SummaryVectorIndexRuntimeOptions_ACU = {},
+): Promise<SummaryVectorIndexRuntimeResult_ACU> {
+    try {
+        const result = await runSummaryVectorRecall_ACU(options);
+        // 失败或这次发送已作废：放掉 8 秒去重签名，否则马上重发同一句会被当成「已召回过」直接放行
+        if ((result.success !== true && result.skipped !== true) || result.reason === 'send_cancelled') {
+            resetSummaryVectorIndexRuntimeDedupeState_ACU();
+        }
+        return result;
+    } catch (error) {
+        resetSummaryVectorIndexRuntimeDedupeState_ACU();
+        throw error;
+    }
+}
+
+async function runSummaryVectorRecall_ACU(
+    options: SummaryVectorIndexRuntimeOptions_ACU,
 ): Promise<SummaryVectorIndexRuntimeResult_ACU> {
     const isActive = (): boolean => options.isActive?.() !== false;
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
@@ -662,13 +681,21 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     try {
         keywords = await generateKeywords_ACU(config, userInput);
         queryText = [userInput, keywords.join('，')].filter(Boolean).join('\n关键词：');
-        const embeddings = await createEmbeddings_ACU({
+        const embedQuery = async (input: string) => (await createEmbeddings_ACU({
             endpoint: config.embeddingEndpoint,
             apiKey: config.embeddingApiKey,
             model: config.embeddingModel,
-            input: [queryText],
-        });
-        queryVector = embeddings[0]?.embedding || [];
+            input: [input],
+        }))[0]?.embedding || [];
+        try {
+            queryVector = await embedQuery(queryText);
+        } catch (error) {
+            // 输入本身过长被向量模型拒绝时，同一条长消息每次都会失败、永远发不出去：截短重试一次
+            if (queryText.length <= EMBEDDING_QUERY_RETRY_MAX_CHARS_ACU || !isActive()) throw error;
+            logWarn_ACU('[交火模式纪要索引] query embedding 失败，截短查询后重试一次:', error);
+            const shortQuery = [userInput.slice(0, EMBEDDING_QUERY_RETRY_MAX_CHARS_ACU), keywords.join('，')].filter(Boolean).join('\n关键词：');
+            queryVector = await embedQuery(shortQuery);
+        }
         if (queryVector.length === 0) {
             logWarn_ACU('[交火模式纪要索引] query embedding 返回空向量，本次召回失败:', userInput);
             return { success: false, reason: 'empty_query_embedding' };
