@@ -365,6 +365,41 @@ describe('recoverLostCheckpointsAfterMessageDeletion_ACU', () => {
     expect(frame.logEntries).toEqual([]);
   });
 
+  it('重新生成：删楼后宿主已追加的新回复（流式占位）不当嫁接目标，产物落到删楼前就在的楼层', async () => {
+    // issue #2：宿主重新生成先删旧回复，流式开始即 push 新回复；删楼调度 1.2s 后才嫁接，
+    // 若落到新回复上，新回复会被当成「已填过表」，自动填表跳过，且带着旧回复的数据。
+    const earlierMsg = aiMsg('earlier', logFrame([{ seq: 2, operations: [] }]));
+    const oldReply = aiMsg('old-truncated', { version: 2, checkpoint: fullCheckpoint(), logEntries: [] });
+    const chat: any[] = [userMsg('u1'), earlierMsg, userMsg('u2'), oldReply];
+    mockGetChatArray.mockReturnValue(chat);
+    captureCheckpointVaultForCurrentChat_ACU();
+
+    chat.splice(3, 1);
+    const newReply: any = { is_user: false, mes: '' };
+    chat.push(newReply);
+    const result = await recoverLostCheckpointsAfterMessageDeletion_ACU();
+
+    expect(result.recovered).toBe(true);
+    expect(newReply.TavernDB_ACU_IsolatedData).toBeUndefined();
+    expect(earlierMsg.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toEqual(fullCheckpoint());
+  });
+
+  it('删掉唯一 AI 楼后只剩新追加的回复：不嫁接到新回复，保留保管库', async () => {
+    const oldReply = aiMsg('old', { version: 2, checkpoint: fullCheckpoint(), logEntries: [] });
+    const chat: any[] = [userMsg('u'), oldReply];
+    mockGetChatArray.mockReturnValue(chat);
+    captureCheckpointVaultForCurrentChat_ACU();
+
+    chat.splice(1, 1);
+    const newReply: any = { is_user: false, mes: '' };
+    chat.push(newReply);
+    const result = await recoverLostCheckpointsAfterMessageDeletion_ACU();
+
+    expect(result.recovered).toBe(false);
+    expect(newReply.TavernDB_ACU_IsolatedData).toBeUndefined();
+    expect(mockSaveChatToHostStrict).not.toHaveBeenCalled();
+  });
+
   it('聊天中已无 AI 楼层时放弃且不保存', async () => {
     const rootMsg = aiMsg('root', { version: 2, checkpoint: fullCheckpoint(), logEntries: [] });
     const chat = [userMsg('u'), rootMsg];

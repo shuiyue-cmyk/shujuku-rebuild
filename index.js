@@ -92769,7 +92769,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261009-20"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261010-07"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92788,7 +92788,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261009-20";
+        const stamp = "20261010-07";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -117330,7 +117330,10 @@ function captureCheckpointVaultForCurrentChat_ACU(chatArg) {
     const chatKey = String(currentChatFileIdentifier_ACU || '');
     const entriesByIsolationKey = new Map();
     const materialEntries = [];
+    const knownMessages = new WeakSet();
     for (const message of chat) {
+        if (message && typeof message === 'object')
+            knownMessages.add(message);
         if (!message || message.is_user)
             continue;
         // 续写基线与表格产物同轮捕获：无容器的楼层同样可能有续写资料字段。
@@ -117355,7 +117358,7 @@ function captureCheckpointVaultForCurrentChat_ACU(chatArg) {
             entriesByIsolationKey.set(isolationKey, entries);
         }
     }
-    vault_ACU = { chatKey, entriesByIsolationKey, materialEntries };
+    vault_ACU = { chatKey, entriesByIsolationKey, materialEntries, knownMessages };
 }
 /** 切聊 / 测试清理。 */
 function resetCheckpointVault_ACU() {
@@ -117392,7 +117395,7 @@ function ensureTargetFrame_ACU(message, isolationKey) {
     }
     return tagData.storageFrame;
 }
-function findGraftTargetMessage_ACU(chat, presentMessages, entries, lostIndex, isolationKey) {
+function findGraftTargetMessage_ACU(chat, presentMessages, entries, lostIndex, isolationKey, knownMessages) {
     // 首选：原位置之后第一个幸存且仍携带 V2 frame 的楼层——帧内 checkpoint 先于
     // logEntries 回放，落在后继帧上顺序与删除前完全一致。
     for (let i = lostIndex + 1; i < entries.length; i += 1) {
@@ -117407,9 +117410,10 @@ function findGraftTargetMessage_ACU(chat, presentMessages, entries, lostIndex, i
     // 无后继帧：落到聊天最后一个**非用户**楼层（表格数据可以挂在被 /hide 的楼上，所以这里不按 AI 楼收窄；
     // 续写基线一侧另行按 isAiFloor_ACU 过滤，见 materialEntries 的嫁接靶楼选择）。若该楼层携带的是更早的
     // frame，其 logs 已被丢失 checkpoint 的 data 吸收（checkpoint 写于其后），由调用方清空并警告。
+    // 删楼后宿主新追加的楼（重新生成的流式新回复）不算：只落在保管库捕获时就在的楼上。
     for (let i = chat.length - 1; i >= 0; i -= 1) {
         const message = chat[i];
-        if (!message || message.is_user)
+        if (!message || message.is_user || !knownMessages.has(message))
             continue;
         const tagData = readIsolatedTagData_ACU(message, isolationKey);
         const hasEarlierFrame = isV2TagData_ACU(tagData) && tagData.storageFrame.logEntries.length > 0;
@@ -117520,12 +117524,12 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
             for (const item of [...lostItems].reverse()) {
                 const { entry, isolationKey, vaultIndex } = item;
                 const entries = vault_ACU.entriesByIsolationKey.get(isolationKey);
-                const target = findGraftTargetMessage_ACU(chat, presentMessages, entries, vaultIndex, isolationKey);
+                const target = findGraftTargetMessage_ACU(chat, presentMessages, entries, vaultIndex, isolationKey, vault_ACU.knownMessages);
                 if (!target) {
                     if (entry.spv79TransitionCheckpoint || entry.compatTransitionCheckpoint) {
                         throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的丢失过渡根无处重建，拒绝保存。`);
                     }
-                    logError_ACU(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的丢失 checkpoint 无处嫁接（聊天已无 AI 楼层），保留保管库等待下次机会。`);
+                    logError_ACU(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的丢失 checkpoint 无处嫁接（聊天里没有删楼前就在的非用户楼层），保留保管库等待下次机会。`);
                     continue;
                 }
                 snapshotTarget(target.message);
@@ -117639,7 +117643,7 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
                 }
                 if (!targetMessage) {
                     for (let index = chat.length - 1; index >= 0; index -= 1) {
-                        if (isAiFloor_ACU(chat[index])) {
+                        if (isAiFloor_ACU(chat[index]) && vault_ACU.knownMessages.has(chat[index])) {
                             targetMessage = chat[index];
                             break;
                         }
@@ -152836,7 +152840,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261009-20";
+        const stamp = "20261010-07";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

@@ -81,6 +81,12 @@ interface CheckpointVaultState_ACU {
     entriesByIsolationKey: Map<string, CheckpointVaultFrameEntry_ACU[]>;
     /** 续写基线，按楼层序。与表格产物同一轮嫁接（TT-only）。 */
     materialEntries: MaterialCheckpointVaultEntry_ACU[];
+    /**
+     * 捕获时聊天里的全部楼层。嫁接只能落在删楼前就存在的楼上：宿主「重新生成」先删旧回复、
+     * 流式一开始就把新回复 push 进聊天，删楼调度（1.2s 防抖）到期时新回复已在末尾——
+     * 落到它身上会让新回复被当成「已填过表」（自动填表跳过）并带着旧回复的数据（issue #2）。
+     */
+    knownMessages: WeakSet<object>;
 }
 
 export interface CheckpointDeleteRecoveryResult_ACU {
@@ -217,8 +223,10 @@ export function captureCheckpointVaultForCurrentChat_ACU(chatArg?: any[]): void 
     const chatKey = String(currentChatFileIdentifier_ACU || '');
     const entriesByIsolationKey = new Map<string, CheckpointVaultFrameEntry_ACU[]>();
     const materialEntries: MaterialCheckpointVaultEntry_ACU[] = [];
+    const knownMessages = new WeakSet<object>();
 
     for (const message of chat) {
+        if (message && typeof message === 'object') knownMessages.add(message);
         if (!message || message.is_user) continue;
         // 续写基线与表格产物同轮捕获：无容器的楼层同样可能有续写资料字段。
         const continuation = captureMaterialCheckpointRecovery_ACU(message)?.continuation ?? null;
@@ -241,7 +249,7 @@ export function captureCheckpointVaultForCurrentChat_ACU(chatArg?: any[]): void 
         }
     }
 
-    vault_ACU = { chatKey, entriesByIsolationKey, materialEntries };
+    vault_ACU = { chatKey, entriesByIsolationKey, materialEntries, knownMessages };
 }
 
 /** 切聊 / 测试清理。 */
@@ -293,6 +301,7 @@ function findGraftTargetMessage_ACU(
     entries: CheckpointVaultFrameEntry_ACU[],
     lostIndex: number,
     isolationKey: string,
+    knownMessages: WeakSet<object>,
 ): { message: any; absorbedEarlierFrame: boolean } | null {
     // 首选：原位置之后第一个幸存且仍携带 V2 frame 的楼层——帧内 checkpoint 先于
     // logEntries 回放，落在后继帧上顺序与删除前完全一致。
@@ -307,9 +316,10 @@ function findGraftTargetMessage_ACU(
     // 无后继帧：落到聊天最后一个**非用户**楼层（表格数据可以挂在被 /hide 的楼上，所以这里不按 AI 楼收窄；
     // 续写基线一侧另行按 isAiFloor_ACU 过滤，见 materialEntries 的嫁接靶楼选择）。若该楼层携带的是更早的
     // frame，其 logs 已被丢失 checkpoint 的 data 吸收（checkpoint 写于其后），由调用方清空并警告。
+    // 删楼后宿主新追加的楼（重新生成的流式新回复）不算：只落在保管库捕获时就在的楼上。
     for (let i = chat.length - 1; i >= 0; i -= 1) {
         const message = chat[i];
-        if (!message || message.is_user) continue;
+        if (!message || message.is_user || !knownMessages.has(message)) continue;
         const tagData = readIsolatedTagData_ACU(message, isolationKey);
         const hasEarlierFrame = isV2TagData_ACU(tagData) && tagData.storageFrame.logEntries.length > 0;
         return { message, absorbedEarlierFrame: hasEarlierFrame };
@@ -429,12 +439,12 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
             for (const item of [...lostItems].reverse()) {
                 const { entry, isolationKey, vaultIndex } = item;
                 const entries = vault_ACU!.entriesByIsolationKey.get(isolationKey)!;
-                const target = findGraftTargetMessage_ACU(chat, presentMessages, entries, vaultIndex, isolationKey);
+                const target = findGraftTargetMessage_ACU(chat, presentMessages, entries, vaultIndex, isolationKey, vault_ACU!.knownMessages);
                 if (!target) {
                     if (entry.spv79TransitionCheckpoint || entry.compatTransitionCheckpoint) {
                         throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的丢失过渡根无处重建，拒绝保存。`);
                     }
-                    logError_ACU(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的丢失 checkpoint 无处嫁接（聊天已无 AI 楼层），保留保管库等待下次机会。`);
+                    logError_ACU(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的丢失 checkpoint 无处嫁接（聊天里没有删楼前就在的非用户楼层），保留保管库等待下次机会。`);
                     continue;
                 }
                 snapshotTarget(target.message);
@@ -552,7 +562,7 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
                 }
                 if (!targetMessage) {
                     for (let index = chat.length - 1; index >= 0; index -= 1) {
-                        if (isAiFloor_ACU(chat[index])) {
+                        if (isAiFloor_ACU(chat[index]) && vault_ACU!.knownMessages.has(chat[index])) {
                             targetMessage = chat[index];
                             break;
                         }
