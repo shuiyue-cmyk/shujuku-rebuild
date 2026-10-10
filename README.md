@@ -26,16 +26,6 @@ https://github.com/shuiyue-cmyk/shujuku-rebuild
 
 后续更新走 TT 扩展面板（`auto_update: true`），开箱即用，无需额外导入脚本。
 
-## 版本规则
-
-`MAJOR.MINOR.PATCH`，其中 **MINOR 与 PATCH 的取值范围是 1–10**（不用 0，也不允许超过 10）：
-
-- PATCH 到 10 后，下一次发版进位到 MINOR、PATCH 归 1：`9.8.10 → 9.9.1`
-- MINOR 到 10 后，下一次发版进位到 MAJOR、MINOR 与 PATCH 归 1：`9.10.10 → 10.1.1`
-
-因此「一批改动」不构成跳 MINOR 的理由——只有低位到 10 才进位。
-`manifest.json` 与 `source/package.json` 的版本号必须同步修改。
-
 ## 问题反馈
 
 提交 issue 前请确认满足以下两条，**缺任意一条的 issue 不予处理，会直接关闭**：
