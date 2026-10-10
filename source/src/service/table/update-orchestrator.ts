@@ -1562,7 +1562,8 @@ export async function collectGroupFillResponse_ACU(
                 return { job, success: false, attempt, aborted: true };
             }
 
-            const minReplyLength = settings_ACU.autoUpdateTokenThreshold || 0;
+            // 填表 AI 的输出看「填表 AI 回复最小长度」；正文长度另由批次跳过处的「正文回复最小长度」判断。
+            const minReplyLength = settings_ACU.tableFillMinResponseLength || 0;
             if (aiResponse && minReplyLength > 0 && aiResponse.length < minReplyLength) {
                 diagnoseResponse('response_below_threshold', attempt);
                 throw new ModelOutputRetryError_ACU(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);

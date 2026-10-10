@@ -103,6 +103,7 @@ const ADVANCED_KEYS = new Set<NumberSettingKey>([
   'updateBatchSize',
   'skipUpdateFloors',
   'autoUpdateTokenThreshold',
+  'tableFillMinResponseLength',
   'tableMaxRetries',
 ]);
 

@@ -9,6 +9,7 @@ import {
   DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
   DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
   DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
+  DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU,
 } from "../../shared/defaults";
 import {
   DEFAULT_CHAR_CARD_PROMPT_ACU,
@@ -62,6 +63,7 @@ export type NumberSettingKey =
   | "skipUpdateFloors"
   | "retainRecentLayers"
   | "autoUpdateTokenThreshold"
+  | "tableFillMinResponseLength"
   | "tableMaxRetries";
 
 export interface FormFillSettingsState {
@@ -152,10 +154,17 @@ const NUMBER_FIELD_META: Array<Omit<FormFillNumberField, "value">> = [
   },
   {
     key: "autoUpdateTokenThreshold",
-    label: "AI 回复最小长度",
+    label: "正文回复最小长度",
     min: 0,
     step: 1,
-    hint: "低于此值跳过自动填表。",
+    hint: "最新一条 AI 正文短于此值时，跳过这一层的自动填表。0 为不限制。",
+  },
+  {
+    key: "tableFillMinResponseLength",
+    label: "填表 AI 回复最小长度",
+    min: 0,
+    step: 1,
+    hint: "填表模型的回复短于此值时按失败重试。0 为不限制。",
   },
   {
     key: "tableMaxRetries",
@@ -174,6 +183,7 @@ const FALLBACKS: Record<NumberSettingKey, number> = {
   skipUpdateFloors: 0,
   retainRecentLayers: 100,
   autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
+  tableFillMinResponseLength: DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU,
   tableMaxRetries: 3,
 };
 

@@ -15,7 +15,7 @@ import {
   DEFAULT_MERGE_SUMMARY_PROMPT_ACU,
   DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU,
 } from '../../shared/defaults-json.js';
-import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU } from '../../shared/defaults';
+import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU, DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU } from '../../shared/defaults';
 import { normalizeExcludeRules_ACU, normalizeExtractRules_ACU, normalizeNonNegativeInteger_ACU, normalizePositiveInteger_ACU } from '../../shared/utils';
 
 // ═══ 统一写结果 ═══
@@ -107,6 +107,7 @@ export type UpdateNumberSettingKey_ACU =
   | 'autoUpdateThreshold'
   | 'autoUpdateFrequency'
   | 'autoUpdateTokenThreshold'
+  | 'tableFillMinResponseLength'
   | 'updateBatchSize'
   | 'maxConcurrentGroups'
   | 'skipUpdateFloors'
@@ -118,6 +119,7 @@ const UPDATE_NUMBER_DEFAULTS_ACU: Record<UpdateNumberSettingKey_ACU, number> = {
   autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
   autoUpdateFrequency: DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
   autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
+  tableFillMinResponseLength: DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU,
   updateBatchSize: 3,
   maxConcurrentGroups: 1,
   skipUpdateFloors: 0,
@@ -130,7 +132,7 @@ function normalizeUpdateNumber_ACU(key: UpdateNumberSettingKey_ACU, value: unkno
   const fallback = UPDATE_NUMBER_DEFAULTS_ACU[key];
   const min = key === 'importSplitSize'
     ? 100
-    : (key === 'autoUpdateThreshold' || key === 'autoUpdateTokenThreshold' || key === 'skipUpdateFloors' || key === 'retainRecentLayers' ? 0 : 1);
+    : (key === 'autoUpdateThreshold' || key === 'autoUpdateTokenThreshold' || key === 'tableFillMinResponseLength' || key === 'skipUpdateFloors' || key === 'retainRecentLayers' ? 0 : 1);
   const normalized = min > 0
     ? normalizePositiveInteger_ACU(value, fallback)
     : normalizeNonNegativeInteger_ACU(value, fallback);

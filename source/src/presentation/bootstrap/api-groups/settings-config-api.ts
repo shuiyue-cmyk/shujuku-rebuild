@@ -148,7 +148,8 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
                     autoUpdateThreshold: settings_ACU.autoUpdateThreshold ?? 3,
                     autoUpdateFrequency: settings_ACU.autoUpdateFrequency ?? 1,
                     updateBatchSize: settings_ACU.updateBatchSize ?? 2,
-                    autoUpdateTokenThreshold: settings_ACU.autoUpdateTokenThreshold ?? 0
+                    autoUpdateTokenThreshold: settings_ACU.autoUpdateTokenThreshold ?? 0,
+                    tableFillMinResponseLength: settings_ACU.tableFillMinResponseLength ?? 0
                 };
             } catch (e) {
                 logError_ACU('getUpdateConfigParams failed:', e);
@@ -156,7 +157,8 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
                     autoUpdateThreshold: 3,
                     autoUpdateFrequency: 1,
                     updateBatchSize: 2,
-                    autoUpdateTokenThreshold: 0
+                    autoUpdateTokenThreshold: 0,
+                    tableFillMinResponseLength: 0
                 };
             }
         },
@@ -181,6 +183,9 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
                 }
                 if (typeof params.autoUpdateTokenThreshold === 'number' && params.autoUpdateTokenThreshold >= 0) {
                     patch.autoUpdateTokenThreshold = Math.floor(params.autoUpdateTokenThreshold);
+                }
+                if (typeof params.tableFillMinResponseLength === 'number' && params.tableFillMinResponseLength >= 0) {
+                    patch.tableFillMinResponseLength = Math.floor(params.tableFillMinResponseLength);
                 }
                 const result = setUpdateNumberFields_ACU(patch);
                 if (!result.ok) {

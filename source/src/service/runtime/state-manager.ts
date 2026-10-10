@@ -9,7 +9,7 @@
 
 import { buildDefaultDecisionGateSettings_ACU } from '../../shared/decision-gate-defaults';
 import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
-import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU } from '../../shared/defaults';
+import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU, DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU } from '../../shared/defaults';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { logAutoFillSkip_ACU } from '../../shared/trigger-diagnostics';
@@ -482,6 +482,7 @@ export let settings_ACU: any = {
     autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
     autoUpdateFrequency: DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
     autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
+    tableFillMinResponseLength: DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU,
     updateBatchSize: 3,
     maxConcurrentGroups: 1,
     autoUpdateEnabled: true,

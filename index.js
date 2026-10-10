@@ -4359,6 +4359,8 @@ function buildDefaultPlotWorldbookConfig_ACU() {
 const DEFAULT_AUTO_UPDATE_THRESHOLD_ACU = 3;
 const DEFAULT_AUTO_UPDATE_FREQUENCY_ACU = 1;
 const DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU = 500;
+/** 填表 AI 回复最小长度（从「AI 回复最小长度」拆出；老设置沿用原值，见 settings-service 加载迁移）。 */
+const DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU = DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU;
 const AUTO_UPDATE_FLOOR_INCREASE_DELAY_ACU = 2000;
 // --- 一次性默认值刷新版本标记 ---
 const VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU = 'spv3.6.3-keyword-prompt-content-based-refresh';
@@ -92838,7 +92840,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261010-09"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261010-16"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92857,7 +92859,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261010-09";
+        const stamp = "20261010-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -102431,6 +102433,7 @@ let settings_ACU = {
     autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
     autoUpdateFrequency: DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
     autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
+    tableFillMinResponseLength: DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU,
     updateBatchSize: 3,
     maxConcurrentGroups: 1,
     autoUpdateEnabled: true,
@@ -103605,6 +103608,11 @@ function loadSettings_ACU() {
                 // 删除顶层配置
                 delete savedSettings.worldbookConfig;
             }
+            // 「AI 回复最小长度」拆成正文 / 填表 AI 两项：老设置只有原值时，填表 AI 一项沿用原值（不能落到默认值）。
+            if (savedSettings.tableFillMinResponseLength === undefined && savedSettings.autoUpdateTokenThreshold !== undefined) {
+                savedSettings.tableFillMinResponseLength = savedSettings.autoUpdateTokenThreshold;
+                shouldPersistSettingsAfterLoad_ACU = true;
+            }
             // Deep merge saved settings into defaults to ensure new properties are added
             _set_settings_ACU(deepMerge_ACU(defaultSettings, savedSettings));
             // [剧情推进] 迁移/兜底：确保 plotWorldbookConfig 存在且结构完整
@@ -104167,7 +104175,10 @@ function buildDefaultSettings_ACU() {
         templateAssistantPromptSegments: [],
         autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
         autoUpdateFrequency: DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
+        // 正文回复最小长度：最新一条 AI 正文短于此值时自动填表跳过该批。
         autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
+        // 填表 AI 回复最小长度：填表模型输出短于此值按失败重试。
+        tableFillMinResponseLength: DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU,
         updateBatchSize: 3,
         maxConcurrentGroups: 1,
         autoUpdateEnabled: true,
@@ -112950,7 +112961,8 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
                 diagnoseResponse('user_aborted', attempt);
                 return { job, success: false, attempt, aborted: true };
             }
-            const minReplyLength = settings_ACU.autoUpdateTokenThreshold || 0;
+            // 填表 AI 的输出看「填表 AI 回复最小长度」；正文长度另由批次跳过处的「正文回复最小长度」判断。
+            const minReplyLength = settings_ACU.tableFillMinResponseLength || 0;
             if (aiResponse && minReplyLength > 0 && aiResponse.length < minReplyLength) {
                 diagnoseResponse('response_below_threshold', attempt);
                 throw new ModelOutputRetryError_ACU(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);
@@ -149953,6 +149965,7 @@ const UPDATE_NUMBER_DEFAULTS_ACU = {
     autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
     autoUpdateFrequency: DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
     autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
+    tableFillMinResponseLength: DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU,
     updateBatchSize: 3,
     maxConcurrentGroups: 1,
     skipUpdateFloors: 0,
@@ -149964,7 +149977,7 @@ function normalizeUpdateNumber_ACU(key, value) {
     const fallback = UPDATE_NUMBER_DEFAULTS_ACU[key];
     const min = key === 'importSplitSize'
         ? 100
-        : (key === 'autoUpdateThreshold' || key === 'autoUpdateTokenThreshold' || key === 'skipUpdateFloors' || key === 'retainRecentLayers' ? 0 : 1);
+        : (key === 'autoUpdateThreshold' || key === 'autoUpdateTokenThreshold' || key === 'tableFillMinResponseLength' || key === 'skipUpdateFloors' || key === 'retainRecentLayers' ? 0 : 1);
     const normalized = min > 0
         ? normalizePositiveInteger_ACU$2(value, fallback)
         : normalizeNonNegativeInteger_ACU$2(value, fallback);
@@ -151484,7 +151497,8 @@ function createSettingsConfigApi(_ctx) {
                     autoUpdateThreshold: settings_ACU.autoUpdateThreshold ?? 3,
                     autoUpdateFrequency: settings_ACU.autoUpdateFrequency ?? 1,
                     updateBatchSize: settings_ACU.updateBatchSize ?? 2,
-                    autoUpdateTokenThreshold: settings_ACU.autoUpdateTokenThreshold ?? 0
+                    autoUpdateTokenThreshold: settings_ACU.autoUpdateTokenThreshold ?? 0,
+                    tableFillMinResponseLength: settings_ACU.tableFillMinResponseLength ?? 0
                 };
             }
             catch (e) {
@@ -151493,7 +151507,8 @@ function createSettingsConfigApi(_ctx) {
                     autoUpdateThreshold: 3,
                     autoUpdateFrequency: 1,
                     updateBatchSize: 2,
-                    autoUpdateTokenThreshold: 0
+                    autoUpdateTokenThreshold: 0,
+                    tableFillMinResponseLength: 0
                 };
             }
         },
@@ -151516,6 +151531,9 @@ function createSettingsConfigApi(_ctx) {
                 }
                 if (typeof params.autoUpdateTokenThreshold === 'number' && params.autoUpdateTokenThreshold >= 0) {
                     patch.autoUpdateTokenThreshold = Math.floor(params.autoUpdateTokenThreshold);
+                }
+                if (typeof params.tableFillMinResponseLength === 'number' && params.tableFillMinResponseLength >= 0) {
+                    patch.tableFillMinResponseLength = Math.floor(params.tableFillMinResponseLength);
                 }
                 const result = setUpdateNumberFields_ACU(patch);
                 if (!result.ok) {
@@ -152964,7 +152982,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261010-09";
+        const stamp = "20261010-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -192343,10 +192361,17 @@ const NUMBER_FIELD_META = [
     },
     {
         key: "autoUpdateTokenThreshold",
-        label: "AI 回复最小长度",
+        label: "正文回复最小长度",
         min: 0,
         step: 1,
-        hint: "低于此值跳过自动填表。",
+        hint: "最新一条 AI 正文短于此值时，跳过这一层的自动填表。0 为不限制。",
+    },
+    {
+        key: "tableFillMinResponseLength",
+        label: "填表 AI 回复最小长度",
+        min: 0,
+        step: 1,
+        hint: "填表模型的回复短于此值时按失败重试。0 为不限制。",
     },
     {
         key: "tableMaxRetries",
@@ -192364,6 +192389,7 @@ const FALLBACKS = {
     skipUpdateFloors: 0,
     retainRecentLayers: 100,
     autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
+    tableFillMinResponseLength: DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU,
     tableMaxRetries: 3,
 };
 function clone$1(value) {
@@ -192878,6 +192904,7 @@ var _sfc_main$n = /*@__PURE__*/ defineComponent({
             'updateBatchSize',
             'skipUpdateFloors',
             'autoUpdateTokenThreshold',
+            'tableFillMinResponseLength',
             'tableMaxRetries',
         ]);
         const advancedFields = computed(() => settings.numberFields.value.filter(field => ADVANCED_KEYS.has(field.key)));
@@ -192942,8 +192969,8 @@ var _sfc_main$n = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-upd__more[data-v-41c9ae45] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border: 0;\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-upd__more[data-v-41c9ae45]:hover {\r\n  color: var(--ub-text);\n}\n.ub-upd__chevron[data-v-41c9ae45] {\r\n  font-size: 0.75em;\r\n  transition: transform 0.16s ease;\n}\n.ub-upd__chevron.is-open[data-v-41c9ae45] {\r\n  transform: rotate(90deg);\n}\n.ub-upd__more + .ub-row[data-v-41c9ae45],\r\n.ub-upd__more ~ .ub-row[data-v-41c9ae45] {\r\n  background: color-mix(in srgb, var(--ub-sunken) 50%, transparent);\n}\r\n", "src/presentation-v3/parts/UpdateSettingsSection.vue#style-0-41c9ae45");
-var UpdateSettingsSection_vue_vue_type_style_index_0_scoped_41c9ae45_lang = null;
+injectSfcStyle("\n.ub-upd__more[data-v-efd558d2] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  width: 100%;\n  padding: var(--ub-s3) var(--ub-s4);\n  border: 0;\n  border-top: 1px solid var(--ub-line-soft);\n  background: var(--ub-sunken);\n  color: var(--ub-text-2);\n  font: inherit;\n  font-size: var(--ub-fs-sm);\n  font-weight: 600;\n  text-align: left;\n  cursor: pointer;\n}\n.ub-upd__more[data-v-efd558d2]:hover {\n  color: var(--ub-text);\n}\n.ub-upd__chevron[data-v-efd558d2] {\n  font-size: 0.75em;\n  transition: transform 0.16s ease;\n}\n.ub-upd__chevron.is-open[data-v-efd558d2] {\n  transform: rotate(90deg);\n}\n.ub-upd__more + .ub-row[data-v-efd558d2],\n.ub-upd__more ~ .ub-row[data-v-efd558d2] {\n  background: color-mix(in srgb, var(--ub-sunken) 50%, transparent);\n}\n", "src/presentation-v3/parts/UpdateSettingsSection.vue#style-0-efd558d2");
+var UpdateSettingsSection_vue_vue_type_style_index_0_scoped_efd558d2_lang = null;
 
 const _hoisted_1$k = ["aria-expanded"];
 function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
@@ -193080,7 +193107,7 @@ function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
 		"description"
 	]);
 }
-var UpdateSettingsSection = /* @__PURE__ */ _export_sfc(_sfc_main$n, [["render", _sfc_render$n], ["__scopeId", "data-v-41c9ae45"]]);
+var UpdateSettingsSection = /* @__PURE__ */ _export_sfc(_sfc_main$n, [["render", _sfc_render$n], ["__scopeId", "data-v-efd558d2"]]);
 
 var _sfc_main$m = /*@__PURE__*/ defineComponent({
     __name: 'BasicConfigPage',

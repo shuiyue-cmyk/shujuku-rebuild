@@ -52,6 +52,7 @@ let mockSettings: any = {
   skipUpdateFloors: 0,
   tableMaxRetries: 3,
   autoUpdateTokenThreshold: 0,
+  tableFillMinResponseLength: 0,
   toastMuteEnabled: false,
   dataIsolationEnabled: false,
   dataIsolationCode: '',
@@ -1653,8 +1654,8 @@ describe('executeCardUpdateCore_ACU', () => {
     expect(result.error).toContain('1 次尝试后仍失败');
   });
 
-  it('AI 回复过短时重试并最终失败', async () => {
-    mockSettings.autoUpdateTokenThreshold = 100;
+  it('填表 AI 回复过短时重试并最终失败（看「填表 AI 回复最小长度」）', async () => {
+    mockSettings.tableFillMinResponseLength = 100;
     mockSettings.tableMaxRetries = 1;
     mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
     mockCallCustomOpenAI.mockResolvedValue('短');
@@ -1666,6 +1667,23 @@ describe('executeCardUpdateCore_ACU', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('AI回复过短');
+  });
+
+  it('填表 AI 的输出长度只看「填表 AI 回复最小长度」，不受「正文回复最小长度」影响', async () => {
+    mockSettings.autoUpdateTokenThreshold = 1000;
+    mockSettings.tableFillMinResponseLength = 0;
+    mockSettings.tableMaxRetries = 1;
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>短</tableEdit>');
+
+    const result = await executeCardUpdateCore_ACU(
+      [], 0, false, 'auto_standard', false,
+      null, null, new AbortController()
+    );
+
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+    expect(String(result.error || '')).not.toContain('AI回复过短');
+    mockSettings.autoUpdateTokenThreshold = 0;
   });
 
   it('用户中止时返回 aborted', async () => {
@@ -6653,6 +6671,23 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     );
     expect(result.failedGroups).toEqual([]);
     mockSettings.autoUpdateTokenThreshold = 0;
+  });
+
+  it('正文长度只看「正文回复最小长度」：填表 AI 的阈值再大也不跳过这一批', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: true, mes: '问' }, { is_user: false, mes: '短' }]);
+    mockSettings.autoUpdateTokenThreshold = 0;
+    mockSettings.tableFillMinResponseLength = 100000;
+    mockSettings.tableMaxRetries = 1;
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+
+    await processGroupedRuntimeChunk_ACU([
+      { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
+    ], 'auto_independent', { performanceRunId: 'run-split' });
+
+    expect(mockCallCustomOpenAI).toHaveBeenCalled();
+    mockSettings.tableFillMinResponseLength = 0;
   });
 
   it('自动模式任务自动带诊断标记，透传进 AI 调用选项（移植上游 ece65f80）', async () => {

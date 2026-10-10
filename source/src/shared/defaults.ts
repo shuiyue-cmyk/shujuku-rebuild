@@ -173,6 +173,8 @@ export function buildDefaultPlotWorldbookConfig_ACU() {
 export const DEFAULT_AUTO_UPDATE_THRESHOLD_ACU = 3;
 export const DEFAULT_AUTO_UPDATE_FREQUENCY_ACU = 1;
 export const DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU = 500;
+/** 填表 AI 回复最小长度（从「AI 回复最小长度」拆出；老设置沿用原值，见 settings-service 加载迁移）。 */
+export const DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU = DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU;
 export const AUTO_UPDATE_FLOOR_INCREASE_DELAY_ACU = 2000;
 
 // --- 一次性默认值刷新版本标记 ---

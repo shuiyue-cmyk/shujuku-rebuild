@@ -153,6 +153,7 @@ vi.mock('../../../src/shared/defaults', () => ({
   DEFAULT_AUTO_UPDATE_FREQUENCY_ACU: 1,
   DEFAULT_AUTO_UPDATE_THRESHOLD_ACU: 3,
   DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU: 500,
+  DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU: 500,
   TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU: 'test-table-defaults-refresh',
   TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU: 'test-prompt-force-default',
   TEMPLATE_ASSISTANT_PROMPT_FORCE_DEFAULT_VERSION_ACU: 'test-template-assistant-prompt-force-default',
@@ -716,6 +717,27 @@ describe('loadSettings_ACU', () => {
     expect(calledWith.autoUpdateEnabled).toBe(true);
     expect(calledWith.maxConcurrentGroups).toBe(1);
     expect(calledWith.discardUnauthorizedTableEditsEnabled).toBe(true);
+  });
+
+  it('「回复最小长度」拆分：无保存设置时正文与填表 AI 两个值都取默认 500', () => {
+    loadSettings_ACU();
+    const calledWith = mockSetSettings.mock.calls[0][0];
+    expect(calledWith.autoUpdateTokenThreshold).toBe(500);
+    expect(calledWith.tableFillMinResponseLength).toBe(500);
+  });
+
+  it('「回复最小长度」拆分：老设置只有原值时，填表 AI 的新值沿用原值', () => {
+    mockReadProfileSettings.mockReturnValue({ autoUpdateTokenThreshold: 800 });
+    loadSettings_ACU();
+    expect(mockSettings.autoUpdateTokenThreshold).toBe(800);
+    expect(mockSettings.tableFillMinResponseLength).toBe(800);
+  });
+
+  it('「回复最小长度」拆分：已分开设置过的不被覆盖', () => {
+    mockReadProfileSettings.mockReturnValue({ autoUpdateTokenThreshold: 800, tableFillMinResponseLength: 0 });
+    loadSettings_ACU();
+    expect(mockSettings.autoUpdateTokenThreshold).toBe(800);
+    expect(mockSettings.tableFillMinResponseLength).toBe(0);
   });
 
   it('R10A-23：条件模板恒开启在加载时归一，旧设置里的 false 不再依赖总览页刷新去改写', () => {
