@@ -92769,7 +92769,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261010-07"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261010-08"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92788,7 +92788,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261010-07";
+        const stamp = "20261010-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -152840,7 +152840,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261010-07";
+        const stamp = "20261010-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -182679,6 +182679,9 @@ var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sf
  * 三条路径都不需要我们写点击处理；真链接还能中键新开、长按复制。
  *
  * 预填正文的原则：只引导用户把「导出的 Debug JSON」带上来，环境项留空位。
+ * 日志有两条送达路径：拖进 issue 当附件，或传到网盘后把分享链接贴进 issue——部分环境
+ * （手机端 GitHub 等）选不了 .json 附件，网盘是兜底。插件不代传：上传与分享由用户在网盘里自己完成，
+ * 用哪个网盘由用户自己定，我们只在文案里提示，不给入口、不碰网盘账号，也不把日志发到第三方。
  * 宿主版本、平台、复现步骤都由用户填——我们在页面里无法证实用户跑的是哪个 TT 版本，
  * 代填等于替用户下结论，也会把 issue 引向错误方向。
  */
@@ -182692,6 +182695,10 @@ function buildDebugIssueBody_ACU(version = readAcuBuildVersion_ACU()) {
     return [
         '> **先带上日志**：在插件「高级工具 → Debug 问题上报」点「开始 Debug」→ 复现问题 → 点「导出 Debug 数据」，',
         '> 把得到的 `acu-debug-*.json` 拖进本 issue 当附件（导出已对密钥全掩码）。没有这个文件基本无法定位。',
+        '> 传不上附件时：把文件上传到你常用的网盘，把分享链接（有提取码一并写上）贴到下面。',
+        '',
+        '### Debug 日志',
+        '- 附件或网盘分享链接：',
         '',
         '### 环境',
         `- 插件版本：${version}`,
@@ -184058,7 +184065,7 @@ const advancedToolsCopy = {
         },
         debug: {
             title: "Debug 问题上报",
-            description: "遇到可复现的问题时：开启 Debug → 复现问题 → 导出 Debug 数据（.json）→ 点「前往 GitHub 提交 issue」把文件作为附件提交（也可自行交给开发者）。导出包含版本、环境摘要（密钥脱敏）、全量日志与表结构概览。",
+            description: "遇到可复现的问题时：开启 Debug → 复现问题 → 导出 Debug 数据（.json）→ 点「前往 GitHub 提交 issue」把文件作为附件提交；附件传不上时可传到自己常用的网盘，把分享链接贴进 issue（也可自行交给开发者）。导出包含版本、环境摘要（密钥脱敏）、全量日志与表结构概览。",
         },
     },
 };
@@ -184219,8 +184226,8 @@ var _sfc_main$B = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-at__sql[data-v-f8ed5532],\r\n.ub-at__logs[data-v-f8ed5532] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-at__row[data-v-f8ed5532] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-at__spacer[data-v-f8ed5532] {\r\n  flex: 1 1 auto;\n}\n.ub-at__hint[data-v-f8ed5532] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__status[data-v-f8ed5532] {\r\n  margin-left: auto;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-at__status.is-success[data-v-f8ed5532] {\r\n  color: var(--ub-ok);\n}\n.ub-at__status.is-error[data-v-f8ed5532] {\r\n  color: var(--ub-danger);\n}\n.ub-at__result[data-v-f8ed5532] {\r\n  min-width: 0;\n}\n.ub-at__empty[data-v-f8ed5532] {\r\n  padding: var(--ub-s4);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: center;\n}\n.ub-at__error[data-v-f8ed5532] {\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-danger-soft);\r\n  color: var(--ub-danger);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  white-space: pre-wrap;\n}\n.ub-at__table-wrap[data-v-f8ed5532] {\r\n  max-height: calc(var(--ub-u) * 420);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  overflow: auto;\n}\n.ub-at__table[data-v-f8ed5532] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__table th[data-v-f8ed5532],\r\n.ub-at__table td[data-v-f8ed5532] {\r\n  max-width: 320px;\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border-bottom: 1px solid var(--ub-line-soft);\r\n  text-align: left;\r\n  vertical-align: top;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n.ub-at__table th[data-v-f8ed5532] {\r\n  position: sticky;\r\n  top: 0;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-weight: 700;\n}\n.ub-at__table td.is-null[data-v-f8ed5532] {\r\n  color: var(--ub-text-3);\r\n  font-style: italic;\n}\n.ub-at__meta[data-v-f8ed5532] {\r\n  margin-top: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__history[data-v-f8ed5532] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  width: 100%;\r\n  padding: var(--ub-s2);\r\n  border: 0;\r\n  border-left: 3px solid var(--ub-ok);\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-at__history.is-fail[data-v-f8ed5532] {\r\n  border-left-color: var(--ub-danger);\n}\n.ub-at__history-meta[data-v-f8ed5532] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-at__history code[data-v-f8ed5532] {\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  white-space: pre-wrap;\r\n  word-break: break-all;\n}\n.ub-at__filters[data-v-f8ed5532] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);\r\n  gap: var(--ub-s2);\n}\n.ub-at__switch[data-v-f8ed5532] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-at__loglist[data-v-f8ed5532] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  max-height: calc(var(--ub-u) * 520);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  overflow-y: auto;\n}\n.ub-at__log[data-v-f8ed5532] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-bottom: 1px solid var(--ub-line-soft);\r\n  border-left: 3px solid transparent;\n}\n.ub-at__log.is-error[data-v-f8ed5532] {\r\n  border-left-color: var(--ub-danger);\n}\n.ub-at__log.is-warn[data-v-f8ed5532] {\r\n  border-left-color: var(--ub-warn);\n}\n.ub-at__log-meta[data-v-f8ed5532] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text-3);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-at__log-tag[data-v-f8ed5532] {\r\n  color: var(--ub-text-2);\r\n  font-weight: 700;\n}\n.ub-at__log-msg[data-v-f8ed5532] {\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n.ub-at__log-hint[data-v-f8ed5532] {\r\n  margin-top: var(--ub-s1);\r\n  padding: var(--ub-s2);\r\n  border-radius: 6px;\r\n  background: var(--ub-warn-soft);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__log-hint summary[data-v-f8ed5532] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  cursor: pointer;\r\n  list-style: none;\n}\n.ub-at__log-hint summary i[data-v-f8ed5532] {\r\n  color: var(--ub-warn);\n}\n.ub-at__log-hint-toggle[data-v-f8ed5532] {\r\n  margin-left: auto;\r\n  color: var(--ub-accent-ink);\r\n  font-weight: 700;\n}\n.ub-at__log-hint ol[data-v-f8ed5532] {\r\n  margin: var(--ub-s2) 0 0;\r\n  padding-left: 1.4em;\n}\n.ub-at__steps[data-v-f8ed5532] {\r\n  margin: 0;\r\n  padding-left: 1.4em;\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.8;\n}\n@media (max-width: 640px) {\n.ub-at__filters[data-v-f8ed5532] {\r\n    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);\n}\n.ub-at__filters[data-v-f8ed5532] > :last-child {\r\n    grid-column: 1 / -1;\n}\n}\r\n", "src/presentation-v3/pages/AdvancedToolsPage.vue#style-0-f8ed5532");
-var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_f8ed5532_lang = null;
+injectSfcStyle("\n.ub-at__sql[data-v-1f0a7747],\n.ub-at__logs[data-v-1f0a7747] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s3);\n  padding: var(--ub-s4);\n}\n.ub-at__row[data-v-1f0a7747] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: var(--ub-s2);\n}\n.ub-at__spacer[data-v-1f0a7747] {\n  flex: 1 1 auto;\n}\n.ub-at__hint[data-v-1f0a7747] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__status[data-v-1f0a7747] {\n  margin-left: auto;\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n}\n.ub-at__status.is-success[data-v-1f0a7747] {\n  color: var(--ub-ok);\n}\n.ub-at__status.is-error[data-v-1f0a7747] {\n  color: var(--ub-danger);\n}\n.ub-at__result[data-v-1f0a7747] {\n  min-width: 0;\n}\n.ub-at__empty[data-v-1f0a7747] {\n  padding: var(--ub-s4);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-sm);\n  text-align: center;\n}\n.ub-at__error[data-v-1f0a7747] {\n  margin: 0;\n  padding: var(--ub-s3);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-danger-soft);\n  color: var(--ub-danger);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  white-space: pre-wrap;\n}\n.ub-at__table-wrap[data-v-1f0a7747] {\n  max-height: calc(var(--ub-u) * 420);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n  overflow: auto;\n}\n.ub-at__table[data-v-1f0a7747] {\n  width: 100%;\n  border-collapse: collapse;\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__table th[data-v-1f0a7747],\n.ub-at__table td[data-v-1f0a7747] {\n  max-width: 320px;\n  padding: var(--ub-s1) var(--ub-s2);\n  border-bottom: 1px solid var(--ub-line-soft);\n  text-align: left;\n  vertical-align: top;\n  white-space: pre-wrap;\n  word-break: break-word;\n}\n.ub-at__table th[data-v-1f0a7747] {\n  position: sticky;\n  top: 0;\n  background: var(--ub-sunken);\n  color: var(--ub-text-2);\n  font-weight: 700;\n}\n.ub-at__table td.is-null[data-v-1f0a7747] {\n  color: var(--ub-text-3);\n  font-style: italic;\n}\n.ub-at__meta[data-v-1f0a7747] {\n  margin-top: var(--ub-s1);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__history[data-v-1f0a7747] {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  width: 100%;\n  padding: var(--ub-s2);\n  border: 0;\n  border-left: 3px solid var(--ub-ok);\n  border-radius: 6px;\n  background: var(--ub-sunken);\n  color: var(--ub-text);\n  font: inherit;\n  text-align: left;\n  cursor: pointer;\n}\n.ub-at__history.is-fail[data-v-1f0a7747] {\n  border-left-color: var(--ub-danger);\n}\n.ub-at__history-meta[data-v-1f0a7747] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n}\n.ub-at__history code[data-v-1f0a7747] {\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  white-space: pre-wrap;\n  word-break: break-all;\n}\n.ub-at__filters[data-v-1f0a7747] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);\n  gap: var(--ub-s2);\n}\n.ub-at__switch[data-v-1f0a7747] {\n  display: inline-flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n}\n.ub-at__loglist[data-v-1f0a7747] {\n  display: flex;\n  flex-direction: column;\n  max-height: calc(var(--ub-u) * 520);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-input-bg);\n  overflow-y: auto;\n}\n.ub-at__log[data-v-1f0a7747] {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  padding: var(--ub-s2) var(--ub-s3);\n  border-bottom: 1px solid var(--ub-line-soft);\n  border-left: 3px solid transparent;\n}\n.ub-at__log.is-error[data-v-1f0a7747] {\n  border-left-color: var(--ub-danger);\n}\n.ub-at__log.is-warn[data-v-1f0a7747] {\n  border-left-color: var(--ub-warn);\n}\n.ub-at__log-meta[data-v-1f0a7747] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  color: var(--ub-text-3);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-2xs);\n}\n.ub-at__log-tag[data-v-1f0a7747] {\n  color: var(--ub-text-2);\n  font-weight: 700;\n}\n.ub-at__log-msg[data-v-1f0a7747] {\n  color: var(--ub-text);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  white-space: pre-wrap;\n  word-break: break-word;\n}\n.ub-at__log-hint[data-v-1f0a7747] {\n  margin-top: var(--ub-s1);\n  padding: var(--ub-s2);\n  border-radius: 6px;\n  background: var(--ub-warn-soft);\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__log-hint summary[data-v-1f0a7747] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  cursor: pointer;\n  list-style: none;\n}\n.ub-at__log-hint summary i[data-v-1f0a7747] {\n  color: var(--ub-warn);\n}\n.ub-at__log-hint-toggle[data-v-1f0a7747] {\n  margin-left: auto;\n  color: var(--ub-accent-ink);\n  font-weight: 700;\n}\n.ub-at__log-hint ol[data-v-1f0a7747] {\n  margin: var(--ub-s2) 0 0;\n  padding-left: 1.4em;\n}\n.ub-at__steps[data-v-1f0a7747] {\n  margin: 0;\n  padding-left: 1.4em;\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-sm);\n  line-height: 1.8;\n}\n@media (max-width: 640px) {\n.ub-at__filters[data-v-1f0a7747] {\n    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);\n}\n.ub-at__filters[data-v-1f0a7747] > :last-child {\n    grid-column: 1 / -1;\n}\n}\n", "src/presentation-v3/pages/AdvancedToolsPage.vue#style-0-1f0a7747");
+var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_1f0a7747_lang = null;
 
 const _hoisted_1$x = { class: "ub-at__sql" };
 const _hoisted_2$u = { class: "ub-at__row" };
@@ -184740,7 +184747,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 						createBaseVNode("li", null, "点「开始 Debug」（补开 debug / warn 采集，之前攒下的报错会一起保留导出）"),
 						createBaseVNode("li", null, "复现问题"),
 						createBaseVNode("li", null, "点「导出 Debug 数据」生成 .json 文件"),
-						createBaseVNode("li", null, "点「前往 GitHub 提交 issue」把文件作为附件提交（也可交给开发者）。排查完记得「停止 Debug」。")
+						createBaseVNode("li", null, "点「前往 GitHub 提交 issue」把文件作为附件提交；附件传不上时，先把文件传到你常用的网盘，再把分享链接（含提取码）贴进 issue。排查完记得「停止 Debug」。")
 					],
 					-1
 					/* CACHED */
@@ -184792,7 +184799,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$B, [["render", _sfc_render$B], ["__scopeId", "data-v-f8ed5532"]]);
+var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$B, [["render", _sfc_render$B], ["__scopeId", "data-v-1f0a7747"]]);
 
 function buildWorldbookSnapshotEntryIndexByBook_ACU(snapshot) {
     const result = new Map();

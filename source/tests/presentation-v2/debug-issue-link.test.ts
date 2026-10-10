@@ -29,6 +29,14 @@ describe('Debug issue 链接构造', () => {
     expect(body).toContain('实际行为');
   });
 
+  it('附件传不上时，正文给出网盘分享链接的填写位', () => {
+    const body = buildDebugIssueBody_ACU('9.8.7');
+
+    expect(body).toContain('网盘');
+    expect(body).toContain('分享链接');
+    expect(body).toMatch(/附件或网盘分享链接：/);
+  });
+
   it('不代填未经证实的宿主版本：环境项留「请填写」空位', () => {
     const body = buildDebugIssueBody_ACU('9.8.7');
 

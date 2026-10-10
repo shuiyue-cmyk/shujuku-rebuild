@@ -134,7 +134,7 @@
         <li>点「开始 Debug」（补开 debug / warn 采集，之前攒下的报错会一起保留导出）</li>
         <li>复现问题</li>
         <li>点「导出 Debug 数据」生成 .json 文件</li>
-        <li>点「前往 GitHub 提交 issue」把文件作为附件提交（也可交给开发者）。排查完记得「停止 Debug」。</li>
+        <li>点「前往 GitHub 提交 issue」把文件作为附件提交；附件传不上时，先把文件传到你常用的网盘，再把分享链接（含提取码）贴进 issue。排查完记得「停止 Debug」。</li>
       </ol>
       <div class="ub-at__row">
         <UbButton :variant="debugFlow.active.value ? 'danger' : 'primary'" :icon="debugFlow.active.value ? 'fa-solid fa-stop' : 'fa-solid fa-bug'" @click="debugFlow.toggleDebug">

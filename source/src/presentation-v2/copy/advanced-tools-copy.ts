@@ -18,7 +18,7 @@ export const advancedToolsCopy = {
     debug: {
       title: "Debug 问题上报",
       description:
-        "遇到可复现的问题时：开启 Debug → 复现问题 → 导出 Debug 数据（.json）→ 点「前往 GitHub 提交 issue」把文件作为附件提交（也可自行交给开发者）。导出包含版本、环境摘要（密钥脱敏）、全量日志与表结构概览。",
+        "遇到可复现的问题时：开启 Debug → 复现问题 → 导出 Debug 数据（.json）→ 点「前往 GitHub 提交 issue」把文件作为附件提交；附件传不上时可传到自己常用的网盘，把分享链接贴进 issue（也可自行交给开发者）。导出包含版本、环境摘要（密钥脱敏）、全量日志与表结构概览。",
     },
   },
 };
