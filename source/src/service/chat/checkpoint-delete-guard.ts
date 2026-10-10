@@ -17,7 +17,8 @@
  * - 恢复点：MESSAGE_DELETED 调度轮开头（冷回放之前）。丢失产物嫁接到其原位置之后
  *   第一个幸存 frame 楼层：帧内 checkpoint 先于 logEntries 回放；过渡根必须从删楼后的
  *   幸存历史重算 data/cutoff 并通过严格回放校验，无法证明安全时拒绝保存。被删楼层自身
- *   的 logEntries 不恢复（删楼 = 撤销该楼编辑）。
+ *   的 logEntries 不恢复（删楼 = 撤销该楼编辑）。例外：被删的是回放根时撤销不了——full checkpoint
+ *   存的是该楼填表之后的状态（没有填表前的副本），挪到前一楼后该楼填进去的行仍在表里。
  *
  * 残余竞态（接受并记录）：删楼后调度防抖窗口（1.2s）内若插件恰好完成一次保存，
  * post-save 同步会先丢弃待恢复产物。生成 / 填表落盘耗时远大于该窗口，实际不可达。
@@ -82,9 +83,12 @@ interface CheckpointVaultState_ACU {
     /** 续写基线，按楼层序。与表格产物同一轮嫁接（TT-only）。 */
     materialEntries: MaterialCheckpointVaultEntry_ACU[];
     /**
-     * 捕获时聊天里的全部楼层。嫁接只能落在删楼前就存在的楼上：宿主「重新生成」先删旧回复、
+     * 删楼前就在的楼层：捕获时聊天里的全部楼层，加上每次 MESSAGE_DELETED 当刻在场的楼层
+     * （见 noteMessagesPresentAtDeletion_ACU）。嫁接只能落在这些楼上：宿主「重新生成」先删旧回复、
      * 流式一开始就把新回复 push 进聊天，删楼调度（1.2s 防抖）到期时新回复已在末尾——
      * 落到它身上会让新回复被当成「已填过表」（自动填表跳过）并带着旧回复的数据（issue #2）。
+     * 删楼当刻补登记是为了覆盖「上次捕获后宿主追加、插件没保存过」的楼（关自动填表、频率跳过、填表失败），
+     * 否则过期保管库会让回放根无处可挪。
      */
     knownMessages: WeakSet<object>;
 }
@@ -250,6 +254,20 @@ export function captureCheckpointVaultForCurrentChat_ACU(chatArg?: any[]): void 
     }
 
     vault_ACU = { chatKey, entriesByIsolationKey, materialEntries, knownMessages };
+}
+
+/**
+ * MESSAGE_DELETED 当刻同步调用：把此刻在场的楼层并入「删楼前就在」的集合。
+ * TT 的重新生成先 await 删楼事件派发完、再开始生成（流式新回复随后才 push），
+ * 所以必须在事件回调的同步段里调用，不能放进防抖调度。
+ */
+export function noteMessagesPresentAtDeletion_ACU(): void {
+    if (!vault_ACU || vault_ACU.chatKey !== String(currentChatFileIdentifier_ACU || '')) return;
+    const chat = getChatArray_ACU();
+    if (!Array.isArray(chat)) return;
+    for (const message of chat) {
+        if (message && typeof message === 'object') vault_ACU.knownMessages.add(message);
+    }
 }
 
 /** 切聊 / 测试清理。 */

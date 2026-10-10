@@ -92838,7 +92838,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261010-08"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261010-09"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92857,7 +92857,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261010-08";
+        const stamp = "20261010-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -117304,7 +117304,8 @@ async function handleManualUpdate_ACU() {
  * - 恢复点：MESSAGE_DELETED 调度轮开头（冷回放之前）。丢失产物嫁接到其原位置之后
  *   第一个幸存 frame 楼层：帧内 checkpoint 先于 logEntries 回放；过渡根必须从删楼后的
  *   幸存历史重算 data/cutoff 并通过严格回放校验，无法证明安全时拒绝保存。被删楼层自身
- *   的 logEntries 不恢复（删楼 = 撤销该楼编辑）。
+ *   的 logEntries 不恢复（删楼 = 撤销该楼编辑）。例外：被删的是回放根时撤销不了——full checkpoint
+ *   存的是该楼填表之后的状态（没有填表前的副本），挪到前一楼后该楼填进去的行仍在表里。
  *
  * 残余竞态（接受并记录）：删楼后调度防抖窗口（1.2s）内若插件恰好完成一次保存，
  * post-save 同步会先丢弃待恢复产物。生成 / 填表落盘耗时远大于该窗口，实际不可达。
@@ -117436,6 +117437,22 @@ function captureCheckpointVaultForCurrentChat_ACU(chatArg) {
         }
     }
     vault_ACU = { chatKey, entriesByIsolationKey, materialEntries, knownMessages };
+}
+/**
+ * MESSAGE_DELETED 当刻同步调用：把此刻在场的楼层并入「删楼前就在」的集合。
+ * TT 的重新生成先 await 删楼事件派发完、再开始生成（流式新回复随后才 push），
+ * 所以必须在事件回调的同步段里调用，不能放进防抖调度。
+ */
+function noteMessagesPresentAtDeletion_ACU() {
+    if (!vault_ACU || vault_ACU.chatKey !== String(currentChatFileIdentifier_ACU || ''))
+        return;
+    const chat = getChatArray_ACU();
+    if (!Array.isArray(chat))
+        return;
+    for (const message of chat) {
+        if (message && typeof message === 'object')
+            vault_ACU.knownMessages.add(message);
+    }
 }
 /** 切聊 / 测试清理。 */
 function resetCheckpointVault_ACU() {
@@ -147525,6 +147542,15 @@ function mainInitialize_ACU() {
                 if (SillyTavern_API_ACU.eventTypes[evName]) {
                     SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes[evName], async (data) => {
                         logDebug_ACU(`ACU ${evName} event detected. Triggering data reload and merge from chat history.`);
+                        // 删楼守卫：同步登记此刻在场的楼层（重新生成的流式新回复要到事件派发完才追加）。
+                        if (evName === 'MESSAGE_DELETED') {
+                            try {
+                                noteMessagesPresentAtDeletion_ACU();
+                            }
+                            catch (error) {
+                                logWarn_ACU('[删楼守卫] 删楼当刻登记在场楼层失败:', error);
+                            }
+                        }
                         scheduleChatMutationRefresh_ACU(evName === 'MESSAGE_DELETED' ? 'chat_modified_deleted' : 'chat_modified_swiped');
                     });
                 }
@@ -152917,7 +152943,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261010-08";
+        const stamp = "20261010-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

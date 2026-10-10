@@ -67,7 +67,7 @@ import {
   getRuntimeLifecycleEpoch_ACU,
   hydrateStorageProviderFromSnapshot_ACU
 } from '../../service/table/table-storage-strategy';
-import { captureCheckpointVaultForCurrentChat_ACU, installCheckpointDeleteGuard_ACU } from '../../service/chat/checkpoint-delete-guard';
+import { captureCheckpointVaultForCurrentChat_ACU, installCheckpointDeleteGuard_ACU, noteMessagesPresentAtDeletion_ACU } from '../../service/chat/checkpoint-delete-guard';
 import { installMaterialCheckpointScheduler_ACU } from '../../service/continuation/agent/agent-checkpoint-scheduler';
 import { auditDormantDataIntegrity_ACU } from '../../service/template/dormant-data-service';
 import { getUiSurface_ACU, showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
@@ -1247,6 +1247,10 @@ export   function mainInitialize_ACU() {
             if (SillyTavern_API_ACU.eventTypes[evName as keyof typeof SillyTavern_API_ACU.eventTypes]) {
                 SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes[evName as keyof typeof SillyTavern_API_ACU.eventTypes], async (data: any) => {
                     logDebug_ACU(`ACU ${evName} event detected. Triggering data reload and merge from chat history.`);
+                    // 删楼守卫：同步登记此刻在场的楼层（重新生成的流式新回复要到事件派发完才追加）。
+                    if (evName === 'MESSAGE_DELETED') {
+                        try { noteMessagesPresentAtDeletion_ACU(); } catch (error) { logWarn_ACU('[删楼守卫] 删楼当刻登记在场楼层失败:', error); }
+                    }
                     scheduleChatMutationRefresh_ACU(evName === 'MESSAGE_DELETED' ? 'chat_modified_deleted' : 'chat_modified_swiped');
                 });
             }

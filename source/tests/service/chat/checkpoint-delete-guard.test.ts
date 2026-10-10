@@ -70,6 +70,7 @@ import {
   captureCheckpointVaultForCurrentChat_ACU,
   recoverLostCheckpointsAfterMessageDeletion_ACU,
   installCheckpointDeleteGuard_ACU,
+  noteMessagesPresentAtDeletion_ACU,
   __getCheckpointVaultForTests_ACU,
   __resetCheckpointDeleteGuardForTests_ACU,
 } from '../../../src/service/chat/checkpoint-delete-guard';
@@ -398,6 +399,92 @@ describe('recoverLostCheckpointsAfterMessageDeletion_ACU', () => {
     expect(result.recovered).toBe(false);
     expect(newReply.TavernDB_ACU_IsolatedData).toBeUndefined();
     expect(mockSaveChatToHostStrict).not.toHaveBeenCalled();
+  });
+
+  it('保管库过期：上次捕获后宿主追加、插件未保存过的楼，删楼那一刻登记后可作落点', async () => {
+    // 关自动填表 / 频率跳过 / 填表失败时插件不保存，保管库停在旧捕获；删楼那一刻在场的楼都算「删楼前就在」。
+    const rootMsg = aiMsg('root', { version: 2, checkpoint: fullCheckpoint(), logEntries: [] });
+    const chat: any[] = [userMsg('u1'), rootMsg];
+    mockGetChatArray.mockReturnValue(chat);
+    captureCheckpointVaultForCurrentChat_ACU();
+    const laterReply = aiMsg('later');
+    chat.push(userMsg('u2'), laterReply);
+
+    chat.splice(1, 1);
+    noteMessagesPresentAtDeletion_ACU();
+    const result = await recoverLostCheckpointsAfterMessageDeletion_ACU();
+
+    expect(result.recovered).toBe(true);
+    expect(laterReply.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toEqual(fullCheckpoint());
+  });
+
+  it('删楼时登记在场楼层后，重新生成随后追加的流式新回复仍不当落点', async () => {
+    const earlierMsg = aiMsg('earlier', logFrame([{ seq: 2, operations: [] }]));
+    const oldReply = aiMsg('old', { version: 2, checkpoint: fullCheckpoint(), logEntries: [] });
+    const chat: any[] = [userMsg('u1'), earlierMsg, userMsg('u2'), oldReply];
+    mockGetChatArray.mockReturnValue(chat);
+    captureCheckpointVaultForCurrentChat_ACU();
+
+    chat.splice(3, 1);
+    noteMessagesPresentAtDeletion_ACU();
+    const newReply: any = { is_user: false, mes: '' };
+    chat.push(newReply);
+    const result = await recoverLostCheckpointsAfterMessageDeletion_ACU();
+
+    expect(result.recovered).toBe(true);
+    expect(newReply.TavernDB_ACU_IsolatedData).toBeUndefined();
+    expect(earlierMsg.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toEqual(fullCheckpoint());
+  });
+
+  it('删楼登记只作用于保管库所属聊天：聊天标识对不上时不登记', async () => {
+    const rootMsg = aiMsg('root', { version: 2, checkpoint: fullCheckpoint(), logEntries: [] });
+    const chat: any[] = [userMsg('u1'), rootMsg];
+    mockGetChatArray.mockReturnValue(chat);
+    captureCheckpointVaultForCurrentChat_ACU();
+    const laterReply = aiMsg('later');
+    chat.push(userMsg('u2'), laterReply);
+
+    mockState.chatKey = 'chat-b';
+    noteMessagesPresentAtDeletion_ACU();
+    mockState.chatKey = 'chat-a';
+    chat.splice(1, 1);
+    const result = await recoverLostCheckpointsAfterMessageDeletion_ACU();
+
+    expect(result.recovered).toBe(false);
+    expect(laterReply.TavernDB_ACU_IsolatedData).toBeUndefined();
+  });
+
+  it('续写基线兜底同样不落到删楼后追加的新回复上（TT-only）', async () => {
+    const { registerMaterialCheckpointRecoveryAdapter_ACU } = await import('../../../src/service/chat/material-checkpoint-sync');
+    registerMaterialCheckpointRecoveryAdapter_ACU({
+      capture: (message: unknown) => {
+        const marker = (message as { _qrf_continuation_agent?: { swipeId: string; snapshot: unknown } })._qrf_continuation_agent;
+        return marker ? { continuation: marker } : null;
+      },
+      graftContinuation(message, artifact) {
+        const target = message as { _qrf_continuation_agent?: unknown };
+        if (target._qrf_continuation_agent) return false;
+        target._qrf_continuation_agent = artifact;
+        return true;
+      },
+      assertContinuation() { return null; },
+    });
+    const earlier = aiMsg('earlier');
+    const oldReply = aiMsg('old');
+    oldReply._qrf_continuation_agent = { swipeId: '0', snapshot: { hooks: ['H1'] } };
+    const chat: any[] = [userMsg('u1'), earlier, userMsg('u2'), oldReply];
+    mockGetChatArray.mockReturnValue(chat);
+    captureCheckpointVaultForCurrentChat_ACU();
+
+    chat.splice(3, 1);
+    noteMessagesPresentAtDeletion_ACU();
+    const newReply: any = { is_user: false, mes: '' };
+    chat.push(newReply);
+    const result = await recoverLostCheckpointsAfterMessageDeletion_ACU();
+
+    expect(result.recovered).toBe(true);
+    expect(newReply._qrf_continuation_agent).toBeUndefined();
+    expect(earlier._qrf_continuation_agent).toEqual({ swipeId: '0', snapshot: { hooks: ['H1'] } });
   });
 
   it('聊天中已无 AI 楼层时放弃且不保存', async () => {
