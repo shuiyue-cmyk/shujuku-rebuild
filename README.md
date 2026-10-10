@@ -36,6 +36,19 @@ https://github.com/shuiyue-cmyk/shujuku-rebuild
 因此「一批改动」不构成跳 MINOR 的理由——只有低位到 10 才进位。
 `manifest.json` 与 `source/package.json` 的版本号必须同步修改。
 
+## 问题反馈
+
+提交 issue 前请确认满足以下两条，**缺任意一条的 issue 不予处理，会直接关闭**：
+
+1. **能稳定复现**：写清楚从哪一步开始、做了什么、期望什么、实际发生了什么，按你写的步骤别人也能复现出来。偶发且说不出触发条件的问题请先自己多试几次，找到规律再提交。
+2. **附带 Debug 日志**：没有日志基本无法定位问题。获取方法：
+   1. 打开插件「高级工具 → Debug 问题上报」，点「开始 Debug」；
+   2. 按你写的步骤复现一次问题；
+   3. 点「导出 Debug 数据」，得到 `acu-debug-*.json` 文件（导出时密钥已全部掩码）；
+   4. 点「前往 GitHub 提交 issue」（会自动带上版本号和填写模板），把文件拖进 issue 作为附件。如果 GitHub 传不上，就把文件上传到你常用的网盘，在 issue 里贴分享链接（有提取码一并写上）。
+
+另外请写明 TauriTavern 版本、所用平台（Windows / macOS / Linux / Android / iOS）。提交入口：[New issue](https://github.com/shuiyue-cmyk/shujuku-rebuild/issues/new)。
+
 ## 支持我
 
 我一直在用 Opencode GO 的套餐游玩酒馆，如果你喜欢这个项目，欢迎通过我的 AFF 支持我 — 使用链接一起获得5美元的额外赠金：
