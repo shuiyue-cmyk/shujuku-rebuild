@@ -197,6 +197,65 @@ describe('recordGenerationContext_ACU', () => {
 
 });
 
+// issue #2 实锤（debug 日志）：思考档开到 xhigh 时一次重新生成要 90~110 秒，超过 60 秒的上下文有效期，
+// ENDED 变成「无配对」；TT 的消息没有 message_id，重新生成前后 AI 楼数又相同，于是被当成外部插件的
+// 假 ENDED 丢掉（unpaired_ended_no_new_output），自动填表不跑。
+describe('前台生成上下文的有效期', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('前台生成跑了 95 秒才结束，仍能配对到自己的上下文', () => {
+    const regenerate = recordGenerationContext_ACU('regenerate', {}, false);
+    vi.advanceTimersByTime(95_000);
+
+    expect(resolveGenerationContextForEnded_ACU()).toEqual({ status: 'matched', context: regenerate });
+  });
+
+  it('长时间生成后，配对放行不受「楼数相同、无 message_id」的无配对收紧影响', () => {
+    generationGate_ACU.lastEndedFloorSignature_ACU = { aiFloorCount: 6, latestAiMessageId: null };
+    recordGenerationContext_ACU('regenerate', {}, false);
+    vi.advanceTimersByTime(95_000);
+
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(undefined, { aiFloorCount: 6, latestAiMessageId: null })).toBe(true);
+  });
+
+  it('quiet 上下文仍按 60 秒过期（后台生成未必有配对的 ENDED）', () => {
+    recordGenerationContext_ACU('quiet', { quiet_prompt: '后台任务' }, false);
+    vi.advanceTimersByTime(61_000);
+
+    expect(resolveGenerationContextForEnded_ACU().status).toBe('none');
+  });
+
+  it('新的前台 STARTED 顶掉旧的未闭合前台上下文（宿主不会同时跑两个前台生成），不判歧义', () => {
+    recordGenerationContext_ACU('normal', {}, false); // 例如早退的生成：发了 STARTED、没有 ENDED
+    vi.advanceTimersByTime(120_000);
+    const regenerate = recordGenerationContext_ACU('regenerate', {}, false);
+
+    expect(resolveGenerationContextForEnded_ACU()).toEqual({ status: 'matched', context: regenerate });
+  });
+
+  it('dry-run 不顶掉在飞的前台上下文', () => {
+    const real = recordGenerationContext_ACU('normal', {}, false);
+    recordGenerationContext_ACU('normal', {}, true);
+
+    expect(resolveGenerationContextForEnded_ACU().context?.seq).toBe(real.seq);
+  });
+
+  it('前台生成期间的 quiet 生成仍与前台并存（照旧按歧义处理），不被顶掉', () => {
+    recordGenerationContext_ACU('normal', {}, false);
+    recordGenerationContext_ACU('quiet', { quiet_prompt: '后台任务' }, false);
+
+    expect(resolveGenerationContextForEnded_ACU().status).toBe('ambiguous');
+  });
+
+  it('前台上下文也有上限：30 分钟仍未结束则过期', () => {
+    recordGenerationContext_ACU('normal', {}, false);
+    vi.advanceTimersByTime(31 * 60_000);
+
+    expect(resolveGenerationContextForEnded_ACU().status).toBe('none');
+  });
+});
+
 describe('resolveGenerationContextForEnded_ACU — 并发结束配对', () => {
   const pre0 = { aiFloorCount: 2, latestAiMessageId: 20, latestContentHash: 'pre-0' };
   const pre1 = { aiFloorCount: 3, latestAiMessageId: 30, latestContentHash: 'pre-1' };

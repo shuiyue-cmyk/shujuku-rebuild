@@ -586,10 +586,12 @@ describe('executeAutoUpdatePlan_ACU', () => {
         'group_b': { indices: [2], batchSize: 2, groupId: 1, sheetKeys: ['sheet_1'], sheetNames: ['表B'] },
       },
     };
-    const mockGrouped = vi.fn().mockResolvedValue({ success: false, failedGroups: ['group_a'] });
+    const mockGrouped = vi.fn().mockResolvedValue({ success: false, failedGroups: ['group_a'], error: '统一提交失败：示例原因' });
     const ops = makeOps({ processGroupedUpdates: mockGrouped });
     const result = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, ops, { runId: 'run-1' });
     expect(result.success).toBe(false);
+    // 失败原因必须进日志：否则 Debug 导出里只有「1 组失败」，看不出为什么。
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('统一提交失败：示例原因'));
     expect(mockLogDebug).toHaveBeenCalledWith(
       '[AutoFill] Trigger skipped',
       expect.objectContaining({ reason: 'execution_failed', runId: 'run-1', stage: 'execute', failedGroupCount: 1 }),

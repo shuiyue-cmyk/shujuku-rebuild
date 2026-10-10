@@ -102061,6 +102061,14 @@ let tempPlotToSave_ACU = null;
 let pendingFinalGenerationGreenlights_ACU = [];
 const USER_SEND_TRIGGER_TTL_MS_ACU = 12000;
 const GENERATION_CONTEXT_TTL_MS_ACU = 60000;
+/**
+ * 前台生成（非 dry-run、非 quiet）上下文的有效期。思考档开高时一次生成常超过 60 秒（issue #2 日志里
+ * 重新生成跑了 94～108 秒）：上下文过期后 ENDED 变成无配对，而 TT 消息没有 message_id、重新生成前后
+ * AI 楼数又不变，会被无配对收紧当成外部插件的假 ENDED 丢掉，自动填表不跑。
+ * 前台生成在宿主上不会并发，旧的未闭合前台上下文由下一次前台 STARTED 顶掉（见 recordGenerationContext_ACU），
+ * 所以放长有效期不会让早退生成留下的残留上下文把后续 ENDED 拖成歧义。
+ */
+const FOREGROUND_GENERATION_CONTEXT_TTL_MS_ACU = 30 * 60000;
 const generationGate_ACU = {
     lastUserMessageId: null,
     lastUserMessageText: '',
@@ -102111,9 +102119,15 @@ function recordLastUserSend_ACU(messageId) {
         // ignore
     }
 }
+/** 前台生成：会显示停止按钮、宿主同一时刻只有一个（dry-run 与 quiet 不算）。 */
+function isForegroundGenerationContext_ACU(context) {
+    return !context.dryRun && !isQuietLikeGeneration_ACU(context.type, context.params);
+}
 function removeExpiredGenerationContexts_ACU(now = Date.now()) {
-    const earliestValidAt = now - GENERATION_CONTEXT_TTL_MS_ACU;
-    generationGate_ACU.activeGenerations = generationGate_ACU.activeGenerations.filter(context => context.at >= earliestValidAt);
+    generationGate_ACU.activeGenerations = generationGate_ACU.activeGenerations.filter(context => {
+        const ttl = isForegroundGenerationContext_ACU(context) ? FOREGROUND_GENERATION_CONTEXT_TTL_MS_ACU : GENERATION_CONTEXT_TTL_MS_ACU;
+        return context.at >= now - ttl;
+    });
 }
 function recordGenerationContext_ACU(type, params, dryRun, preSignature) {
     const context = {
@@ -102127,6 +102141,11 @@ function recordGenerationContext_ACU(type, params, dryRun, preSignature) {
     if (preSignature !== undefined)
         context.preSignature = preSignature;
     removeExpiredGenerationContexts_ACU(context.at);
+    if (isForegroundGenerationContext_ACU(context)) {
+        // 新的前台生成开始 ⇒ 之前未闭合的前台上下文（早退生成只发了 STARTED）已不可能再收到 ENDED。
+        generationGate_ACU.activeGenerations = generationGate_ACU.activeGenerations
+            .filter(existing => !isForegroundGenerationContext_ACU(existing));
+    }
     generationGate_ACU.activeGenerations.push(context);
     generationGate_ACU.lastGeneration = context;
     return context;
@@ -119783,6 +119802,8 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
             }
         }
         if (failedGroupKeys.length > 0) {
+            // 诊断结构化字段不带业务载荷，失败原因单独记一条（每组截短），Debug 导出里才能看到为什么失败。
+            logWarn_ACU(`[自动填表] ${failedGroupKeys.length}/${totalGroups} 组失败：${failedGroupErrors.map(error => error.slice(0, 300)).join('；') || '未返回具体错误'}`);
             const runnerUnavailableGroupKeys = stagingGroupKeys.filter(key => failedGroupKeys.includes(key));
             logAutoFillSkip_ACU(runnerUnavailableGroupKeys.length ? 'staging_runner_unavailable' : 'execution_failed', {
                 runId: performanceContext?.runId, stage: 'execute', groupCount: totalGroups,

@@ -423,6 +423,8 @@ export async function executeAutoUpdatePlan_ACU(
     }
 
     if (failedGroupKeys.length > 0) {
+        // 诊断结构化字段不带业务载荷，失败原因单独记一条（每组截短），Debug 导出里才能看到为什么失败。
+        logWarn_ACU(`[自动填表] ${failedGroupKeys.length}/${totalGroups} 组失败：${failedGroupErrors.map(error => error.slice(0, 300)).join('；') || '未返回具体错误'}`);
         const runnerUnavailableGroupKeys = stagingGroupKeys.filter(key => failedGroupKeys.includes(key));
         logAutoFillSkip_ACU(runnerUnavailableGroupKeys.length ? 'staging_runner_unavailable' : 'execution_failed', {
             runId: performanceContext?.runId, stage: 'execute', groupCount: totalGroups,

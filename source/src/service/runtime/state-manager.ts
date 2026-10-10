@@ -52,6 +52,14 @@ export let pendingFinalGenerationGreenlights_ACU: any[] = [];
 
 export const USER_SEND_TRIGGER_TTL_MS_ACU = 12000;
 export const GENERATION_CONTEXT_TTL_MS_ACU = 60000;
+/**
+ * 前台生成（非 dry-run、非 quiet）上下文的有效期。思考档开高时一次生成常超过 60 秒（issue #2 日志里
+ * 重新生成跑了 94～108 秒）：上下文过期后 ENDED 变成无配对，而 TT 消息没有 message_id、重新生成前后
+ * AI 楼数又不变，会被无配对收紧当成外部插件的假 ENDED 丢掉，自动填表不跑。
+ * 前台生成在宿主上不会并发，旧的未闭合前台上下文由下一次前台 STARTED 顶掉（见 recordGenerationContext_ACU），
+ * 所以放长有效期不会让早退生成留下的残留上下文把后续 ENDED 拖成歧义。
+ */
+export const FOREGROUND_GENERATION_CONTEXT_TTL_MS_ACU = 30 * 60_000;
 
 export interface GenerationContext_ACU {
   seq: number;
@@ -137,9 +145,16 @@ export function recordLastUserSend_ACU(messageId: any) {
   }
 }
 
+/** 前台生成：会显示停止按钮、宿主同一时刻只有一个（dry-run 与 quiet 不算）。 */
+function isForegroundGenerationContext_ACU(context: GenerationContext_ACU): boolean {
+  return !context.dryRun && !isQuietLikeGeneration_ACU(context.type, context.params);
+}
+
 function removeExpiredGenerationContexts_ACU(now = Date.now()): void {
-  const earliestValidAt = now - GENERATION_CONTEXT_TTL_MS_ACU;
-  generationGate_ACU.activeGenerations = generationGate_ACU.activeGenerations.filter(context => context.at >= earliestValidAt);
+  generationGate_ACU.activeGenerations = generationGate_ACU.activeGenerations.filter(context => {
+    const ttl = isForegroundGenerationContext_ACU(context) ? FOREGROUND_GENERATION_CONTEXT_TTL_MS_ACU : GENERATION_CONTEXT_TTL_MS_ACU;
+    return context.at >= now - ttl;
+  });
 }
 
 export function recordGenerationContext_ACU(type: any, params: any, dryRun: any, preSignature?: AiFloorSignatureEx_ACU | null): GenerationContext_ACU {
@@ -153,6 +168,11 @@ export function recordGenerationContext_ACU(type: any, params: any, dryRun: any,
   // [配对零产出证据] 仅当调用方显式传入第 4 参才落盘；旧三参调用形状逐字不变（无该键）。
   if (preSignature !== undefined) context.preSignature = preSignature;
   removeExpiredGenerationContexts_ACU(context.at);
+  if (isForegroundGenerationContext_ACU(context)) {
+    // 新的前台生成开始 ⇒ 之前未闭合的前台上下文（早退生成只发了 STARTED）已不可能再收到 ENDED。
+    generationGate_ACU.activeGenerations = generationGate_ACU.activeGenerations
+      .filter(existing => !isForegroundGenerationContext_ACU(existing));
+  }
   generationGate_ACU.activeGenerations.push(context);
   generationGate_ACU.lastGeneration = context;
   return context;
