@@ -400,6 +400,94 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
   });
 });
 
+describe('callCustomOpenAI_ACU — 填表纠错回灌', () => {
+  beforeEach(() => {
+    mockGetApiConfigByPreset.mockReturnValue({
+      apiMode: 'custom',
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', max_tokens: 4096, temperature: 1.0 },
+    });
+    mockSettings.charCardPrompt = [
+      { role: 'SYSTEM', content: '系统 $0' },
+      { role: 'USER', content: '用户 $1' },
+    ];
+  });
+
+  it('带纠错历史时，上次回复与纠错说明追加在原任务之后；本次原始回复回报给调用方', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content: '新回复' } }] }) });
+    const onTableFillResponse = vi.fn();
+
+    const result = await callCustomOpenAI_ACU({ tableDataText: '数据', messagesText: '聊天' }, null, {
+      tableFillRetryHistory: [{ response: '<tableEdit>INSERT INTO missing (v) VALUES (1);</tableEdit>', error: '无法识别的目标表「missing」' }],
+      onTableFillResponse,
+    });
+
+    const sent = mockBuildCustomBody.mock.calls[0][0];
+    expect(sent.map((message: any) => message.role)).toEqual(['system', 'user', 'assistant', 'system']);
+    expect(sent[2].content).toBe('<tableEdit>INSERT INTO missing (v) VALUES (1);</tableEdit>');
+    expect(sent[3].content).toContain('无法识别的目标表「missing」');
+    // 纠错说明不进表格数据边界：表格数据里不该出现报错。
+    expect(sent[0].content).not.toContain('missing');
+    expect(result).toBe('新回复');
+    expect(onTableFillResponse).toHaveBeenCalledWith('新回复');
+  });
+
+  it('回灌内容不经过模板处理：上次回复里的 $1、{{表名}} 原样保留', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) });
+    const resolveTableWorldbookContent = vi.fn(async () => '被解析');
+
+    await callCustomOpenAI_ACU({ tableDataText: '数据', messagesText: '聊天', resolveTableWorldbookContent }, null, {
+      tableFillRetryHistory: [{ response: '回复里有 $1 和 {{人物表}}', error: '报错 $0' }],
+    });
+
+    const sent = mockBuildCustomBody.mock.calls[0][0];
+    expect(sent[2].content).toBe('回复里有 $1 和 {{人物表}}');
+    expect(sent[3].content).toContain('报错 $0');
+    expect(resolveTableWorldbookContent).not.toHaveBeenCalled();
+  });
+
+  it('工具参数无效时，可重试错误携带上次正文与工具参数，供下一次回灌', async () => {
+    mockSettings.tableFillNativeToolsEnabled = true;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: {
+        content: '分析完毕',
+        tool_calls: [{ type: 'function', function: { name: 'table_sql', arguments: '{"sql": UPDATE' } }],
+      } }] }),
+    });
+    const onTableFillResponse = vi.fn();
+
+    const error = await callCustomOpenAI_ACU({ tableDataText: '数据' }, null, { onTableFillResponse }).catch(e => e);
+
+    expect(error).toBeInstanceOf(RetryableAiResponseError_ACU);
+    expect(error.rawResponse).toContain('分析完毕');
+    expect(error.rawResponse).toContain('table_sql({"sql": UPDATE)');
+    expect(onTableFillResponse).toHaveBeenCalledWith(error.rawResponse);
+    delete mockSettings.tableFillNativeToolsEnabled;
+  });
+
+  it('挂工具时纠错说明要求重新调用 table_sql', async () => {
+    mockSettings.tableFillNativeToolsEnabled = true;
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content: '<tableEdit>UPDATE t SET a = 1;</tableEdit>' } }] }) });
+
+    await callCustomOpenAI_ACU({ tableDataText: '数据' }, null, {
+      tableFillRetryHistory: [{ response: '', error: 'table_sql 工具参数不是合法 JSON' }],
+    });
+
+    const sent = mockBuildCustomBody.mock.calls[0][0];
+    expect(sent[sent.length - 1].content).toContain('重新调用 table_sql');
+    delete mockSettings.tableFillNativeToolsEnabled;
+  });
+
+  it('空回时可重试错误的原始回复为空', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content: '' } }] }) });
+
+    const error = await callCustomOpenAI_ACU({ tableDataText: '数据' }).catch(e => e);
+
+    expect(error).toBeInstanceOf(RetryableAiResponseError_ACU);
+    expect(error.rawResponse).toBe('');
+  });
+});
+
 describe('callCustomOpenAI_ACU — 不可信内容模板隔离', () => {
   const UNTRUSTED_ATTACK = [
     '<%= "UNTRUSTED_EJS" %>',

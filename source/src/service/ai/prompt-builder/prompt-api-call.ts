@@ -51,6 +51,7 @@ import {
   isSqliteMode
 } from '../../table/storage-mode';
 import { createUntrustedTemplateGuard_ACU } from '../../../shared/untrusted-template-guard';
+import { withTableFillRetryHistory_ACU } from './table-fill-retry';
 
 /**
  * The request reached a provider successfully, but its body contained no
@@ -60,7 +61,8 @@ import { createUntrustedTemplateGuard_ACU } from '../../../shared/untrusted-temp
 export class RetryableAiResponseError_ACU extends Error {
   readonly code = 'empty_or_invalid_api_response';
 
-  constructor(message = 'API响应格式不正确或内容为空。') {
+  /** @param rawResponse 本次可读的原回复（正文 + 工具参数），供下一次重试回灌；空回为空串 */
+  constructor(message = 'API响应格式不正确或内容为空。', readonly rawResponse = '') {
     super(message);
     this.name = 'RetryableAiResponseError';
   }
@@ -244,7 +246,13 @@ export class RetryableAiResponseError_ACU extends Error {
         for (const message of messages) message.content = untrustedGuard.restore(message.content);
     }
 
-    logDebug_ACU('Final messages array being sent to API:', messages);
+    // 纠错历史在模板处理之后拼接：上次回复里的 $1、{{表名}} 不会被当成占位符。
+    const requestMessages = withTableFillRetryHistory_ACU(messages, options?.tableFillRetryHistory, { tools: fillNativeToolsOn });
+    const reportTableFillResponse = (raw: string) => {
+        try { options?.onTableFillResponse?.(raw); } catch { /* 回报回调异常不影响主流程 */ }
+    };
+
+    logDebug_ACU('Final messages array being sent to API:', requestMessages);
     logDebug_ACU(`使用API预设: ${effectiveTableApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
 
     try {
@@ -257,19 +265,27 @@ export class RetryableAiResponseError_ACU extends Error {
         }
         logDebug_ACU('ACU: 调用后端生成 API, Model:', effectiveApiConfig.model);
         if (fillNativeToolsOn) {
-            const turn = await postChatCompletionTurn_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill', tools: buildTableFillNativeTools_ACU(sqliteMode), toolChoice: 'auto' }), abortSignal);
+            const turn = await postChatCompletionTurn_ACU(buildCustomApiRequestBody_ACU(requestMessages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill', tools: buildTableFillNativeTools_ACU(sqliteMode), toolChoice: 'auto' }), abortSignal);
+            // 回灌用可读文本：正文 + 工具名(参数)，不伪造未配对的原生工具调用历史。
+            const rawTurn = [
+                typeof turn?.content === 'string' ? turn.content : '',
+                ...(turn?.toolCalls || []).map(call => `${call.name}(${call.arguments})`),
+            ].filter(Boolean).join('\n');
+            reportTableFillResponse(rawTurn);
             const resolved = resolveTableFillToolTurn_ACU(turn ?? { content: '', toolCalls: [] });
             // 项目未开启 strictNullChecks 时布尔判别联合不收窄，显式取 error 分支。
-            if (!resolved.ok) throw new RetryableAiResponseError_ACU((resolved as { ok: false; error: string }).error);
+            if (!resolved.ok) throw new RetryableAiResponseError_ACU((resolved as { ok: false; error: string }).error, rawTurn);
             if (resolved.viaTool) logDebug_ACU('[填表] 原生工具调用已合成为 <tableEdit>，走既有解析链。');
             if (resolved.text) {
                 return resolved.text.trim();
             }
-            throw new RetryableAiResponseError_ACU();
+            throw new RetryableAiResponseError_ACU(undefined, rawTurn);
         }
-        const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill' }), abortSignal);
+        const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(requestMessages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill' }), abortSignal);
         if (content) {
-            return content.trim();
+            const trimmed = content.trim();
+            reportTableFillResponse(trimmed);
+            return trimmed;
         }
         throw new RetryableAiResponseError_ACU();
     } finally {

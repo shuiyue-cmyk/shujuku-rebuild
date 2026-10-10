@@ -84378,6 +84378,57 @@ function createUntrustedTemplateGuard_ACU(reservedValues, tokenLabel = 'UNTRUSTE
 }
 
 /**
+ * service/ai/prompt-builder/table-fill-retry.ts — 填表失败重试的纠错历史回灌（思路移植上游 789f960b）
+ *
+ * 旧做法把报错拼进 $0 表格数据尾部：报错落在 <table_data> 不可信边界里，模型也看不到自己上次写了什么。
+ * 现在按对话回灌：上次回复以 assistant 放回，报错与修正要求以 system 跟在后面；原有 assistant 预填充仍在最后。
+ *
+ * 与上游的差异（我方口径）：
+ * - 只有 SQLite 一种存储模式，修正要求只针对 SQL / table_sql；
+ * - 上次回复「仅供参考」：只针对报错修正，其余内容要求对照原任务重新判断、不照抄——
+ *   否则模型倾向于原样复述首轮内容，把首轮的误判固化下来（用户要求）；
+ * - 只回灌最近几轮，避免多轮重试把请求越堆越长。
+ *
+ * 纠错历史只活在本次请求里，不写表格、不写聊天。回灌在模板处理之后拼接，
+ * 上次回复里的 $1、{{表名}} 等不会被当成占位符解析。
+ */
+/** 最多回灌最近几轮失败。 */
+const MAX_TABLE_FILL_RETRY_TURNS_ACU = 2;
+const TABLE_FILL_RETRY_EDIT_GUIDE_ACU = 'SQL 只用 INSERT、REPLACE、UPDATE、DELETE；表名、列名照抄本次提供的表结构，不写 CREATE、ALTER、DROP，不改隐藏列。';
+function buildTableFillRetryCorrection_ACU(error, tools) {
+    const outputGuide = tools
+        ? '重新调用 table_sql 提交，参数须为完整合法的 JSON，sql 字段须为字符串。'
+        : '重新输出完整闭合的 <tableEdit>...</tableEdit> 块，不要只输出解释、续写残片或裸 SQL。';
+    return [
+        '【填表纠错】',
+        `具体报错：${error}`,
+        '修正要求：上一条回复仅供参考，只针对上述报错修正；其余内容请对照原任务、表格与聊天记录重新判断，不要照抄上一条回复，也不编造数据。按原任务重新提交本轮完整修改。',
+        outputGuide,
+        TABLE_FILL_RETRY_EDIT_GUIDE_ACU,
+    ].join('\n');
+}
+/**
+ * 把纠错历史接到本次请求消息后面（原 assistant 预填充保持最后）。
+ * @param messages 已完成模板处理的请求消息；不会被改写
+ * @param history 之前各次失败的回复与报错，按时间先后
+ * @param mode tools：本次请求是否挂了 table_sql 工具
+ */
+function withTableFillRetryHistory_ACU(messages, history, mode) {
+    if (!history?.length)
+        return messages;
+    const extra = [];
+    for (const turn of history.slice(-MAX_TABLE_FILL_RETRY_TURNS_ACU)) {
+        if (turn.response)
+            extra.push({ role: 'assistant', content: turn.response });
+        extra.push({ role: 'system', content: buildTableFillRetryCorrection_ACU(turn.error, mode.tools) });
+    }
+    const last = messages[messages.length - 1];
+    return last?.role === 'assistant'
+        ? [...messages.slice(0, -1), ...extra, last]
+        : [...messages, ...extra];
+}
+
+/**
  * service/ai/prompt-builder/prompt-api-call.ts
  * AI API 调用 — prompt 组装 + API 调用 + 流式/非流式响应处理
  * 从 prompt-builder.ts 拆出（L195-L501 + L1519-L1604）
@@ -84388,8 +84439,10 @@ function createUntrustedTemplateGuard_ACU(reservedValues, tokenLabel = 'UNTRUSTE
  * authentication, or transport failures as model-output failures.
  */
 class RetryableAiResponseError_ACU extends Error {
-    constructor(message = 'API响应格式不正确或内容为空。') {
+    /** @param rawResponse 本次可读的原回复（正文 + 工具参数），供下一次重试回灌；空回为空串 */
+    constructor(message = 'API响应格式不正确或内容为空。', rawResponse = '') {
         super(message);
+        this.rawResponse = rawResponse;
         this.code = 'empty_or_invalid_api_response';
         this.name = 'RetryableAiResponseError';
     }
@@ -84564,7 +84617,15 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
         for (const message of messages)
             message.content = untrustedGuard.restore(message.content);
     }
-    logDebug_ACU('Final messages array being sent to API:', messages);
+    // 纠错历史在模板处理之后拼接：上次回复里的 $1、{{表名}} 不会被当成占位符。
+    const requestMessages = withTableFillRetryHistory_ACU(messages, options?.tableFillRetryHistory, { tools: fillNativeToolsOn });
+    const reportTableFillResponse = (raw) => {
+        try {
+            options?.onTableFillResponse?.(raw);
+        }
+        catch { /* 回报回调异常不影响主流程 */ }
+    };
+    logDebug_ACU('Final messages array being sent to API:', requestMessages);
     logDebug_ACU(`使用API预设: ${effectiveTableApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
     try {
         if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
@@ -84576,21 +84637,29 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
         }
         logDebug_ACU('ACU: 调用后端生成 API, Model:', effectiveApiConfig.model);
         if (fillNativeToolsOn) {
-            const turn = await postChatCompletionTurn_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill', tools: buildTableFillNativeTools_ACU(sqliteMode), toolChoice: 'auto' }), abortSignal);
+            const turn = await postChatCompletionTurn_ACU(buildCustomApiRequestBody_ACU(requestMessages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill', tools: buildTableFillNativeTools_ACU(sqliteMode), toolChoice: 'auto' }), abortSignal);
+            // 回灌用可读文本：正文 + 工具名(参数)，不伪造未配对的原生工具调用历史。
+            const rawTurn = [
+                typeof turn?.content === 'string' ? turn.content : '',
+                ...(turn?.toolCalls || []).map(call => `${call.name}(${call.arguments})`),
+            ].filter(Boolean).join('\n');
+            reportTableFillResponse(rawTurn);
             const resolved = resolveTableFillToolTurn_ACU(turn ?? { content: '', toolCalls: [] });
             // 项目未开启 strictNullChecks 时布尔判别联合不收窄，显式取 error 分支。
             if (!resolved.ok)
-                throw new RetryableAiResponseError_ACU(resolved.error);
+                throw new RetryableAiResponseError_ACU(resolved.error, rawTurn);
             if (resolved.viaTool)
                 logDebug_ACU('[填表] 原生工具调用已合成为 <tableEdit>，走既有解析链。');
             if (resolved.text) {
                 return resolved.text.trim();
             }
-            throw new RetryableAiResponseError_ACU();
+            throw new RetryableAiResponseError_ACU(undefined, rawTurn);
         }
-        const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill' }), abortSignal);
+        const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(requestMessages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, sessionNamespace: 'table-fill' }), abortSignal);
         if (content) {
-            return content.trim();
+            const trimmed = content.trim();
+            reportTableFillResponse(trimmed);
+            return trimmed;
         }
         throw new RetryableAiResponseError_ACU();
     }
@@ -112033,8 +112102,6 @@ async function captureFillExecutionScope_ACU(performanceContext) {
     performanceSpan.end({ messageCount: liveChat.length });
     return result;
 }
-const SQL_ERROR_MARKER_ACU = '\n\n<!-- SQL_ERROR_FEEDBACK -->\n';
-const UNIFIED_GROUP_ERROR_MARKER_ACU = '\n\n<!-- UNIFIED_GROUP_ERROR_FEEDBACK -->\n';
 const MAX_RETRY_FEEDBACK_LENGTH_ACU = 500;
 const MAX_WARN_ERROR_LENGTH_ACU = 800;
 class ModelOutputRetryError_ACU extends Error {
@@ -112715,6 +112782,14 @@ function resolveUpdateMode_ACU(mode) {
             return 'auto_standard';
     }
 }
+/** 统一提交 / 格式失败后的组级重试反馈：报错 + 该组上一轮回复 + 该组已有纠错历史。 */
+function buildGroupRetryFeedback_ACU(error, previous) {
+    return {
+        lastUnifiedError: error,
+        lastAiResponse: previous?.rawAiResponse || previous?.aiResponse || '',
+        retryHistory: previous?.retryHistory,
+    };
+}
 async function collectGroupFillResponse_ACU(job, feedback, abortController = new AbortController(), options = {}) {
     const effectiveAbortController = abortController || new AbortController();
     const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && isTableFillStopRequested_ACU());
@@ -112806,6 +112881,13 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
     }
     let lastErrorMessage = 'AI响应中未找到完整有效的 <tableEdit> 标签';
     let lastErrorCategory = 'model';
+    // 纠错历史（思路移植上游 789f960b）：报错不再拼进 $0 表格数据，而是连同上次回复按对话回灌。
+    const retryHistory = [...(feedback?.retryHistory || [])];
+    const previousError = feedback?.lastUnifiedError || (isSqliteMode() ? feedback?.lastSqlError : null);
+    if (previousError) {
+        retryHistory.push({ response: feedback?.lastAiResponse || '', error: sanitizeRetryFeedback_ACU(previousError) });
+    }
+    let lastAiResponse = '';
     // 响应期诊断（移植上游 ece65f80）：仅自动填表链路开启时留痕。
     const diagnoseResponse = (diagnosticCode, attempt) => {
         if (job.requestOptions?.autoFillDiagnostics)
@@ -112820,20 +112902,7 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
             return { job, success: false, attempt, aborted: true };
         }
         options.onProgress?.({ phase: 'calling_ai', attempt, maxRetries });
-        if (feedback?.lastSqlError && isSqliteMode()) {
-            const markerIndex = dynamicContent.tableDataText.indexOf(SQL_ERROR_MARKER_ACU);
-            if (markerIndex !== -1) {
-                dynamicContent.tableDataText = dynamicContent.tableDataText.substring(0, markerIndex);
-            }
-            dynamicContent.tableDataText += `${SQL_ERROR_MARKER_ACU}[SQL执行错误，请修正后重新输出]\n错误信息: ${sanitizeRetryFeedback_ACU(feedback.lastSqlError)}`;
-        }
-        if (feedback?.lastUnifiedError) {
-            const markerIndex = dynamicContent.tableDataText.indexOf(UNIFIED_GROUP_ERROR_MARKER_ACU);
-            if (markerIndex !== -1) {
-                dynamicContent.tableDataText = dynamicContent.tableDataText.substring(0, markerIndex);
-            }
-            dynamicContent.tableDataText += `${UNIFIED_GROUP_ERROR_MARKER_ACU}[统一提交失败，请修正后重新输出]\n错误信息: ${sanitizeRetryFeedback_ACU(feedback.lastUnifiedError)}`;
-        }
+        lastAiResponse = '';
         try {
             const aiWaitSpan = startRuntimePerformanceSpan_ACU('table-fill-ai-wait', {
                 runId: job.performanceRunId,
@@ -112847,7 +112916,11 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
                     ...(job.requestOptions || {}),
                     tableData: job.baseSnapshot,
                     targetSheetKeys: job.targetSheetKeys,
+                    tableFillRetryHistory: [...retryHistory],
+                    onTableFillResponse: (response) => { lastAiResponse = response; },
                 });
+                if (!lastAiResponse)
+                    lastAiResponse = aiResponse || '';
                 aiWaitSpan.end({ success: true });
             }
             catch (error) {
@@ -112882,9 +112955,11 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
                     throw new ModelOutputRetryError_ACU(error?.message || 'SQLite 填表 SQL 无效。');
                 }
             }
-            return { job, success: true, attempt, aiResponse, tableEditText };
+            return { job, success: true, attempt, aiResponse, tableEditText, rawAiResponse: lastAiResponse, retryHistory };
         }
         catch (error) {
+            if (!lastAiResponse && typeof error?.rawResponse === 'string')
+                lastAiResponse = error.rawResponse;
             lastErrorMessage = error?.message || '未知错误';
             lastErrorCategory = error instanceof ModelOutputRetryError_ACU
                 || error instanceof RetryableAiResponseError_ACU
@@ -112909,12 +112984,7 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
                 };
             }
             if (attempt < maxRetries) {
-                if (isSqliteMode() && error instanceof ModelOutputRetryError_ACU) {
-                    const markerIndex = dynamicContent.tableDataText.indexOf(SQL_ERROR_MARKER_ACU);
-                    if (markerIndex !== -1)
-                        dynamicContent.tableDataText = dynamicContent.tableDataText.substring(0, markerIndex);
-                    dynamicContent.tableDataText += `${SQL_ERROR_MARKER_ACU}[上次 SQL 输出无效，请修正后重新输出]\n错误信息: ${sanitizeRetryFeedback_ACU(lastErrorMessage)}`;
-                }
+                retryHistory.push({ response: lastAiResponse, error: sanitizeRetryFeedback_ACU(lastErrorMessage) });
                 options.onProgress?.({ phase: 'retry', attempt, maxRetries, message: sanitizeRetryFeedback_ACU(lastErrorMessage, 50) });
                 await new Promise(resolve => setTimeout(resolve, 5000));
             }
@@ -112928,6 +112998,8 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
         error: `填表在 ${maxRetries} 次尝试后仍失败: ${safeError}`,
         rawError: safeError,
         errorCategory: lastErrorCategory,
+        rawAiResponse: lastAiResponse,
+        retryHistory,
     };
 }
 function buildSqlInitializationBase_ACU(baseSnapshot, targetSheetKeys) {
@@ -113785,6 +113857,8 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
         const bucket = orderedBuckets[bucketIndex];
         const maxBucketRetries = Math.max(1, Number(settings_ACU.tableMaxRetries) || 3);
         let retryUnifiedError = null;
+        // 统一提交失败后重试：每组带上自己上一轮的回复与纠错历史。
+        const previousResponses = new Map();
         let bucketSucceeded = false;
         // 阶段 G1：bucket 重试循环外持有 request-scoped replay evidence。
         // 同 bucket 的各次 attempt 共享同一 boundary（mergeBaseMaxMessageIndex），
@@ -113965,8 +114039,7 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                 catch { /* dispose 幂等 */ }
             };
             try {
-                const collectFeedback = retryUnifiedError ? { lastUnifiedError: retryUnifiedError } : undefined;
-                const settledResponses = await Promise.allSettled(jobs.map(job => collectGroupFillResponse_ACU(job, collectFeedback, options.abortController, {
+                const settledResponses = await Promise.allSettled(jobs.map(job => collectGroupFillResponse_ACU(job, retryUnifiedError ? buildGroupRetryFeedback_ACU(retryUnifiedError, previousResponses.get(job.groupKey)) : undefined, options.abortController, {
                     onProgress: event => emitBucketProgress(bucketIndex, event),
                     respectGlobalStop: options.respectGlobalStop,
                     worldbookReadContext: bucketReadContext,
@@ -114006,7 +114079,7 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                             message: formatError.substring(0, 50),
                         });
                         const retryJobs = nonSqlResponses.map(response => response.job);
-                        const retrySettled = await Promise.allSettled(retryJobs.map(job => collectGroupFillResponse_ACU(job, { lastUnifiedError: formatError }, options.abortController, {
+                        const retrySettled = await Promise.allSettled(retryJobs.map(job => collectGroupFillResponse_ACU(job, buildGroupRetryFeedback_ACU(formatError, responseByGroupKey.get(job.groupKey)), options.abortController, {
                             onProgress: event => emitBucketProgress(bucketIndex, event),
                             respectGlobalStop: options.respectGlobalStop,
                             worldbookReadContext: bucketReadContext,
@@ -114091,6 +114164,7 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                     break;
                 }
                 retryUnifiedError = safeApplyError;
+                responses.forEach(response => previousResponses.set(response.job.groupKey, response));
                 if (bucketAttempt >= maxBucketRetries) {
                     jobs.forEach(job => failedGroups.add(job.groupKey));
                     firstError = firstError || `统一提交在 ${maxBucketRetries} 次尝试后仍失败: ${retryUnifiedError}`;
@@ -114415,8 +114489,11 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                 };
             }
         }
-        let lastSqlError = null;
+        // 纠错历史跨 attempt 累积；每次 collect 只跑一轮，提交失败的报错由这里补记。
+        const retryHistory = [];
+        let lastAiResponse = '';
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            lastAiResponse = '';
             const attemptReadContext = createLorebookReadContext_ACU({ source: 'form_fill_legacy', isActive: () => !effectiveAbortController?.signal.aborted, isAborted: () => effectiveAbortController?.signal.aborted === true });
             try {
                 let rawBaseSnapshot = getRuntimeTableDataSnapshot_ACU(progressContext?.batchBaseSnapshot || null) || {};
@@ -114438,7 +114515,8 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                     templateScope: executionScope.templateScope,
                     sqlApplyScope: executionScope.sqlApplyScope,
                 };
-                const collectResult = await collectGroupFillResponse_ACU(currentJob, { lastSqlError }, effectiveAbortController, { onProgress: emitProgress, maxRetriesOverride: 1, worldbookReadContext: attemptReadContext });
+                const collectResult = await collectGroupFillResponse_ACU(currentJob, { retryHistory }, effectiveAbortController, { onProgress: emitProgress, maxRetriesOverride: 1, worldbookReadContext: attemptReadContext });
+                lastAiResponse = collectResult.rawAiResponse || collectResult.aiResponse || '';
                 if (collectResult.aborted) {
                     return { success: false, modifiedKeys: [], aborted: true };
                 }
@@ -114803,8 +114881,7 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                 if (errorCategory !== 'model') {
                     return { success: false, modifiedKeys: [], error: safeError, errorCategory };
                 }
-                if (isSqliteMode())
-                    lastSqlError = safeError;
+                retryHistory.push({ response: lastAiResponse, error: sanitizeRetryFeedback_ACU(safeError) });
                 if (attempt < maxRetries) {
                     const waitTime = 5000;
                     logDebug_ACU(`等待 ${waitTime}ms 后重试...`);
