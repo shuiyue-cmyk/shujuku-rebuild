@@ -693,10 +693,10 @@ export   function loadSettings_ACU() {
           settings_ACU.plotSettings = upgradedPlotSettings as any;
           shouldPersistSettingsAfterLoad_ACU = true;
       }
-      // [正文替换] 默认提示词末尾新增「审核要求」段：仍是旧默认的升级，改过的保留。
+      // [正文替换] 默认提示词末尾的「审核要求」段已删除：仍是未改动默认（含该段）的去掉这一段，改过的保留。
       if (upgradeContentOptimizationDefaultPrompt_ACU(settings_ACU)) {
           shouldPersistSettingsAfterLoad_ACU = true;
-          logDebug_ACU('[正文替换] 默认提示词已升级：末尾补上审核要求段');
+          logDebug_ACU('[正文替换] 默认提示词已更新：去掉末尾的审核要求段');
       }
 
       settingsStorageReadyForSave_ACU = true;

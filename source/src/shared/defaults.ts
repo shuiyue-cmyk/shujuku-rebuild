@@ -333,6 +333,7 @@ export const defaultWorldbookConfig_ACU = {
 };
 
 import { DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU } from './defaults-json.js';
+import { sha256HexSync_ACU } from './sha256-sync';
 
 /** 构建默认正文优化提示词组（纯数据构造，无运行时依赖） */
 export function buildDefaultContentOptimizationPromptGroup_ACU({ mainContent = '' } = {}) {
@@ -357,16 +358,25 @@ function promptGroupSignature_ACU(group: any[]): string {
 }
 
 /**
- * 默认提示词末尾新增了 SYSTEM「审核要求」段。设置里存的是提示词副本，
- * 只有仍是旧默认（新默认去掉末段、一字未改）的才升级为新默认；用户改过的保持原样。
- * @returns 是否做了升级（调用方据此补存设置）
+ * 曾追加在默认提示词末尾、现已删除（用户决定）的 SYSTEM「审核要求」段内容的 sha256。
+ * 只存哈希用于识别，不在源码里保留原文。
+ */
+const REMOVED_REVIEW_SEGMENT_SHA256_ACU = '4fe54d19f71ffed6f987b78c39a1528606f85b38419c4b6b5546615636e24559';
+
+/**
+ * 默认提示词末尾的 SYSTEM「审核要求」段已删除。设置里存的是提示词副本：
+ * 只有「现默认 + 该段原文」一字未改的才去掉这一段；用户改过任何一段（含该段本身）都保持原样。
+ * @returns 是否做了改写（调用方据此补存设置）
  */
 export function upgradeContentOptimizationDefaultPrompt_ACU(settings: any): boolean {
     const cfg = settings?.contentOptimizationSettings;
     if (!cfg || !Array.isArray(cfg.promptGroup) || cfg.promptGroup.length === 0) return false;
     const current = buildDefaultContentOptimizationPromptGroup_ACU();
-    const legacySignature = promptGroupSignature_ACU(current.slice(0, -1));
-    if (promptGroupSignature_ACU(cfg.promptGroup) !== legacySignature) return false;
+    if (cfg.promptGroup.length !== current.length + 1) return false;
+    const tail = cfg.promptGroup[cfg.promptGroup.length - 1];
+    if (String(tail?.role ?? '').toUpperCase() !== 'SYSTEM'
+        || sha256HexSync_ACU(String(tail?.content ?? '')) !== REMOVED_REVIEW_SEGMENT_SHA256_ACU) return false;
+    if (promptGroupSignature_ACU(cfg.promptGroup.slice(0, -1)) !== promptGroupSignature_ACU(current)) return false;
     cfg.promptGroup = current;
     return true;
 }
