@@ -112,7 +112,8 @@ vi.mock('../../src/presentation/components/optimization-ui/optimization-ui-overl
   showOptimizationProgressToast_ACU: vi.fn(),
   hideOptimizationProgressToast_ACU: vi.fn(),
 }));
-vi.mock('../../src/service/optimization/decision-gate', () => ({
+vi.mock('../../src/service/optimization/decision-gate', async importOriginal => ({
+  hasActiveDecisionKey_ACU: (await importOriginal<any>()).hasActiveDecisionKey_ACU,
   judgeContentForAutoReplace_ACU: (...args: any[]) => h.judge(...(args as [string])),
 }));
 vi.mock('../../src/presentation/components/optimization-ui/optimization-ui-diff', () => ({
@@ -203,6 +204,20 @@ describe('替换前判定（executeContentOptimization_ACU）', () => {
     expect(h.judge).not.toHaveBeenCalled();
     expect(h.perform).toHaveBeenCalledTimes(1);
     expect(h.toast).not.toHaveBeenCalledWith('info', expect.stringContaining('不替换'));
+  });
+
+  it('选硅基流动：填了它的 key 就判定；只填了 OpenRouter 的 key 视同未开启，不闪「正在判定」', async () => {
+    h.judge.mockResolvedValue({ kind: 'decided', replace: true, choice: '好', goodProbability: 0.9, model: 'm' });
+    useSettings({ decisionGate: { enabled: true, provider: 'siliconflow', siliconflowApiKey: 'sk-sf' } });
+    await executeContentOptimization_ACU(1);
+    expect(h.judge).toHaveBeenCalledTimes(1);
+
+    h.judge.mockClear();
+    h.showOverlay.mockClear();
+    useSettings({ decisionGate: { enabled: true, provider: 'siliconflow', apiKey: 'sk-or-test' } });
+    await executeContentOptimization_ACU(1);
+    expect(h.judge).not.toHaveBeenCalled();
+    expect(h.showOverlay).not.toHaveBeenCalledWith(expect.stringContaining('判定'));
   });
 
   it('无感模式下判定期间遮住本楼', async () => {

@@ -22,7 +22,7 @@ export const contentReplaceCopy = {
     decision: {
       title: "替换前判定",
       description:
-        "正文出来后先问 OpenRouter 上的决策模型「这篇文章写得好不好」，判为「好」才替换，判为「不好」保留原文。只需填 Key；每楼花费极低。判定失败或超时会照常替换。",
+        "正文出来后先问决策模型「这篇文章写得好不好」，判为「好」才替换，判为「不好」保留原文。可选 OpenRouter 或硅基流动（中国），只需填对应的 Key；每楼花费极低。判定失败或超时会照常替换。",
     },
     preset: {
       title: "正文替换预设",

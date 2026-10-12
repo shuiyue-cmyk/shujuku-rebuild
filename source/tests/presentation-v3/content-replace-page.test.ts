@@ -290,4 +290,46 @@ describe('ContentReplacePage', () => {
     expect(document.querySelector('.ub-cr__output')?.textContent || '').toContain('不会替换');
     app.unmount();
   });
+  it('替换前判定：切到硅基流动后填它的 key 与模型，测试判定发往硅基流动', async () => {
+    const fetchMock = vi.fn(async (_url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ answers: { quality: { type: 'choice', choice: '好', probabilities: { 好: 0.9, 不好: 0.1 } } } }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const { app, settings } = await mountContentReplacePage();
+
+    const section = document.getElementById('cr-decision')!;
+    const provider = section.querySelector<HTMLSelectElement>('select[aria-label="判定服务"]')!;
+    provider.value = 'siliconflow';
+    provider.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick();
+    expect(settings.contentOptimizationSettings.decisionGate.provider).toBe('siliconflow');
+    expect(section.textContent).toContain('硅基流动（中国） Key');
+    expect(section.textContent).toContain('何时开始收费');
+
+    const model = section.querySelector<HTMLSelectElement>('select[aria-label="决策模型"]')!;
+    expect(Array.from(model.options).map(option => option.value)).toEqual(['SemIf', 'diffusiongemma', 'Kev-4B']);
+    model.value = 'diffusiongemma';
+    model.dispatchEvent(new Event('change', { bubbles: true }));
+    const key = section.querySelector<HTMLInputElement>('input[type="password"]')!;
+    key.value = 'sk-sf-test';
+    key.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick();
+    expect(settings.contentOptimizationSettings.decisionGate).toMatchObject({
+      siliconflowApiKey: 'sk-sf-test', siliconflowModel: 'diffusiongemma', apiKey: '',
+    });
+
+    const textarea = document.querySelector<HTMLTextAreaElement>('#cr-test textarea')!;
+    textarea.value = '这是一段足够长的测试正文。';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+    btn('测试决策判定')!.click();
+    await tick();
+    await tick();
+
+    expect(fetchMock.mock.calls.some(call => String(call[0]) === 'https://api.siliconflow.cn/v1/systemone')).toBe(true);
+    expect(fetchMock.mock.calls.some(call => String(call[0]).includes('openrouter'))).toBe(false);
+    app.unmount();
+  });
 });

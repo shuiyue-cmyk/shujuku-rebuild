@@ -10,6 +10,10 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({ settings_ACU: h.s
 import {
   DECISION_API_URL_ACU,
   DEFAULT_DECISION_MODEL_ACU,
+  DEFAULT_SILICONFLOW_DECISION_MODEL_ACU,
+  SILICONFLOW_DECISION_API_URL_ACU,
+  SILICONFLOW_DECISION_MODELS_ACU,
+  hasActiveDecisionKey_ACU,
   buildDecisionRequestBody_ACU,
   fetchDecisionModels_ACU,
   interpretDecisionResponse_ACU,
@@ -38,13 +42,14 @@ function choiceAnswer(choice: string, good: number) {
 describe('normalizeDecisionGateSettings_ACU', () => {
   it('缺省时关闭、默认模型、门槛 50', () => {
     expect(normalizeDecisionGateSettings_ACU(undefined)).toEqual({
-      enabled: false, apiKey: '', model: DEFAULT_DECISION_MODEL_ACU, threshold: 50,
+      enabled: false, provider: 'openrouter', apiKey: '', model: DEFAULT_DECISION_MODEL_ACU,
+      siliconflowApiKey: '', siliconflowModel: DEFAULT_SILICONFLOW_DECISION_MODEL_ACU, threshold: 50,
     });
   });
 
   it('门槛夹到 0–100 并取整，key 去首尾空白', () => {
     expect(normalizeDecisionGateSettings_ACU({ enabled: true, apiKey: ' sk-or-x ', model: 'a/b', threshold: 140 }))
-      .toEqual({ enabled: true, apiKey: 'sk-or-x', model: 'a/b', threshold: 100 });
+      .toMatchObject({ enabled: true, provider: 'openrouter', apiKey: 'sk-or-x', model: 'a/b', threshold: 100 });
     expect(normalizeDecisionGateSettings_ACU({ threshold: -3 }).threshold).toBe(0);
     expect(normalizeDecisionGateSettings_ACU({ threshold: '72.6' }).threshold).toBe(73);
   });
@@ -247,5 +252,76 @@ describe('复审修正（二）：读响应体同样受超时与取消约束', (
 
   it('模型列表的响应体卡住同样超时', async () => {
     await expect(fetchDecisionModels_ACU({ fetch: vi.fn(async () => stalledBody()), timeoutMs: 5 })).rejects.toThrow('超时');
+  });
+});
+
+describe('第二个判定服务：硅基流动', () => {
+  const sfSettings = normalizeDecisionGateSettings_ACU({
+    enabled: true, provider: 'siliconflow', apiKey: 'sk-or-keep', siliconflowApiKey: ' sk-sf-x ', threshold: 50,
+  });
+
+  it('老设置没有 provider 时按 OpenRouter；未知值同样回到 OpenRouter', () => {
+    expect(normalizeDecisionGateSettings_ACU({ enabled: true, apiKey: 'sk-or-x' }).provider).toBe('openrouter');
+    expect(normalizeDecisionGateSettings_ACU({ provider: 'bogus' }).provider).toBe('openrouter');
+    expect(sfSettings.provider).toBe('siliconflow');
+    expect(sfSettings.siliconflowApiKey).toBe('sk-sf-x');
+    expect(sfSettings.siliconflowModel).toBe(DEFAULT_SILICONFLOW_DECISION_MODEL_ACU);
+  });
+
+  it('两家的 key 与模型各存各的，切换服务不丢另一家的设置', () => {
+    expect(sfSettings.apiKey).toBe('sk-or-keep');
+    expect(sfSettings.model).toBe(DEFAULT_DECISION_MODEL_ACU);
+  });
+
+  it('默认模型在内置列表里', () => {
+    expect(SILICONFLOW_DECISION_MODELS_ACU.map(model => model.id)).toContain(DEFAULT_SILICONFLOW_DECISION_MODEL_ACU);
+  });
+
+  it('选硅基流动时直连它的接口，带它的 key 与模型', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, choiceAnswer('好', 0.9)));
+    const verdict = await requestContentDecision_ACU('一段正文', sfSettings, { fetch: fetchImpl });
+
+    expect(verdict).toMatchObject({ kind: 'decided', replace: true });
+    const [url, init] = fetchImpl.mock.calls[0] as any[];
+    expect(url).toBe(SILICONFLOW_DECISION_API_URL_ACU);
+    expect(init.headers.Authorization).toBe('Bearer sk-sf-x');
+    expect(JSON.parse(init.body)).toMatchObject({ model: DEFAULT_SILICONFLOW_DECISION_MODEL_ACU, state: '一段正文' });
+  });
+
+  it('硅基流动没填 key 时不发请求，提示里写明是哪家的 key', async () => {
+    const fetchImpl = vi.fn();
+    const verdict = await requestContentDecision_ACU('正文', { ...sfSettings, siliconflowApiKey: '' }, { fetch: fetchImpl });
+    expect(verdict.kind).toBe('error');
+    expect((verdict as any).message).toContain('硅基流动');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('硅基流动的报错格式（顶层 message）也能读出原因', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(401, { code: 30014, message: 'Token is invalid.', data: null }));
+    const verdict = await requestContentDecision_ACU('正文', sfSettings, { fetch: fetchImpl });
+    expect((verdict as any).message).toContain('401');
+    expect((verdict as any).message).toContain('Token is invalid.');
+  });
+
+  it('是否已填 key 按当前所选服务判断', () => {
+    expect(hasActiveDecisionKey_ACU({ provider: 'siliconflow', apiKey: 'sk-or-x', siliconflowApiKey: '' })).toBe(false);
+    expect(hasActiveDecisionKey_ACU({ provider: 'siliconflow', siliconflowApiKey: 'sk-sf' })).toBe(true);
+    expect(hasActiveDecisionKey_ACU({ apiKey: 'sk-or-x', siliconflowApiKey: '' })).toBe(true);
+    expect(hasActiveDecisionKey_ACU({ provider: 'openrouter', siliconflowApiKey: 'sk-sf' })).toBe(false);
+    expect(hasActiveDecisionKey_ACU(undefined)).toBe(false);
+  });
+
+  it('自动替换：选了硅基流动但只填了 OpenRouter 的 key，视同未开启', async () => {
+    h.settings.contentOptimizationSettings = { decisionGate: { enabled: true, provider: 'siliconflow', apiKey: 'sk-or-x' } };
+    const fetchImpl = vi.fn();
+    expect(await judgeContentForAutoReplace_ACU('正文', { fetch: fetchImpl })).toEqual({ kind: 'disabled' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('自动替换：选了硅基流动并填了它的 key，发往硅基流动', async () => {
+    h.settings.contentOptimizationSettings = { decisionGate: { enabled: true, provider: 'siliconflow', siliconflowApiKey: 'sk-sf' } };
+    const fetchImpl = vi.fn(async () => jsonResponse(200, choiceAnswer('不好', 0.2)));
+    expect(await judgeContentForAutoReplace_ACU('正文内容', { fetch: fetchImpl })).toMatchObject({ kind: 'decided', replace: false });
+    expect((fetchImpl.mock.calls[0] as any[])[0]).toBe(SILICONFLOW_DECISION_API_URL_ACU);
   });
 });

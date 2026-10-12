@@ -4906,12 +4906,18 @@ function ensureProfileExists_ACU(code, { seedFromCurrent = true, settings = {} }
  */
 /** 别名始终指向 Jev 最新版，用户只填 key 就能用。 */
 const DEFAULT_DECISION_MODEL_ACU = '~typesafe/jev-latest';
+/** 硅基流动默认 SemIf：实测响应快（<1s）且给出分级概率，门槛才有意义。 */
+const DEFAULT_SILICONFLOW_DECISION_MODEL_ACU = 'SemIf';
 const DEFAULT_DECISION_THRESHOLD_ACU = 50;
+/** apiKey / model 是 OpenRouter 的（沿用老字段名），硅基流动单独存一份，切换服务不丢另一家的设置。 */
 function buildDefaultDecisionGateSettings_ACU() {
     return {
         enabled: false,
+        provider: 'openrouter',
         apiKey: '',
         model: DEFAULT_DECISION_MODEL_ACU,
+        siliconflowApiKey: '',
+        siliconflowModel: DEFAULT_SILICONFLOW_DECISION_MODEL_ACU,
         threshold: DEFAULT_DECISION_THRESHOLD_ACU,
     };
 }
@@ -92843,7 +92849,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261011-13"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261012-12"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92862,7 +92868,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261011-13";
+        const stamp = "20261012-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -104246,7 +104252,7 @@ function buildDefaultSettings_ACU() {
             showDiff: true, // 是否显示优化对比（非无感模式下有效）
             parallelMode: false, // 填表与正文替换并行执行（默认关闭）
             ignoreMvuUpdate: false, // 忽略MVU更新：开后正文替换不等MVU解析、MVU结束后也不重跑（默认关闭）
-            decisionGate: buildDefaultDecisionGateSettings_ACU(), // 替换前判定：OpenRouter 决策模型判「好」才替换
+            decisionGate: buildDefaultDecisionGateSettings_ACU(), // 替换前判定：OpenRouter / 硅基流动 决策模型判「好」才替换
             minLength: 100, // 最小优化长度阈值
             maxOptimizations: 10, // 单次最大优化项数
             loopCount: 1, // 循环优化次数
@@ -118665,22 +118671,34 @@ function hideOptimizationOverlay_ACU() {
  */
 
 /**
- * service/optimization/decision-gate.ts — 正文替换「替换前判定」（OpenRouter 决策模型）
+ * service/optimization/decision-gate.ts — 正文替换「替换前判定」（OpenRouter / 硅基流动 决策模型）
  *
  * 思路（用户拍板）：RP 常用的性价比模型 AI 味重，而决策模型恰好偏爱这种写法。
  * 所以正文出来后先问决策模型「这篇文章写得好不好」，判为「好」的才交给替换模型润色，
  * 判为「不好」的保持原文。决策模型只回答预设选项并附概率，不生成文字，单次花费可忽略。
  *
- * 决策接口与聊天接口格式不同，宿主的 chat-completions 转发带不了它；OpenRouter 对任意来源放行跨域，
- * 插件在 TT WebView 内直连（与向量 embedding / rerank 直连外部接口同一做法）。
+ * 决策接口与聊天接口格式不同，宿主的 chat-completions 转发带不了它；OpenRouter 与硅基流动都对任意来源放行跨域，
+ * 插件在 TT WebView 内直连（与向量 embedding / rerank 直连外部接口同一做法）。两家请求与返回格式相同。
+ * 阿里百炼的决策接口不放行跨域（预检直接 401），网页内无法直连，故未接入。
  * 判定失败一律返回 error，由调用方照常替换，判定永远不会卡住正文。
  */
 const DECISION_API_URL_ACU = 'https://openrouter.ai/api/alpha/decisions';
 const DECISION_MODELS_URL_ACU = 'https://openrouter.ai/api/v1/models?output_modalities=decisions';
+const SILICONFLOW_DECISION_API_URL_ACU = 'https://api.siliconflow.cn/v1/systemone';
 const DECISION_GOOD_LABEL_ACU = '好';
 const DECISION_BAD_LABEL_ACU = '不好';
 const DECISION_TIMEOUT_MS_ACU = 20000;
 const DECISION_QUESTION_KEY_ACU = 'quality';
+const DECISION_PROVIDER_LABELS_ACU = {
+    openrouter: 'OpenRouter',
+    siliconflow: '硅基流动（中国）',
+};
+/** 硅基流动的模型列表接口不区分决策模型，按文档内置。Kev-4B 实测单次 10 秒以上，排在最后。 */
+const SILICONFLOW_DECISION_MODELS_ACU = [
+    { id: 'SemIf', name: 'SemIf', free: false },
+    { id: 'diffusiongemma', name: 'diffusiongemma', free: false },
+    { id: 'Kev-4B', name: 'Kev-4B（较慢）', free: false },
+];
 function normalizeDecisionGateSettings_ACU(raw) {
     const source = raw && typeof raw === 'object' ? raw : {};
     // 清空输入框得到 '' / null：Number 会把它们当成 0，门槛 0% 等于判定形同虚设，回到默认值
@@ -118688,13 +118706,27 @@ function normalizeDecisionGateSettings_ACU(raw) {
     const threshold = rawThreshold === null || rawThreshold === undefined || String(rawThreshold).trim() === ''
         ? NaN
         : Number(rawThreshold);
-    const model = typeof source.model === 'string' ? source.model.trim() : '';
+    const text = (value) => (typeof value === 'string' ? value.trim() : '');
     return {
         enabled: source.enabled === true,
-        apiKey: typeof source.apiKey === 'string' ? source.apiKey.trim() : '',
-        model: model || DEFAULT_DECISION_MODEL_ACU,
+        provider: source.provider === 'siliconflow' ? 'siliconflow' : 'openrouter',
+        apiKey: text(source.apiKey),
+        model: text(source.model) || DEFAULT_DECISION_MODEL_ACU,
+        siliconflowApiKey: text(source.siliconflowApiKey),
+        siliconflowModel: text(source.siliconflowModel) || DEFAULT_SILICONFLOW_DECISION_MODEL_ACU,
         threshold: Number.isFinite(threshold) ? Math.min(100, Math.max(0, Math.round(threshold))) : DEFAULT_DECISION_THRESHOLD_ACU,
     };
+}
+/** 当前所选服务的接口地址、key 与模型。 */
+function resolveDecisionEndpoint_ACU(settings) {
+    if (settings.provider === 'siliconflow') {
+        return { label: DECISION_PROVIDER_LABELS_ACU.siliconflow, url: SILICONFLOW_DECISION_API_URL_ACU, apiKey: settings.siliconflowApiKey, model: settings.siliconflowModel };
+    }
+    return { label: DECISION_PROVIDER_LABELS_ACU.openrouter, url: DECISION_API_URL_ACU, apiKey: settings.apiKey, model: settings.model };
+}
+/** 当前所选服务是否已填 key（未规整的原始设置也可传入）。 */
+function hasActiveDecisionKey_ACU(raw) {
+    return !!resolveDecisionEndpoint_ACU(normalizeDecisionGateSettings_ACU(raw)).apiKey;
 }
 function buildDecisionRequestBody_ACU(model, text) {
     return {
@@ -118783,17 +118815,18 @@ async function readErrorMessage_ACU(response) {
     }
 }
 async function requestContentDecision_ACU(text, settings, deps = {}) {
-    if (!settings.apiKey)
-        return { kind: 'error', message: '未填写 OpenRouter Key' };
+    const endpoint = resolveDecisionEndpoint_ACU(settings);
+    if (!endpoint.apiKey)
+        return { kind: 'error', message: `未填写${endpoint.label} Key` };
     const fetchImpl = deps.fetch ?? globalThis.fetch;
     const outcome = await runWithDeadline_ACU(deps, async (signal) => {
-        const response = await fetchImpl(DECISION_API_URL_ACU, {
+        const response = await fetchImpl(endpoint.url, {
             method: 'POST',
             headers: {
-                Authorization: `Bearer ${settings.apiKey}`,
+                Authorization: `Bearer ${endpoint.apiKey}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(buildDecisionRequestBody_ACU(settings.model, text)),
+            body: JSON.stringify(buildDecisionRequestBody_ACU(endpoint.model, text)),
             signal,
         });
         if (!response.ok) {
@@ -118814,7 +118847,7 @@ async function requestContentDecision_ACU(text, settings, deps = {}) {
  */
 async function judgeContentForAutoReplace_ACU(text, deps = {}) {
     const settings = normalizeDecisionGateSettings_ACU(settings_ACU?.contentOptimizationSettings?.decisionGate);
-    if (!settings.enabled || !settings.apiKey)
+    if (!settings.enabled || !resolveDecisionEndpoint_ACU(settings).apiKey)
         return { kind: 'disabled' };
     return requestContentDecision_ACU(stripMvuUpdateBlocks_ACU(text), settings, deps);
 }
@@ -119153,7 +119186,7 @@ function recordAutoProcessedAfterWriteBack_ACU(messageIndex, fallbackContent) {
  */
 async function runDecisionGate_ACU(messageIndex, message, content, judgedText, config) {
     // 没填 key 时判定不生效（页面有提示），不闪「正在判定」
-    if (config.decisionGate?.enabled !== true || !String(config.decisionGate?.apiKey ?? '').trim())
+    if (config.decisionGate?.enabled !== true || !hasActiveDecisionKey_ACU(config.decisionGate))
         return 'continue';
     if (config.seamlessMode) {
         showOptimizationOverlay_ACU('正在判定正文...');
@@ -152985,7 +153018,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261011-13";
+        const stamp = "20261012-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -193167,7 +193200,7 @@ const contentReplaceCopy = {
         },
         decision: {
             title: "替换前判定",
-            description: "正文出来后先问 OpenRouter 上的决策模型「这篇文章写得好不好」，判为「好」才替换，判为「不好」保留原文。只需填 Key；每楼花费极低。判定失败或超时会照常替换。",
+            description: "正文出来后先问决策模型「这篇文章写得好不好」，判为「好」才替换，判为「不好」保留原文。可选 OpenRouter 或硅基流动（中国），只需填对应的 Key；每楼花费极低。判定失败或超时会照常替换。",
         },
         preset: {
             title: "正文替换预设",
@@ -193405,6 +193438,10 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         message: null,
     }),
     getters: {
+        /** 当前所选判定服务的模型列表：OpenRouter 用拉取到的，硅基流动用内置的。 */
+        activeDecisionModels(state) {
+            return state.decisionGate.provider === 'siliconflow' ? SILICONFLOW_DECISION_MODELS_ACU : state.decisionModels;
+        },
         /**
          * 提示词身份（唯一派生点）：草稿指纹 + 是否等于默认预设 + 命中的预设名。
          *
@@ -193547,9 +193584,9 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
             this.decisionGate = normalizeDecisionGateSettings_ACU({ ...this.decisionGate, ...patch });
             this.saveBasicSettings();
         },
-        /** 拉取 OpenRouter 当前的决策模型列表（公开接口，不需要 key）。 */
+        /** 拉取 OpenRouter 当前的决策模型列表（公开接口，不需要 key）；硅基流动用内置列表，不拉取。 */
         async loadDecisionModels() {
-            if (this.decisionModelsLoading)
+            if (this.decisionGate.provider !== 'openrouter' || this.decisionModelsLoading)
                 return;
             this.decisionModelsLoading = true;
             try {
@@ -193576,8 +193613,9 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
                 setMessage$1(this, 'warning', '请输入至少 10 个字符的测试文本。');
                 return;
             }
-            if (!this.decisionGate.apiKey) {
-                setMessage$1(this, 'warning', '请先填写 OpenRouter Key。');
+            const endpoint = resolveDecisionEndpoint_ACU(this.decisionGate);
+            if (!endpoint.apiKey) {
+                setMessage$1(this, 'warning', `请先填写${endpoint.label} Key。`);
                 return;
             }
             if (this.busyAction)
@@ -193950,6 +193988,7 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
     },
 });
 
+const DECISION_PROVIDER_SWITCH_HINT_ACU = '两家各存各的 Key 和模型，切换不会丢掉另一家的设置。';
 var _sfc_main$l = /*@__PURE__*/ defineComponent({
     __name: 'ContentReplacePage',
     setup(__props, { expose: __expose }) {
@@ -194006,14 +194045,48 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
         const reoptimizeHint = computed(() => (store.lastOptimizedMessageIndex >= 0
             ? `${store.lastOptimizedLabel}：丢掉已替换的结果，用替换前的原文重新优化（相当于重 roll）。`
             : store.lastOptimizedLabel));
+        const decisionProviderOptions = Object.keys(DECISION_PROVIDER_LABELS_ACU)
+            .map(value => ({ value, label: DECISION_PROVIDER_LABELS_ACU[value] }));
+        const DECISION_PROVIDER_VIEW_ACU = {
+            openrouter: {
+                providerHint: DECISION_PROVIDER_SWITCH_HINT_ACU,
+                keyHint: '在 openrouter.ai 的 Keys 页面创建，只用于决策判定。',
+                keyPlaceholder: 'sk-or-...',
+                modelHint: '默认 Jev 最新版；标「免费」的不扣费。',
+            },
+            siliconflow: {
+                providerHint: `${DECISION_PROVIDER_SWITCH_HINT_ACU}截至 2026 年 10 月 12 日，硅基流动这三个决策模型仍免费；但官方写的是限时免费到 10 月 8 日，之后何时开始收费没有通知，请留意账户扣费。`,
+                keyHint: '在 cloud.siliconflow.cn 的 API 密钥页面创建，只用于决策判定。',
+                keyPlaceholder: 'sk-...',
+                modelHint: '默认 SemIf，响应快；diffusiongemma 只给「好 / 不好」不给概率，门槛基本不起作用；Kev-4B 较慢，可能超时。',
+            },
+        };
+        const decisionView = computed(() => ({
+            label: DECISION_PROVIDER_LABELS_ACU[store.decisionGate.provider],
+            ...DECISION_PROVIDER_VIEW_ACU[store.decisionGate.provider],
+        }));
+        const isSiliconflow = computed(() => store.decisionGate.provider === 'siliconflow');
+        const decisionKey = computed(() => (isSiliconflow.value ? store.decisionGate.siliconflowApiKey : store.decisionGate.apiKey));
+        const decisionModel = computed(() => (isSiliconflow.value ? store.decisionGate.siliconflowModel : store.decisionGate.model));
+        function setDecisionProvider(value) {
+            store.setDecisionGate({ provider: value });
+            if (store.decisionGate.enabled && !store.decisionModels.length)
+                void store.loadDecisionModels();
+        }
+        function setDecisionKey(value) {
+            store.setDecisionGate(isSiliconflow.value ? { siliconflowApiKey: String(value) } : { apiKey: String(value) });
+        }
+        function setDecisionModel(value) {
+            store.setDecisionGate(isSiliconflow.value ? { siliconflowModel: value } : { model: value });
+        }
         /** 列表还没拉到（或拉取失败）时，当前所选模型仍要能显示。 */
         const decisionModelOptions = computed(() => {
-            const options = store.decisionModels.map(model => ({
+            const options = store.activeDecisionModels.map(model => ({
                 value: model.id,
                 label: model.free ? `${model.name}（免费）` : model.name,
             }));
-            if (!options.some(option => option.value === store.decisionGate.model)) {
-                options.unshift({ value: store.decisionGate.model, label: store.decisionGate.model });
+            if (!options.some(option => option.value === decisionModel.value)) {
+                options.unshift({ value: decisionModel.value, label: decisionModel.value });
             }
             return options;
         });
@@ -194130,14 +194203,14 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 confirmVariant: 'danger',
             });
         });
-        const __returned__ = { PLACEHOLDERS, store, dialogStore, apiStore, followActiveApiLabel, apiOptions, contentReplaceStale, markContentReplaceConfirmed, presetSheetOpen, promptSheetOpen, editingPresetName, sections, modeToggles, presetItems, promptSegmentsForView, reoptimizeHint, decisionModelOptions, thresholdInputKey, setDecisionThreshold, setDecisionEnabled, promptGroupMissingContent, canEditCurrentPrompt, setApiPreset, onDeletePreset, onRenamePreset, confirmLeaveCustomPrompt, onSelectPreset, onEditPreset, openPromptSheetForCurrent, closePromptSheet, onSavePromptGroup, onResetPromptGroup, onPromptUpdate, refreshAll, get copy() { return contentReplaceCopy; }, PromptSegmentsSheet, UbBadge, UbButton, UbCallout, UbFileButton, UbIconButton, UbInput, UbPage, UbPresetPicker, UbRow, UbRulePairs, UbSection, UbSelect, UbSheet, UbSwitch, UbTextarea };
+        const __returned__ = { PLACEHOLDERS, store, dialogStore, apiStore, followActiveApiLabel, apiOptions, contentReplaceStale, markContentReplaceConfirmed, presetSheetOpen, promptSheetOpen, editingPresetName, sections, modeToggles, presetItems, promptSegmentsForView, reoptimizeHint, decisionProviderOptions, DECISION_PROVIDER_SWITCH_HINT_ACU, DECISION_PROVIDER_VIEW_ACU, decisionView, isSiliconflow, decisionKey, decisionModel, setDecisionProvider, setDecisionKey, setDecisionModel, decisionModelOptions, thresholdInputKey, setDecisionThreshold, setDecisionEnabled, promptGroupMissingContent, canEditCurrentPrompt, setApiPreset, onDeletePreset, onRenamePreset, confirmLeaveCustomPrompt, onSelectPreset, onEditPreset, openPromptSheetForCurrent, closePromptSheet, onSavePromptGroup, onResetPromptGroup, onPromptUpdate, refreshAll, get copy() { return contentReplaceCopy; }, PromptSegmentsSheet, UbBadge, UbButton, UbCallout, UbFileButton, UbIconButton, UbInput, UbPage, UbPresetPicker, UbRow, UbRulePairs, UbSection, UbSelect, UbSheet, UbSwitch, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-cr__preset[data-v-38f7f6d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-38f7f6d5] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-38f7f6d5] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-38f7f6d5] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-38f7f6d5] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-38f7f6d5] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-38f7f6d5] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-38f7f6d5] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-38f7f6d5] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-38f7f6d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-38f7f6d5] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-38f7f6d5] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-38f7f6d5] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-38f7f6d5] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-38f7f6d5");
-var ContentReplacePage_vue_vue_type_style_index_0_scoped_38f7f6d5_lang = null;
+injectSfcStyle("\n.ub-cr__preset[data-v-5e9dccf5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s3);\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-5e9dccf5] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-5e9dccf5] {\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-5e9dccf5] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-5e9dccf5] {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-5e9dccf5] {\n  max-height: calc(var(--ub-u) * 360);\n  margin: 0;\n  padding: var(--ub-s3);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-sunken);\n  color: var(--ub-text);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  line-height: 1.6;\n  white-space: pre-wrap;\n  overflow: auto;\n}\n.ub-cr__list[data-v-5e9dccf5] {\n  margin: 0;\n  padding: 0;\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-card);\n  background: var(--ub-panel);\n  list-style: none;\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-5e9dccf5] {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-5e9dccf5] {\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-5e9dccf5] {\n  display: flex;\n  flex-direction: column;\n  flex: 1 1 auto;\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-5e9dccf5] {\n  overflow: hidden;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  font-weight: 600;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-5e9dccf5] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-5e9dccf5] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: var(--ub-s1);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-5e9dccf5] {\n  padding: 1px 6px;\n  border-radius: 6px;\n  background: var(--ub-sunken);\n  color: var(--ub-accent-ink);\n  font-family: var(--ub-mono);\n}\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-5e9dccf5");
+var ContentReplacePage_vue_vue_type_style_index_0_scoped_5e9dccf5_lang = null;
 
 const _hoisted_1$j = { class: "ub-cr__picker" };
 const _hoisted_2$i = { class: "ub-cr__preset" };
@@ -194306,7 +194379,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.store.lastOptimizedMessageIndex < 0,
 							onClick: $setup.store.reoptimizeLatest
 						}, {
-							default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
+							default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
 								" 重新优化 ",
 								-1
 								/* CACHED */
@@ -194329,7 +194402,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							busy: $setup.store.busyAction === "optimize-current",
 							onClick: $setup.store.optimizeCurrentContent
 						}, {
-							default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+							default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
 								" 优化当前正文 ",
 								-1
 								/* CACHED */
@@ -194359,49 +194432,67 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
-					$setup.store.decisionGate.enabled && !$setup.store.decisionGate.apiKey ? (openBlock(), createBlock($setup["UbCallout"], {
+					createVNode($setup["UbRow"], {
+						label: "判定服务",
+						hint: $setup.decisionView.providerHint
+					}, {
+						default: withCtx(() => [createVNode($setup["UbSelect"], {
+							options: $setup.decisionProviderOptions,
+							"model-value": $setup.store.decisionGate.provider,
+							"aria-label": "判定服务",
+							"onUpdate:modelValue": $setup.setDecisionProvider
+						}, null, 8, ["options", "model-value"])]),
+						_: 1
+					}, 8, ["hint"]),
+					$setup.store.decisionGate.enabled && !$setup.decisionKey ? (openBlock(), createBlock($setup["UbCallout"], {
 						key: 0,
 						kind: "warning"
 					}, {
-						default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
-							" 还没填 OpenRouter Key，判定暂不生效，正文照常替换。 ",
-							-1
-							/* CACHED */
-						)])]),
+						default: withCtx(() => [createTextVNode(
+							" 还没填 " + toDisplayString($setup.decisionView.label) + " Key，判定暂不生效，正文照常替换。 ",
+							1
+							/* TEXT */
+						)]),
 						_: 1
 					})) : createCommentVNode("v-if", true),
-					createVNode($setup["UbRow"], {
-						label: "OpenRouter Key",
-						hint: "在 openrouter.ai 的 Keys 页面创建，只用于决策判定。",
+					(openBlock(), createBlock($setup["UbRow"], {
+						key: $setup.store.decisionGate.provider,
+						label: `${$setup.decisionView.label} Key`,
+						hint: $setup.decisionView.keyHint,
 						stack: ""
 					}, {
 						default: withCtx(() => [createVNode($setup["UbInput"], {
-							"model-value": $setup.store.decisionGate.apiKey,
+							"model-value": $setup.decisionKey,
 							type: "password",
-							placeholder: "sk-or-...",
+							placeholder: $setup.decisionView.keyPlaceholder,
 							autocomplete: "off",
-							"aria-label": "OpenRouter Key",
-							onChange: _cache[4] || (_cache[4] = ($event) => $setup.store.setDecisionGate({ apiKey: String($event) }))
-						}, null, 8, ["model-value"])]),
+							"aria-label": `${$setup.decisionView.label} Key`,
+							onChange: $setup.setDecisionKey
+						}, null, 8, [
+							"model-value",
+							"placeholder",
+							"aria-label"
+						])]),
 						_: 1
-					}),
+					}, 8, ["label", "hint"])),
 					createVNode($setup["UbRow"], {
 						label: "决策模型",
-						hint: "默认 Jev 最新版；标「免费」的不扣费。"
+						hint: $setup.decisionView.modelHint
 					}, {
 						default: withCtx(() => [createBaseVNode("div", _hoisted_1$j, [createVNode($setup["UbSelect"], {
 							options: $setup.decisionModelOptions,
-							"model-value": $setup.store.decisionGate.model,
+							"model-value": $setup.decisionModel,
 							"aria-label": "决策模型",
-							"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.store.setDecisionGate({ model: $event }))
-						}, null, 8, ["options", "model-value"]), createVNode($setup["UbIconButton"], {
+							"onUpdate:modelValue": $setup.setDecisionModel
+						}, null, 8, ["options", "model-value"]), $setup.store.decisionGate.provider === "openrouter" ? (openBlock(), createBlock($setup["UbIconButton"], {
+							key: 0,
 							icon: "fa-solid fa-rotate",
 							title: "刷新模型列表",
 							disabled: $setup.store.decisionModelsLoading,
 							onClick: $setup.store.loadDecisionModels
-						}, null, 8, ["disabled", "onClick"])])]),
+						}, null, 8, ["disabled", "onClick"])) : createCommentVNode("v-if", true)])]),
 						_: 1
-					}),
+					}, 8, ["hint"]),
 					createVNode($setup["UbRow"], {
 						label: "判定门槛（%）",
 						hint: "「好」的概率达到这个值才替换；50 即按模型的选择。调高则更少替换。"
@@ -194437,7 +194528,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				}, 8, ["variant"])]),
 				default: withCtx(() => [createBaseVNode("div", _hoisted_2$i, [
 					createBaseVNode("p", _hoisted_3$h, [
-						_cache[17] || (_cache[17] = createTextVNode(
+						_cache[14] || (_cache[14] = createTextVNode(
 							"当前提示词：",
 							-1
 							/* CACHED */
@@ -194463,7 +194554,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							"empty-text": "暂无正文替换预设",
 							placeholder: "自定义提示词",
 							"show-default-action": false,
-							"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.onSelectPreset($event))
+							"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.onSelectPreset($event))
 						}, null, 8, ["items", "model-value"]),
 						createVNode($setup["UbIconButton"], {
 							icon: "fa-solid fa-pen",
@@ -194483,14 +194574,14 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						createVNode($setup["UbIconButton"], {
 							icon: "fa-solid fa-gear",
 							title: "管理预设",
-							onClick: _cache[7] || (_cache[7] = ($event) => $setup.presetSheetOpen = true)
+							onClick: _cache[5] || (_cache[5] = ($event) => $setup.presetSheetOpen = true)
 						})
 					]),
 					$setup.promptGroupMissingContent ? (openBlock(), createBlock($setup["UbCallout"], {
 						key: 0,
 						kind: "warning"
 					}, {
-						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
+						default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 							" 正文替换提示词缺少 $CONTENT 占位符，运行时无法知道要检查哪段正文；请打开编辑器载入默认提示词或补回占位符。 ",
 							-1
 							/* CACHED */
@@ -194516,7 +194607,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value": $setup.store.extractTags,
 							placeholder: "例如: content,正文",
 							"aria-label": "提取标签",
-							"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.store.setString("extractTags", String($event)))
+							"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.store.setString("extractTags", String($event)))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -194529,7 +194620,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value": $setup.store.excludeTags,
 							placeholder: "例如: think,thinking",
 							"aria-label": "排除标签",
-							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.store.setString("excludeTags", String($event)))
+							"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.store.setString("excludeTags", String($event)))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -194571,14 +194662,14 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						rows: 5,
 						label: "测试文本",
 						placeholder: "输入一段模拟 AI 正文，验证提示词与返回格式。",
-						"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.store.setString("testInput", $event))
+						"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.store.setString("testInput", $event))
 					}, null, 8, ["model-value"]),
 					createBaseVNode("div", _hoisted_5$e, [createVNode($setup["UbButton"], {
 						icon: "fa-solid fa-scale-balanced",
 						busy: $setup.store.busyAction === "decision-test",
 						onClick: $setup.store.runDecisionTest
 					}, {
-						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
+						default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
 							"测试决策判定",
 							-1
 							/* CACHED */
@@ -194590,7 +194681,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						busy: $setup.store.busyAction === "test",
 						onClick: $setup.store.runTest
 					}, {
-						default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
 							"执行优化测试",
 							-1
 							/* CACHED */
@@ -194611,7 +194702,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				"is-open": $setup.presetSheetOpen,
 				title: "管理正文替换预设",
 				width: "560px",
-				onClose: _cache[11] || (_cache[11] = ($event) => $setup.presetSheetOpen = false)
+				onClose: _cache[9] || (_cache[9] = ($event) => $setup.presetSheetOpen = false)
 			}, {
 				default: withCtx(() => [
 					$setup.store.message ? (openBlock(), createBlock($setup["UbCallout"], {
@@ -194630,7 +194721,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						icon: "fa-solid fa-plus",
 						onClick: $setup.store.createPresetFromDefault
 					}, {
-						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 							"从默认新建",
 							-1
 							/* CACHED */
@@ -194685,7 +194776,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						/* KEYED_FRAGMENT */
 					))])) : (openBlock(), createElementBlock("p", _hoisted_11$5, "暂无预设。点上方「从默认新建」，或在预设卡片里导入。")),
 					createVNode($setup["UbCallout"], { kind: "info" }, {
-						default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
+						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 							"点「编辑提示词」会先把该预设载入为当前提示词，再打开编辑器；保存后同步更新这个预设。",
 							-1
 							/* CACHED */
@@ -194706,11 +194797,11 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				onClose: $setup.closePromptSheet,
 				onSave: $setup.onSavePromptGroup,
 				onReset: $setup.onResetPromptGroup,
-				onAdd: _cache[12] || (_cache[12] = ($event) => $setup.store.addPromptSegment($event)),
-				onDelete: _cache[13] || (_cache[13] = ($event) => $setup.store.deletePromptSegment($event)),
+				onAdd: _cache[10] || (_cache[10] = ($event) => $setup.store.addPromptSegment($event)),
+				onDelete: _cache[11] || (_cache[11] = ($event) => $setup.store.deletePromptSegment($event)),
 				onUpdate: $setup.onPromptUpdate
 			}, {
-				lead: withCtx(() => [createBaseVNode("div", _hoisted_12$4, [_cache[23] || (_cache[23] = createBaseVNode(
+				lead: withCtx(() => [createBaseVNode("div", _hoisted_12$4, [_cache[20] || (_cache[20] = createBaseVNode(
 					"span",
 					null,
 					"可用占位符",
@@ -194742,7 +194833,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-38f7f6d5"]]);
+var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-5e9dccf5"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;

@@ -1,31 +1,56 @@
 /**
- * service/optimization/decision-gate.ts — 正文替换「替换前判定」（OpenRouter 决策模型）
+ * service/optimization/decision-gate.ts — 正文替换「替换前判定」（OpenRouter / 硅基流动 决策模型）
  *
  * 思路（用户拍板）：RP 常用的性价比模型 AI 味重，而决策模型恰好偏爱这种写法。
  * 所以正文出来后先问决策模型「这篇文章写得好不好」，判为「好」的才交给替换模型润色，
  * 判为「不好」的保持原文。决策模型只回答预设选项并附概率，不生成文字，单次花费可忽略。
  *
- * 决策接口与聊天接口格式不同，宿主的 chat-completions 转发带不了它；OpenRouter 对任意来源放行跨域，
- * 插件在 TT WebView 内直连（与向量 embedding / rerank 直连外部接口同一做法）。
+ * 决策接口与聊天接口格式不同，宿主的 chat-completions 转发带不了它；OpenRouter 与硅基流动都对任意来源放行跨域，
+ * 插件在 TT WebView 内直连（与向量 embedding / rerank 直连外部接口同一做法）。两家请求与返回格式相同。
+ * 阿里百炼的决策接口不放行跨域（预检直接 401），网页内无法直连，故未接入。
  * 判定失败一律返回 error，由调用方照常替换，判定永远不会卡住正文。
  */
 import { settings_ACU } from '../runtime/state-manager';
 import { stripMvuUpdateBlocks_ACU } from '../../shared/text-optimization';
-import { DEFAULT_DECISION_MODEL_ACU, DEFAULT_DECISION_THRESHOLD_ACU } from '../../shared/decision-gate-defaults';
+import {
+  DEFAULT_DECISION_MODEL_ACU,
+  DEFAULT_DECISION_THRESHOLD_ACU,
+  DEFAULT_SILICONFLOW_DECISION_MODEL_ACU,
+} from '../../shared/decision-gate-defaults';
 
-export { DEFAULT_DECISION_MODEL_ACU } from '../../shared/decision-gate-defaults';
+export { DEFAULT_DECISION_MODEL_ACU, DEFAULT_SILICONFLOW_DECISION_MODEL_ACU } from '../../shared/decision-gate-defaults';
 
 export const DECISION_API_URL_ACU = 'https://openrouter.ai/api/alpha/decisions';
 export const DECISION_MODELS_URL_ACU = 'https://openrouter.ai/api/v1/models?output_modalities=decisions';
+export const SILICONFLOW_DECISION_API_URL_ACU = 'https://api.siliconflow.cn/v1/systemone';
 export const DECISION_GOOD_LABEL_ACU = '好';
 export const DECISION_BAD_LABEL_ACU = '不好';
 export const DECISION_TIMEOUT_MS_ACU = 20000;
 const DECISION_QUESTION_KEY_ACU = 'quality';
 
+export type DecisionProvider_ACU = 'openrouter' | 'siliconflow';
+
+export const DECISION_PROVIDER_LABELS_ACU: Record<DecisionProvider_ACU, string> = {
+  openrouter: 'OpenRouter',
+  siliconflow: '硅基流动（中国）',
+};
+
+/** 硅基流动的模型列表接口不区分决策模型，按文档内置。Kev-4B 实测单次 10 秒以上，排在最后。 */
+export const SILICONFLOW_DECISION_MODELS_ACU: readonly DecisionModelOption_ACU[] = [
+  { id: 'SemIf', name: 'SemIf', free: false },
+  { id: 'diffusiongemma', name: 'diffusiongemma', free: false },
+  { id: 'Kev-4B', name: 'Kev-4B（较慢）', free: false },
+];
+
 export interface DecisionGateSettings_ACU {
   enabled: boolean;
+  provider: DecisionProvider_ACU;
+  /** OpenRouter 的 key（沿用老字段名）。 */
   apiKey: string;
+  /** OpenRouter 的模型（沿用老字段名）。 */
   model: string;
+  siliconflowApiKey: string;
+  siliconflowModel: string;
   /** 「好」的概率达到多少（百分比）才替换。 */
   threshold: number;
 }
@@ -56,13 +81,29 @@ export function normalizeDecisionGateSettings_ACU(raw: unknown): DecisionGateSet
   const threshold = rawThreshold === null || rawThreshold === undefined || String(rawThreshold).trim() === ''
     ? NaN
     : Number(rawThreshold);
-  const model = typeof source.model === 'string' ? source.model.trim() : '';
+  const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
   return {
     enabled: source.enabled === true,
-    apiKey: typeof source.apiKey === 'string' ? source.apiKey.trim() : '',
-    model: model || DEFAULT_DECISION_MODEL_ACU,
+    provider: source.provider === 'siliconflow' ? 'siliconflow' : 'openrouter',
+    apiKey: text(source.apiKey),
+    model: text(source.model) || DEFAULT_DECISION_MODEL_ACU,
+    siliconflowApiKey: text(source.siliconflowApiKey),
+    siliconflowModel: text(source.siliconflowModel) || DEFAULT_SILICONFLOW_DECISION_MODEL_ACU,
     threshold: Number.isFinite(threshold) ? Math.min(100, Math.max(0, Math.round(threshold))) : DEFAULT_DECISION_THRESHOLD_ACU,
   };
+}
+
+/** 当前所选服务的接口地址、key 与模型。 */
+export function resolveDecisionEndpoint_ACU(settings: DecisionGateSettings_ACU) {
+  if (settings.provider === 'siliconflow') {
+    return { label: DECISION_PROVIDER_LABELS_ACU.siliconflow, url: SILICONFLOW_DECISION_API_URL_ACU, apiKey: settings.siliconflowApiKey, model: settings.siliconflowModel };
+  }
+  return { label: DECISION_PROVIDER_LABELS_ACU.openrouter, url: DECISION_API_URL_ACU, apiKey: settings.apiKey, model: settings.model };
+}
+
+/** 当前所选服务是否已填 key（未规整的原始设置也可传入）。 */
+export function hasActiveDecisionKey_ACU(raw: unknown): boolean {
+  return !!resolveDecisionEndpoint_ACU(normalizeDecisionGateSettings_ACU(raw)).apiKey;
 }
 
 export function buildDecisionRequestBody_ACU(model: string, text: string) {
@@ -159,16 +200,17 @@ export async function requestContentDecision_ACU(
   settings: DecisionGateSettings_ACU,
   deps: DecisionFetchDeps_ACU = {},
 ): Promise<DecisionVerdict_ACU> {
-  if (!settings.apiKey) return { kind: 'error', message: '未填写 OpenRouter Key' };
+  const endpoint = resolveDecisionEndpoint_ACU(settings);
+  if (!endpoint.apiKey) return { kind: 'error', message: `未填写${endpoint.label} Key` };
   const fetchImpl = deps.fetch ?? globalThis.fetch;
   const outcome = await runWithDeadline_ACU<DecisionVerdict_ACU>(deps, async signal => {
-    const response = await fetchImpl(DECISION_API_URL_ACU, {
+    const response = await fetchImpl(endpoint.url, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${settings.apiKey}`,
+        Authorization: `Bearer ${endpoint.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(buildDecisionRequestBody_ACU(settings.model, text)),
+      body: JSON.stringify(buildDecisionRequestBody_ACU(endpoint.model, text)),
       signal,
     });
     if (!response.ok) {
@@ -191,7 +233,7 @@ export async function judgeContentForAutoReplace_ACU(
   deps: DecisionFetchDeps_ACU = {},
 ): Promise<DecisionGateOutcome_ACU> {
   const settings = normalizeDecisionGateSettings_ACU(settings_ACU?.contentOptimizationSettings?.decisionGate);
-  if (!settings.enabled || !settings.apiKey) return { kind: 'disabled' };
+  if (!settings.enabled || !resolveDecisionEndpoint_ACU(settings).apiKey) return { kind: 'disabled' };
   return requestContentDecision_ACU(stripMvuUpdateBlocks_ACU(text), settings, deps);
 }
 

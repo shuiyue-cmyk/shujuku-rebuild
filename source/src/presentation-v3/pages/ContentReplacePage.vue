@@ -57,28 +57,37 @@
       <UbRow label="启用替换前判定" hint="只影响自动替换；手动「重新优化」和测试不经过判定。">
         <UbSwitch :model-value="store.decisionGate.enabled" aria-label="启用替换前判定" @update:model-value="setDecisionEnabled" />
       </UbRow>
-      <UbCallout v-if="store.decisionGate.enabled && !store.decisionGate.apiKey" kind="warning">
-        还没填 OpenRouter Key，判定暂不生效，正文照常替换。
-      </UbCallout>
-      <UbRow label="OpenRouter Key" hint="在 openrouter.ai 的 Keys 页面创建，只用于决策判定。" stack>
-        <UbInput
-          :model-value="store.decisionGate.apiKey"
-          type="password"
-          placeholder="sk-or-..."
-          autocomplete="off"
-          aria-label="OpenRouter Key"
-          @change="store.setDecisionGate({ apiKey: String($event) })"
+      <UbRow label="判定服务" :hint="decisionView.providerHint">
+        <UbSelect
+          :options="decisionProviderOptions"
+          :model-value="store.decisionGate.provider"
+          aria-label="判定服务"
+          @update:model-value="setDecisionProvider"
         />
       </UbRow>
-      <UbRow label="决策模型" hint="默认 Jev 最新版；标「免费」的不扣费。">
+      <UbCallout v-if="store.decisionGate.enabled && !decisionKey" kind="warning">
+        还没填 {{ decisionView.label }} Key，判定暂不生效，正文照常替换。
+      </UbCallout>
+      <UbRow :key="store.decisionGate.provider" :label="`${decisionView.label} Key`" :hint="decisionView.keyHint" stack>
+        <UbInput
+          :model-value="decisionKey"
+          type="password"
+          :placeholder="decisionView.keyPlaceholder"
+          autocomplete="off"
+          :aria-label="`${decisionView.label} Key`"
+          @change="setDecisionKey"
+        />
+      </UbRow>
+      <UbRow label="决策模型" :hint="decisionView.modelHint">
         <div class="ub-cr__picker">
           <UbSelect
             :options="decisionModelOptions"
-            :model-value="store.decisionGate.model"
+            :model-value="decisionModel"
             aria-label="决策模型"
-            @update:model-value="store.setDecisionGate({ model: $event })"
+            @update:model-value="setDecisionModel"
           />
           <UbIconButton
+            v-if="store.decisionGate.provider === 'openrouter'"
             icon="fa-solid fa-rotate"
             title="刷新模型列表"
             :disabled="store.decisionModelsLoading"
@@ -235,6 +244,7 @@ import {
   type ContentReplacePromptSegment,
 } from '../../presentation-v2/stores/content-replace-store';
 import { useDialogStore } from '../../presentation-v2/stores/dialog-store';
+import { DECISION_PROVIDER_LABELS_ACU, type DecisionProvider_ACU } from '../../service/optimization/decision-gate';
 import PromptSegmentsSheet from '../parts/PromptSegmentsSheet.vue';
 import UbBadge from '../ui/UbBadge.vue';
 import UbButton from '../ui/UbButton.vue';
@@ -317,14 +327,51 @@ const reoptimizeHint = computed(() => (store.lastOptimizedMessageIndex >= 0
   ? `${store.lastOptimizedLabel}：丢掉已替换的结果，用替换前的原文重新优化（相当于重 roll）。`
   : store.lastOptimizedLabel));
 
+const decisionProviderOptions = (Object.keys(DECISION_PROVIDER_LABELS_ACU) as DecisionProvider_ACU[])
+  .map(value => ({ value, label: DECISION_PROVIDER_LABELS_ACU[value] }));
+
+const DECISION_PROVIDER_SWITCH_HINT_ACU = '两家各存各的 Key 和模型，切换不会丢掉另一家的设置。';
+const DECISION_PROVIDER_VIEW_ACU: Record<DecisionProvider_ACU, { providerHint: string; keyHint: string; keyPlaceholder: string; modelHint: string }> = {
+  openrouter: {
+    providerHint: DECISION_PROVIDER_SWITCH_HINT_ACU,
+    keyHint: '在 openrouter.ai 的 Keys 页面创建，只用于决策判定。',
+    keyPlaceholder: 'sk-or-...',
+    modelHint: '默认 Jev 最新版；标「免费」的不扣费。',
+  },
+  siliconflow: {
+    providerHint: `${DECISION_PROVIDER_SWITCH_HINT_ACU}截至 2026 年 10 月 12 日，硅基流动这三个决策模型仍免费；但官方写的是限时免费到 10 月 8 日，之后何时开始收费没有通知，请留意账户扣费。`,
+    keyHint: '在 cloud.siliconflow.cn 的 API 密钥页面创建，只用于决策判定。',
+    keyPlaceholder: 'sk-...',
+    modelHint: '默认 SemIf，响应快；diffusiongemma 只给「好 / 不好」不给概率，门槛基本不起作用；Kev-4B 较慢，可能超时。',
+  },
+};
+const decisionView = computed(() => ({
+  label: DECISION_PROVIDER_LABELS_ACU[store.decisionGate.provider],
+  ...DECISION_PROVIDER_VIEW_ACU[store.decisionGate.provider],
+}));
+const isSiliconflow = computed(() => store.decisionGate.provider === 'siliconflow');
+const decisionKey = computed(() => (isSiliconflow.value ? store.decisionGate.siliconflowApiKey : store.decisionGate.apiKey));
+const decisionModel = computed(() => (isSiliconflow.value ? store.decisionGate.siliconflowModel : store.decisionGate.model));
+
+function setDecisionProvider(value: string): void {
+  store.setDecisionGate({ provider: value });
+  if (store.decisionGate.enabled && !store.decisionModels.length) void store.loadDecisionModels();
+}
+function setDecisionKey(value: string | number): void {
+  store.setDecisionGate(isSiliconflow.value ? { siliconflowApiKey: String(value) } : { apiKey: String(value) });
+}
+function setDecisionModel(value: string): void {
+  store.setDecisionGate(isSiliconflow.value ? { siliconflowModel: value } : { model: value });
+}
+
 /** 列表还没拉到（或拉取失败）时，当前所选模型仍要能显示。 */
 const decisionModelOptions = computed(() => {
-  const options = store.decisionModels.map(model => ({
+  const options = store.activeDecisionModels.map(model => ({
     value: model.id,
     label: model.free ? `${model.name}（免费）` : model.name,
   }));
-  if (!options.some(option => option.value === store.decisionGate.model)) {
-    options.unshift({ value: store.decisionGate.model, label: store.decisionGate.model });
+  if (!options.some(option => option.value === decisionModel.value)) {
+    options.unshift({ value: decisionModel.value, label: decisionModel.value });
   }
   return options;
 });

@@ -10,9 +10,11 @@ import { buildDefaultContentOptimizationPromptGroup_ACU } from '../../shared/def
 import { getOriginalContent_ACU, replaceChatMessage_ACU } from '../../service/chat/chat-service';
 import { performContentOptimization_ACU } from '../../service/optimization/content-optimization';
 import {
+  SILICONFLOW_DECISION_MODELS_ACU,
   fetchDecisionModels_ACU,
   normalizeDecisionGateSettings_ACU,
   requestContentDecision_ACU,
+  resolveDecisionEndpoint_ACU,
   type DecisionGateSettings_ACU,
   type DecisionModelOption_ACU,
 } from '../../service/optimization/decision-gate';
@@ -331,6 +333,10 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
     message: null,
   }),
   getters: {
+    /** 当前所选判定服务的模型列表：OpenRouter 用拉取到的，硅基流动用内置的。 */
+    activeDecisionModels(state): readonly DecisionModelOption_ACU[] {
+      return state.decisionGate.provider === 'siliconflow' ? SILICONFLOW_DECISION_MODELS_ACU : state.decisionModels;
+    },
     /**
      * 提示词身份（唯一派生点）：草稿指纹 + 是否等于默认预设 + 命中的预设名。
      *
@@ -471,9 +477,9 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       this.decisionGate = normalizeDecisionGateSettings_ACU({ ...this.decisionGate, ...patch });
       this.saveBasicSettings();
     },
-    /** 拉取 OpenRouter 当前的决策模型列表（公开接口，不需要 key）。 */
+    /** 拉取 OpenRouter 当前的决策模型列表（公开接口，不需要 key）；硅基流动用内置列表，不拉取。 */
     async loadDecisionModels(): Promise<void> {
-      if (this.decisionModelsLoading) return;
+      if (this.decisionGate.provider !== 'openrouter' || this.decisionModelsLoading) return;
       this.decisionModelsLoading = true;
       try {
         this.decisionModels = await fetchDecisionModels_ACU();
@@ -497,8 +503,9 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         setMessage(this, 'warning', '请输入至少 10 个字符的测试文本。');
         return;
       }
-      if (!this.decisionGate.apiKey) {
-        setMessage(this, 'warning', '请先填写 OpenRouter Key。');
+      const endpoint = resolveDecisionEndpoint_ACU(this.decisionGate);
+      if (!endpoint.apiKey) {
+        setMessage(this, 'warning', `请先填写${endpoint.label} Key。`);
         return;
       }
       if (this.busyAction) return;

@@ -60,6 +60,7 @@ import {
   applyContextTagFilters_ACU
 } from '../../../service/runtime/helpers-remaining';
 import {
+  hasActiveDecisionKey_ACU,
   judgeContentForAutoReplace_ACU,
   type DecisionGateOutcome_ACU
 } from '../../../service/optimization/decision-gate';
@@ -276,7 +277,7 @@ import {
     config: any,
   ): Promise<'continue' | 'skipped' | 'cancelled'> {
     // 没填 key 时判定不生效（页面有提示），不闪「正在判定」
-    if (config.decisionGate?.enabled !== true || !String(config.decisionGate?.apiKey ?? '').trim()) return 'continue';
+    if (config.decisionGate?.enabled !== true || !hasActiveDecisionKey_ACU(config.decisionGate)) return 'continue';
     if (config.seamlessMode) {
       showOptimizationOverlay_ACU('正在判定正文...');
     } else {

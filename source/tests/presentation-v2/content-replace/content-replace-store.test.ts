@@ -150,13 +150,16 @@ describe('useContentReplaceStore', () => {
   it('替换前判定：开关、key、模型、门槛规整后写回 contentOptimizationSettings.decisionGate', async () => {
     const { store, settings, saveSettings } = await setupStore();
 
-    expect(store.decisionGate).toEqual({ enabled: false, apiKey: '', model: '~typesafe/jev-latest', threshold: 50 });
+    expect(store.decisionGate).toEqual({
+      enabled: false, provider: 'openrouter', apiKey: '', model: '~typesafe/jev-latest',
+      siliconflowApiKey: '', siliconflowModel: 'SemIf', threshold: 50,
+    });
 
     store.setDecisionGate({ enabled: true, apiKey: ' sk-or-x ', threshold: 130 });
     store.setDecisionGate({ model: 'inception/mercury-decide:free' });
 
-    expect(settings.contentOptimizationSettings.decisionGate).toEqual({
-      enabled: true, apiKey: 'sk-or-x', model: 'inception/mercury-decide:free', threshold: 100,
+    expect(settings.contentOptimizationSettings.decisionGate).toMatchObject({
+      enabled: true, provider: 'openrouter', apiKey: 'sk-or-x', model: 'inception/mercury-decide:free', threshold: 100,
     });
     expect(saveSettings).toHaveBeenCalled();
     store.refreshFromSettings();
@@ -211,6 +214,31 @@ describe('useContentReplaceStore', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(store.message?.text).toContain('Key');
+  });
+
+  it('测试判定：选硅基流动却只填了 OpenRouter 的 key，提示填硅基流动 Key，不发请求', async () => {
+    const { store } = await setupStore();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    store.setDecisionGate({ provider: 'siliconflow', apiKey: 'sk-or-x' });
+    store.setString('testInput', '夜色漫过屋檐，她收起最后一封信。');
+
+    await store.runDecisionTest();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(store.message?.text).toContain('硅基流动');
+  });
+
+  it('切到硅基流动后模型列表用内置的，不去拉 OpenRouter 的列表', async () => {
+    const { store } = await setupStore();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    store.setDecisionGate({ provider: 'siliconflow' });
+
+    await store.loadDecisionModels();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(store.activeDecisionModels.map(model => model.id)).toContain('SemIf');
   });
 
   it('新建、载入、删除正文替换提示词预设', async () => {
