@@ -40,6 +40,7 @@ import {
   currentChatFileIdentifier_ACU,
   getCurrentIsolationKey_ACU,
   getAutoFillStopEpoch_ACU,
+  hasActiveForegroundGeneration_ACU,
   settings_ACU,
   _set_coreApisAreReady_ACU
 } from '../../../service/runtime/state-manager';
@@ -84,6 +85,7 @@ import {
   countAiModelOutputFloors_ACU
 } from '../../../shared/ai-floor';
 import {
+  getMvuAnalysisGateState_ACU,
   waitForMvuAnalysisToSettle_ACU
 } from '../../../service/runtime/mvu-analysis-gate';
 
@@ -235,6 +237,23 @@ import {
     }
   }
 
+  /** 自动任务事件代次：重新生成 / 删楼 / 切换版本时 +1，排队中的旧任务据此作废。 */
+  let autoTaskEventEpoch_ACU = 0;
+  /** 当前 MVU 在飞等待的创建者所属代次：创建者被作废时，由并入的最新一轮接手。 */
+  let mvuGateOwnerEventEpoch_ACU = 0;
+
+  /**
+   * 作废排队中的自动填表与正文替换（移植上游 2657754a + f874c888）：取消防抖，
+   * 并让已进入 MVU 等待 / 物化等待的旧任务在下一个检查点退出。已发出的 AI 请求不在此取消，
+   * 由各自的写回守卫兜底。
+   */
+  export function cancelPendingAutoTasks_ACU(reason: string): void {
+    autoTaskEventEpoch_ACU += 1;
+    clearTimeout(autoFillDebounceTimer_ACU as any);
+    _set_autoFillDebounceTimer_ACU(null);
+    logDebug_ACU(`[新消息] 排队中的自动任务已作废（${reason}）`);
+  }
+
   // [触发修复] GENERATION_ENDED 后 AI 楼层有界物化等待常量
   export async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent?: AutoFillIntent_ACU) {
     logDebug_ACU(
@@ -247,6 +266,7 @@ import {
     const scheduledIsolationKey_ACU = intent?.isolationKey ?? getCurrentIsolationKey_ACU();
     const scheduledRunId_ACU = `auto-fill-${++autoFillRunSequence_ACU}`;
     const scheduledStopEpoch_ACU = getAutoFillStopEpoch_ACU();
+    const scheduledEventEpoch_ACU = autoTaskEventEpoch_ACU;
     latestAutoFillRunId_ACU = scheduledRunId_ACU;
     const isCurrentAutoFillRun_ACU = (): boolean => (
       latestAutoFillRunId_ACU === scheduledRunId_ACU
@@ -255,8 +275,23 @@ import {
     const stopIfAutoFillRunStale_ACU = (stage: string): boolean => {
       // 停止代次是跨异步阶段的硬闸；runId 只在防抖回调入场时判定，
       // 不能把已获 MVU 闸门所有权的首个回调误判为旧回调。
-      if (getAutoFillStopEpoch_ACU() === scheduledStopEpoch_ACU) return false;
-      logDebug_ACU(`[新消息] 自动填表 run ${scheduledRunId_ACU} 已因停止代次失效（stage=${stage}），放弃旧回调`);
+      if (getAutoFillStopEpoch_ACU() !== scheduledStopEpoch_ACU) {
+        logDebug_ACU(`[新消息] 自动填表 run ${scheduledRunId_ACU} 已因停止代次失效（stage=${stage}），放弃旧回调`);
+        return true;
+      }
+      // 重新生成 / 删楼 / 切换版本后旧任务的目标楼层已失效；正文还在生成时也不能对没写完的回复动手。
+      const reason = autoTaskEventEpoch_ACU !== scheduledEventEpoch_ACU
+        ? 'generation_changed'
+        : hasActiveForegroundGeneration_ACU() ? 'generation_in_progress' : null;
+      if (!reason) return false;
+      logDebug_ACU(`[新消息] 自动任务 run ${scheduledRunId_ACU} 放弃（${reason}，stage=${stage}）`);
+      logAutoFillSkip_ACU(reason, {
+        eventType,
+        eventMessageId: intent?.eventMessageId,
+        messageId: intent?.eventMessageId,
+        chatKey: scheduledChatKey_ACU,
+        isolationKey: scheduledIsolationKey_ACU,
+      });
       return true;
     };
     clearTimeout(autoFillDebounceTimer_ACU);
@@ -296,13 +331,20 @@ import {
       // 放在 loadAllChatMessages / chatKey 复检之前，等待期间切了聊天由既有复检自然丢弃，不新增特判。
       // MVU 未装 / 未启用 / 开关关闭 → 同步立即放行，与闸门上线前逐字一致。
       // 「忽略MVU更新」开后替换分支已早跑，此处闸门实际只拦填表（正常轮靠 skipReplace 跳过替换）。
+      // 没有在飞等待 ⇒ 本轮将成为创建者：记下所属代次，供并入方判断创建者是否已被作废。
+      if (!getMvuAnalysisGateState_ACU().waiting) mvuGateOwnerEventEpoch_ACU = scheduledEventEpoch_ACU;
       const mvuGate_ACU = await waitForMvuAnalysisToSettle_ACU();
       if (stopIfAutoFillRunStale_ACU('after_mvu_gate')) return;
       if (mvuGate_ACU.mergedIntoExisting) {
         // [防双跑] 本次触发并入了他人在飞等待：创建者放行后会按最新楼独自处理，
         // 合并方继续跑=同楼正文替换/填表双跑各烧一次 AI（2026-09-05 日志实证），直接放弃本轮。
-        logDebug_ACU('[MVU联动] 本次触发已并入在飞等待，交由创建者继续处理，本轮丢弃（防同楼双跑）');
-        return;
+        // 例外：创建者属于已作废的旧代次（重新生成 / 删楼后它会自行退出），由并入的最新一轮接手。
+        const ownerCancelled_ACU = mvuGateOwnerEventEpoch_ACU !== scheduledEventEpoch_ACU;
+        if (!ownerCancelled_ACU || latestAutoFillRunId_ACU !== scheduledRunId_ACU) {
+          logDebug_ACU('[MVU联动] 本次触发已并入在飞等待，交由创建者继续处理，本轮丢弃（防同楼双跑）');
+          return;
+        }
+        logDebug_ACU('[MVU联动] 在飞等待的创建者已作废，由本轮（最新一轮）接手继续处理');
       }
       if (mvuGate_ACU.delayed) {
         logDebug_ACU(

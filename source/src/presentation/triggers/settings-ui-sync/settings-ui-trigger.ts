@@ -35,8 +35,7 @@ import {
   getSortedSheetKeys_ACU
 } from '../../../service/template/chat-scope';
 import {
-  loadAllChatMessages_ACU,
-  updateReadableLorebookEntry_ACU
+  loadAllChatMessages_ACU
 } from '../../../service/worldbook/pipeline';
 import {
   getStorageProvider
@@ -66,8 +65,10 @@ import {
 } from '../../../service/table/auto-fill-echo-guard';
 import {
   executeAutoFillStagingGroups_ACU,
+  refreshCommittedWorldbook_ACU,
   type CardUpdateProgressEvent
 } from '../../../service/table/update-orchestrator';
+import { formatPostCommitWarnings_ACU, type TableUpdatePostCommitWarning_ACU } from '../../../shared/post-commit-warnings';
 import {
   isSqliteMode
 } from '../../../service/table/storage-mode';
@@ -110,14 +111,14 @@ function buildAutoUpdateProgressMessage_ACU(event: CardUpdateProgressEvent): str
     }
 }
 
-async function refreshRuntimeDataAndNotifyAfterAutoUpdate_ACU(): Promise<void> {
+async function refreshRuntimeDataAndNotifyAfterAutoUpdate_ACU(): Promise<{ postCommitWarnings?: TableUpdatePostCommitWarning_ACU[] }> {
     const data = getStorageProvider().getCurrentData() || currentJsonTableData_ACU;
-    if (data) {
-        await updateReadableLorebookEntry_ACU(true, false, null, data);
-    }
+    // 表格此时已提交：世界书刷新失败只作告警交回调度层，不让整轮自动填表算失败。
+    const postCommitWarnings = data ? await refreshCommittedWorldbook_ACU(data) : [];
     try {
         (topLevelWindow_ACU as any).AutoCardUpdaterAPI?._notifyTableUpdate?.();
     } catch (_) {}
+    return postCommitWarnings.length ? { postCommitWarnings } : {};
 }
 
 // 存储模式恒为 SQLite：自动填表不再弹常驻进度框（原非 SQLite 分组路径已删除，R9-12），只提示重试。
@@ -293,6 +294,8 @@ function currentAutoUpdateScopeKey_ACU(): string {
             ? `并发分组更新有 ${result.failedGroups} 组失败：${firstError}`
             : `并发分组更新有 ${result.failedGroups} 组失败，请查看日志。`);
     }
+    const postCommitWarningText = formatPostCommitWarnings_ACU(result.postCommitWarnings);
+    if (postCommitWarningText) showToastr_ACU('warning', postCommitWarningText);
     } finally {
       performanceSpan.end({
         messageCount: getChatArray_ACU()?.length || 0,

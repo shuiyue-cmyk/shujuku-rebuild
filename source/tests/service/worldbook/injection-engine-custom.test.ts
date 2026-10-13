@@ -340,10 +340,33 @@ describe('updateCustomTableExports_ACU', () => {
       const createdEntries = mockCreateLorebookEntries.mock.calls[0][1];
       expect(createdEntries).toEqual(expect.arrayContaining([
         expect.objectContaining({ comment: 'TavernDB-ACU-CustomExport-关系档案-表头', type: 'constant' }),
-        expect.objectContaining({ comment: 'TavernDB-ACU-CustomExport-关系档案-1', keys: ['艾琳'], type: 'keyword', content: '| 艾琳 | 搭档 |\n' }),
-        expect.objectContaining({ comment: 'TavernDB-ACU-CustomExport-关系档案-2', keys: ['布莱恩'], type: 'keyword', content: '| 布莱恩 | 对手 |\n' }),
+        expect.objectContaining({ comment: 'TavernDB-ACU-CustomExport-关系档案-1', keys: ['艾琳'], type: 'selective', content: '| 艾琳 | 搭档 |\n' }),
+        expect.objectContaining({ comment: 'TavernDB-ACU-CustomExport-关系档案-2', keys: ['布莱恩'], type: 'selective', content: '| 布莱恩 | 对手 |\n' }),
       ]));
       expect(createdEntries.some((entry: any) => String(entry.comment).includes('人物关系表-'))).toBe(false);
+    });
+
+    it('整表合并的关键词条目同样交给宿主合法类型 selective，表格配置里仍是 keyword', async () => {
+      const config = {
+        enabled: true, splitByRow: false, entryName: '纪要', entryType: 'keyword', keywords: '事件甲',
+        preventRecursion: true, injectionTemplate: '', extraIndexEnabled: false, extraIndexColumns: [],
+        extraIndexColumnModes: {}, extraIndexInjectionTemplate: '',
+        entryPlacement: { position: 'at_depth_as_system', depth: 2, order: 10000 },
+        extraIndexPlacement: { position: 'at_depth_as_system', depth: 2, order: 10010 },
+      };
+      const mergedData: any = {
+        sheet_chronicle: { name: '纪要表', content: [['', '关键词', '内容'], ['', '事件甲', '纪要正文']], exportConfig: config },
+      };
+      mockGetSortedSheetKeys.mockReturnValue(['sheet_chronicle']);
+      mockEnsureExportConfigDefaults.mockReturnValue(config);
+
+      await updateCustomTableExports_ACU(mergedData);
+
+      const createdEntries: any[] = mockCreateLorebookEntries.mock.calls.flatMap((call: any) => call[1] || []);
+      expect(createdEntries.length).toBeGreaterThan(0);
+      expect(createdEntries.every(entry => ['constant', 'selective', 'vectorized'].includes(entry.type))).toBe(true);
+      expect(createdEntries.some(entry => entry.type === 'selective' && (entry.keys || []).includes('事件甲'))).toBe(true);
+      expect(config.entryType).toBe('keyword');
     });
   });
 

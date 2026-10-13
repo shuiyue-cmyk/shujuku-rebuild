@@ -9,6 +9,7 @@ import { topLevelWindow_ACU } from '../../shared/env';
 import { logWarn_ACU } from '../../shared/utils';
 import { createCallbackApi, type ApiGroupContext } from './api-groups/callback-api';
 import { createCoreDataApi } from './api-groups/core-data-api';
+import { createTableHistoryApi } from './api-groups/table-history-api';
 import { createTableCrudApi } from './api-groups/table-crud-api';
 import { createTableLockApi } from './api-groups/table-lock-api';
 import { createTemplatePresetApi } from './api-groups/template-preset-api';
@@ -41,6 +42,7 @@ const sqlApi = createSqlApi(ctx);
 const apiGroupEntries: Array<{ name: string; methods: Record<string, Function> }> = [
     { name: 'callback', methods: createCallbackApi(ctx) },
     { name: 'core-data', methods: createCoreDataApi(ctx) },
+    { name: 'table-history', methods: createTableHistoryApi() },
     { name: 'table-crud', methods: createTableCrudApi(ctx) },
     { name: 'table-lock', methods: createTableLockApi(ctx) },
     { name: 'template-preset', methods: createTemplatePresetApi(ctx) },

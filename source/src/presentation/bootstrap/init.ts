@@ -109,6 +109,7 @@ import {
   setSendTextareaValue_ACU
 } from '../../shared/host-input';
 import {
+  cancelPendingAutoTasks_ACU,
   handleNewMessageDebounced_ACU
 } from '../triggers/settings-ui-sync/settings-ui-connect';
 import {
@@ -869,12 +870,18 @@ export   function mainInitialize_ACU() {
               } catch {
                 preSignature = undefined;
               }
+              const quietLike = isQuietLikeGeneration_ACU(type, params);
+              // 新一轮正文生成会重写 / 追加楼层：上一轮还在排队（防抖、等 MVU、等楼层落地）的自动填表与
+              // 正文替换不能再对着旧楼层或没写完的新回复跑（移植上游 2657754a + f874c888）。
+              // quiet / dryRun / 插件自动触发的生成不动正文，不作废。
+              if (!dryRun && !quietLike && !params?.automatic_trigger) {
+                cancelPendingAutoTasks_ACU('generation_started');
+              }
               const context = recordGenerationContext_ACU(type, params, dryRun, preSignature);
               bindContinuationInternalAiGenerationStarted_ACU(context.seq);
               // 宿主的 GENERATION_STARTED 通常在发送点击返回后的微任务里才送达，同步配对必然错过；
               // 对非 quiet/非 dryRun/非自动触发的生成开放宽松认领（spv8.9.2 状态法），桥内部只在
               // 存在未绑定序列号的等待轮时才会认领。
-              const quietLike = isQuietLikeGeneration_ACU(type, params);
               // TT 2.3.0：Agent 断点续连以 { agentResume: true, runId } 作为第三参派发 STARTED，
               // 形态上不含 automatic_trigger/quiet_prompt，会被误判成「普通前台生成」而吃宽松认领。
               // 它不是本轮用户生成，不许被续写桥认领。
@@ -1247,6 +1254,8 @@ export   function mainInitialize_ACU() {
             if (SillyTavern_API_ACU.eventTypes[evName as keyof typeof SillyTavern_API_ACU.eventTypes]) {
                 SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes[evName as keyof typeof SillyTavern_API_ACU.eventTypes], async (data: any) => {
                     logDebug_ACU(`ACU ${evName} event detected. Triggering data reload and merge from chat history.`);
+                    // 删楼或切换版本后旧任务的楼层锚点已失效，排队中的自动任务一并作废。
+                    cancelPendingAutoTasks_ACU(evName === 'MESSAGE_DELETED' ? 'message_deleted' : 'message_swiped');
                     // 删楼守卫：同步登记此刻在场的楼层（重新生成的流式新回复要到事件派发完才追加）。
                     if (evName === 'MESSAGE_DELETED') {
                         try { noteMessagesPresentAtDeletion_ACU(); } catch (error) { logWarn_ACU('[删楼守卫] 删楼当刻登记在场楼层失败:', error); }

@@ -1777,6 +1777,40 @@ describe('executeCardUpdateCore_ACU', () => {
     }));
   });
 
+  it('表格已保存、世界书刷新失败：仍算成功，不重试 AI，带回「只需重试世界书同步」的告警', async () => {
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>更新</tableEdit>');
+    mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
+    mockCheckIfFirstTimeInit.mockResolvedValue(false);
+    mockUpdateReadableLorebookEntry.mockRejectedValueOnce(new Error('世界书写入超时'));
+
+    const result = await executeCardUpdateCore_ACU(
+      [], 0, false, 'auto_standard', false,
+      ['sheet_0'], null, new AbortController()
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.modifiedKeys).toEqual(['sheet_0']);
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+    expect(result.postCommitWarnings).toEqual([expect.objectContaining({ code: 'worldbook_sync_failed' })]);
+    expect(result.postCommitWarnings![0].message).toContain('表格已保存');
+    expect(result.postCommitWarnings![0].message).toContain('世界书写入超时');
+    expect(result.postCommitWarnings![0].message).toContain('无需重新填表');
+  });
+
+  it('世界书刷新正常时不带告警', async () => {
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>更新</tableEdit>');
+    mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
+    mockCheckIfFirstTimeInit.mockResolvedValue(false);
+    mockUpdateReadableLorebookEntry.mockResolvedValueOnce(undefined);
+
+    const result = await executeCardUpdateCore_ACU([], 0, false, 'auto_standard', false, ['sheet_0'], null, new AbortController());
+
+    expect(result.success).toBe(true);
+    expect(result.postCommitWarnings).toBeUndefined();
+  });
+
   it('import 模式不保存到聊天记录', async () => {
     mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>有效内容</tableEdit>');
@@ -5410,6 +5444,25 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
     expect(baseSnapshot.sheet_0.content).toEqual([['row_id', '值'], ['1', 'base-a']]);
     expect(baseSnapshot.sheet_1.content).toEqual([['row_id', '值'], ['1', 'base-b']]);
   });
+  it('统一提交：表格已保存、世界书刷新失败时仍算成功并带回告警，不当作提交失败', async () => {
+    const baseSnapshot = {
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+    };
+    const responses = [
+      { success: true, attempt: 1, aiResponse: '<tableEdit>sheet_0</tableEdit>', tableEditText: 'sheet_0', job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+    ];
+    mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
+    mockUpdateReadableLorebookEntry.mockRejectedValueOnce(new Error('宿主世界书不可用'));
+
+    const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
+
+    expect(result.success).toBe(true);
+    expect(result.modifiedKeys).toEqual(['sheet_0']);
+    expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
+    expect(result.postCommitWarnings).toEqual([expect.objectContaining({ code: 'worldbook_sync_failed' })]);
+    expect(result.postCommitWarnings![0].message).toContain('宿主世界书不可用');
+  });
+
   it('规范化后的空模板首次填表可通过 snapshot 提交', async () => {
     const baseSnapshot = {
       mate: { type: 'acu' },

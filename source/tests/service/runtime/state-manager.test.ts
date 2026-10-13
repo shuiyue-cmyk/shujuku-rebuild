@@ -43,6 +43,7 @@ import {
   isRecentUserSendIntent_ACU,
   recordLastUserSend_ACU,
   recordGenerationContext_ACU,
+  hasActiveForegroundGeneration_ACU,
   resolveGenerationContextForEnded_ACU,
   consumeGenerationContextForEnded_ACU,
   discardLatestGenerationContext_ACU,
@@ -201,6 +202,23 @@ describe('recordGenerationContext_ACU', () => {
 // issue #2 实锤（debug 日志）：思考档开到 xhigh 时一次重新生成要 90~110 秒，超过 60 秒的上下文有效期，
 // ENDED 变成「无配对」；TT 的消息没有 message_id，重新生成前后 AI 楼数又相同，于是被当成外部插件的
 // 假 ENDED 丢掉（unpaired_ended_no_new_output），自动填表不跑。
+describe('hasActiveForegroundGeneration_ACU：是否有正文生成在途', () => {
+  it('普通 / 重新生成在途为真；结束配对后为假', () => {
+    expect(hasActiveForegroundGeneration_ACU()).toBe(false);
+    recordGenerationContext_ACU('regenerate', {}, false);
+    expect(hasActiveForegroundGeneration_ACU()).toBe(true);
+    resolveGenerationContextForEnded_ACU();
+    expect(hasActiveForegroundGeneration_ACU()).toBe(false);
+  });
+
+  it('quiet、dryRun、插件自动触发的生成不算正文生成', () => {
+    recordGenerationContext_ACU('quiet', { quiet_prompt: '后台' }, false);
+    recordGenerationContext_ACU('normal', {}, true);
+    recordGenerationContext_ACU('normal', { automatic_trigger: true }, false);
+    expect(hasActiveForegroundGeneration_ACU()).toBe(false);
+  });
+});
+
 describe('前台生成上下文的有效期', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });

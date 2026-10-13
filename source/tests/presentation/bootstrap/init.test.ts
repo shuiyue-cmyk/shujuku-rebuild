@@ -47,6 +47,7 @@ const m = vi.hoisted(() => ({
   captureVault: vi.fn(),
   dormantAudit: vi.fn(),
   clearAutoFillDebounce: vi.fn(),
+  cancelPendingAutoTasks: vi.fn(),
   runtimeOnlyFlush: vi.fn(async () => ({ flushed: false, sheetKeys: [] })),
   ensureSeedCheckpoint: vi.fn(async () => false),
   recordGenerationContext: vi.fn(() => ({ seq: 1 })),
@@ -68,7 +69,7 @@ const m = vi.hoisted(() => ({
 vi.mock('../../../src/shared/host-api', () => ({ SillyTavern_API_ACU: m.api }));
 vi.mock('../../../src/shared/env', () => ({ topLevelWindow_ACU: { AutoCardUpdaterAPI: { _notifyTableUpdate: m.notify } } }));
 vi.mock('../../../src/presentation/theme/toast', () => ({ showToastr_ACU: vi.fn() }));
-vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect', () => ({ attemptToLoadCoreApis_ACU: vi.fn(() => true), handleNewMessageDebounced_ACU: (...args: any[]) => m.handleNewMessage(...args) }));
+vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect', () => ({ attemptToLoadCoreApis_ACU: vi.fn(() => true), handleNewMessageDebounced_ACU: (...args: any[]) => m.handleNewMessage(...args), cancelPendingAutoTasks_ACU: (...args: any[]) => m.cancelPendingAutoTasks(...args) }));
 vi.mock('../../../src/service/runtime/helpers-remaining', () => ({ ensureInitialSeedCheckpoint_ACU: (...args: any[]) => m.ensureSeedCheckpoint(...args), handleChatCompletionReady_ACU: vi.fn(), loadPresetAndCleanCharacterData_ACU: m.loadPreset }));
 vi.mock('../../../src/service/table/runtime-only-pending-flush', () => ({ flushRuntimeOnlyPendingChanges_ACU: (...args: any[]) => m.runtimeOnlyFlush(...args) }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
@@ -575,6 +576,31 @@ describe('mainInitialize_ACU 交火召回失败停发与发送租约（移植上
       m.isRetryOfStoppedSend.mockReturnValue(false);
     }
     expect(m.orchestrate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('mainInitialize_ACU 重新生成 / 删楼 / 切换版本作废排队中的自动任务（移植上游 2657754a + f874c888）', () => {
+  it('新一轮正文生成开始时作废；quiet、dryRun、插件自动触发的生成不作废', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValue(false);
+    m.cancelPendingAutoTasks.mockClear();
+
+    m.generationStartedHandler!('regenerate', {}, false);
+    expect(m.cancelPendingAutoTasks).toHaveBeenCalledTimes(1);
+
+    m.generationStartedHandler!('normal', {}, true);
+    m.generationStartedHandler!('normal', { automatic_trigger: true }, false);
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValueOnce(true);
+    m.generationStartedHandler!('quiet', { quiet_prompt: 'x' }, false);
+    expect(m.cancelPendingAutoTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it('删楼或切换回复版本时作废', async () => {
+    m.cancelPendingAutoTasks.mockClear();
+    vi.useFakeTimers();
+    await m.chatMutationHandler!({});
+    expect(m.cancelPendingAutoTasks).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });
 

@@ -92849,7 +92849,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261012-12"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261013-15"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92868,7 +92868,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261012-12";
+        const stamp = "20261013-15";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -99442,6 +99442,8 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
             if (mainEntryDisabled && !hasExtraIndexEnabled)
                 return;
             const config = ensureExportConfigDefaults_ACU(table.exportConfig, table.name || sheetKey);
+            // 表格配置的 keyword 在宿主 API 里叫 selective；只转换导出值，不改模板或配置。
+            const entryType = config.entryType === 'keyword' ? 'selective' : (config.entryType || 'constant');
             const tableName = table.name;
             const sqlInjectionTemplate = isSqliteMode() && typeof config.sqlInjectionTemplate === 'string'
                 ? config.sqlInjectionTemplate.trim()
@@ -99503,7 +99505,7 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
                     content: sqlInjectionTemplate,
                     keys,
                     enabled: true,
-                    type: config.entryType || 'constant',
+                    type: entryType,
                     prevent_recursion: config.preventRecursion !== false,
                     order: mainOrder,
                 }, entryPlacement));
@@ -99601,7 +99603,7 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
                     postCreateOrderFixPlan.push({ comment: fullComment, order: dataOrder, placement: entryPlacement });
                     rowEntries.push(applyPlacementToEntry_ACU({
                         comment: fullComment, content: finalContent, keys: keys, enabled: true,
-                        type: config.entryType || 'constant', prevent_recursion: config.preventRecursion !== false, order: dataOrder
+                        type: entryType, prevent_recursion: config.preventRecursion !== false, order: dataOrder
                     }, entryPlacement));
                 });
                 if (use3DepthWrapperGroup && hasWrapperAfter) {
@@ -99671,7 +99673,7 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
                     postCreateOrderFixPlan.push({ comment: fullComment, order: cursor, placement: entryPlacement });
                     blockEntries.push(applyPlacementToEntry_ACU({
                         comment: fullComment, content: mainContent, keys: keys, enabled: true,
-                        type: config.entryType || 'constant', prevent_recursion: config.preventRecursion !== false, order: cursor++
+                        type: entryType, prevent_recursion: config.preventRecursion !== false, order: cursor++
                     }, entryPlacement));
                     if (useWrapperBlock && hasWrapperAfter) {
                         const wrapperName = getImportEntryName(`${entryName}-包裹-下`, { ...markerBase, entryName, role: 'wrapper_after' });
@@ -99701,10 +99703,10 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
                 if (config.entryType === 'keyword' && keys.length === 0)
                     return;
                 // [合并逻辑] 检查是否可以合并
-                const mergeKey = `${entryName}|${config.entryType || 'constant'}|${keys.sort().join(',')}${isImport ? `|${sheetKey}` : ''}`;
+                const mergeKey = `${entryName}|${entryType}|${keys.sort().join(',')}${isImport ? `|${sheetKey}` : ''}`;
                 if (!mergedEntriesMap[mergeKey]) {
                     mergedEntriesMap[mergeKey] = {
-                        entryName: entryName, entryType: config.entryType || 'constant', keywords: keys,
+                        entryName: entryName, entryType: entryType, keywords: keys,
                         preventRecursion: config.preventRecursion !== false, sheetKeys: [], tableContents: [], tableName: String(tableName || sheetKey),
                         injectionTemplate: config.injectionTemplate, wrapperParts: wrapperParts,
                         useWrapperEntries: useWrapperEntries, entryPlacement: entryPlacement
@@ -102134,6 +102136,12 @@ function recordLastUserSend_ACU(messageId) {
 function isForegroundGenerationContext_ACU(context) {
     return !context.dryRun && !isQuietLikeGeneration_ACU(context.type, context.params);
 }
+/** 是否有正文生成在途（quiet / dryRun / 插件自动触发的不算）：在途时自动填表与正文替换不启动。 */
+function hasActiveForegroundGeneration_ACU() {
+    removeExpiredGenerationContexts_ACU();
+    return generationGate_ACU.activeGenerations.some(context => isForegroundGenerationContext_ACU(context)
+        && !context.params?.automatic_trigger);
+}
 function removeExpiredGenerationContexts_ACU(now = Date.now()) {
     generationGate_ACU.activeGenerations = generationGate_ACU.activeGenerations.filter(context => {
         const ttl = isForegroundGenerationContext_ACU(context) ? FOREGROUND_GENERATION_CONTEXT_TTL_MS_ACU : GENERATION_CONTEXT_TTL_MS_ACU;
@@ -104488,6 +104496,15 @@ function applyCombinedSettingsImport_ACU(combinedData) {
         throw new Error(cause ? `合并配置保存失败，已回滚：${cause}` : '合并配置保存失败，已回滚。');
     }
     return modifiedFields;
+}
+
+/**
+ * shared/post-commit-warnings.ts — 填表「表格已提交、派生刷新失败」告警（叶子模块，无依赖）。
+ * service 层产出、presentation 层展示共用这一份类型与文案拼接。
+ */
+/** 告警去重后拼成一条提示文案；没有告警返回空串。 */
+function formatPostCommitWarnings_ACU(warnings) {
+    return [...new Set((warnings || []).map(warning => warning.message))].join('\n');
 }
 
 /**
@@ -112019,6 +112036,22 @@ async function runSummaryVectorFollowupAfterTableFill_ACU(options) {
     }
 }
 /**
+ * 表格已提交后刷新可读世界书：失败只记成告警，不算填表失败、也不触发重试
+ * （否则用户看到「填表失败」而表格其实已存上；上游 issue #34）。
+ */
+async function refreshCommittedWorldbook_ACU(tableData) {
+    try {
+        await updateReadableLorebookEntry_ACU(true, false, null, tableData);
+        return [];
+    }
+    catch (error) {
+        const reason = sanitizeRetryFeedback_ACU(error?.message || String(error), MAX_WARN_ERROR_LENGTH_ACU);
+        const message = `表格已保存，但世界书刷新失败：${reason}。请仅重试世界书同步，无需重新填表。`;
+        logWarn_ACU(`[TableUpdate] ${message}`);
+        return [{ code: 'worldbook_sync_failed', message }];
+    }
+}
+/**
  * 跨 full checkpoint staging 的收尾：把 run 级目标表 overlay 原子折叠回原正式根，
  * 再把候选 replay 验证过的 head 快照发布到 runtime，最后释放 detached staging 会话。
  * 汇合失败同样要释放会话（detached SQLite 不能泄漏），只是不发布 runtime。
@@ -113501,11 +113534,13 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
                 errorCategory: commitResult.errorCategory || 'infrastructure',
             };
         }
+        const postCommitWarnings = [];
         if (!options.isImportMode && options.syncAfterCommit !== false && commitResult.tableData) {
-            await updateReadableLorebookEntry_ACU(true, false, null, commitResult.tableData);
+            postCommitWarnings.push(...await refreshCommittedWorldbook_ACU(commitResult.tableData));
         }
-        return { success: true, modifiedKeys: commitResult.value.modifiedKeys, tableData: commitResult.tableData };
+        return { success: true, modifiedKeys: commitResult.value.modifiedKeys, tableData: commitResult.tableData, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
     }
+    const postCommitWarnings = [];
     const sqlInitialization = isSqliteMode()
         ? buildSqlInitializationBase_ACU(baseSnapshot, [...allTargetSheetKeySet])
         : { workingTableData: JSON.parse(JSON.stringify(baseSnapshot)), initializedSheetKeys: new Set() };
@@ -113690,15 +113725,10 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
                 settings: settings_ACU,
                 metrics: { targetMessageIndex: options.saveTargetIndex },
             });
-            try {
-                await updateReadableLorebookEntry_ACU(true, false, null, workingTableData);
-                lorebookSpan.end({ success: true });
-            }
-            catch (error) {
-                lorebookSpan.end({ success: false });
-                throw error;
-            }
-            if (getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
+            postCommitWarnings.push(...await refreshCommittedWorldbook_ACU(workingTableData));
+            lorebookSpan.end({ success: postCommitWarnings.length === 0 });
+            // 刷新失败时照旧跳过向量收尾，但不推翻已完成的表格提交。
+            if (postCommitWarnings.length === 0 && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
                 const vectorSpan = startRuntimePerformanceSpan_ACU('table-fill-vector-flush', {
                     runId: options.performanceRunId,
                     parentSpanId: options.performanceParentSpanId,
@@ -113721,7 +113751,7 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
             }
         }
     }
-    return { success: true, modifiedKeys, tableData: workingTableData };
+    return { success: true, modifiedKeys, tableData: workingTableData, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
 }
 function applyUnifiedGroupFillResponses_ACU(...args) {
     const responses = args[0];
@@ -113887,6 +113917,7 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
     let committedBucketCount = 0;
     // 与 committedBucketCount 分开计数：伪提交（帧只落进度/事件，modifiedKeys 为空）会推进前者
     // 但不产生任何表数据，UI 与编排器只有后者能证明「真的写了数据」。
+    const postCommitWarnings = [];
     let committedDataBucketCount = 0;
     let aborted = false;
     for (let bucketIndex = 0; bucketIndex < orderedBuckets.length; bucketIndex++) {
@@ -114182,6 +114213,7 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                     performanceParentSpanId: options.performanceParentSpanId,
                 });
                 if (applyResult.success) {
+                    postCommitWarnings.push(...(applyResult.postCommitWarnings || []));
                     const nextCommittedBucketCount = committedBucketCount + 1;
                     if (Array.isArray(applyResult.modifiedKeys) && applyResult.modifiedKeys.length > 0) {
                         committedDataBucketCount += 1;
@@ -114232,11 +114264,11 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
         }
     }
     if (aborted) {
-        return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount, committedDataBucketCount };
+        return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
     }
     return failedGroups.size > 0
-        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, committedDataBucketCount }
-        : { success: true, failedGroups: [], committedBucketCount, committedDataBucketCount };
+        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) }
+        : { success: true, failedGroups: [], committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
 }
 function processGroupedRuntimeChunk_ACU(...args) {
     const groups = args[0];
@@ -114493,6 +114525,7 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
         });
     };
     let success = false;
+    const postCommitWarnings = [];
     let modifiedKeys = [];
     const maxRetries = settings_ACU.tableMaxRetries || 3;
     const executionScope = await captureFillExecutionScope_ACU();
@@ -114756,7 +114789,7 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                     }
                     modifiedKeys = commitResult.value.modifiedKeys;
                     if (!isImportMode && commitResult.tableData) {
-                        await updateReadableLorebookEntry_ACU(true, false, null, commitResult.tableData);
+                        postCommitWarnings.push(...await refreshCommittedWorldbook_ACU(commitResult.tableData));
                     }
                     success = true;
                     break;
@@ -114904,7 +114937,7 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                 }
                 modifiedKeys = updateOutcome.value.modifiedKeys;
                 if (!isImportMode && updateOutcome.tableData) {
-                    await updateReadableLorebookEntry_ACU(true, false, null, updateOutcome.tableData);
+                    postCommitWarnings.push(...await refreshCommittedWorldbook_ACU(updateOutcome.tableData));
                 }
                 success = true;
                 break;
@@ -114969,7 +115002,7 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                 });
             }
         }
-        return { success, modifiedKeys };
+        return { success, modifiedKeys, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
     }
     catch (error) {
         if (error.name === 'AbortError') {
@@ -115007,6 +115040,7 @@ async function processUpdatesBatch_ACU(indicesToUpdate, mode, options, executeUp
         _set_wasStoppedByUser_ACU(false);
         _set_isAutoUpdatingCard_ACU(true);
     }
+    const postCommitWarnings = [];
     try {
         const isSummaryMode = (mode && (mode.includes('summary') || mode === 'manual_summary')) || false;
         const batchSize = specificBatchSize || (settings_ACU.updateBatchSize || 2);
@@ -115096,17 +115130,19 @@ async function processUpdatesBatch_ACU(indicesToUpdate, mode, options, executeUp
                 totalBatches: batches.length,
                 batchBaseSnapshot: JSON.parse(JSON.stringify(mergedBatchData)),
             });
+            postCommitWarnings.push(...(result.postCommitWarnings || []));
             if (!result.success) {
                 return {
                     success: false,
                     failedBatch: batchNumber,
+                    ...(postCommitWarnings.length ? { postCommitWarnings } : {}),
                     error: result.error || `批处理在第 ${batchNumber} 批时失败或被终止。`,
                     ...(result.diagnosticCode ? { diagnosticCode: result.diagnosticCode } : {}),
                     ...(result.diagnostic ? { diagnostic: result.diagnostic } : {}),
                 };
             }
         }
-        return { success: true };
+        return { success: true, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
     }
     finally {
         if (ownsAutoUpdatingFlag) {
@@ -116149,6 +116185,7 @@ async function ensureManualRefillAnchorHealth_ACU(liveChat, isolationKey, option
 async function orchestrateManualUpdate_ACU(targetKeys, refreshData, options = {}) {
     let committedBucketCount = 0;
     // 与 committedBucketCount 分开计数：伪提交（帧只落进度/事件，modifiedKeys 为空）推前者不推后者。
+    const postCommitWarnings = [];
     let committedDataBucketCount = 0;
     // 跨根 staging 作用域（仅 manualRefillEnabled 且跨根时启用；提升到函数级以便
     // chunk 循环内 settle 与收尾共用）。non-null 断言仅在 requiresBoundaryStaging
@@ -116807,6 +116844,7 @@ async function orchestrateManualUpdate_ACU(targetKeys, refreshData, options = {}
                     });
                     committedBucketCount += chunkResult.committedBucketCount;
                     committedDataBucketCount += chunkResult.committedDataBucketCount;
+                    postCommitWarnings.push(...(chunkResult.postCommitWarnings || []));
                     // 已有提交 ⇒ 本会话不再回滚清理，此时才执行被推迟的外置向量文件删除。
                     await flushDeferredRefillVectorCleanup();
                     if (!chunkResult.success) {
@@ -116846,6 +116884,7 @@ async function orchestrateManualUpdate_ACU(targetKeys, refreshData, options = {}
                                 syncAfterCommit: false,
                             });
                             committedBucketCount += preResult.committedBucketCount;
+                            postCommitWarnings.push(...(preResult.postCommitWarnings || []));
                             committedDataBucketCount += preResult.committedDataBucketCount;
                             await flushDeferredRefillVectorCleanup();
                             if (!preResult.success) {
@@ -116876,6 +116915,7 @@ async function orchestrateManualUpdate_ACU(targetKeys, refreshData, options = {}
                                 replaceExistingIncremental: false,
                             });
                             committedBucketCount += postResult.committedBucketCount;
+                            postCommitWarnings.push(...(postResult.postCommitWarnings || []));
                             committedDataBucketCount += postResult.committedDataBucketCount;
                             await flushDeferredRefillVectorCleanup();
                             if (!postResult.success) {
@@ -117007,6 +117047,7 @@ async function orchestrateManualUpdate_ACU(targetKeys, refreshData, options = {}
         return {
             success: true, checkpointWarning, committedBucketCount, committedDataBucketCount,
             ...(zeroCommitRollback.rolledBackCleanup ? { rolledBackCleanup: true } : {}),
+            ...(postCommitWarnings.length ? { postCommitWarnings } : {}),
         };
     }
     catch (error) {
@@ -117202,6 +117243,11 @@ async function proceedWithCardUpdate_ACU(messagesToUse, batchToastMessage = '正
         // 调用 service 层，传入进度回调（只接收纯数据事件）
         const result = await executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImportMode, updateMode, isSilentMode, targetSheetKeys, requestOptions, localAbortController, progressContext, (event) => handleProgressEvent(event, isSilentMode, loadingToast));
         // UI：根据返回值决定后续 UI 操作
+        // 批处理内部调用（showFinalErrorToast=false）不弹：告警交给调度层汇总后统一提示一次。
+        const postCommitWarningText = formatPostCommitWarnings_ACU(result.postCommitWarnings);
+        if (postCommitWarningText && !isSilentMode && showFinalErrorToast) {
+            showToastr_ACU('warning', postCommitWarningText);
+        }
         if (result.success && !isSilentMode) {
             setTimeout(() => {
                 notifyTableUpdate();
@@ -117309,7 +117355,10 @@ async function handleManualUpdate_ACU() {
         manualProgressToast = null;
         // UI：根据返回值显示 toast
         if (result.success) {
-            showToastr_ACU(result.checkpointWarning ? 'warning' : 'success', result.checkpointWarning ? `手动更新完成，但 AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}` : '手动更新完成！');
+            const warnings = [formatPostCommitWarnings_ACU(result.postCommitWarnings)].filter(Boolean);
+            if (result.checkpointWarning)
+                warnings.push(`AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}`);
+            showToastr_ACU(warnings.length ? 'warning' : 'success', ['手动更新完成！', ...warnings].join('\n'));
             notifyTableUpdate();
         }
         else if (result.error) {
@@ -119744,6 +119793,7 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
     const maxConcurrentGroups = Math.max(1, settings.maxConcurrentGroups || 1);
     const failedGroupKeys = [];
     const failedGroupErrors = [];
+    const postCommitWarnings = [];
     // 执行阶段跟踪：execute 段失败与 refresh 段失败记不同诊断码（移植上游 ece65f80）。
     let executionStage = 'execute';
     const pushGroupError_ACU = (groupKey, error) => {
@@ -119776,6 +119826,7 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
             }
             : {};
         const groupedResult = await runner(groupedChunk, 'auto_independent', groupedOptions);
+        postCommitWarnings.push(...(groupedResult.postCommitWarnings || []));
         if (!groupedResult.success) {
             failedGroupKeys.push(...groupedResult.failedGroups);
             const groupedError = groupedResult.error || '分组更新失败，未返回具体错误。';
@@ -119816,6 +119867,9 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
                         return;
                     }
                     const rawResult = result.value?.success;
+                    if (rawResult && typeof rawResult === 'object') {
+                        postCommitWarnings.push(...(rawResult.postCommitWarnings || []));
+                    }
                     const groupSucceeded = typeof rawResult === 'object' && rawResult !== null && 'success' in rawResult
                         ? rawResult.success !== false
                         : !!rawResult;
@@ -119864,7 +119918,8 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
         logAutoFillStage_ACU('refresh', { runId: performanceContext?.runId });
         await ops.loadAllChatMessages();
         setAutoUpdating(false);
-        await ops.refreshData();
+        const refreshResult = await ops.refreshData();
+        postCommitWarnings.push(...(refreshResult?.postCommitWarnings || []));
         // 清理超出保留层数的旧数据
         try {
             await ops.purgeOldLayerData();
@@ -119878,6 +119933,7 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
             failedGroups: failedGroupKeys.length,
             totalGroups,
             errors: failedGroupErrors,
+            ...(postCommitWarnings.length ? { postCommitWarnings } : {}),
             ...(runnerUnavailableGroupKeys.length > 0
                 ? {
                     diagnosticCode: 'staging_runner_unavailable',
@@ -120097,13 +120153,13 @@ function buildAutoUpdateProgressMessage_ACU(event) {
 }
 async function refreshRuntimeDataAndNotifyAfterAutoUpdate_ACU() {
     const data = getStorageProvider().getCurrentData() || currentJsonTableData_ACU;
-    if (data) {
-        await updateReadableLorebookEntry_ACU(true, false, null, data);
-    }
+    // 表格此时已提交：世界书刷新失败只作告警交回调度层，不让整轮自动填表算失败。
+    const postCommitWarnings = data ? await refreshCommittedWorldbook_ACU(data) : [];
     try {
         topLevelWindow_ACU.AutoCardUpdaterAPI?._notifyTableUpdate?.();
     }
     catch (_) { }
+    return postCommitWarnings.length ? { postCommitWarnings } : {};
 }
 // 存储模式恒为 SQLite：自动填表不再弹常驻进度框（原非 SQLite 分组路径已删除，R9-12），只提示重试。
 function handleAutoGroupedProgressEvent_ACU(event) {
@@ -120240,6 +120296,9 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
                 ? `并发分组更新有 ${result.failedGroups} 组失败：${firstError}`
                 : `并发分组更新有 ${result.failedGroups} 组失败，请查看日志。`);
         }
+        const postCommitWarningText = formatPostCommitWarnings_ACU(result.postCommitWarnings);
+        if (postCommitWarningText)
+            showToastr_ACU('warning', postCommitWarningText);
     }
     finally {
         performanceSpan.end({
@@ -121077,6 +121136,21 @@ async function runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey,
         return false;
     }
 }
+/** 自动任务事件代次：重新生成 / 删楼 / 切换版本时 +1，排队中的旧任务据此作废。 */
+let autoTaskEventEpoch_ACU = 0;
+/** 当前 MVU 在飞等待的创建者所属代次：创建者被作废时，由并入的最新一轮接手。 */
+let mvuGateOwnerEventEpoch_ACU = 0;
+/**
+ * 作废排队中的自动填表与正文替换（移植上游 2657754a + f874c888）：取消防抖，
+ * 并让已进入 MVU 等待 / 物化等待的旧任务在下一个检查点退出。已发出的 AI 请求不在此取消，
+ * 由各自的写回守卫兜底。
+ */
+function cancelPendingAutoTasks_ACU(reason) {
+    autoTaskEventEpoch_ACU += 1;
+    clearTimeout(autoFillDebounceTimer_ACU);
+    _set_autoFillDebounceTimer_ACU(null);
+    logDebug_ACU(`[新消息] 排队中的自动任务已作废（${reason}）`);
+}
 // [触发修复] GENERATION_ENDED 后 AI 楼层有界物化等待常量
 async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) {
     logDebug_ACU(`New message event (${eventType}) detected for ACU, debouncing for ${NEW_MESSAGE_DEBOUNCE_DELAY_ACU}ms...`);
@@ -121087,15 +121161,31 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
     const scheduledIsolationKey_ACU = intent?.isolationKey ?? getCurrentIsolationKey_ACU();
     const scheduledRunId_ACU = `auto-fill-${++autoFillRunSequence_ACU}`;
     const scheduledStopEpoch_ACU = getAutoFillStopEpoch_ACU();
+    const scheduledEventEpoch_ACU = autoTaskEventEpoch_ACU;
     latestAutoFillRunId_ACU = scheduledRunId_ACU;
     const isCurrentAutoFillRun_ACU = () => (latestAutoFillRunId_ACU === scheduledRunId_ACU
         && getAutoFillStopEpoch_ACU() === scheduledStopEpoch_ACU);
     const stopIfAutoFillRunStale_ACU = (stage) => {
         // 停止代次是跨异步阶段的硬闸；runId 只在防抖回调入场时判定，
         // 不能把已获 MVU 闸门所有权的首个回调误判为旧回调。
-        if (getAutoFillStopEpoch_ACU() === scheduledStopEpoch_ACU)
+        if (getAutoFillStopEpoch_ACU() !== scheduledStopEpoch_ACU) {
+            logDebug_ACU(`[新消息] 自动填表 run ${scheduledRunId_ACU} 已因停止代次失效（stage=${stage}），放弃旧回调`);
+            return true;
+        }
+        // 重新生成 / 删楼 / 切换版本后旧任务的目标楼层已失效；正文还在生成时也不能对没写完的回复动手。
+        const reason = autoTaskEventEpoch_ACU !== scheduledEventEpoch_ACU
+            ? 'generation_changed'
+            : hasActiveForegroundGeneration_ACU() ? 'generation_in_progress' : null;
+        if (!reason)
             return false;
-        logDebug_ACU(`[新消息] 自动填表 run ${scheduledRunId_ACU} 已因停止代次失效（stage=${stage}），放弃旧回调`);
+        logDebug_ACU(`[新消息] 自动任务 run ${scheduledRunId_ACU} 放弃（${reason}，stage=${stage}）`);
+        logAutoFillSkip_ACU(reason, {
+            eventType,
+            eventMessageId: intent?.eventMessageId,
+            messageId: intent?.eventMessageId,
+            chatKey: scheduledChatKey_ACU,
+            isolationKey: scheduledIsolationKey_ACU,
+        });
         return true;
     };
     clearTimeout(autoFillDebounceTimer_ACU);
@@ -121138,14 +121228,22 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
             // 放在 loadAllChatMessages / chatKey 复检之前，等待期间切了聊天由既有复检自然丢弃，不新增特判。
             // MVU 未装 / 未启用 / 开关关闭 → 同步立即放行，与闸门上线前逐字一致。
             // 「忽略MVU更新」开后替换分支已早跑，此处闸门实际只拦填表（正常轮靠 skipReplace 跳过替换）。
+            // 没有在飞等待 ⇒ 本轮将成为创建者：记下所属代次，供并入方判断创建者是否已被作废。
+            if (!getMvuAnalysisGateState_ACU().waiting)
+                mvuGateOwnerEventEpoch_ACU = scheduledEventEpoch_ACU;
             const mvuGate_ACU = await waitForMvuAnalysisToSettle_ACU();
             if (stopIfAutoFillRunStale_ACU('after_mvu_gate'))
                 return;
             if (mvuGate_ACU.mergedIntoExisting) {
                 // [防双跑] 本次触发并入了他人在飞等待：创建者放行后会按最新楼独自处理，
                 // 合并方继续跑=同楼正文替换/填表双跑各烧一次 AI（2026-09-05 日志实证），直接放弃本轮。
-                logDebug_ACU('[MVU联动] 本次触发已并入在飞等待，交由创建者继续处理，本轮丢弃（防同楼双跑）');
-                return;
+                // 例外：创建者属于已作废的旧代次（重新生成 / 删楼后它会自行退出），由并入的最新一轮接手。
+                const ownerCancelled_ACU = mvuGateOwnerEventEpoch_ACU !== scheduledEventEpoch_ACU;
+                if (!ownerCancelled_ACU || latestAutoFillRunId_ACU !== scheduledRunId_ACU) {
+                    logDebug_ACU('[MVU联动] 本次触发已并入在飞等待，交由创建者继续处理，本轮丢弃（防同楼双跑）');
+                    return;
+                }
+                logDebug_ACU('[MVU联动] 在飞等待的创建者已作废，由本轮（最新一轮）接手继续处理');
             }
             if (mvuGate_ACU.delayed) {
                 logDebug_ACU(`[MVU联动] 闸门放行（reason=${mvuGate_ACU.reason}，等待 ${mvuGate_ACU.elapsedMs}ms，挂起=${mvuGate_ACU.suspended}），继续自动填表与正文替换`);
@@ -147227,12 +147325,18 @@ function mainInitialize_ACU() {
                         catch {
                             preSignature = undefined;
                         }
+                        const quietLike = isQuietLikeGeneration_ACU(type, params);
+                        // 新一轮正文生成会重写 / 追加楼层：上一轮还在排队（防抖、等 MVU、等楼层落地）的自动填表与
+                        // 正文替换不能再对着旧楼层或没写完的新回复跑（移植上游 2657754a + f874c888）。
+                        // quiet / dryRun / 插件自动触发的生成不动正文，不作废。
+                        if (!dryRun && !quietLike && !params?.automatic_trigger) {
+                            cancelPendingAutoTasks_ACU('generation_started');
+                        }
                         const context = recordGenerationContext_ACU(type, params, dryRun, preSignature);
                         bindContinuationInternalAiGenerationStarted_ACU(context.seq);
                         // 宿主的 GENERATION_STARTED 通常在发送点击返回后的微任务里才送达，同步配对必然错过；
                         // 对非 quiet/非 dryRun/非自动触发的生成开放宽松认领（spv8.9.2 状态法），桥内部只在
                         // 存在未绑定序列号的等待轮时才会认领。
-                        const quietLike = isQuietLikeGeneration_ACU(type, params);
                         // TT 2.3.0：Agent 断点续连以 { agentResume: true, runId } 作为第三参派发 STARTED，
                         // 形态上不含 automatic_trigger/quiet_prompt，会被误判成「普通前台生成」而吃宽松认领。
                         // 它不是本轮用户生成，不许被续写桥认领。
@@ -147611,6 +147715,8 @@ function mainInitialize_ACU() {
                 if (SillyTavern_API_ACU.eventTypes[evName]) {
                     SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes[evName], async (data) => {
                         logDebug_ACU(`ACU ${evName} event detected. Triggering data reload and merge from chat history.`);
+                        // 删楼或切换版本后旧任务的楼层锚点已失效，排队中的自动任务一并作废。
+                        cancelPendingAutoTasks_ACU(evName === 'MESSAGE_DELETED' ? 'message_deleted' : 'message_swiped');
                         // 删楼守卫：同步登记此刻在场的楼层（重新生成的流式新回复要到事件派发完才追加）。
                         if (evName === 'MESSAGE_DELETED') {
                             try {
@@ -148180,6 +148286,89 @@ function createCoreDataApi(ctx) {
             }
             finally {
                 _set_isAutoUpdatingCard_ACU(false);
+            }
+        },
+    };
+}
+
+/**
+ * 对外只读接口：按楼层读取表格历史快照（移植上游 PR #31 / 412182b4 + e445c967）。
+ * 本库没有上游的结构化回放失败点（V2ReplayOperationError），失败只返回 code + error。
+ */
+function createTableHistoryApi() {
+    return {
+        /**
+         * 只读导出当前聊天、当前隔离槽在指定消息处的 V2 完整表格状态。
+         * 索引为从 0 开始的绝对消息索引，包含该消息自身的操作；没有帧的消息
+         * 继承此前状态。重复索引去重，返回顺序保持请求顺序。
+         * 需要正式 full checkpoint；缺失基底、损坏帧或 SQL 失败返回结构化错误，
+         * 不以当前表格或空对象替代。不会保存聊天、通知 UI 或发布回放运行时。
+         * 空数组返回空结果。异步读取期间聊天、swipe 或存储修订变化会拒绝结果。
+         * 返回数据为独立副本；本接口不提供持久缓存。
+         *
+         * @example
+         * const result = await AutoCardUpdaterAPI.exportTableSnapshotsAtMessages([0, 5]);
+         * if (result.success) console.log(result.snapshots[0].data);
+         */
+        exportTableSnapshotsAtMessages: async function (messageIndices) {
+            if (!Array.isArray(messageIndices) || Array.from(messageIndices).some(index => !Number.isSafeInteger(index) || index < 0)) {
+                return { success: false, code: 'invalid_message_indices', error: 'messageIndices 必须是非负整数消息索引数组。' };
+            }
+            const indices = [...new Set(messageIndices)];
+            if (indices.length === 0)
+                return { success: true, snapshots: [] };
+            const host = SillyTavern_API_ACU;
+            const chat = getChatArray_ACU();
+            if (!host || !Array.isArray(host.chat) || host.chatId == null || host.chatId === '') {
+                return { success: false, code: 'host_unavailable', error: '当前聊天尚未就绪。' };
+            }
+            if (indices.some(index => index >= chat.length)) {
+                return { success: false, code: 'invalid_message_indices', error: '消息索引超出当前聊天范围。' };
+            }
+            const { chatId, characterId, groupId } = host;
+            const isolationKey = getCurrentIsolationKey_ACU(); // 空串是合法的默认槽。
+            const owners = chat.map(message => ({
+                message, swipeId: message?.swipe_id,
+                storage: message?.TavernDB_ACU_IsolatedData,
+                frame: message?.TavernDB_ACU_IsolatedData?.[isolationKey]?.storageFrame,
+            }));
+            const revision = computeReplayHeadRevisionDigest_ACU(chat, isolationKey);
+            const isCurrent = () => SillyTavern_API_ACU === host && getChatArray_ACU() === chat
+                && host.chatId === chatId && host.characterId === characterId && host.groupId === groupId
+                && getCurrentIsolationKey_ACU() === isolationKey && chat.length === owners.length
+                && owners.every((owner, index) => chat[index] === owner.message
+                    && chat[index]?.swipe_id === owner.swipeId
+                    && chat[index]?.TavernDB_ACU_IsolatedData === owner.storage
+                    && chat[index]?.TavernDB_ACU_IsolatedData?.[isolationKey]?.storageFrame === owner.frame)
+                && computeReplayHeadRevisionDigest_ACU(chat, isolationKey) === revision;
+            const stale = () => ({
+                success: false, code: 'context_changed', error: '历史读取期间聊天或存储修订已变化，请重新读取。',
+            });
+            try {
+                // 批量回放只读取到最大请求索引，避免后续损坏帧阻断更早的有效快照。
+                // 原始存储字段比对同时覆盖对象与生产读取口支持的 JSON 字符串格式。
+                // 纯读取：不调度后台固化，免得读历史时隐式改写聊天。
+                const lastIndex = indices.reduce((maximum, index) => Math.max(maximum, index), 0);
+                const states = await loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(chat.slice(0, lastIndex + 1), isolationKey, indices, {
+                    updateRuntimeState: false,
+                    compatibilityMode: 'disabled',
+                    allowTemporaryTemplateBaseline: false,
+                    backgroundFixation: 'skip',
+                });
+                if (!isCurrent())
+                    return stale();
+                const snapshots = indices.map(messageIndex => {
+                    const state = states.get(messageIndex);
+                    if (!state)
+                        throw new Error(`未取得消息 ${messageIndex} 的历史快照。`);
+                    return { messageIndex, data: structuredClone(state.data) };
+                });
+                return { success: true, snapshots };
+            }
+            catch (error) {
+                if (!isCurrent())
+                    return stale();
+                return { success: false, code: 'replay_failed', error: error instanceof Error ? error.message : String(error) };
             }
         },
     };
@@ -152977,6 +153166,7 @@ const sqlApi = createSqlApi(ctx);
 const apiGroupEntries = [
     { name: 'callback', methods: createCallbackApi(ctx) },
     { name: 'core-data', methods: createCoreDataApi(ctx) },
+    { name: 'table-history', methods: createTableHistoryApi() },
     { name: 'table-crud', methods: createTableCrudApi(ctx) },
     { name: 'table-lock', methods: createTableLockApi(ctx) },
     { name: 'template-preset', methods: createTemplatePresetApi(ctx) },
@@ -153018,7 +153208,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261012-12";
+        const stamp = "20261013-15";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -204650,10 +204840,12 @@ function useManualUpdate() {
             const successText = result.rolledBackCleanup
                 ? '手动填表未写入任何数据，已回滚清理。'
                 : '手动填表完成。';
-            finishToast(result.success ? (result.checkpointWarning || result.rolledBackCleanup ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'), result.success
+            // 表格已提交、只是世界书刷新失败：仍报完成，告警另起一行说明只需重试世界书同步。
+            const postCommitWarningText = formatPostCommitWarnings_ACU(result.postCommitWarnings);
+            finishToast(result.success ? (result.checkpointWarning || result.rolledBackCleanup || postCommitWarningText ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'), result.success
                 ? `${successText}${result.rolledBackCleanup ? '' : rollbackNote}${result.checkpointWarning
                     ? ` 但 AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}`
-                    : ''}`
+                    : ''}${postCommitWarningText ? `\n${postCommitWarningText}` : ''}`
                 : (abortRequested ? `手动填表任务已由用户终止。${rollbackNote}` : `${result.error || '手动填表失败。'}${rollbackNote}`));
         }
         catch (error) {

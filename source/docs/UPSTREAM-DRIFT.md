@@ -132,3 +132,28 @@ npm run drift                                  # 等价 node scripts/upstream-dr
   我方正文优化与自动填表同走 GENERATION_ENDED 一个入口（同一配对门控），不存在该缺陷。
 - `bf3bc1dc` / `0faaec8b` 智能续写维护者一次提交、新建条目系统字段归属：涉及我方没有的模块
   （`agent-module-field-commit`、`agent-maintainer-submit` 等），归入续写暂缓批次。
+
+## 2026-10-13 跟进（上游 main `f0baa844..422e498d`）
+
+已移植（按我方口径重写）：
+
+- `2657754a` + `f874c888` 重新生成 / 删楼 / 切换版本时作废排队中的自动任务。我方填表与正文替换同走一个入口
+  （`handleNewMessageDebounced_ACU`），所以只加一套代次：前台正文生成开始（非 quiet / dryRun / 自动触发）、
+  `MESSAGE_DELETED`、`MESSAGE_SWIPED` 时 `cancelPendingAutoTasks_ACU` 递增代次并清防抖；入口各检查点发现
+  代次变化（`generation_changed`）或仍有正文生成在途（`generation_in_progress`）即放弃。已发出的 AI 请求不取消，
+  由写回守卫兜底。我方独有：MVU 在飞等待的创建者被作废时，由并入同一次等待的最新一轮接手，避免新楼层被一起丢掉。
+- `422e498d`（issue #34）表格提交后世界书刷新失败不再算整次填表失败：`refreshCommittedWorldbook_ACU` 只返回告警
+  （`postCommitWarnings`），沿单组 / 分组 / 批处理 / 手动 / 自动调度各层汇总，自动填表、手动填表、单次更新各提示一次
+  「表格已保存，但世界书刷新失败……无需重新填表」。告警类型与文案拼接放在 `shared/post-commit-warnings.ts`。
+- `9d114771` 表格导出「关键词」条目交给宿主时转成 `selective`（宿主合法类型），表格配置仍保留 `keyword`。
+- `412182b4` + `e445c967`（PR #31）对外只读接口 `exportTableSnapshotsAtMessages`。与上游差异：我方没有
+  `V2ReplayOperationError`，回放失败只返回 `code` + `error`，不带 `failurePoint`；额外传 `backgroundFixation: 'skip'`，
+  保证读取不调度后台固化。
+
+无需跟：
+
+- `e445c967` 慢生成上下文失效（上游 issue #32）：即我方 issue #2，已按「前台上下文 30 分钟 + 新前台顶掉旧前台」修过。
+- `63aacfb4` 楼层正文解耦：改的是上游后加的楼层快照校验（`chat-message-snapshot`）与推演提交，我方没有这两套机制；
+  续写部分归入续写暂缓批次。
+- `48c02522`（PR #35）故事弧维护交回主代理：续写暂缓批次。
+- `094ebc82`（PR #28）提示词后处理选项精简：我方默认值本就不同（`strict`），保留现有 8 个选项。

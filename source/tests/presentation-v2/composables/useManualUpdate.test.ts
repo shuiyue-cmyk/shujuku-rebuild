@@ -325,6 +325,23 @@ describe('useManualUpdate destructive refill confirmation', () => {
     __resetToastStoreForTests();
   });
 
+  it('表格已保存、世界书刷新失败：提示完成，并以告警附上「只需重试世界书同步」', async () => {
+    const { useManualUpdate, dialog, toast, orchestrateManualUpdate_ACU, __resetToastStoreForTests } = await importManualUpdate();
+    const message = '表格已保存，但世界书刷新失败：超时。请仅重试世界书同步，无需重新填表。';
+    orchestrateManualUpdate_ACU.mockResolvedValue({ success: true, postCommitWarnings: [{ code: 'worldbook_sync_failed', message }] });
+    const manual = useManualUpdate();
+
+    const pending = manual.runManualUpdate();
+    await waitForCondition(() => dialog.active?.title === '执行手动填表', '确认弹窗出现');
+    dialog.submitActive();
+    await pending;
+
+    expect(toast.items.at(-1)?.kind).toBe('warning');
+    expect(toast.items.at(-1)?.text).toContain('手动填表完成');
+    expect(toast.items.at(-1)?.text).toContain(message);
+    __resetToastStoreForTests();
+  });
+
   // 上游 issue #18 第四条：先清后填 + AI 失败时，零提交的结果已由 service 回滚并落盘，
   // toast 必须如实告知，否则用户会以为旧数据已被清掉且无法恢复。
   it('零提交失败时提示已回滚清理，已提交失败时不提示回滚', async () => {

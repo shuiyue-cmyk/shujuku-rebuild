@@ -118,6 +118,19 @@ describe('handleManualUpdate_ACU destructive refill confirmation', () => {
     expect(orchestrateManualUpdate_ACU.mock.calls[0][2]).not.toHaveProperty('confirmBoundaryReset');
   });
 
+  it('表格已保存、世界书刷新失败：手动更新以告警提示完成，并附上只需重试世界书同步', async () => {
+    const { handleManualUpdate_ACU, showCustomConfirm_ACU, showToastr_ACU, orchestrateManualUpdate_ACU } = await importTrigger();
+    showCustomConfirm_ACU.mockResolvedValue(true);
+    orchestrateManualUpdate_ACU.mockResolvedValue({ success: true, postCommitWarnings: [{ code: 'worldbook_sync_failed', message: '表格已保存，但世界书刷新失败：超时。请仅重试世界书同步，无需重新填表。' }] });
+
+    await handleManualUpdate_ACU();
+
+    const finalToast = showToastr_ACU.mock.calls.at(-1);
+    expect(finalToast?.[0]).toBe('warning');
+    expect(finalToast?.[1]).toContain('手动更新完成');
+    expect(finalToast?.[1]).toContain('无需重新填表');
+  });
+
   it('orchestrator 失败时展示 error toast', async () => {
     const { handleManualUpdate_ACU, showCustomConfirm_ACU, showToastr_ACU, orchestrateManualUpdate_ACU } = await importTrigger();
     showCustomConfirm_ACU.mockResolvedValue(true);
@@ -141,6 +154,21 @@ describe('update error toast ownership', () => {
     expect(showToastr_ACU.mock.calls.filter(call => call[0] === 'error')).toEqual([
       ['error', '更新失败: 单次失败'],
     ]);
+  });
+
+  it('直接执行单次更新：表格已保存、世界书刷新失败时弹一次告警；批处理内部调用不弹（交给调度层汇总）', async () => {
+    const { proceedWithCardUpdate_ACU, processUpdates_ACU, processUpdatesBatch_ACU, executeCardUpdateCore_ACU, showToastr_ACU } = await importTrigger();
+    executeCardUpdateCore_ACU.mockResolvedValue({ success: true, modifiedKeys: ['sheet_0'], postCommitWarnings: [{ code: 'worldbook_sync_failed', message: '表格已保存，但世界书刷新失败：超时。请仅重试世界书同步，无需重新填表。' }] });
+
+    await proceedWithCardUpdate_ACU([{ is_user: false, mes: 'AI' }]);
+    expect(showToastr_ACU.mock.calls.filter(call => call[0] === 'warning' && String(call[1]).includes('世界书刷新失败'))).toHaveLength(1);
+
+    showToastr_ACU.mockClear();
+    processUpdatesBatch_ACU.mockImplementation(async (_indices: number[], _mode: string, _options: any, executeUpdate: any) => {
+      return executeUpdate([{ is_user: false, mes: 'AI' }], 1, 'auto_standard', false, ['sheet_0'], null, { currentBatch: 1, totalBatches: 1, batchBaseSnapshot: {} });
+    });
+    await processUpdates_ACU([1], 'auto');
+    expect(showToastr_ACU.mock.calls.filter(call => String(call[1]).includes('世界书刷新失败'))).toHaveLength(0);
   });
 
   it('批处理失败时内部 proceed 不报错，由 processUpdates 最外层只显示一次', async () => {

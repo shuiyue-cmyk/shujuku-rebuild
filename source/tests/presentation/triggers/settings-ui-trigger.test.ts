@@ -9,6 +9,7 @@ const m = vi.hoisted(() => ({
   buildPlan: vi.fn(() => ({ tablesToUpdate: [{ sheetKey: 'sheet_0' }], updateGroups: { group_1: {} } })),
   getChat: vi.fn(() => [{ is_user: true }, { is_user: false }]),
   preCheck: { canProceed: true, reason: '' },
+  refreshWb: vi.fn(async () => [] as any[]),
 }));
 
 // 自动填表「已处理集合」的内存替身（真实实现走 window + localStorage，本文件只验接线）
@@ -40,10 +41,13 @@ vi.mock('../../../src/service/table/storage-mode', () => ({ isSqliteMode: vi.fn(
 vi.mock('../../../src/presentation/theme/toast', () => ({ showToastr_ACU: vi.fn() }));
 vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logError_ACU: vi.fn(), logWarn_ACU: vi.fn(), isSummaryOrOutlineTable_ACU: vi.fn() }));
 vi.mock('../../../src/service/worldbook/pipeline', () => ({ loadAllChatMessages_ACU: vi.fn(), updateReadableLorebookEntry_ACU: vi.fn() }));
-vi.mock('../../../src/service/table/table-storage-strategy', () => ({ getStorageProvider: vi.fn(() => ({ getCurrentData: vi.fn() })) }));
 vi.mock('../../../src/shared/env', () => ({ topLevelWindow_ACU: {} }));
 vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-config', () => ({ purgeOldLayerData_ACU: vi.fn() }));
-vi.mock('../../../src/service/table/update-orchestrator', () => ({ processGroupedRuntimeChunk_ACU: vi.fn() }));
+vi.mock('../../../src/service/table/update-orchestrator', () => ({
+  processGroupedRuntimeChunk_ACU: vi.fn(),
+  refreshCommittedWorldbook_ACU: (...args: any[]) => m.refreshWb(...args),
+}));
+vi.mock('../../../src/service/table/table-storage-strategy', () => ({ getStorageProvider: vi.fn(() => ({ getCurrentData: vi.fn(() => ({ sheet_0: {} })) })) }));
 vi.mock('../../../src/data/storage/optimization-cache-storage', () => ({
   saveOptimizationBaseToCache_ACU: vi.fn(),
   loadOptimizationBaseFromCache_ACU: vi.fn(() => null),
@@ -271,6 +275,39 @@ describe('triggerAutomaticUpdateIfNeeded_ACU 回声防重', () => {
     await triggerAutomaticUpdateIfNeeded_ACU();
     await settleMicrotasks();
     expect(m.executePlan).toHaveBeenCalledTimes(2);
+  });
+
+  it('表格已保存、只是世界书刷新失败：照常登记本楼，并弹一条告警说明无需重新填表', async () => {
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    const { showToastr_ACU } = await import('../../../src/presentation/theme/toast');
+    const message = '表格已保存，但世界书刷新失败：超时。请仅重试世界书同步，无需重新填表。';
+    m.executePlan.mockResolvedValue({
+      success: true, totalGroups: 1, failedGroups: 0, errors: [],
+      postCommitWarnings: [{ code: 'worldbook_sync_failed', message }, { code: 'worldbook_sync_failed', message }],
+    });
+
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+
+    expect(guardStore.fill.size).toBe(1);
+    expect(showToastr_ACU).toHaveBeenCalledWith('warning', message);
+  });
+
+  it('收尾刷新世界书失败不抛错，而是把告警交回调度层', async () => {
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    const warning = { code: 'worldbook_sync_failed', message: '表格已保存，但世界书刷新失败：x' };
+    m.refreshWb.mockResolvedValueOnce([warning]);
+    let refreshOutcome: any;
+    m.executePlan.mockImplementation(async (_plan: any, _settings: any, _setUpdating: any, ops: any) => {
+      refreshOutcome = await ops.refreshData();
+      return { success: true, totalGroups: 1, failedGroups: 0, errors: [] };
+    });
+
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+
+    expect(m.refreshWb).toHaveBeenCalledWith({ sheet_0: {} });
+    expect(refreshOutcome).toEqual({ postCommitWarnings: [warning] });
   });
 
   it('用户终止本轮不登记（避免把没填完的楼层标成已填）', async () => {

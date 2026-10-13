@@ -1,4 +1,5 @@
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
+import { formatPostCommitWarnings_ACU } from '../../shared/post-commit-warnings';
 import {
   settings_ACU,
   currentChatFileIdentifier_ACU,
@@ -566,12 +567,14 @@ export function useManualUpdate(): ManualUpdateState {
       const successText = result.rolledBackCleanup
         ? '手动填表未写入任何数据，已回滚清理。'
         : '手动填表完成。';
+      // 表格已提交、只是世界书刷新失败：仍报完成，告警另起一行说明只需重试世界书同步。
+      const postCommitWarningText = formatPostCommitWarnings_ACU(result.postCommitWarnings);
       finishToast(
-        result.success ? (result.checkpointWarning || result.rolledBackCleanup ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'),
+        result.success ? (result.checkpointWarning || result.rolledBackCleanup || postCommitWarningText ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'),
         result.success
           ? `${successText}${result.rolledBackCleanup ? '' : rollbackNote}${result.checkpointWarning
                 ? ` 但 AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}`
-                : ''}`
+                : ''}${postCommitWarningText ? `\n${postCommitWarningText}` : ''}`
           : (abortRequested ? `手动填表任务已由用户终止。${rollbackNote}` : `${result.error || '手动填表失败。'}${rollbackNote}`),
       );
     } catch (error: any) {

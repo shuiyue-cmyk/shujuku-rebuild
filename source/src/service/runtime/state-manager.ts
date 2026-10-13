@@ -150,6 +150,13 @@ function isForegroundGenerationContext_ACU(context: GenerationContext_ACU): bool
   return !context.dryRun && !isQuietLikeGeneration_ACU(context.type, context.params);
 }
 
+/** 是否有正文生成在途（quiet / dryRun / 插件自动触发的不算）：在途时自动填表与正文替换不启动。 */
+export function hasActiveForegroundGeneration_ACU(): boolean {
+  removeExpiredGenerationContexts_ACU();
+  return generationGate_ACU.activeGenerations.some(context => isForegroundGenerationContext_ACU(context)
+    && !context.params?.automatic_trigger);
+}
+
 function removeExpiredGenerationContexts_ACU(now = Date.now()): void {
   generationGate_ACU.activeGenerations = generationGate_ACU.activeGenerations.filter(context => {
     const ttl = isForegroundGenerationContext_ACU(context) ? FOREGROUND_GENERATION_CONTEXT_TTL_MS_ACU : GENERATION_CONTEXT_TTL_MS_ACU;

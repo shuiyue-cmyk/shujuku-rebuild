@@ -1,6 +1,7 @@
 // update-process.ts — 表格更新 UI 壳（presentation 层：负责 UI 交互）
 // service 层只返回结果，presentation 层根据返回值自行决定 UI 操作。
 
+import { formatPostCommitWarnings_ACU } from '../../shared/post-commit-warnings';
 import {
   requestTableFillStop_ACU,
   _set_manualExtraHint_ACU,
@@ -258,6 +259,11 @@ export async function proceedWithCardUpdate_ACU(
         );
 
         // UI：根据返回值决定后续 UI 操作
+        // 批处理内部调用（showFinalErrorToast=false）不弹：告警交给调度层汇总后统一提示一次。
+        const postCommitWarningText = formatPostCommitWarnings_ACU(result.postCommitWarnings);
+        if (postCommitWarningText && !isSilentMode && showFinalErrorToast) {
+            showToastr_ACU('warning', postCommitWarningText);
+        }
         if (result.success && !isSilentMode) {
             setTimeout(() => {
                 notifyTableUpdate();
@@ -395,7 +401,9 @@ export async function handleManualUpdate_ACU() {
 
         // UI：根据返回值显示 toast
         if (result.success) {
-            showToastr_ACU(result.checkpointWarning ? 'warning' : 'success', result.checkpointWarning ? `手动更新完成，但 AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}` : '手动更新完成！');
+            const warnings = [formatPostCommitWarnings_ACU(result.postCommitWarnings)].filter(Boolean);
+            if (result.checkpointWarning) warnings.push(`AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}`);
+            showToastr_ACU(warnings.length ? 'warning' : 'success', ['手动更新完成！', ...warnings].join('\n'));
             notifyTableUpdate();
 
         } else if (result.error) {

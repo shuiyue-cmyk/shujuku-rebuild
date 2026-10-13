@@ -558,6 +558,43 @@ describe('executeAutoUpdatePlan_ACU', () => {
     expect(mockProcess).not.toHaveBeenCalled();
   });
 
+  it('分组提交、收尾刷新带回的「世界书刷新失败」告警汇总到结果里，不影响成功判定', async () => {
+    const plan = {
+      tablesToUpdate: [],
+      updateGroups: {
+        'group_a': { indices: [1], batchSize: 2, groupId: 0, sheetKeys: ['sheet_0'], sheetNames: ['表A'] },
+      },
+    };
+    const groupWarning = { code: 'worldbook_sync_failed', message: '表格已保存，但世界书刷新失败：A' };
+    const refreshWarning = { code: 'worldbook_sync_failed', message: '表格已保存，但世界书刷新失败：B' };
+    const ops = makeOps({
+      processGroupedUpdates: vi.fn().mockResolvedValue({ success: true, failedGroups: [], postCommitWarnings: [groupWarning] }),
+      refreshData: vi.fn().mockResolvedValue({ postCommitWarnings: [refreshWarning] }),
+    });
+
+    const result = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, ops);
+
+    expect(result.success).toBe(true);
+    expect(result.postCommitWarnings).toEqual([groupWarning, refreshWarning]);
+  });
+
+  it('逐组 processUpdates 路径带回的告警同样汇总；没有告警时不带该字段', async () => {
+    const plan = {
+      tablesToUpdate: [],
+      updateGroups: {
+        'group_a': { indices: [1], batchSize: 2, groupId: 0, sheetKeys: ['sheet_0'], sheetNames: ['表A'] },
+      },
+    };
+    const warning = { code: 'worldbook_sync_failed', message: '表格已保存，但世界书刷新失败：C' };
+    const withWarning = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating,
+      makeOps({ processUpdates: vi.fn().mockResolvedValue({ success: true, postCommitWarnings: [warning] }) }));
+    expect(withWarning.success).toBe(true);
+    expect(withWarning.postCommitWarnings).toEqual([warning]);
+
+    const clean = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, makeOps());
+    expect(clean.postCommitWarnings).toBeUndefined();
+  });
+
   it('grouped 委托返回 failedGroups 时按数量汇总失败组', async () => {
     const plan = {
       tablesToUpdate: [],

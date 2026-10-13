@@ -33,7 +33,11 @@ export type AutoFillSkipReason_ACU =
   /** 无配对上下文的 GENERATION_ENDED，且自上次门控放行以来 AI 楼零产出（外部插件假事件 / 查看器中途停止）→ 门控源头丢弃 */
   | 'unpaired_ended_no_new_output'
   /** 配对上下文的 GENERATION_ENDED，但自 STARTED 以来 AI 楼三元组（楼数/id/末楼内容哈希）零变化（查看器配对空转）→ 防抖回调源头跳过 */
-  | 'paired_ended_no_new_output';
+  | 'paired_ended_no_new_output'
+  /** 排队期间开始了新一轮正文生成、删了楼或切换了回复版本 → 旧任务的目标楼层已失效，丢弃 */
+  | 'generation_changed'
+  /** 防抖到期时正文还在生成 → 不对没写完的回复填表 / 替换 */
+  | 'generation_in_progress';
 
 export interface AutoFillSkipContext_ACU {
   eventType?: string;

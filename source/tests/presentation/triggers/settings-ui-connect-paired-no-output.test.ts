@@ -44,6 +44,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   isAutoUpdatingCard_ACU: false,
   wasStoppedByUser_ACU: false,
   getCurrentIsolationKey_ACU: () => '',
+  hasActiveForegroundGeneration_ACU: () => false,
   getAutoFillStopEpoch_ACU: () => 0,
   _set_coreApisAreReady_ACU: vi.fn(),
   _set_lastTotalAiMessages_ACU: vi.fn(),

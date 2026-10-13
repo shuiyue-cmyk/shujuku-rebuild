@@ -15,6 +15,9 @@ import { resolveManualUpdateBatchSize_ACU, resolveManualUpdateContextDepth_ACU }
 import { ensureStableRowIdsForSheetContent_ACU, filterSheetKeysByTemplateScope_ACU, getChatSheetGuideDataForIsolationKey_ACU, getCurrentChatTemplateScopeState_ACU, getEffectiveSeedRowsForSheet_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, resolveTemplateScope_ACU, sanitizeTemplateSnapshotForChat_ACU, shouldUseInitialSeedRows_ACU } from '../template/chat-scope';
 import type { TemplateScope_ACU } from '../template/chat-scope';
 import { loadAllChatMessages_ACU, updateReadableLorebookEntry_ACU } from '../worldbook/pipeline';
+import type { TableUpdatePostCommitWarning_ACU } from '../../shared/post-commit-warnings';
+export type { TableUpdatePostCommitWarning_ACU } from '../../shared/post-commit-warnings';
+export { formatPostCommitWarnings_ACU } from '../../shared/post-commit-warnings';
 import { logAutoFillSkip_ACU, logAutoFillStage_ACU } from '../../shared/trigger-diagnostics';
 import { enqueueSummaryVectorIndexFlush_ACU } from '../vector/summary-vector-index-flush-queue';
 import {
@@ -350,10 +353,28 @@ export interface BatchUpdateProgressContext {
     batchBaseSnapshot?: Record<string, any>;
 }
 
+/**
+ * 表格已提交后刷新可读世界书：失败只记成告警，不算填表失败、也不触发重试
+ * （否则用户看到「填表失败」而表格其实已存上；上游 issue #34）。
+ */
+export async function refreshCommittedWorldbook_ACU(tableData: Record<string, any>): Promise<TableUpdatePostCommitWarning_ACU[]> {
+    try {
+        await updateReadableLorebookEntry_ACU(true, false, null, tableData);
+        return [];
+    } catch (error: any) {
+        const reason = sanitizeRetryFeedback_ACU(error?.message || String(error), MAX_WARN_ERROR_LENGTH_ACU);
+        const message = `表格已保存，但世界书刷新失败：${reason}。请仅重试世界书同步，无需重新填表。`;
+        logWarn_ACU(`[TableUpdate] ${message}`);
+        return [{ code: 'worldbook_sync_failed', message }];
+    }
+}
+
 /** executeCardUpdateCore 的返回值 */
 export interface CardUpdateResult {
     success: boolean;
     modifiedKeys: string[];
+    /** 仅在提交后刷新失败时出现；success 与 modifiedKeys 仍表示表格变更结果。 */
+    postCommitWarnings?: TableUpdatePostCommitWarning_ACU[];
     tableData?: Record<string, any>;
     error?: string;
     errorCategory?: TableUpdateCommitErrorCategory_ACU;
@@ -370,6 +391,7 @@ export interface CardUpdateResult {
 /** processUpdatesBatch 的返回值 */
 export interface BatchUpdateResult {
     success: boolean;
+    postCommitWarnings?: TableUpdatePostCommitWarning_ACU[];
     failedBatch?: number;
     error?: string;
     /** 稳定失败分类，供 UI 与日志按 code 判断，不解析 error 文案。 */
@@ -401,6 +423,7 @@ export interface WriteTargetAdmissionDiagnostic_ACU {
 export interface ManualUpdateResult {
     success: boolean;
     error?: string;
+    postCommitWarnings?: TableUpdatePostCommitWarning_ACU[];
     /** 是否触发了自动合并 */
     checkpointWarning?: string;
     outcome?: 'complete' | 'no_work' | 'stopped' | 'sync_pending' | 'blocked' | 'integrity_failed' | 'progress_metadata_failed';
@@ -2145,12 +2168,14 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
                 errorCategory: commitResult.errorCategory || 'infrastructure',
             };
         }
+        const postCommitWarnings: TableUpdatePostCommitWarning_ACU[] = [];
         if (!options.isImportMode && options.syncAfterCommit !== false && commitResult.tableData) {
-            await updateReadableLorebookEntry_ACU(true, false, null, commitResult.tableData);
+            postCommitWarnings.push(...await refreshCommittedWorldbook_ACU(commitResult.tableData));
         }
-        return { success: true, modifiedKeys: commitResult.value.modifiedKeys, tableData: commitResult.tableData as any };
+        return { success: true, modifiedKeys: commitResult.value.modifiedKeys, tableData: commitResult.tableData as any, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
     }
 
+    const postCommitWarnings: TableUpdatePostCommitWarning_ACU[] = [];
     const sqlInitialization = isSqliteMode()
         ? buildSqlInitializationBase_ACU(baseSnapshot, [...allTargetSheetKeySet])
         : { workingTableData: JSON.parse(JSON.stringify(baseSnapshot)), initializedSheetKeys: new Set<string>() };
@@ -2347,14 +2372,10 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
                 settings: settings_ACU,
                 metrics: { targetMessageIndex: options.saveTargetIndex },
             });
-            try {
-                await updateReadableLorebookEntry_ACU(true, false, null, workingTableData);
-                lorebookSpan.end({ success: true });
-            } catch (error) {
-                lorebookSpan.end({ success: false });
-                throw error;
-            }
-            if (getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
+            postCommitWarnings.push(...await refreshCommittedWorldbook_ACU(workingTableData));
+            lorebookSpan.end({ success: postCommitWarnings.length === 0 });
+            // 刷新失败时照旧跳过向量收尾，但不推翻已完成的表格提交。
+            if (postCommitWarnings.length === 0 && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
                 const vectorSpan = startRuntimePerformanceSpan_ACU('table-fill-vector-flush', {
                     runId: options.performanceRunId,
                     parentSpanId: options.performanceParentSpanId,
@@ -2377,7 +2398,7 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
         }
     }
 
-    return { success: true, modifiedKeys, tableData: workingTableData as any };
+    return { success: true, modifiedKeys, tableData: workingTableData as any, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
 }
 
 export function applyUnifiedGroupFillResponses_ACU(
@@ -2458,7 +2479,7 @@ async function processGroupedRuntimeChunkCore_ACU(
         performanceRunId?: string;
         performanceParentSpanId?: string;
     } = {}
-): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; committedDataBucketCount: number; diagnosticCode?: ManualUpdateResult['diagnosticCode'] }> {
+): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; committedDataBucketCount: number; diagnosticCode?: ManualUpdateResult['diagnosticCode']; postCommitWarnings?: TableUpdatePostCommitWarning_ACU[] }> {
     if (!Array.isArray(groups) || groups.length === 0) {
         return { success: true, failedGroups: [], committedBucketCount: 0, committedDataBucketCount: 0 };
     }
@@ -2595,6 +2616,7 @@ async function processGroupedRuntimeChunkCore_ACU(
     let committedBucketCount = 0;
     // 与 committedBucketCount 分开计数：伪提交（帧只落进度/事件，modifiedKeys 为空）会推进前者
     // 但不产生任何表数据，UI 与编排器只有后者能证明「真的写了数据」。
+    const postCommitWarnings: TableUpdatePostCommitWarning_ACU[] = [];
     let committedDataBucketCount = 0;
     let aborted = false;
     for (let bucketIndex = 0; bucketIndex < orderedBuckets.length; bucketIndex++) {
@@ -2922,6 +2944,7 @@ async function processGroupedRuntimeChunkCore_ACU(
                 performanceParentSpanId: options.performanceParentSpanId,
             });
             if (applyResult.success) {
+                postCommitWarnings.push(...(applyResult.postCommitWarnings || []));
                 const nextCommittedBucketCount = committedBucketCount + 1;
                 if (Array.isArray(applyResult.modifiedKeys) && applyResult.modifiedKeys.length > 0) {
                     committedDataBucketCount += 1;
@@ -2973,11 +2996,11 @@ async function processGroupedRuntimeChunkCore_ACU(
     }
 
     if (aborted) {
-        return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount, committedDataBucketCount };
+        return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
     }
     return failedGroups.size > 0
-        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, committedDataBucketCount }
-        : { success: true, failedGroups: [], committedBucketCount, committedDataBucketCount };
+        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) }
+        : { success: true, failedGroups: [], committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
 }
 
 export function processGroupedRuntimeChunk_ACU(
@@ -3031,7 +3054,7 @@ export async function executeAutoFillStagingGroups_ACU(
             requiresBoundaryStaging: boolean;
         };
     } = {},
-): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number }> {
+): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; postCommitWarnings?: TableUpdatePostCommitWarning_ACU[] }> {
     const boundary = options.boundary;
     const originalFullIndex = boundary?.fullCheckpointIndices?.length === 1 ? boundary.fullCheckpointIndices[0] : null;
     const normalizedGroups = Array.isArray(groups) ? groups : [];
@@ -3280,6 +3303,7 @@ export async function executeCardUpdateCore_ACU(
         });
     };
     let success = false;
+    const postCommitWarnings: TableUpdatePostCommitWarning_ACU[] = [];
     let modifiedKeys: string[] = [];
     const maxRetries = settings_ACU.tableMaxRetries || 3;
     const executionScope = await captureFillExecutionScope_ACU();
@@ -3575,7 +3599,7 @@ export async function executeCardUpdateCore_ACU(
                     }
                     modifiedKeys = commitResult.value.modifiedKeys;
                     if (!isImportMode && commitResult.tableData) {
-                        await updateReadableLorebookEntry_ACU(true, false, null, commitResult.tableData);
+                        postCommitWarnings.push(...await refreshCommittedWorldbook_ACU(commitResult.tableData));
                     }
                     success = true;
                     break;
@@ -3734,7 +3758,7 @@ export async function executeCardUpdateCore_ACU(
                 }
                 modifiedKeys = updateOutcome.value.modifiedKeys;
                 if (!isImportMode && updateOutcome.tableData) {
-                    await updateReadableLorebookEntry_ACU(true, false, null, updateOutcome.tableData);
+                    postCommitWarnings.push(...await refreshCommittedWorldbook_ACU(updateOutcome.tableData));
                 }
 
                 success = true;
@@ -3808,7 +3832,7 @@ export async function executeCardUpdateCore_ACU(
             }
 
         }
-        return { success, modifiedKeys };
+        return { success, modifiedKeys, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
 
     } catch (error: any) {
         if (error.name === 'AbortError') {
@@ -3863,6 +3887,7 @@ export async function processUpdatesBatch_ACU(
         _set_isAutoUpdatingCard_ACU(true);
     }
 
+    const postCommitWarnings: TableUpdatePostCommitWarning_ACU[] = [];
     try {
         const isSummaryMode = (mode && (mode.includes('summary') || mode === 'manual_summary')) || false;
         const batchSize = specificBatchSize || (settings_ACU.updateBatchSize || 2);
@@ -3977,10 +4002,12 @@ export async function processUpdatesBatch_ACU(
                 }
             );
 
+            postCommitWarnings.push(...(result.postCommitWarnings || []));
             if (!result.success) {
                 return {
                     success: false,
                     failedBatch: batchNumber,
+                    ...(postCommitWarnings.length ? { postCommitWarnings } : {}),
                     error: result.error || `批处理在第 ${batchNumber} 批时失败或被终止。`,
                     ...(result.diagnosticCode ? { diagnosticCode: result.diagnosticCode } : {}),
                     ...(result.diagnostic ? { diagnostic: result.diagnostic } : {}),
@@ -3988,7 +4015,7 @@ export async function processUpdatesBatch_ACU(
             }
         }
 
-        return { success: true };
+        return { success: true, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
     } finally {
         if (ownsAutoUpdatingFlag) {
             _set_isAutoUpdatingCard_ACU(false);
@@ -5103,6 +5130,7 @@ export async function orchestrateManualUpdate_ACU(
 ): Promise<ManualUpdateResult> {
     let committedBucketCount = 0;
     // 与 committedBucketCount 分开计数：伪提交（帧只落进度/事件，modifiedKeys 为空）推前者不推后者。
+    const postCommitWarnings: TableUpdatePostCommitWarning_ACU[] = [];
     let committedDataBucketCount = 0;
     // 跨根 staging 作用域（仅 manualRefillEnabled 且跨根时启用；提升到函数级以便
     // chunk 循环内 settle 与收尾共用）。non-null 断言仅在 requiresBoundaryStaging
@@ -5772,6 +5800,7 @@ export async function orchestrateManualUpdate_ACU(
                     });
                     committedBucketCount += chunkResult.committedBucketCount;
                     committedDataBucketCount += chunkResult.committedDataBucketCount;
+                    postCommitWarnings.push(...(chunkResult.postCommitWarnings || []));
                     // 已有提交 ⇒ 本会话不再回滚清理，此时才执行被推迟的外置向量文件删除。
                     await flushDeferredRefillVectorCleanup();
                     if (!chunkResult.success) {
@@ -5811,6 +5840,7 @@ export async function orchestrateManualUpdate_ACU(
                                 syncAfterCommit: false,
                             });
                             committedBucketCount += preResult.committedBucketCount;
+                            postCommitWarnings.push(...(preResult.postCommitWarnings || []));
                             committedDataBucketCount += preResult.committedDataBucketCount;
                             await flushDeferredRefillVectorCleanup();
                             if (!preResult.success) {
@@ -5843,6 +5873,7 @@ export async function orchestrateManualUpdate_ACU(
                                 replaceExistingIncremental: false,
                             });
                             committedBucketCount += postResult.committedBucketCount;
+                            postCommitWarnings.push(...(postResult.postCommitWarnings || []));
                             committedDataBucketCount += postResult.committedDataBucketCount;
                             await flushDeferredRefillVectorCleanup();
                             if (!postResult.success) {
@@ -5978,6 +6009,7 @@ export async function orchestrateManualUpdate_ACU(
         return {
             success: true, checkpointWarning, committedBucketCount, committedDataBucketCount,
             ...(zeroCommitRollback.rolledBackCleanup ? { rolledBackCleanup: true } : {}),
+            ...(postCommitWarnings.length ? { postCommitWarnings } : {}),
         };
     } catch (error: any) {
         // 破坏性清理尚未开始：异常原样抛出（可能是普通路径的配置/准入错误，或

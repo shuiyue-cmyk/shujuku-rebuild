@@ -11,6 +11,7 @@ import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performanc
 import { getSortedSheetKeys_ACU } from '../template/chat-scope';
 import { getLatestV2FullCheckpointMessageIndex_ACU, resolveTableHistoryStatesFromChat_ACU } from './table-history';
 import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
+import type { TableUpdatePostCommitWarning_ACU } from '../../shared/post-commit-warnings';
 
 export interface TableUpdateItem {
     sheetKey: string;
@@ -260,6 +261,8 @@ export interface AutoUpdateResult {
     failedGroups: number;
     totalGroups: number;
     errors?: string[];
+    /** 表格已提交、只是派生刷新（世界书）失败的告警；不计入失败组。 */
+    postCommitWarnings?: TableUpdatePostCommitWarning_ACU[];
     /** 稳定失败分类（spv8.9）：staging 组无可用 runner 时为 'staging_runner_unavailable'。 */
     diagnosticCode?: 'staging_runner_unavailable';
     /** 稳定结构化诊断字段：标记因缺少 staging runner 而失败的组 key；不含聊天内容。 */
@@ -272,13 +275,13 @@ export interface AutoUpdateResult {
  */
 export interface AutoUpdateOperations {
     processUpdates: (indices: number[], mode: string, options: any) => Promise<any>;
-    processGroupedUpdates?: (groups: Array<{ key: string; groupId: number; indices: number[]; batchSize: number; sheetKeys: string[]; requestOptions: Record<string, any> | null }>, mode: string, options: any) => Promise<{ success: boolean; failedGroups: string[]; error?: string; skippedGroups?: string[] }>;
+    processGroupedUpdates?: (groups: Array<{ key: string; groupId: number; indices: number[]; batchSize: number; sheetKeys: string[]; requestOptions: Record<string, any> | null }>, mode: string, options: any) => Promise<{ success: boolean; failedGroups: string[]; error?: string; skippedGroups?: string[]; postCommitWarnings?: TableUpdatePostCommitWarning_ACU[] }>;
     /**
      * 跨 full checkpoint 边界分组的执行委托（由 orchestrator 提供共享 staging runner）。
      * 传入的是 requiresBoundaryStaging=true 的组；执行器负责 pre 段 stage_only、
      * 边界原子汇合与 post 段普通持久化。缺省时降级为 processGroupedUpdates。
      */
-    processStagingGroupedUpdates?: (groups: Array<{ key: string; groupId: number; indices: number[]; batchSize: number; sheetKeys: string[]; requestOptions: Record<string, any> | null }>, mode: string, options: any) => Promise<{ success: boolean; failedGroups: string[]; error?: string; skippedGroups?: string[] }>;
+    processStagingGroupedUpdates?: (groups: Array<{ key: string; groupId: number; indices: number[]; batchSize: number; sheetKeys: string[]; requestOptions: Record<string, any> | null }>, mode: string, options: any) => Promise<{ success: boolean; failedGroups: string[]; error?: string; skippedGroups?: string[]; postCommitWarnings?: TableUpdatePostCommitWarning_ACU[] }>;
     refreshData: () => Promise<any>;
     loadAllChatMessages: () => Promise<void>;
     purgeOldLayerData: () => Promise<void>;
@@ -310,6 +313,7 @@ export async function executeAutoUpdatePlan_ACU(
     const maxConcurrentGroups = Math.max(1, settings.maxConcurrentGroups || 1);
     const failedGroupKeys: string[] = [];
     const failedGroupErrors: string[] = [];
+    const postCommitWarnings: TableUpdatePostCommitWarning_ACU[] = [];
     // 执行阶段跟踪：execute 段失败与 refresh 段失败记不同诊断码（移植上游 ece65f80）。
     let executionStage = 'execute';
     const pushGroupError_ACU = (groupKey: string, error: unknown): void => {
@@ -323,7 +327,7 @@ export async function executeAutoUpdatePlan_ACU(
     const normalGroupKeys = groupKeys.filter(key => updateGroups[key].requiresBoundaryStaging !== true);
     const executeGroupChunk = async (
         chunkKeys: string[],
-        runner: ((groups: Array<{ key: string; groupId: number; indices: number[]; batchSize: number; sheetKeys: string[]; requestOptions: Record<string, any> | null }>, mode: string, options: any) => Promise<{ success: boolean; failedGroups: string[]; error?: string; skippedGroups?: string[] }>),
+        runner: NonNullable<AutoUpdateOperations['processGroupedUpdates']>,
     ): Promise<void> => {
         const groupedChunk = chunkKeys.map(key => {
             const group = updateGroups[key];
@@ -344,6 +348,7 @@ export async function executeAutoUpdatePlan_ACU(
             }
             : {};
         const groupedResult = await runner(groupedChunk, 'auto_independent', groupedOptions);
+        postCommitWarnings.push(...(groupedResult.postCommitWarnings || []));
         if (!groupedResult.success) {
             failedGroupKeys.push(...groupedResult.failedGroups);
             const groupedError = groupedResult.error || '分组更新失败，未返回具体错误。';
@@ -388,6 +393,9 @@ export async function executeAutoUpdatePlan_ACU(
                     return;
                 }
                 const rawResult = result.value?.success;
+                if (rawResult && typeof rawResult === 'object') {
+                    postCommitWarnings.push(...((rawResult as { postCommitWarnings?: TableUpdatePostCommitWarning_ACU[] }).postCommitWarnings || []));
+                }
                 const groupSucceeded = typeof rawResult === 'object' && rawResult !== null && 'success' in rawResult
                     ? (rawResult as { success?: boolean }).success !== false
                     : !!rawResult;
@@ -438,7 +446,8 @@ export async function executeAutoUpdatePlan_ACU(
     logAutoFillStage_ACU('refresh', { runId: performanceContext?.runId });
     await ops.loadAllChatMessages();
     setAutoUpdating(false);
-    await ops.refreshData();
+    const refreshResult = await ops.refreshData();
+    postCommitWarnings.push(...(refreshResult?.postCommitWarnings || []));
 
     // 清理超出保留层数的旧数据
     try {
@@ -453,6 +462,7 @@ export async function executeAutoUpdatePlan_ACU(
         failedGroups: failedGroupKeys.length,
         totalGroups,
         errors: failedGroupErrors,
+        ...(postCommitWarnings.length ? { postCommitWarnings } : {}),
         ...(runnerUnavailableGroupKeys.length > 0
             ? {
                 diagnosticCode: 'staging_runner_unavailable' as const,
