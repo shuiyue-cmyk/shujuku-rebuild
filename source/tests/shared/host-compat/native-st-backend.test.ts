@@ -21,6 +21,11 @@ vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: mockLogDebug,
 }));
 
+const { liveModule } = vi.hoisted(() => ({ liveModule: { current: null as any } }));
+vi.mock('../../../src/shared/host-compat/host-world-info-module', () => ({
+  getVerifiedHostWorldInfoModule_ACU: () => liveModule.current,
+}));
+
 import { createNativeStBackend_ACU } from '../../../src/shared/host-compat/native-st-backend';
 
 /** 构造一份与 TT dev getContext() 同形的最小 context 快照 */
@@ -42,6 +47,7 @@ const fetchMock = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  liveModule.current = null;
   fetchMock.mockReset();
   (globalThis as any).fetch = fetchMock;
 });
@@ -111,6 +117,17 @@ describe('getLorebooks', () => {
     const backend = createNativeStBackend_ACU(() => ctx);
 
     expect(await backend.getLorebooks()).toEqual([]);
+  });
+});
+
+describe('附加世界书读实时数据（宿主世界书模块已加载时）', () => {
+  it('不读带缓存的设置快照，刚挂上的附加书立即可见', async () => {
+    liveModule.current = { world_info: { charLore: [{ name: 'hero', extraBooks: ['刚挂上的'] }] } };
+    const ctx = buildContext({ characters: [{ name: '主角', avatar: 'hero.png', data: { extensions: { world: '主书' } } }] });
+    const backend = createNativeStBackend_ACU(() => ctx);
+
+    expect(await backend.getCharWorldbookNames('current')).toEqual({ primary: '主书', additional: ['刚挂上的'] });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

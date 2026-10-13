@@ -41,6 +41,8 @@ const mockSkillify = vi.fn(async (options: any) => {
   throw new Error('boom');
 });
 
+const mockSkillifyBooks = vi.fn(async (_bookNames: string[], _options: any): Promise<any> => ({ totalCandidates: 0 }));
+
 function createGlobalPromptTemplates() {
   return {
     agentDecisionPromptSegments: [{ role: 'system', content: 'global decision', deletable: false }],
@@ -108,6 +110,7 @@ async function getComposable(options: {
   }));
   vi.doMock('../../../src/service/agent/agent-skillify-service', () => ({
     skillifyCurrentPlotWorldbookSelection_ACU: mockSkillify,
+    skillifyWorldbookEntries_ACU: mockSkillifyBooks,
   }));
   vi.doMock('../../../src/service/agent/agent-worldbook-skill-meta', () => ({
     clearWorldbookSkillMetaBlocks_ACU: mockClearSkillMeta,
@@ -155,6 +158,7 @@ describe('usePlotWorldbookAgentControl', () => {
     mockRefreshSnapshot.mockClear();
     mockWriteControl.mockReset();
     mockSkillify.mockClear();
+    mockSkillifyBooks.mockReset();
     mockTakeover.mockClear();
     mockRestore.mockClear();
     mockClearSkillMeta.mockClear();
@@ -293,6 +297,29 @@ describe('usePlotWorldbookAgentControl', () => {
       maxAiRetries: 2,
       overwriteManual: false,
     }));
+  });
+
+  it('skillifyBooks 对指定世界书 Skill 化（常用世界书用），确认框写明书名，不沿用整库续跑游标', async () => {
+    mockSkillifyBooks.mockResolvedValue({ totalCandidates: 2, totalMatched: 2, selectedForRun: 2, remaining: 0, truncated: false, updated: 2, skipped: 0, failed: 0, results: [] });
+    const c = await getComposable();
+
+    const result = await c.skillifyBooks(['战斗技能']);
+
+    expect(result).toBe(true);
+    expect(JSON.stringify(dialog.confirm.mock.calls[0][0])).toContain('战斗技能');
+    expect(mockSkillify).not.toHaveBeenCalled();
+    expect(mockSkillifyBooks).toHaveBeenCalledWith(['战斗技能'], expect.objectContaining({
+      cursor: undefined,
+      maxConcurrency: 3,
+      maxAiRetries: 2,
+      overwriteManual: false,
+    }));
+  });
+
+  it('skillifyBooks 没给书时不调用服务', async () => {
+    const c = await getComposable();
+    expect(await c.skillifyBooks([])).toBe(false);
+    expect(mockSkillifyBooks).not.toHaveBeenCalled();
   });
 
   it('setAgentDecisionConcurrency 保存高于旧上限的独立决策并发数', async () => {

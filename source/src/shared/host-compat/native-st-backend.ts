@@ -21,6 +21,7 @@
  */
 
 import { logDebug_ACU, logWarn_ACU } from '../utils';
+import { getVerifiedHostWorldInfoModule_ACU } from './host-world-info-module';
 import {
     buildNativeEntryDefaults_ACU,
     nativeToOldEntry_ACU,
@@ -289,9 +290,11 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
         const avatar = typeof character?.avatar === 'string' ? character.avatar : '';
         if (avatar) {
             const avatarBase = avatar.replace(/\.[^.]+$/, '');
-            const snapshot = await fetchSettingsSnapshot();
-            const loreEntry = snapshot?.charLore?.find(item => item.name === avatarBase);
-            additional = loreEntry?.extraBooks ?? [];
+            // 宿主世界书模块已加载（挂载过常用世界书）时读实时 charLore：设置快照带缓存，刚挂上的书会读不到。
+            const liveCharLore = getVerifiedHostWorldInfoModule_ACU()?.world_info?.charLore;
+            const charLore = Array.isArray(liveCharLore) ? liveCharLore : (await fetchSettingsSnapshot())?.charLore;
+            const loreEntry = charLore?.find(item => item?.name === avatarBase);
+            additional = Array.isArray(loreEntry?.extraBooks) ? loreEntry!.extraBooks!.map(book => String(book)) : [];
         }
         return { primary, additional };
     }

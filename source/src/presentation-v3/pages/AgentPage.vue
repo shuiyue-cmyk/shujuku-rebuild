@@ -61,6 +61,69 @@
       <p class="ub-agent__current">当前范围：<strong>{{ currentScopeLabel }}</strong></p>
     </UbSection>
 
+    <UbSection
+      id="agent-favorites"
+      title="常用世界书"
+      description="把常用的 Skill 世界书放进来，换新角色卡时勾选几本，一键复制成「角色卡名-原书名」并挂成这张卡的附加世界书。副本与原书互不影响。"
+      icon="fa-solid fa-star"
+      padded
+    >
+      <div class="ub-agent-fav">
+        <p v-if="favorites.favorites.value.length === 0" class="ub-agent__current">还没有常用世界书，从下面选一本加入。</p>
+        <div v-else class="ub-agent-fav__list">
+          <div v-for="name in favorites.favorites.value" :key="name" class="ub-agent-fav__item">
+            <button
+              type="button"
+              role="checkbox"
+              class="ub-agent-fav__check"
+              :class="{ 'is-on': favorites.selected.value.includes(name) }"
+              :aria-checked="favorites.selected.value.includes(name) ? 'true' : 'false'"
+              :aria-label="`挂载 ${name}`"
+              :disabled="favoriteStatus(name)?.exists === false"
+              @click="favorites.toggleSelected(name, !favorites.selected.value.includes(name))"
+            >
+              <i :class="favorites.selected.value.includes(name) ? 'fa-solid fa-square-check' : 'fa-regular fa-square'" aria-hidden="true"></i>
+              <span>{{ name }}</span>
+            </button>
+            <UbBadge :variant="favoriteBadge(name).variant">{{ favoriteBadge(name).label }}</UbBadge>
+            <UbButton
+              v-if="favoriteNeedsSkillify(name)"
+              size="sm"
+              variant="soft"
+              icon="fa-solid fa-wand-sparkles"
+              :busy="skillifyingFavorite === name"
+              :disabled="agentControl.busy.value !== null"
+              @click="onSkillifyFavorite(name)"
+            >Skill 化</UbButton>
+            <UbButton size="sm" variant="ghost" icon="fa-solid fa-xmark" :aria-label="`移出 ${name}`" @click="favorites.remove(name)">移出</UbButton>
+          </div>
+        </div>
+        <div class="ub-agent-fav__add">
+          <UbSelect
+            :options="favoriteAddOptions"
+            :model-value="favoriteToAdd"
+            placeholder="选择要加入常用的世界书"
+            aria-label="加入常用世界书"
+            @update:model-value="favoriteToAdd = $event"
+          />
+          <UbButton size="sm" icon="fa-solid fa-plus" :disabled="!favoriteToAdd" @click="onAddFavorite">加入常用</UbButton>
+        </div>
+        <div class="ub-agent-fav__mount">
+          <p class="ub-agent__current">
+            当前角色卡：<strong>{{ favorites.characterName.value || '（未打开单人角色卡）' }}</strong>
+          </p>
+          <UbButton
+            size="sm"
+            variant="primary"
+            icon="fa-solid fa-link"
+            :busy="favorites.mounting.value"
+            :disabled="!favorites.canMount.value || favorites.selected.value.length === 0"
+            @click="onMountFavorites"
+          >挂载所选到当前角色卡（{{ favorites.selected.value.length }}）</UbButton>
+        </div>
+      </div>
+    </UbSection>
+
     <UbSection id="agent-entries" title="条目与 Skill" description="勾选「Skill 化」后点「对所选 Skill 化」；也可逐条手写 Skill 描述与触发时机。" icon="fa-solid fa-list-check" padded>
       <WorldbookEntries
         id-prefix="agent"
@@ -116,6 +179,8 @@ import { computed, onMounted, ref } from 'vue';
 import { useAgentWorldbookEntries } from '../../presentation-v2/composables/useAgentWorldbookEntries';
 import { useApiPresetSelectOptions } from '../../presentation-v2/composables/useApiPresetSelectOptions';
 import { useApiPresetStaleness } from '../../presentation-v2/composables/useApiPresetStaleness';
+import { useFavoriteWorldbooks } from '../../presentation-v2/composables/useFavoriteWorldbooks';
+import type { FavoriteWorldbookSkillStatus_ACU } from '../../service/agent/agent-favorite-worldbooks';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
 import { usePlotWorldbookAgentControl } from '../../presentation-v2/composables/usePlotWorldbookAgentControl';
 import { useWorldbookSelector } from '../../presentation-v2/composables/useWorldbookSelector';
@@ -150,6 +215,11 @@ const apiPresetOptions = computed(() => agentControl.apiPresetOptions.value.map(
 // 防呆：API 预设在别处被改过时标黄，重选决策或 Skill 任一即确认
 const { isStale: agentStale, markConfirmed: markAgentConfirmed } = useApiPresetStaleness('agent-wb-control');
 
+const favorites = useFavoriteWorldbooks({ skillifyBooks: agentControl.skillifyBooks });
+const favoriteToAdd = ref('');
+const skillifyingFavorite = ref('');
+const favoriteAddOptions = computed(() => favorites.addableNames.value.map(name => ({ value: name, label: name })));
+
 const advancedOpen = ref(false);
 const entryFilter = ref('');
 const entryEmptyText = ref('当前 Agent 世界书范围内无可 Skill 化的条目。');
@@ -157,6 +227,7 @@ const entryEmptyText = ref('当前 Agent 世界书范围内无可 Skill 化的�
 const sections = [
   { id: 'agent-control', label: '总控' },
   { id: 'agent-scope', label: '范围' },
+  { id: 'agent-favorites', label: '常用世界书' },
   { id: 'agent-entries', label: '条目与 Skill' },
   { id: 'agent-editing', label: '世界书编辑' },
 ];
@@ -271,8 +342,47 @@ async function refreshEntries(): Promise<void> {
 
 async function refreshAll(): Promise<void> {
   apiStore.refreshFromSettings();
-  await Promise.all([agentControl.refresh(), worldbook.refresh()]);
+  await Promise.all([agentControl.refresh(), worldbook.refresh(), favorites.refresh()]);
   await refreshEntries();
+}
+
+function favoriteStatus(name: string): FavoriteWorldbookSkillStatus_ACU | undefined {
+  return favorites.statuses.value[name];
+}
+
+function favoriteNeedsSkillify(name: string): boolean {
+  const status = favoriteStatus(name);
+  return !!status?.exists && status.skilledCount < status.candidateCount;
+}
+
+function favoriteBadge(name: string): { variant: 'neutral' | 'success' | 'warning' | 'danger'; label: string } {
+  const status = favoriteStatus(name);
+  if (!status) return { variant: 'neutral', label: '读取中' };
+  if (!status.exists) return { variant: 'danger', label: '找不到这本书' };
+  if (status.candidateCount === 0) return { variant: 'neutral', label: '无可 Skill 化条目' };
+  if (status.skilledCount >= status.candidateCount) return { variant: 'success', label: `已 Skill 化 ${status.skilledCount}/${status.candidateCount}` };
+  return { variant: 'warning', label: `Skill ${status.skilledCount}/${status.candidateCount}` };
+}
+
+async function onAddFavorite(): Promise<void> {
+  const name = favoriteToAdd.value;
+  if (!name) return;
+  favoriteToAdd.value = '';
+  await favorites.add(name);
+}
+
+async function onSkillifyFavorite(name: string): Promise<void> {
+  skillifyingFavorite.value = name;
+  try {
+    await favorites.skillify(name);
+  } finally {
+    skillifyingFavorite.value = '';
+  }
+  await refreshEntries();
+}
+
+async function onMountFavorites(): Promise<void> {
+  if (await favorites.mountSelected()) await refreshAll();
 }
 
 async function onScopeSourceChange(source: WorldbookSource): Promise<void> {
@@ -342,5 +452,87 @@ watchChatChanged_ACU(() => void refreshAll());
 
 .ub-agent__current strong {
   color: var(--ub-text);
+}
+
+.ub-agent-fav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ub-s3);
+  min-width: 0;
+}
+
+.ub-agent-fav__list {
+  display: flex;
+  flex-direction: column;
+  padding: var(--ub-s1);
+  border: 1px solid var(--ub-line-soft);
+  border-radius: var(--ub-r-control);
+  background: var(--ub-input-bg);
+}
+
+.ub-agent-fav__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ub-s2);
+  padding: var(--ub-s1) 0;
+}
+
+.ub-agent-fav__item + .ub-agent-fav__item {
+  border-top: 1px solid var(--ub-line-soft);
+}
+
+.ub-agent-fav__check {
+  display: flex;
+  flex: 1 1 calc(var(--ub-u) * 120);
+  align-items: center;
+  gap: var(--ub-s2);
+  min-width: 0;
+  min-height: var(--ub-control-h-sm);
+  padding: var(--ub-s1) var(--ub-s2);
+  border: 0;
+  border-radius: calc(var(--ub-r-control) - 3px);
+  background: transparent;
+  color: var(--ub-text-2);
+  font: inherit;
+  font-size: var(--ub-fs-sm);
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.ub-agent-fav__check:hover:not(:disabled) {
+  background: var(--ub-hover);
+}
+
+.ub-agent-fav__check:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.ub-agent-fav__check.is-on {
+  color: var(--ub-text);
+  font-weight: 600;
+}
+
+.ub-agent-fav__check.is-on i {
+  color: var(--ub-accent-ink);
+}
+
+.ub-agent-fav__add,
+.ub-agent-fav__mount {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ub-s2);
+}
+
+.ub-agent-fav__add > :first-child {
+  flex: 1 1 calc(var(--ub-u) * 140);
+  min-width: 0;
+}
+
+.ub-agent-fav__mount .ub-agent__current {
+  flex: 1 1 auto;
 }
 </style>

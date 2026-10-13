@@ -12,6 +12,7 @@ const harness = vi.hoisted(() => ({
   loadEntries: vi.fn(async () => ['AgentBook']),
   refreshWorldbooks: vi.fn(async () => undefined),
   refreshApiPresets: vi.fn(),
+  favorites: null as any,
 }));
 
 vi.mock('../../src/presentation-v2/stores/api-preset-store', async () => {
@@ -77,6 +78,33 @@ vi.mock('../../src/presentation-v2/composables/useWorldbookSelector', async () =
     names: ref(['AgentBook']), charPrimary: ref('CharBook'), status: ref('success'), error: ref(''), refresh: harness.refreshWorldbooks,
   }) };
 });
+vi.mock('../../src/presentation-v2/composables/useFavoriteWorldbooks', async () => {
+  const { computed, ref } = await import('vue');
+  const selected = ref<string[]>([]);
+  const characterName = ref('艾琳');
+  harness.favorites = {
+    favorites: ref(['战斗技能', '地理百科', '旧书']),
+    statuses: ref({
+      战斗技能: { bookName: '战斗技能', exists: true, candidateCount: 3, skilledCount: 3 },
+      地理百科: { bookName: '地理百科', exists: true, candidateCount: 4, skilledCount: 1 },
+      旧书: { bookName: '旧书', exists: false, candidateCount: 0, skilledCount: 0 },
+    }),
+    addableNames: ref(['AgentBook']),
+    characterName,
+    selected,
+    mounting: ref(false),
+    canMount: computed(() => !!characterName.value),
+    refresh: vi.fn(async () => undefined),
+    add: vi.fn(async () => undefined),
+    remove: vi.fn(),
+    toggleSelected: vi.fn((name: string, checked: boolean) => {
+      selected.value = checked ? [...selected.value, name] : selected.value.filter(item => item !== name);
+    }),
+    mountSelected: vi.fn(async () => true),
+    skillify: vi.fn(async () => undefined),
+  };
+  return { useFavoriteWorldbooks: () => harness.favorites };
+});
 vi.mock('../../src/presentation-v2/composables/useChatChangedListener', async () => {
   const { ref } = await import('vue');
   return { useChatChangedTick: () => ref(0), watchChatChanged_ACU: () => {} };
@@ -137,6 +165,48 @@ describe('AgentPage', () => {
       expect(select.options[select.selectedIndex].textContent?.trim()).toBe('Fast（当前）');
     }
     expect(el.textContent).not.toContain('使用当前 API 配置');
+
+    app.unmount();
+  });
+
+  it('常用世界书：显示 Skill 进度，未完成的给 Skill 化按钮，找不到的不能勾选；勾选后挂载到当前角色卡', async () => {
+    const Page = (await import('../../src/presentation-v3/pages/AgentPage.vue')).default;
+    const portal = document.createElement('div');
+    portal.id = 'ub-portal';
+    document.body.appendChild(portal);
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const app = createApp(Page);
+    app.use(createPinia());
+    app.mount(el);
+    await Promise.resolve();
+
+    const section = el.querySelector('#agent-favorites')!;
+    expect(harness.favorites.refresh).toHaveBeenCalled();
+    const items = Array.from(section.querySelectorAll('.ub-agent-fav__item'));
+    expect(items.map(item => item.textContent)).toEqual([
+      expect.stringContaining('已 Skill 化 3/3'),
+      expect.stringContaining('Skill 1/4'),
+      expect.stringContaining('找不到这本书'),
+    ]);
+    const skillifyButtons = (item: Element) => Array.from(item.querySelectorAll('button')).filter(button => button.textContent?.includes('Skill 化') && !button.classList.contains('ub-agent-fav__check'));
+    expect(skillifyButtons(items[0])).toHaveLength(0);
+    expect(skillifyButtons(items[1])).toHaveLength(1);
+    expect(items[2].querySelector<HTMLButtonElement>('.ub-agent-fav__check')!.disabled).toBe(true);
+
+    skillifyButtons(items[1])[0].click();
+    await Promise.resolve();
+    expect(harness.favorites.skillify).toHaveBeenCalledWith('地理百科');
+
+    const mountButton = Array.from(section.querySelectorAll<HTMLButtonElement>('button')).find(button => button.textContent?.includes('挂载所选'))!;
+    expect(mountButton.disabled).toBe(true);
+    items[0].querySelector<HTMLButtonElement>('.ub-agent-fav__check')!.click();
+    await Promise.resolve();
+    expect(mountButton.disabled).toBe(false);
+    expect(section.textContent).toContain('艾琳');
+    mountButton.click();
+    await Promise.resolve();
+    expect(harness.favorites.mountSelected).toHaveBeenCalledTimes(1);
 
     app.unmount();
   });

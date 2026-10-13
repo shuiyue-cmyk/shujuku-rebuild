@@ -118041,6 +118041,100 @@ function __resetChatMutationSchedulerForTests_ACU() {
 }
 
 /**
+ * shared/host-compat/host-world-info-module.ts — 宿主内部世界书模块（scripts/world-info.js）加载器
+ *
+ * 角色卡「附加世界书」的绑定（world_info.charLore）不在 getContext() 里，只能经宿主内部模块的
+ * charUpdateAddAuxWorld 写入。TT 的核心脚本不打包、按原路径直接提供（rspack 只打包第三方库），
+ * 所以按宿主实际加载的同一地址 import 会拿到同一个模块实例（模块按 URL 只执行一次）。
+ *
+ * 安全约束：
+ * - 只在插件与宿主同一窗口时加载（不同窗口 import 会再执行一份宿主模块）；
+ * - 地址优先取宿主真实加载过的资源地址，取不到再按页面基址拼；
+ * - 加载后必须与 getContext().loadWorldInfo 是同一个函数，否则视为不是宿主那份实例，弃用。
+ * 任一条件不满足都返回 null，由调用方降级（例如提示用户手动挂载）。
+ *
+ * 与 worldbook-gateway 里读激活世界书用的 loadHostWorldInfoModule_ACU 是同一宿主模块；
+ * 那边只读、失败可降级，这里要写宿主状态，所以多一道身份核对，两者不合并。
+ */
+const MODULE_PATH_ACU = 'scripts/world-info.js';
+let loadingPromise_ACU = null;
+let verifiedModule_ACU = null;
+/** 供测试替换真实的动态 import。 */
+let importModule_ACU = url => import(/* webpackIgnore: true */ url);
+function __setHostWorldInfoModuleImporterForTests_ACU(importer) {
+    importModule_ACU = importer || (url => import(/* webpackIgnore: true */ url));
+    loadingPromise_ACU = null;
+    verifiedModule_ACU = null;
+}
+/** 宿主实际加载 world-info.js 用的地址：先查资源加载记录，没有再按页面基址拼。 */
+function resolveHostWorldInfoModuleUrl_ACU(win) {
+    try {
+        const entries = typeof win?.performance?.getEntriesByType === 'function'
+            ? win.performance.getEntriesByType('resource')
+            : [];
+        const loaded = (Array.isArray(entries) ? entries : [])
+            .map((entry) => String(entry?.name || ''))
+            .find(name => /\/scripts\/world-info\.js(?:[?#]|$)/.test(name));
+        if (loaded)
+            return loaded;
+        const base = win?.document?.baseURI;
+        return base ? new URL(MODULE_PATH_ACU, base).href : null;
+    }
+    catch {
+        return null;
+    }
+}
+function isSameRealmAsHost_ACU() {
+    try {
+        return typeof window !== 'undefined' && getHostWindow() === window;
+    }
+    catch {
+        return false;
+    }
+}
+/** 加载并校验宿主世界书模块；不满足安全约束或加载失败返回 null（失败后允许下次重试）。 */
+function loadVerifiedHostWorldInfoModule_ACU() {
+    if (verifiedModule_ACU)
+        return Promise.resolve(verifiedModule_ACU);
+    if (loadingPromise_ACU)
+        return loadingPromise_ACU;
+    loadingPromise_ACU = (async () => {
+        if (!isSameRealmAsHost_ACU()) {
+            logWarn_ACU('[HostWorldInfoModule] 插件与宿主不在同一窗口，不加载宿主世界书模块。');
+            return null;
+        }
+        const win = getHostWindow();
+        const url = resolveHostWorldInfoModuleUrl_ACU(win);
+        if (!url)
+            return null;
+        const mod = await importModule_ACU(url);
+        const contextLoad = win?.SillyTavern?.getContext?.()?.loadWorldInfo;
+        const valid = mod && typeof mod.charUpdateAddAuxWorld === 'function'
+            && mod.world_info && typeof mod.world_info === 'object'
+            && typeof mod.loadWorldInfo === 'function'
+            && mod.loadWorldInfo === contextLoad;
+        if (!valid) {
+            logWarn_ACU('[HostWorldInfoModule] 加载到的世界书模块不是宿主正在使用的那一份，弃用。');
+            return null;
+        }
+        verifiedModule_ACU = mod;
+        return verifiedModule_ACU;
+    })().catch((error) => {
+        logWarn_ACU('[HostWorldInfoModule] 加载宿主世界书模块失败：', error);
+        return null;
+    }).then((result) => {
+        if (!result)
+            loadingPromise_ACU = null;
+        return result;
+    });
+    return loadingPromise_ACU;
+}
+/** 已加载并校验过的宿主模块（同步读取，未加载过返回 null）。 */
+function getVerifiedHostWorldInfoModule_ACU() {
+    return verifiedModule_ACU;
+}
+
+/**
  * shared/host-compat/native-st-backend.ts — SillyTavern 原生后端
  *
  * 在无酒馆助手（TavernHelper）的插件独立运行模式下，用 SillyTavern.getContext()
@@ -118274,9 +118368,11 @@ function createNativeStBackend_ACU(getStApi) {
         const avatar = typeof character?.avatar === 'string' ? character.avatar : '';
         if (avatar) {
             const avatarBase = avatar.replace(/\.[^.]+$/, '');
-            const snapshot = await fetchSettingsSnapshot();
-            const loreEntry = snapshot?.charLore?.find(item => item.name === avatarBase);
-            additional = loreEntry?.extraBooks ?? [];
+            // 宿主世界书模块已加载（挂载过常用世界书）时读实时 charLore：设置快照带缓存，刚挂上的书会读不到。
+            const liveCharLore = getVerifiedHostWorldInfoModule_ACU()?.world_info?.charLore;
+            const charLore = Array.isArray(liveCharLore) ? liveCharLore : (await fetchSettingsSnapshot())?.charLore;
+            const loreEntry = charLore?.find(item => item?.name === avatarBase);
+            additional = Array.isArray(loreEntry?.extraBooks) ? loreEntry.extraBooks.map(book => String(book)) : [];
         }
         return { primary, additional };
     }
@@ -136230,7 +136326,7 @@ function continuationBeatObligation_ACU(turn) {
 function isStale_ACU(error) {
     return error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE';
 }
-function errorText_ACU(error) {
+function errorText_ACU$1(error) {
     if (error instanceof ContinuationValidationError_ACU)
         return error.error.message;
     return error instanceof Error ? error.message : String(error);
@@ -136472,7 +136568,7 @@ async function runContinuationMaterialRepair_ACU(input) {
         catch (error) {
             if (isStale_ACU(error))
                 throw error;
-            return { ok: false, summary: errorText_ACU(error) };
+            return { ok: false, summary: errorText_ACU$1(error) };
         }
     }));
     for (let index = 0; index < calls.length; index += 1) {
@@ -136523,7 +136619,7 @@ async function runContinuationMaterialRepair_ACU(input) {
                 if (isStale_ACU(error))
                     throw error;
                 for (const module of call.targetModules) {
-                    issues.push({ module, source: 'transaction_rejected', path: module, message: errorText_ACU(error) });
+                    issues.push({ module, source: 'transaction_rejected', path: module, message: errorText_ACU$1(error) });
                 }
             }
         }
@@ -136598,7 +136694,7 @@ async function runContinuationAgentWorkflow_ACU(input) {
         catch (error) {
             if (isStale_ACU(error))
                 throw error;
-            return { ok: false, summary: errorText_ACU(error) };
+            return { ok: false, summary: errorText_ACU$1(error) };
         }
     };
     const applyMaintainerLike_ACU = async (output, writes, readRevisions, agentName, settlementRange) => {
@@ -136820,7 +136916,7 @@ async function runContinuationAgentWorkflow_ACU(input) {
     const composerPromise = input.runComposer({ prompt: composerBase, revisionFeedback: '', priorInstruction: '' }).catch(error => {
         if (isStale_ACU(error))
             throw error;
-        const failed = { instruction: '', summary: errorText_ACU(error), constraints: null };
+        const failed = { instruction: '', summary: errorText_ACU$1(error), constraints: null };
         return failed;
     });
     const [repairs, composer] = await Promise.all([repairPromise, composerPromise]);
@@ -136904,7 +137000,7 @@ async function runContinuationAgentWorkflow_ACU(input) {
                 if (isStale_ACU(error))
                     throw error;
                 failures += 1;
-                steps.push({ agentName: 'final-reviewer', status: 'failed', summary: errorText_ACU(error) });
+                steps.push({ agentName: 'final-reviewer', status: 'failed', summary: errorText_ACU$1(error) });
                 if (failures >= limit)
                     break;
                 continue;
@@ -136930,7 +137026,7 @@ async function runContinuationAgentWorkflow_ACU(input) {
                 if (isStale_ACU(error))
                     throw error;
                 failures += 1;
-                steps.push({ agentName: AGENT_INSTRUCTION_COMPOSER_NAME_ACU, status: 'failed', summary: errorText_ACU(error) });
+                steps.push({ agentName: AGENT_INSTRUCTION_COMPOSER_NAME_ACU, status: 'failed', summary: errorText_ACU$1(error) });
                 continue;
             }
             if (!revised.instruction.trim()) {
@@ -174949,7 +175045,7 @@ const _hoisted_4$E = {
 	class: "fa-solid fa-circle-notch fa-spin ub-btn__icon",
 	"aria-hidden": "true"
 };
-const _hoisted_5$w = {
+const _hoisted_5$x = {
 	key: 2,
 	class: "ub-btn__label"
 };
@@ -174999,7 +175095,7 @@ function _sfc_render$Z(_ctx, _cache, $props, $setup, $data, $options) {
 		null,
 		2
 		/* CLASS */
-	)) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_5$w, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_3$I));
+	)) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_5$x, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_3$I));
 }
 var UbButton = /* @__PURE__ */ _export_sfc(_sfc_main$Z, [["render", _sfc_render$Z], ["__scopeId", "data-v-3521ab51"]]);
 
@@ -175250,13 +175346,13 @@ const _hoisted_1$Q = ["onKeydown"];
 const _hoisted_2$K = ["aria-label"];
 const _hoisted_3$H = { class: "ub-sheet__head" };
 const _hoisted_4$D = { class: "ub-sheet__titles" };
-const _hoisted_5$v = { class: "ub-sheet__title" };
-const _hoisted_6$r = {
+const _hoisted_5$w = { class: "ub-sheet__title" };
+const _hoisted_6$s = {
 	key: 0,
 	class: "ub-sheet__subtitle"
 };
-const _hoisted_7$p = { class: "ub-sheet__body" };
-const _hoisted_8$l = {
+const _hoisted_7$q = { class: "ub-sheet__body" };
+const _hoisted_8$m = {
 	key: 0,
 	class: "ub-sheet__foot"
 };
@@ -175287,13 +175383,13 @@ function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
 			})) : createCommentVNode("v-if", true),
 			createBaseVNode("div", _hoisted_4$D, [createBaseVNode(
 				"h3",
-				_hoisted_5$v,
+				_hoisted_5$w,
 				toDisplayString($props.title),
 				1
 				/* TEXT */
 			), $props.subtitle ? (openBlock(), createElementBlock(
 				"p",
-				_hoisted_6$r,
+				_hoisted_6$s,
 				toDisplayString($props.subtitle),
 				1
 				/* TEXT */
@@ -175305,8 +175401,8 @@ function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
 				onClick: $setup.requestClose
 			})
 		]),
-		createBaseVNode("div", _hoisted_7$p, [renderSlot(_ctx.$slots, "default", {}, undefined, true)]),
-		_ctx.$slots.footer ? (openBlock(), createElementBlock("footer", _hoisted_8$l, [renderSlot(_ctx.$slots, "footer", {}, undefined, true)])) : createCommentVNode("v-if", true)
+		createBaseVNode("div", _hoisted_7$q, [renderSlot(_ctx.$slots, "default", {}, undefined, true)]),
+		_ctx.$slots.footer ? (openBlock(), createElementBlock("footer", _hoisted_8$m, [renderSlot(_ctx.$slots, "footer", {}, undefined, true)])) : createCommentVNode("v-if", true)
 	], 12, _hoisted_2$K)], 42, _hoisted_1$Q)) : createCommentVNode("v-if", true)]);
 }
 var UbSheet = /* @__PURE__ */ _export_sfc(_sfc_main$V, [["render", _sfc_render$V], ["__scopeId", "data-v-34c6aa88"]]);
@@ -179647,13 +179743,13 @@ const _hoisted_1$L = { class: "ub-segs" };
 const _hoisted_2$H = { class: "ub-segs__list" };
 const _hoisted_3$F = { class: "ub-segs__head" };
 const _hoisted_4$B = { class: "ub-segs__index" };
-const _hoisted_5$u = { class: "ub-segs__role" };
-const _hoisted_6$q = {
+const _hoisted_5$v = { class: "ub-segs__role" };
+const _hoisted_6$r = {
 	key: 0,
 	class: "ub-segs__slot"
 };
-const _hoisted_7$o = ["title"];
-const _hoisted_8$k = {
+const _hoisted_7$p = ["title"];
+const _hoisted_8$l = {
 	key: 0,
 	class: "ub-segs__empty"
 };
@@ -179691,7 +179787,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 							1
 							/* TEXT */
 						),
-						createBaseVNode("div", _hoisted_5$u, [createVNode($setup["UbSelect"], {
+						createBaseVNode("div", _hoisted_5$v, [createVNode($setup["UbSelect"], {
 							size: "sm",
 							options: $props.roleOptions,
 							"model-value": seg.role,
@@ -179703,7 +179799,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 							"aria-label",
 							"onUpdate:modelValue"
 						])]),
-						$props.showSlot ? (openBlock(), createElementBlock("div", _hoisted_6$q, [createVNode($setup["UbSelect"], {
+						$props.showSlot ? (openBlock(), createElementBlock("div", _hoisted_6$r, [createVNode($setup["UbSelect"], {
 							size: "sm",
 							options: $props.slotOptions,
 							"model-value": seg.mainSlot || "",
@@ -179739,7 +179835,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value",
 							"aria-label",
 							"onUpdate:modelValue"
-						])], 8, _hoisted_7$o)) : createCommentVNode("v-if", true),
+						])], 8, _hoisted_7$p)) : createCommentVNode("v-if", true),
 						$props.allowMove ? (openBlock(), createElementBlock(
 							Fragment,
 							{ key: 2 },
@@ -179800,7 +179896,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 			/* KEYED_FRAGMENT */
 		)), !$props.segments.length ? (openBlock(), createElementBlock(
 			"li",
-			_hoisted_8$k,
+			_hoisted_8$l,
 			toDisplayString($props.emptyText),
 			1
 			/* TEXT */
@@ -180175,16 +180271,16 @@ const _hoisted_1$I = {
 const _hoisted_2$E = { class: "ub-vai__intro" };
 const _hoisted_3$C = { class: "ub-vai__controls" };
 const _hoisted_4$z = { class: "ub-vai__preset" };
-const _hoisted_5$t = { class: "ub-vai__feed" };
-const _hoisted_6$p = {
+const _hoisted_5$u = { class: "ub-vai__feed" };
+const _hoisted_6$q = {
 	key: 0,
 	class: "ub-vai__empty"
 };
-const _hoisted_7$n = { class: "ub-vai__turn-head" };
-const _hoisted_8$j = { class: "ub-vai__who" };
-const _hoisted_9$e = { class: "ub-vai__text" };
-const _hoisted_10$d = { class: "ub-vai__list" };
-const _hoisted_11$c = {
+const _hoisted_7$o = { class: "ub-vai__turn-head" };
+const _hoisted_8$k = { class: "ub-vai__who" };
+const _hoisted_9$f = { class: "ub-vai__text" };
+const _hoisted_10$e = { class: "ub-vai__list" };
+const _hoisted_11$d = {
 	key: 2,
 	class: "ub-vai__diffs"
 };
@@ -180266,8 +180362,8 @@ function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
 					_: 1
 				})) : createCommentVNode("v-if", true)
 			]),
-			createBaseVNode("div", _hoisted_5$t, [
-				!$setup.assistant.turns.value.length && !$setup.assistant.isRunning.value ? (openBlock(), createElementBlock("p", _hoisted_6$p, [..._cache[12] || (_cache[12] = [createBaseVNode(
+			createBaseVNode("div", _hoisted_5$u, [
+				!$setup.assistant.turns.value.length && !$setup.assistant.isRunning.value ? (openBlock(), createElementBlock("p", _hoisted_6$q, [..._cache[12] || (_cache[12] = [createBaseVNode(
 					"i",
 					{
 						class: "fa-regular fa-comments",
@@ -180292,8 +180388,8 @@ function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
 								class: normalizeClass(["ub-vai__turn", `ub-vai__turn--${turn.type}`])
 							},
 							[
-								createBaseVNode("header", _hoisted_7$n, [
-									createBaseVNode("span", _hoisted_8$j, [createBaseVNode(
+								createBaseVNode("header", _hoisted_7$o, [
+									createBaseVNode("span", _hoisted_8$k, [createBaseVNode(
 										"i",
 										{
 											class: normalizeClass($setup.turnIcon(turn.type)),
@@ -180359,7 +180455,7 @@ function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
 								]),
 								createBaseVNode(
 									"p",
-									_hoisted_9$e,
+									_hoisted_9$f,
 									toDisplayString($setup.assistant.getTurnSummary(turn)),
 									1
 									/* TEXT */
@@ -180388,7 +180484,7 @@ function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
 										kind: "warning"
 									},
 									{
-										default: withCtx(() => [createBaseVNode("ul", _hoisted_10$d, [(openBlock(true), createElementBlock(
+										default: withCtx(() => [createBaseVNode("ul", _hoisted_10$e, [(openBlock(true), createElementBlock(
 											Fragment,
 											null,
 											renderList($setup.assistant.getTurnWarnings(turn), (warning) => {
@@ -180408,7 +180504,7 @@ function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
 									1024
 									/* DYNAMIC_SLOTS */
 								)) : createCommentVNode("v-if", true),
-								$setup.assistant.getTurnDiffGroups(turn).length ? (openBlock(), createElementBlock("div", _hoisted_11$c, [(openBlock(true), createElementBlock(
+								$setup.assistant.getTurnDiffGroups(turn).length ? (openBlock(), createElementBlock("div", _hoisted_11$d, [(openBlock(true), createElementBlock(
 									Fragment,
 									null,
 									renderList($setup.assistant.getTurnDiffGroups(turn), (group) => {
@@ -180817,7 +180913,7 @@ const _hoisted_4$y = {
 	key: 1,
 	class: "ub-row__hint"
 };
-const _hoisted_5$s = {
+const _hoisted_5$t = {
 	key: 1,
 	class: "ub-row__control"
 };
@@ -180836,7 +180932,7 @@ function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 		toDisplayString($props.hint),
 		1
 		/* TEXT */
-	)], true)])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("div", _hoisted_5$s, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_1$G);
+	)], true)])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("div", _hoisted_5$t, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_1$G);
 }
 var UbRow = /* @__PURE__ */ _export_sfc(_sfc_main$K, [["render", _sfc_render$K], ["__scopeId", "data-v-085151b3"]]);
 
@@ -180875,15 +180971,15 @@ const _hoisted_4$x = {
 	key: 0,
 	class: "ub-section__title"
 };
-const _hoisted_5$r = {
+const _hoisted_5$s = {
 	key: 1,
 	class: "ub-section__desc"
 };
-const _hoisted_6$o = {
+const _hoisted_6$p = {
 	key: 0,
 	class: "ub-section__actions"
 };
-const _hoisted_7$m = {
+const _hoisted_7$n = {
 	key: 1,
 	class: "ub-section__lead"
 };
@@ -180909,12 +181005,12 @@ function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
 			/* TEXT */
 		)])) : createCommentVNode("v-if", true), $props.description ? (openBlock(), createElementBlock(
 			"p",
-			_hoisted_5$r,
+			_hoisted_5$s,
 			toDisplayString($props.description),
 			1
 			/* TEXT */
-		)) : createCommentVNode("v-if", true)]), _ctx.$slots.actions ? (openBlock(), createElementBlock("div", _hoisted_6$o, [renderSlot(_ctx.$slots, "actions", {}, undefined, true)])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true),
-		_ctx.$slots.lead ? (openBlock(), createElementBlock("div", _hoisted_7$m, [renderSlot(_ctx.$slots, "lead", {}, undefined, true)])) : createCommentVNode("v-if", true),
+		)) : createCommentVNode("v-if", true)]), _ctx.$slots.actions ? (openBlock(), createElementBlock("div", _hoisted_6$p, [renderSlot(_ctx.$slots, "actions", {}, undefined, true)])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true),
+		_ctx.$slots.lead ? (openBlock(), createElementBlock("div", _hoisted_7$n, [renderSlot(_ctx.$slots, "lead", {}, undefined, true)])) : createCommentVNode("v-if", true),
 		createBaseVNode(
 			"div",
 			{ class: normalizeClass(["ub-section__card", {
@@ -181106,12 +181202,12 @@ const _hoisted_4$v = {
 	key: 1,
 	class: "ub-vconf__empty"
 };
-const _hoisted_5$q = { class: "ub-vconf__num" };
-const _hoisted_6$n = {
+const _hoisted_5$r = { class: "ub-vconf__num" };
+const _hoisted_6$o = {
 	key: 1,
 	class: "ub-vconf__muted"
 };
-const _hoisted_7$l = { class: "ub-vconf__modes" };
+const _hoisted_7$m = { class: "ub-vconf__modes" };
 function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$D, [
 		createVNode($setup["UbSection"], {
@@ -181211,7 +181307,7 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 						label: item.label,
 						hint: item.hint
 					}, {
-						default: withCtx(() => [createBaseVNode("span", _hoisted_5$q, [createVNode($setup["UbInput"], {
+						default: withCtx(() => [createBaseVNode("span", _hoisted_5$r, [createVNode($setup["UbInput"], {
 							type: "number",
 							"model-value": $setup.updateConfig[item.key],
 							min: -1,
@@ -181306,7 +181402,7 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 						/* TEXT */
 					)]),
 					_: 1
-				}, 8, ["variant"])) : (openBlock(), createElementBlock("span", _hoisted_6$n, "修改后建议校验一次"))]),
+				}, 8, ["variant"])) : (openBlock(), createElementBlock("span", _hoisted_6$o, "修改后建议校验一次"))]),
 				default: withCtx(() => [createVNode($setup["UbButton"], {
 					size: "sm",
 					icon: "fa-solid fa-circle-check",
@@ -181469,7 +181565,7 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 									hint: "勾选要写进索引的列，并选择它只进索引还是两边都写。",
 									stack: ""
 								}, {
-									default: withCtx(() => [createBaseVNode("div", _hoisted_7$l, [(openBlock(true), createElementBlock(
+									default: withCtx(() => [createBaseVNode("div", _hoisted_7$m, [(openBlock(true), createElementBlock(
 										Fragment,
 										null,
 										renderList($setup.config.visibleColumnEntries.value, (column) => {
@@ -181876,19 +181972,19 @@ const _hoisted_3$x = {
 	"aria-label": "数据分页"
 };
 const _hoisted_4$u = { class: "ub-vdata__pager-input" };
-const _hoisted_5$p = { class: "ub-vdata__pager-text" };
-const _hoisted_6$m = {
+const _hoisted_5$q = { class: "ub-vdata__pager-text" };
+const _hoisted_6$n = {
 	key: 0,
 	class: "ub-vdata__empty"
 };
-const _hoisted_7$k = {
+const _hoisted_7$l = {
 	key: 1,
 	class: "ub-vdata__cards"
 };
-const _hoisted_8$i = { class: "ub-vcard__head" };
-const _hoisted_9$d = { class: "ub-vcard__no" };
-const _hoisted_10$c = { class: "ub-vcard__fields" };
-const _hoisted_11$b = ["data-ub-viz-line"];
+const _hoisted_8$j = { class: "ub-vcard__head" };
+const _hoisted_9$e = { class: "ub-vcard__no" };
+const _hoisted_10$d = { class: "ub-vcard__fields" };
+const _hoisted_11$c = ["data-ub-viz-line"];
 const _hoisted_12$a = [
 	"data-ub-viz-field-layout",
 	"onPointerdown",
@@ -181950,7 +182046,7 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 				}, null, 8, ["model-value", "max"])]),
 				createBaseVNode(
 					"span",
-					_hoisted_5$p,
+					_hoisted_5$q,
 					"/ " + toDisplayString($setup.win.pageCount) + " 页",
 					1
 					/* TEXT */
@@ -181963,7 +182059,7 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 					onClick: _cache[2] || (_cache[2] = ($event) => $setup.setPage($setup.win.page + 1))
 				}, null, 8, ["disabled"])
 			])) : createCommentVNode("v-if", true)]),
-			$setup.rowCount === 0 ? (openBlock(), createElementBlock("p", _hoisted_6$m, [..._cache[4] || (_cache[4] = [createBaseVNode(
+			$setup.rowCount === 0 ? (openBlock(), createElementBlock("p", _hoisted_6$n, [..._cache[4] || (_cache[4] = [createBaseVNode(
 				"i",
 				{
 					class: "fa-regular fa-folder-open",
@@ -181976,7 +182072,7 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 				" 这张表还没有数据。点下面的「新增一行」，再逐个字段填写。 ",
 				-1
 				/* CACHED */
-			)])])) : (openBlock(), createElementBlock("ol", _hoisted_7$k, [(openBlock(true), createElementBlock(
+			)])])) : (openBlock(), createElementBlock("ol", _hoisted_7$l, [(openBlock(true), createElementBlock(
 				Fragment,
 				null,
 				renderList($setup.rows, (row) => {
@@ -181987,10 +182083,10 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 							class: normalizeClass(["ub-vcard", { "is-locked": row.locked }]),
 							"data-ub-viz-card": ""
 						},
-						[createBaseVNode("header", _hoisted_8$i, [
+						[createBaseVNode("header", _hoisted_8$j, [
 							createBaseVNode(
 								"span",
-								_hoisted_9$d,
+								_hoisted_9$e,
 								"#" + toDisplayString(row.index + 1),
 								1
 								/* TEXT */
@@ -182033,7 +182129,7 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 								title: "删除这一行",
 								onClick: ($event) => $setup.deleteRow(row.index)
 							}, null, 8, ["onClick"])
-						]), createBaseVNode("div", _hoisted_10$c, [(openBlock(true), createElementBlock(
+						]), createBaseVNode("div", _hoisted_10$d, [(openBlock(true), createElementBlock(
 							Fragment,
 							null,
 							renderList(row.fieldRows, (fieldRow) => {
@@ -182131,7 +182227,7 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 									}),
 									128
 									/* KEYED_FRAGMENT */
-								))], 10, _hoisted_11$b);
+								))], 10, _hoisted_11$c);
 							}),
 							128
 							/* KEYED_FRAGMENT */
@@ -182198,10 +182294,10 @@ const _hoisted_2$y = {
 };
 const _hoisted_3$w = { class: "ub-vmanage__no" };
 const _hoisted_4$t = ["onClick"];
-const _hoisted_5$o = { class: "ub-vmanage__title" };
-const _hoisted_6$l = { class: "ub-vmanage__meta" };
-const _hoisted_7$j = { class: "ub-vmanage__ops" };
-const _hoisted_8$h = {
+const _hoisted_5$p = { class: "ub-vmanage__title" };
+const _hoisted_6$m = { class: "ub-vmanage__meta" };
+const _hoisted_7$k = { class: "ub-vmanage__ops" };
+const _hoisted_8$i = {
 	key: 1,
 	class: "ub-vmanage__empty"
 };
@@ -182246,18 +182342,18 @@ function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 						onClick: ($event) => $setup.emit("open-sheet", item.key)
 					}, [createBaseVNode(
 						"span",
-						_hoisted_5$o,
+						_hoisted_5$p,
 						toDisplayString(item.name),
 						1
 						/* TEXT */
 					), createBaseVNode(
 						"span",
-						_hoisted_6$l,
+						_hoisted_6$m,
 						toDisplayString(item.rowCount) + " 行 · " + toDisplayString(item.columnCount) + " 列",
 						1
 						/* TEXT */
 					)], 8, _hoisted_4$t),
-					createBaseVNode("span", _hoisted_7$j, [
+					createBaseVNode("span", _hoisted_7$k, [
 						createVNode($setup["UbIconButton"], {
 							icon: "fa-solid fa-arrow-up",
 							size: "sm",
@@ -182284,7 +182380,7 @@ function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 			}),
 			128
 			/* KEYED_FRAGMENT */
-		))])) : (openBlock(), createElementBlock("p", _hoisted_8$h, "数据库里还没有表格，点右上角「新增表格」开始。"))]),
+		))])) : (openBlock(), createElementBlock("p", _hoisted_8$i, "数据库里还没有表格，点右上角「新增表格」开始。"))]),
 		_: 1
 	}), createVNode($setup["UbSection"], {
 		title: "全局注入位置",
@@ -182363,10 +182459,10 @@ const _hoisted_4$s = [
 	"data-ub-viz-sheet",
 	"onClick"
 ];
-const _hoisted_5$n = { class: "ub-vnav__text" };
-const _hoisted_6$k = { class: "ub-vnav__name" };
-const _hoisted_7$i = { class: "ub-vnav__meta" };
-const _hoisted_8$g = {
+const _hoisted_5$o = { class: "ub-vnav__text" };
+const _hoisted_6$l = { class: "ub-vnav__name" };
+const _hoisted_7$j = { class: "ub-vnav__meta" };
+const _hoisted_8$h = {
 	key: 0,
 	class: "ub-vnav__empty"
 };
@@ -182400,15 +182496,15 @@ function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 					null,
 					-1
 					/* CACHED */
-				)), createBaseVNode("span", _hoisted_5$n, [createBaseVNode(
+				)), createBaseVNode("span", _hoisted_5$o, [createBaseVNode(
 					"span",
-					_hoisted_6$k,
+					_hoisted_6$l,
 					toDisplayString(item.name),
 					1
 					/* TEXT */
 				), createBaseVNode(
 					"span",
-					_hoisted_7$i,
+					_hoisted_7$j,
 					toDisplayString(item.rowCount) + " 行 · " + toDisplayString(item.columnCount) + " 列",
 					1
 					/* TEXT */
@@ -182417,7 +182513,7 @@ function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 			128
 			/* KEYED_FRAGMENT */
 		))]),
-		$props.sheetItems.length === 0 ? (openBlock(), createElementBlock("p", _hoisted_8$g, "还没有表格，去「数据库管理」新增一张。")) : createCommentVNode("v-if", true),
+		$props.sheetItems.length === 0 ? (openBlock(), createElementBlock("p", _hoisted_8$h, "还没有表格，去「数据库管理」新增一张。")) : createCommentVNode("v-if", true),
 		_cache[3] || (_cache[3] = createBaseVNode(
 			"div",
 			{
@@ -182666,16 +182762,16 @@ const _hoisted_1$z = {
 const _hoisted_2$w = { class: "ub-viz__rail" };
 const _hoisted_3$u = { class: "ub-viz__brand" };
 const _hoisted_4$r = { class: "ub-viz__brand-text" };
-const _hoisted_5$m = { class: "ub-viz__brand-tag" };
-const _hoisted_6$j = { class: "ub-viz__rail-nav" };
-const _hoisted_7$h = { class: "ub-viz__main" };
-const _hoisted_8$f = {
+const _hoisted_5$n = { class: "ub-viz__brand-tag" };
+const _hoisted_6$k = { class: "ub-viz__rail-nav" };
+const _hoisted_7$i = { class: "ub-viz__main" };
+const _hoisted_8$g = {
 	class: "ub-viz__head",
 	"data-ub-viz-head": ""
 };
-const _hoisted_9$c = ["aria-expanded"];
-const _hoisted_10$b = { class: "ub-viz__switcher-name" };
-const _hoisted_11$a = { class: "ub-viz__titles" };
+const _hoisted_9$d = ["aria-expanded"];
+const _hoisted_10$c = { class: "ub-viz__switcher-name" };
+const _hoisted_11$b = { class: "ub-viz__titles" };
 const _hoisted_12$9 = { class: "ub-viz__title" };
 const _hoisted_13$8 = { class: "ub-viz__sub" };
 const _hoisted_14$6 = {
@@ -182725,11 +182821,11 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 			/* CACHED */
 		)), createBaseVNode(
 			"span",
-			_hoisted_5$m,
+			_hoisted_5$n,
 			toDisplayString($setup.visualizer.sheetItems.length) + " 张表 · " + toDisplayString($setup.visualizer.dirty ? "有未保存修改" : "已同步"),
 			1
 			/* TEXT */
-		)])]), createBaseVNode("div", _hoisted_6$j, [createVNode($setup["VizTableNav"], {
+		)])]), createBaseVNode("div", _hoisted_6$k, [createVNode($setup["VizTableNav"], {
 			"sheet-items": $setup.visualizer.sheetItems,
 			"current-sheet-key": $setup.visualizer.currentSheetKey,
 			"sheet-mode": $setup.sheetMode,
@@ -182740,8 +182836,8 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 			"current-sheet-key",
 			"sheet-mode"
 		])])]),
-		createBaseVNode("div", _hoisted_7$h, [
-			createBaseVNode("header", _hoisted_8$f, [
+		createBaseVNode("div", _hoisted_7$i, [
+			createBaseVNode("header", _hoisted_8$g, [
 				createBaseVNode("button", {
 					type: "button",
 					class: "ub-viz__switcher",
@@ -182761,7 +182857,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 					),
 					createBaseVNode(
 						"span",
-						_hoisted_10$b,
+						_hoisted_10$c,
 						toDisplayString($setup.headTitle),
 						1
 						/* TEXT */
@@ -182776,8 +182872,8 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 						-1
 						/* CACHED */
 					))
-				], 8, _hoisted_9$c),
-				createBaseVNode("div", _hoisted_11$a, [createBaseVNode(
+				], 8, _hoisted_9$d),
+				createBaseVNode("div", _hoisted_11$b, [createBaseVNode(
 					"h1",
 					_hoisted_12$9,
 					toDisplayString($setup.headTitle),
@@ -184604,19 +184700,19 @@ const _hoisted_4$p = {
 	class: "ub-at__result",
 	"aria-label": "SQL 执行结果"
 };
-const _hoisted_5$l = {
+const _hoisted_5$m = {
 	key: 0,
 	class: "ub-at__empty"
 };
-const _hoisted_6$i = {
+const _hoisted_6$j = {
 	key: 2,
 	class: "ub-at__error"
 };
-const _hoisted_7$g = { class: "ub-at__table-wrap" };
-const _hoisted_8$e = { class: "ub-at__table" };
-const _hoisted_9$b = { key: 0 };
-const _hoisted_10$a = ["colspan"];
-const _hoisted_11$9 = { class: "ub-at__meta" };
+const _hoisted_7$h = { class: "ub-at__table-wrap" };
+const _hoisted_8$f = { class: "ub-at__table" };
+const _hoisted_9$c = { key: 0 };
+const _hoisted_10$b = ["colspan"];
+const _hoisted_11$a = { class: "ub-at__meta" };
 const _hoisted_12$8 = {
 	key: 0,
 	class: "ub-at__empty"
@@ -184755,7 +184851,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 							/* TEXT, CLASS */
 						)
 					]),
-					createBaseVNode("div", _hoisted_4$p, [$setup.sqlFlow.result.value.kind === "idle" ? (openBlock(), createElementBlock("p", _hoisted_5$l, "执行 SQL 后结果会显示在这里")) : $setup.sqlFlow.result.value.kind === "mutation" ? (openBlock(), createBlock($setup["UbCallout"], {
+					createBaseVNode("div", _hoisted_4$p, [$setup.sqlFlow.result.value.kind === "idle" ? (openBlock(), createElementBlock("p", _hoisted_5$m, "执行 SQL 后结果会显示在这里")) : $setup.sqlFlow.result.value.kind === "mutation" ? (openBlock(), createBlock($setup["UbCallout"], {
 						key: 1,
 						kind: "success"
 					}, {
@@ -184767,14 +184863,14 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					})) : $setup.sqlFlow.result.value.kind === "error" ? (openBlock(), createElementBlock(
 						"pre",
-						_hoisted_6$i,
+						_hoisted_6$j,
 						toDisplayString($setup.sqlFlow.result.value.error),
 						1
 						/* TEXT */
 					)) : (openBlock(), createElementBlock(
 						Fragment,
 						{ key: 3 },
-						[createBaseVNode("div", _hoisted_7$g, [createBaseVNode("table", _hoisted_8$e, [createBaseVNode("thead", null, [createBaseVNode("tr", null, [(openBlock(true), createElementBlock(
+						[createBaseVNode("div", _hoisted_7$h, [createBaseVNode("table", _hoisted_8$f, [createBaseVNode("thead", null, [createBaseVNode("tr", null, [(openBlock(true), createElementBlock(
 							Fragment,
 							null,
 							renderList($setup.sqlFlow.result.value.columns, (column) => {
@@ -184788,10 +184884,10 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 							}),
 							128
 							/* KEYED_FRAGMENT */
-						))])]), createBaseVNode("tbody", null, [!$setup.sqlFlow.result.value.values.length ? (openBlock(), createElementBlock("tr", _hoisted_9$b, [createBaseVNode("td", {
+						))])]), createBaseVNode("tbody", null, [!$setup.sqlFlow.result.value.values.length ? (openBlock(), createElementBlock("tr", _hoisted_9$c, [createBaseVNode("td", {
 							colspan: Math.max($setup.sqlFlow.result.value.columns.length, 1),
 							class: "ub-at__empty"
-						}, "查询成功，没有返回行", 8, _hoisted_10$a)])) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
+						}, "查询成功，没有返回行", 8, _hoisted_10$b)])) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
 							Fragment,
 							null,
 							renderList($setup.sqlFlow.result.value.values, (row, rowIndex) => {
@@ -184818,7 +184914,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 							/* KEYED_FRAGMENT */
 						))])])]), createBaseVNode(
 							"p",
-							_hoisted_11$9,
+							_hoisted_11$a,
 							toDisplayString($setup.sqlFlow.result.value.rowCount) + " 行 · " + toDisplayString($setup.sqlFlow.result.value.elapsedMs) + "ms",
 							1
 							/* TEXT */
@@ -185703,6 +185799,335 @@ function useApiPresetStaleness(key) {
     return { isStale, markConfirmed };
 }
 
+/**
+ * data/gateways/worldbook-file-gateway.ts — 整本世界书读写与角色卡附加世界书绑定（常用世界书挂载用）
+ *
+ * - 整本读写走 getContext().loadWorldInfo / saveWorldInfo（新名字保存即新建文件），保存后刷新宿主列表；
+ * - 世界书名单读宿主实时列表（兼容层的设置快照带缓存，刚建的书会读不到）；
+ * - 附加世界书绑定：有酒馆助手时用它的 rebindCharWorldbooks；否则经宿主内部世界书模块
+ *   charUpdateAddAuxWorld 写入（见 host-world-info-module）。两条都走不通返回 'unavailable'，
+ *   由调用方提示用户手动挂载。
+ */
+function context_ACU() {
+    return SillyTavern_API_ACU;
+}
+/** 当前单人角色卡；群聊或未选角色返回 null。 */
+function getCurrentSingleCharacter_ACU() {
+    const ctx = context_ACU();
+    if (!ctx || (ctx.groupId !== undefined && ctx.groupId !== null && ctx.groupId !== ''))
+        return null;
+    const character = Array.isArray(ctx.characters) ? ctx.characters[Number(ctx.characterId)] : null;
+    const name = typeof character?.name === 'string' ? character.name.trim() : '';
+    const avatar = typeof character?.avatar === 'string' ? character.avatar : '';
+    return name && avatar ? { name, avatar } : null;
+}
+async function listWorldbookNamesLive_ACU() {
+    const live = context_ACU()?.getWorldInfoNames?.();
+    if (Array.isArray(live))
+        return live.map((name) => String(name));
+    return listLorebooks_ACU();
+}
+/** 读整本世界书；不存在或宿主接口缺失返回 null。 */
+async function loadWorldbookFile_ACU(name) {
+    const ctx = context_ACU();
+    if (typeof ctx?.loadWorldInfo !== 'function')
+        throw new Error('宿主不支持读取整本世界书。');
+    const data = await ctx.loadWorldInfo(name);
+    return data && typeof data === 'object' ? data : null;
+}
+/** 整本写入（同名覆盖，新名字即新建），并刷新宿主世界书列表。 */
+async function saveWorldbookFile_ACU(name, data) {
+    const ctx = context_ACU();
+    if (typeof ctx?.saveWorldInfo !== 'function')
+        throw new Error('宿主不支持写入整本世界书。');
+    await ctx.saveWorldInfo(name, data, true);
+    if (typeof ctx.updateWorldInfoList === 'function')
+        await ctx.updateWorldInfoList();
+}
+/** 把世界书挂成当前角色卡的附加世界书。 */
+async function addAuxWorldbookToCurrentCharacter_ACU(character, bookName) {
+    const helper = getHostWindow()?.TavernHelper;
+    if (helper && typeof helper.rebindCharWorldbooks === 'function' && typeof helper.getCharWorldbookNames === 'function') {
+        const current = await helper.getCharWorldbookNames('current');
+        const additional = Array.isArray(current?.additional) ? current.additional : [];
+        if (current?.primary === bookName || additional.includes(bookName))
+            return 'already';
+        await helper.rebindCharWorldbooks('current', { primary: current?.primary ?? null, additional: [...additional, bookName] });
+        return 'bound';
+    }
+    const mod = await loadVerifiedHostWorldInfoModule_ACU();
+    if (!mod)
+        return 'unavailable';
+    const avatarBase = character.avatar.replace(/\.[^.]+$/, '');
+    const readExtraBooks = () => {
+        const charLore = Array.isArray(mod.world_info.charLore) ? mod.world_info.charLore : [];
+        const entry = charLore.find(item => item?.name === avatarBase);
+        return Array.isArray(entry?.extraBooks) ? entry.extraBooks : [];
+    };
+    if (readExtraBooks().includes(bookName))
+        return 'already';
+    await mod.charUpdateAddAuxWorld(character.avatar, bookName);
+    return readExtraBooks().includes(bookName) ? 'bound' : 'unavailable';
+}
+
+/**
+ * service/agent/agent-favorite-worldbooks.ts — 常用世界书（用户需求）
+ *
+ * 用户把几本 skill 化的世界书设为「常用」，换新角色卡时一键复制成「角色卡名-原书名」并挂成该卡的
+ * 附加世界书，免去手动复制、改名、挂载。副本与常用书互相独立：每张卡的 Agent 接管、手改互不影响。
+ * 名单存插件设置（所有角色卡共用）。
+ */
+const FAVORITE_WORLDBOOKS_KEY_ACU = 'agentFavoriteWorldbooks';
+function normalizeFavoriteWorldbookNames_ACU(raw) {
+    if (!Array.isArray(raw))
+        return [];
+    return [...new Set(raw
+            .filter((name) => typeof name === 'string')
+            .map(name => name.trim())
+            .filter(Boolean))];
+}
+function readFavoriteWorldbookNames_ACU() {
+    return normalizeFavoriteWorldbookNames_ACU(settings_ACU?.[FAVORITE_WORLDBOOKS_KEY_ACU]);
+}
+function writeFavoriteWorldbookNames_ACU(names) {
+    const normalized = normalizeFavoriteWorldbookNames_ACU(names);
+    settings_ACU[FAVORITE_WORLDBOOKS_KEY_ACU] = normalized;
+    saveSettings_ACU();
+    return normalized;
+}
+function sanitizeWorldbookNamePart_ACU(text) {
+    // 宿主按文件名保存世界书：先替换文件名不允许的字符，保证挂载用的名字与实际文件名一致。
+    return String(text || '')
+        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')
+        .trim()
+        .replace(/[.\s]+$/, '');
+}
+/** 副本名：角色卡名-原书名（用户决定）。 */
+function buildMountedWorldbookName_ACU(characterName, bookName) {
+    return `${sanitizeWorldbookNamePart_ACU(characterName)}-${sanitizeWorldbookNamePart_ACU(bookName)}`;
+}
+function isAgentRuntimeEntry_ACU(entry) {
+    const comment = String(entry?.comment ?? '').trim();
+    // 数据库生成条目与 Agent 每卡状态（配置、快照、绿灯）都不属于常用书内容，复制会把别的卡的状态带过来。
+    return comment.startsWith('TavernDB-ACU-') || isDatabaseGeneratedLorebookEntry_ACU(entry);
+}
+/** 复制用的世界书数据：深拷贝，去掉数据库生成与 Agent 状态条目。 */
+function buildFavoriteWorldbookCopyData_ACU(data) {
+    const copy = structuredClone(data);
+    const entries = copy?.entries && typeof copy.entries === 'object' ? copy.entries : {};
+    copy.entries = Object.fromEntries(Object.entries(entries)
+        .filter(([, entry]) => entry && typeof entry === 'object' && !isAgentRuntimeEntry_ACU(entry)));
+    return copy;
+}
+async function readFavoriteWorldbookSkillStatus_ACU(bookName) {
+    const names = await listWorldbookNamesLive_ACU();
+    if (!names.includes(bookName))
+        return { bookName, exists: false, candidateCount: 0, skilledCount: 0 };
+    const candidates = (await getLorebookEntries_ACU(bookName)).filter(entry => isWorldbookEntrySkillifyCandidate_ACU(entry));
+    return {
+        bookName,
+        exists: true,
+        candidateCount: candidates.length,
+        skilledCount: candidates.filter(entry => hasUsableWorldbookSkillMeta_ACU(entry?.comment)).length,
+    };
+}
+function errorText_ACU(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+/**
+ * 把选中的常用书复制成当前角色卡的副本并挂成附加世界书。逐本处理、一本失败不影响其他本。
+ * 副本已存在时由 resolveExisting 决定保留 / 覆盖 / 跳过（用户决定：每次都问）。
+ */
+async function mountFavoriteWorldbooksToCurrentCharacter_ACU(bookNames, options) {
+    const character = getCurrentSingleCharacter_ACU();
+    if (!character)
+        return { ok: false, reason: 'no_character' };
+    const results = [];
+    for (const sourceName of normalizeFavoriteWorldbookNames_ACU(bookNames)) {
+        const targetName = buildMountedWorldbookName_ACU(character.name, sourceName);
+        const item = { sourceName, targetName, copy: 'failed', binding: 'not_attempted' };
+        results.push(item);
+        try {
+            const existingNames = await listWorldbookNamesLive_ACU();
+            let decision = 'create';
+            if (existingNames.includes(targetName))
+                decision = await options.resolveExisting(targetName, sourceName);
+            if (decision === 'skip') {
+                item.copy = 'skipped';
+                continue;
+            }
+            if (decision === 'keep') {
+                item.copy = 'kept';
+            }
+            else {
+                const source = existingNames.includes(sourceName) ? await loadWorldbookFile_ACU(sourceName) : null;
+                if (!source) {
+                    item.reason = `找不到常用世界书「${sourceName}」，可能已被删除或改名。`;
+                    continue;
+                }
+                await saveWorldbookFile_ACU(targetName, buildFavoriteWorldbookCopyData_ACU(source));
+                if (!(await listWorldbookNamesLive_ACU()).includes(targetName)) {
+                    item.reason = `副本「${targetName}」保存后没有出现在世界书列表里。`;
+                    continue;
+                }
+                item.copy = decision === 'overwrite' ? 'overwritten' : 'created';
+            }
+        }
+        catch (error) {
+            item.reason = errorText_ACU(error);
+            continue;
+        }
+        try {
+            item.binding = await addAuxWorldbookToCurrentCharacter_ACU(character, targetName);
+        }
+        catch (error) {
+            item.binding = 'failed';
+            item.reason = errorText_ACU(error);
+        }
+    }
+    return { ok: true, characterName: character.name, results };
+}
+
+/**
+ * 常用世界书面板：维护常用名单、显示各本 skill 化进度，把勾选的几本复制并挂到当前角色卡。
+ */
+function useFavoriteWorldbooks(options) {
+    const dialog = useDialogStore();
+    const toast = useToastStore();
+    const favorites = ref([]);
+    const statuses = ref({});
+    const allNames = ref([]);
+    const characterName = ref('');
+    const selected = ref([]);
+    const loading = ref(false);
+    const mounting = ref(false);
+    const addableNames = computed(() => allNames.value.filter(name => !favorites.value.includes(name)));
+    const canMount = computed(() => !!characterName.value && !mounting.value);
+    async function refreshStatus(bookName) {
+        try {
+            const status = await readFavoriteWorldbookSkillStatus_ACU(bookName);
+            statuses.value = { ...statuses.value, [bookName]: status };
+        }
+        catch {
+            statuses.value = { ...statuses.value, [bookName]: { bookName, exists: false, candidateCount: 0, skilledCount: 0 } };
+        }
+    }
+    async function refresh() {
+        loading.value = true;
+        try {
+            favorites.value = readFavoriteWorldbookNames_ACU();
+            selected.value = selected.value.filter(name => favorites.value.includes(name));
+            characterName.value = getCurrentSingleCharacter_ACU()?.name || '';
+            try {
+                allNames.value = await listWorldbookNamesLive_ACU();
+            }
+            catch {
+                allNames.value = [];
+            }
+            statuses.value = {};
+            await Promise.all(favorites.value.map(refreshStatus));
+        }
+        finally {
+            loading.value = false;
+        }
+    }
+    async function add(bookName) {
+        if (!bookName || favorites.value.includes(bookName))
+            return;
+        favorites.value = writeFavoriteWorldbookNames_ACU([...favorites.value, bookName]);
+        await refreshStatus(bookName);
+    }
+    function remove(bookName) {
+        favorites.value = writeFavoriteWorldbookNames_ACU(favorites.value.filter(name => name !== bookName));
+        selected.value = selected.value.filter(name => name !== bookName);
+        const next = { ...statuses.value };
+        delete next[bookName];
+        statuses.value = next;
+    }
+    function toggleSelected(bookName, checked) {
+        const rest = selected.value.filter(name => name !== bookName);
+        selected.value = checked ? [...rest, bookName] : rest;
+    }
+    async function resolveExisting(targetName, sourceName) {
+        const choice = await dialog.choose({
+            title: '副本已存在',
+            message: `这张角色卡已经有「${targetName}」（来自常用世界书「${sourceName}」）。要怎么处理？`,
+            actions: [
+                { value: 'keep', label: '保留副本，只确保挂上', variant: 'primary' },
+                { value: 'overwrite', label: '用常用书覆盖（副本里的改动会丢失）', variant: 'danger' },
+                { value: 'skip', label: '跳过这本' },
+            ],
+            cancelLabel: '跳过这本',
+        });
+        return choice || 'skip';
+    }
+    function describeItem(item) {
+        if (item.copy === 'failed')
+            return `「${item.sourceName}」没有复制：${item.reason || '未知错误'}`;
+        if (item.binding === 'unavailable')
+            return `「${item.targetName}」已建好，但没能自动挂到角色卡，请在酒馆里手动把它加为附加世界书。`;
+        if (item.binding === 'failed')
+            return `「${item.targetName}」已建好，挂到角色卡时出错：${item.reason || '未知错误'}，请手动挂载。`;
+        return '';
+    }
+    async function mountSelected() {
+        if (!canMount.value || selected.value.length === 0)
+            return false;
+        mounting.value = true;
+        try {
+            const ordered = favorites.value.filter(name => selected.value.includes(name));
+            const result = await mountFavoriteWorldbooksToCurrentCharacter_ACU(ordered, { resolveExisting });
+            if (!result.ok) {
+                toast.warning('请先打开一张单人角色卡再挂载（群聊不支持）。', { muteable: false });
+                return false;
+            }
+            const mounted = result.results.filter(item => item.binding === 'bound' || item.binding === 'already');
+            const problems = result.results.map(describeItem).filter(Boolean);
+            if (mounted.length > 0) {
+                toast.success(`已挂到「${result.characterName}」：${mounted.map(item => item.targetName).join('、')}`, { muteable: false });
+            }
+            if (problems.length > 0)
+                toast.warning(problems.join('\n'), { muteable: false });
+            if (mounted.length === 0 && problems.length === 0)
+                toast.info('没有挂载任何世界书（都已跳过）。', { muteable: false });
+            selected.value = [];
+            try {
+                allNames.value = await listWorldbookNamesLive_ACU();
+            }
+            catch { /* 列表刷新失败不影响结果 */ }
+            return mounted.length > 0;
+        }
+        catch (error) {
+            toast.error(`挂载常用世界书失败：${error?.message || '未知错误'}`, { muteable: false });
+            return false;
+        }
+        finally {
+            mounting.value = false;
+        }
+    }
+    async function skillify(bookName) {
+        await options.skillifyBooks([bookName]);
+        await refreshStatus(bookName);
+    }
+    return {
+        favorites,
+        statuses,
+        allNames,
+        addableNames,
+        characterName,
+        selected,
+        loading,
+        mounting,
+        canMount,
+        refresh,
+        add,
+        remove,
+        toggleSelected,
+        mountSelected,
+        skillify,
+    };
+}
+
 // 跨页面共享的文案片段（多页使用的相同文案在此定义一份，页面 copy 引用之）
 const worldbookEntriesCopy = {
     emptyDefault: "所选世界书中无可显示的条目。",
@@ -185795,6 +186220,7 @@ const plotCopy = {
             partial: (updated, skipped, failed) => `Skill 化部分完成：更新 ${updated} 条，跳过 ${skipped} 条，失败 ${failed} 条。`,
             noSelection: "请先勾选要 Skill 化的世界书条目。",
             selectedConfirmMessage: (count) => `将调用配置的 Agent Skill API，为已勾选的 ${count} 条世界书条目生成描述与触发时机。已有 Skill 元数据的条目会自动跳过，无论这些数据来自 AI 生成还是用户手动编辑。`,
+            booksConfirmMessage: (bookNames) => `将调用配置的 Agent Skill API，为世界书「${bookNames.join('」「')}」里可处理的条目生成描述与触发时机。已有 Skill 元数据的条目会自动跳过，无论这些数据来自 AI 生成还是用户手动编辑。条目较多时一次只处理一批，可再点一次继续。`,
             noCandidates: "当前范围没有可 Skill 化的世界书条目。",
             error: "一键 Skill 化失败",
         },
@@ -186331,7 +186757,8 @@ function usePlotWorldbookAgentControl() {
     async function skillifyAll() {
         return runSkillifyWithOptions_ACU();
     }
-    async function runSkillifyWithOptions_ACU(optionsPatch = {}) {
+    /** bookNames：只处理这几本（常用世界书用），不读当前 Agent 范围，也不沿用整库续跑游标。 */
+    async function runSkillifyWithOptions_ACU(optionsPatch = {}, bookNames) {
         // R10A-17：busy 要到 refresh + 确认之后才置位，确认阶段用独立标志挡住连点；确认后再查一次 busy。
         if (busy.value || skillifyConfirmPending)
             return false;
@@ -186340,9 +186767,11 @@ function usePlotWorldbookAgentControl() {
         try {
             await refresh();
             const confirmCopy = plotCopy.agentControl.skillify.confirm;
-            confirmed = await dialog.confirm(optionsPatch.selectedEntries
-                ? { ...confirmCopy, message: plotCopy.agentControl.skillify.selectedConfirmMessage(optionsPatch.selectedEntries.length) }
-                : confirmCopy);
+            confirmed = await dialog.confirm(bookNames
+                ? { ...confirmCopy, message: plotCopy.agentControl.skillify.booksConfirmMessage(bookNames) }
+                : optionsPatch.selectedEntries
+                    ? { ...confirmCopy, message: plotCopy.agentControl.skillify.selectedConfirmMessage(optionsPatch.selectedEntries.length) }
+                    : confirmCopy);
         }
         finally {
             skillifyConfirmPending = false;
@@ -186385,8 +186814,8 @@ function usePlotWorldbookAgentControl() {
                     return;
                 progressToastId = toast.info(text, progressOptions);
             };
-            const hasExplicitSelection = Array.isArray(optionsPatch.selectedEntries);
-            const result = await skillifyCurrentPlotWorldbookSelection_ACU({
+            const hasExplicitSelection = Array.isArray(optionsPatch.selectedEntries) || Array.isArray(bookNames);
+            const skillifyOptions = {
                 presetName: agentSkillApiPreset.value,
                 overwriteManual: false,
                 maxAiRetries: contextSettings.value.agentAiMaxRetries,
@@ -186396,7 +186825,10 @@ function usePlotWorldbookAgentControl() {
                 signal: skillifyAbort.signal,
                 ...optionsPatch,
                 onProgress: notifyProgress,
-            });
+            };
+            const result = bookNames
+                ? await skillifyWorldbookEntries_ACU(bookNames, skillifyOptions)
+                : await skillifyCurrentPlotWorldbookSelection_ACU(skillifyOptions);
             skillifyBatchStats.value = {
                 totalMatched: result.totalMatched,
                 selectedForRun: result.selectedForRun,
@@ -186448,6 +186880,12 @@ function usePlotWorldbookAgentControl() {
             return false;
         }
         return runSkillifyWithOptions_ACU({ selectedEntries });
+    }
+    async function skillifyBooks(bookNames) {
+        const names = Array.isArray(bookNames) ? bookNames.filter(name => typeof name === 'string' && name.trim()) : [];
+        if (names.length === 0)
+            return false;
+        return runSkillifyWithOptions_ACU({}, names);
     }
     async function clearSkillMeta() {
         if (busy.value)
@@ -186562,6 +187000,7 @@ function usePlotWorldbookAgentControl() {
         restore,
         skillifyAll,
         skillifySelected,
+        skillifyBooks,
         syncAgentWorldbookTakeoverAfterSkillChange,
         clearSkillMeta,
     };
@@ -187193,23 +187632,23 @@ const _hoisted_4$o = {
 	key: 0,
 	class: "ub-wbe__status"
 };
-const _hoisted_5$k = {
+const _hoisted_5$l = {
 	key: 1,
 	class: "ub-wbe__status is-error",
 	role: "alert"
 };
-const _hoisted_6$h = {
+const _hoisted_6$i = {
 	key: 2,
 	class: "ub-wbe__status"
 };
-const _hoisted_7$f = {
+const _hoisted_7$g = {
 	key: 3,
 	class: "ub-wbe__groups"
 };
-const _hoisted_8$d = { class: "ub-wbe__entry-main" };
-const _hoisted_9$a = ["title"];
-const _hoisted_10$9 = { class: "ub-wbe__tags" };
-const _hoisted_11$8 = {
+const _hoisted_8$e = { class: "ub-wbe__entry-main" };
+const _hoisted_9$b = ["title"];
+const _hoisted_10$a = { class: "ub-wbe__tags" };
+const _hoisted_11$9 = {
 	key: 0,
 	class: "ub-wbe__skill-row"
 };
@@ -187300,17 +187739,17 @@ function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 		/* STABLE_FRAGMENT */
 	)) : createCommentVNode("v-if", true)])]), $props.loading ? (openBlock(), createElementBlock("p", _hoisted_4$o, "正在加载条目...")) : $props.status === "error" ? (openBlock(), createElementBlock(
 		"p",
-		_hoisted_5$k,
+		_hoisted_5$l,
 		toDisplayString($props.error || "加载条目失败"),
 		1
 		/* TEXT */
 	)) : $props.groups.length === 0 ? (openBlock(), createElementBlock(
 		"p",
-		_hoisted_6$h,
+		_hoisted_6$i,
 		toDisplayString($props.emptyText),
 		1
 		/* TEXT */
-	)) : (openBlock(), createElementBlock("div", _hoisted_7$f, [(openBlock(true), createElementBlock(
+	)) : (openBlock(), createElementBlock("div", _hoisted_7$g, [(openBlock(true), createElementBlock(
 		Fragment,
 		null,
 		renderList($setup.filteredGroups, (group, index) => {
@@ -187334,7 +187773,7 @@ function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 								class: normalizeClass(["ub-wbe__entry", { "is-disabled": entry.disabled }])
 							},
 							[
-								createBaseVNode("div", _hoisted_8$d, [$props.showEntryToggle ? (openBlock(), createBlock($setup["UbCheck"], {
+								createBaseVNode("div", _hoisted_8$e, [$props.showEntryToggle ? (openBlock(), createBlock($setup["UbCheck"], {
 									key: 0,
 									"model-value": entry.checked,
 									label: entry.label,
@@ -187351,7 +187790,7 @@ function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 									key: 1,
 									class: "ub-wbe__label",
 									title: entry.label
-								}, toDisplayString(entry.label), 9, _hoisted_9$a)), createBaseVNode("span", _hoisted_10$9, [
+								}, toDisplayString(entry.label), 9, _hoisted_9$b)), createBaseVNode("span", _hoisted_10$a, [
 									$props.showSkillifyControls && entry.skillMeta ? (openBlock(), createBlock($setup["UbBadge"], {
 										key: 0,
 										variant: "accent"
@@ -187383,7 +187822,7 @@ function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 										_: 2
 									}, 1032, ["variant"])) : createCommentVNode("v-if", true)
 								])]),
-								$props.showSkillifyControls ? (openBlock(), createElementBlock("div", _hoisted_11$8, [createVNode($setup["UbCheck"], {
+								$props.showSkillifyControls ? (openBlock(), createElementBlock("div", _hoisted_11$9, [createVNode($setup["UbCheck"], {
 									"model-value": entry.skillifySelected,
 									label: "Skill 化",
 									disabled: entry.disabled || !entry.skillifySelectable,
@@ -187538,7 +187977,7 @@ const _hoisted_4$n = {
 	key: 0,
 	class: "ub-wbsrc__empty"
 };
-const _hoisted_5$j = {
+const _hoisted_5$k = {
 	key: 1,
 	class: "ub-wbsrc__error"
 };
@@ -187604,7 +188043,7 @@ function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
 		)])) : createCommentVNode("v-if", true),
 		$props.status === "error" ? (openBlock(), createElementBlock(
 			"p",
-			_hoisted_5$j,
+			_hoisted_5$k,
 			toDisplayString($props.error || "加载失败"),
 			1
 			/* TEXT */
@@ -187629,12 +188068,17 @@ var _sfc_main$x = /*@__PURE__*/ defineComponent({
         const apiPresetOptions = computed(() => agentControl.apiPresetOptions.value.map(option => option.value === '' ? { ...option, label: followActiveApiLabel.value } : option));
         // 防呆：API 预设在别处被改过时标黄，重选决策或 Skill 任一即确认
         const { isStale: agentStale, markConfirmed: markAgentConfirmed } = useApiPresetStaleness('agent-wb-control');
+        const favorites = useFavoriteWorldbooks({ skillifyBooks: agentControl.skillifyBooks });
+        const favoriteToAdd = ref('');
+        const skillifyingFavorite = ref('');
+        const favoriteAddOptions = computed(() => favorites.addableNames.value.map(name => ({ value: name, label: name })));
         const advancedOpen = ref(false);
         const entryFilter = ref('');
         const entryEmptyText = ref('当前 Agent 世界书范围内无可 Skill 化的条目。');
         const sections = [
             { id: 'agent-control', label: '总控' },
             { id: 'agent-scope', label: '范围' },
+            { id: 'agent-favorites', label: '常用世界书' },
             { id: 'agent-entries', label: '条目与 Skill' },
             { id: 'agent-editing', label: '世界书编辑' },
         ];
@@ -187753,8 +188197,48 @@ var _sfc_main$x = /*@__PURE__*/ defineComponent({
         }
         async function refreshAll() {
             apiStore.refreshFromSettings();
-            await Promise.all([agentControl.refresh(), worldbook.refresh()]);
+            await Promise.all([agentControl.refresh(), worldbook.refresh(), favorites.refresh()]);
             await refreshEntries();
+        }
+        function favoriteStatus(name) {
+            return favorites.statuses.value[name];
+        }
+        function favoriteNeedsSkillify(name) {
+            const status = favoriteStatus(name);
+            return !!status?.exists && status.skilledCount < status.candidateCount;
+        }
+        function favoriteBadge(name) {
+            const status = favoriteStatus(name);
+            if (!status)
+                return { variant: 'neutral', label: '读取中' };
+            if (!status.exists)
+                return { variant: 'danger', label: '找不到这本书' };
+            if (status.candidateCount === 0)
+                return { variant: 'neutral', label: '无可 Skill 化条目' };
+            if (status.skilledCount >= status.candidateCount)
+                return { variant: 'success', label: `已 Skill 化 ${status.skilledCount}/${status.candidateCount}` };
+            return { variant: 'warning', label: `Skill ${status.skilledCount}/${status.candidateCount}` };
+        }
+        async function onAddFavorite() {
+            const name = favoriteToAdd.value;
+            if (!name)
+                return;
+            favoriteToAdd.value = '';
+            await favorites.add(name);
+        }
+        async function onSkillifyFavorite(name) {
+            skillifyingFavorite.value = name;
+            try {
+                await favorites.skillify(name);
+            }
+            finally {
+                skillifyingFavorite.value = '';
+            }
+            await refreshEntries();
+        }
+        async function onMountFavorites() {
+            if (await favorites.mountSelected())
+                await refreshAll();
         }
         async function onScopeSourceChange(source) {
             if (await agentControl.setWorldbookScope(source))
@@ -187790,19 +188274,37 @@ var _sfc_main$x = /*@__PURE__*/ defineComponent({
         }
         onMounted(() => void refreshAll());
         watchChatChanged_ACU(() => void refreshAll());
-        const __returned__ = { copy, worldbook, agentControl, toast, entries, apiStore, followActiveApiLabel, apiPresetOptions, agentStale, markAgentConfirmed, advancedOpen, entryFilter, entryEmptyText, sections, modeOptions, editingEnabled, entryStats, disabledSkillCount, blueSkillCount, combinedCount, currentScopeLabel, setDecisionApi, setSkillApi, onModeChange, runRestore, runSkillify, runClearSkillMeta, reportBatchFailedBooks, onEnableDisabledSkills, onConvertBlueToGreen, onCombined, refreshEntries, refreshAll, onScopeSourceChange, onScopeBookToggle, onSkillifySelected, onSaveSkill, onDeleteSkill, AgentAdvancedSheet, WorldbookEntries, WorldbookSourcePicker, UbBadge, UbButton, UbPage, UbRow, UbSection, UbSegmented, UbSelect };
+        const __returned__ = { copy, worldbook, agentControl, toast, entries, apiStore, followActiveApiLabel, apiPresetOptions, agentStale, markAgentConfirmed, favorites, favoriteToAdd, skillifyingFavorite, favoriteAddOptions, advancedOpen, entryFilter, entryEmptyText, sections, modeOptions, editingEnabled, entryStats, disabledSkillCount, blueSkillCount, combinedCount, currentScopeLabel, setDecisionApi, setSkillApi, onModeChange, runRestore, runSkillify, runClearSkillMeta, reportBatchFailedBooks, onEnableDisabledSkills, onConvertBlueToGreen, onCombined, refreshEntries, refreshAll, favoriteStatus, favoriteNeedsSkillify, favoriteBadge, onAddFavorite, onSkillifyFavorite, onMountFavorites, onScopeSourceChange, onScopeBookToggle, onSkillifySelected, onSaveSkill, onDeleteSkill, AgentAdvancedSheet, WorldbookEntries, WorldbookSourcePicker, UbBadge, UbButton, UbPage, UbRow, UbSection, UbSegmented, UbSelect };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-agent__mode[data-v-702abae8] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-agent__config[data-v-702abae8] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-agent__actions[data-v-702abae8] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\n}\n.ub-agent__current[data-v-702abae8] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-agent__current strong[data-v-702abae8] {\r\n  color: var(--ub-text);\n}\r\n", "src/presentation-v3/pages/AgentPage.vue#style-0-702abae8");
-var AgentPage_vue_vue_type_style_index_0_scoped_702abae8_lang = null;
+injectSfcStyle("\n.ub-agent__mode[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-agent__config[data-v-90faf24e] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-agent__actions[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\n}\n.ub-agent__current[data-v-90faf24e] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-agent__current strong[data-v-90faf24e] {\r\n  color: var(--ub-text);\n}\n.ub-agent-fav[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\n}\n.ub-agent-fav__list[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--ub-s1);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\n}\n.ub-agent-fav__item[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s1) 0;\n}\n.ub-agent-fav__item + .ub-agent-fav__item[data-v-90faf24e] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-agent-fav__check[data-v-90faf24e] {\r\n  display: flex;\r\n  flex: 1 1 calc(var(--ub-u) * 120);\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\r\n  min-height: var(--ub-control-h-sm);\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border: 0;\r\n  border-radius: calc(var(--ub-r-control) - 3px);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: left;\r\n  cursor: pointer;\r\n  overflow-wrap: anywhere;\n}\n.ub-agent-fav__check[data-v-90faf24e]:hover:not(:disabled) {\r\n  background: var(--ub-hover);\n}\n.ub-agent-fav__check[data-v-90faf24e]:disabled {\r\n  cursor: not-allowed;\r\n  opacity: 0.6;\n}\n.ub-agent-fav__check.is-on[data-v-90faf24e] {\r\n  color: var(--ub-text);\r\n  font-weight: 600;\n}\n.ub-agent-fav__check.is-on i[data-v-90faf24e] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-agent-fav__add[data-v-90faf24e],\r\n.ub-agent-fav__mount[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-agent-fav__add[data-v-90faf24e] > :first-child {\r\n  flex: 1 1 calc(var(--ub-u) * 140);\r\n  min-width: 0;\n}\n.ub-agent-fav__mount .ub-agent__current[data-v-90faf24e] {\r\n  flex: 1 1 auto;\n}\r\n", "src/presentation-v3/pages/AgentPage.vue#style-0-90faf24e");
+var AgentPage_vue_vue_type_style_index_0_scoped_90faf24e_lang = null;
 
 const _hoisted_1$t = { class: "ub-agent__mode" };
 const _hoisted_2$r = { class: "ub-agent__config" };
 const _hoisted_3$p = { class: "ub-agent__actions" };
 const _hoisted_4$m = { class: "ub-agent__current" };
+const _hoisted_5$j = { class: "ub-agent-fav" };
+const _hoisted_6$h = {
+	key: 0,
+	class: "ub-agent__current"
+};
+const _hoisted_7$f = {
+	key: 1,
+	class: "ub-agent-fav__list"
+};
+const _hoisted_8$d = [
+	"aria-checked",
+	"aria-label",
+	"disabled",
+	"onClick"
+];
+const _hoisted_9$a = { class: "ub-agent-fav__add" };
+const _hoisted_10$9 = { class: "ub-agent-fav__mount" };
+const _hoisted_11$8 = { class: "ub-agent__current" };
 function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		lead: "独立管理 Agent 的世界书范围、Skill 元数据和接管状态。",
@@ -187965,7 +188467,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 					"names",
 					"status",
 					"error"
-				]), createBaseVNode("p", _hoisted_4$m, [_cache[8] || (_cache[8] = createTextVNode(
+				]), createBaseVNode("p", _hoisted_4$m, [_cache[9] || (_cache[9] = createTextVNode(
 					"当前范围：",
 					-1
 					/* CACHED */
@@ -187976,6 +188478,140 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 					1
 					/* TEXT */
 				)])]),
+				_: 1
+			}),
+			createVNode($setup["UbSection"], {
+				id: "agent-favorites",
+				title: "常用世界书",
+				description: "把常用的 Skill 世界书放进来，换新角色卡时勾选几本，一键复制成「角色卡名-原书名」并挂成这张卡的附加世界书。副本与原书互不影响。",
+				icon: "fa-solid fa-star",
+				padded: ""
+			}, {
+				default: withCtx(() => [createBaseVNode("div", _hoisted_5$j, [
+					$setup.favorites.favorites.value.length === 0 ? (openBlock(), createElementBlock("p", _hoisted_6$h, "还没有常用世界书，从下面选一本加入。")) : (openBlock(), createElementBlock("div", _hoisted_7$f, [(openBlock(true), createElementBlock(
+						Fragment,
+						null,
+						renderList($setup.favorites.favorites.value, (name) => {
+							return openBlock(), createElementBlock("div", {
+								key: name,
+								class: "ub-agent-fav__item"
+							}, [
+								createBaseVNode("button", {
+									type: "button",
+									role: "checkbox",
+									class: normalizeClass(["ub-agent-fav__check", { "is-on": $setup.favorites.selected.value.includes(name) }]),
+									"aria-checked": $setup.favorites.selected.value.includes(name) ? "true" : "false",
+									"aria-label": `挂载 ${name}`,
+									disabled: $setup.favoriteStatus(name)?.exists === false,
+									onClick: ($event) => $setup.favorites.toggleSelected(name, !$setup.favorites.selected.value.includes(name))
+								}, [createBaseVNode(
+									"i",
+									{
+										class: normalizeClass($setup.favorites.selected.value.includes(name) ? "fa-solid fa-square-check" : "fa-regular fa-square"),
+										"aria-hidden": "true"
+									},
+									null,
+									2
+									/* CLASS */
+								), createBaseVNode(
+									"span",
+									null,
+									toDisplayString(name),
+									1
+									/* TEXT */
+								)], 10, _hoisted_8$d),
+								createVNode($setup["UbBadge"], { variant: $setup.favoriteBadge(name).variant }, {
+									default: withCtx(() => [createTextVNode(
+										toDisplayString($setup.favoriteBadge(name).label),
+										1
+										/* TEXT */
+									)]),
+									_: 2
+								}, 1032, ["variant"]),
+								$setup.favoriteNeedsSkillify(name) ? (openBlock(), createBlock($setup["UbButton"], {
+									key: 0,
+									size: "sm",
+									variant: "soft",
+									icon: "fa-solid fa-wand-sparkles",
+									busy: $setup.skillifyingFavorite === name,
+									disabled: $setup.agentControl.busy.value !== null,
+									onClick: ($event) => $setup.onSkillifyFavorite(name)
+								}, {
+									default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
+										"Skill 化",
+										-1
+										/* CACHED */
+									)])]),
+									_: 1
+								}, 8, [
+									"busy",
+									"disabled",
+									"onClick"
+								])) : createCommentVNode("v-if", true),
+								createVNode($setup["UbButton"], {
+									size: "sm",
+									variant: "ghost",
+									icon: "fa-solid fa-xmark",
+									"aria-label": `移出 ${name}`,
+									onClick: ($event) => $setup.favorites.remove(name)
+								}, {
+									default: withCtx(() => [..._cache[11] || (_cache[11] = [createTextVNode(
+										"移出",
+										-1
+										/* CACHED */
+									)])]),
+									_: 1
+								}, 8, ["aria-label", "onClick"])
+							]);
+						}),
+						128
+						/* KEYED_FRAGMENT */
+					))])),
+					createBaseVNode("div", _hoisted_9$a, [createVNode($setup["UbSelect"], {
+						options: $setup.favoriteAddOptions,
+						"model-value": $setup.favoriteToAdd,
+						placeholder: "选择要加入常用的世界书",
+						"aria-label": "加入常用世界书",
+						"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.favoriteToAdd = $event)
+					}, null, 8, ["options", "model-value"]), createVNode($setup["UbButton"], {
+						size: "sm",
+						icon: "fa-solid fa-plus",
+						disabled: !$setup.favoriteToAdd,
+						onClick: $setup.onAddFavorite
+					}, {
+						default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
+							"加入常用",
+							-1
+							/* CACHED */
+						)])]),
+						_: 1
+					}, 8, ["disabled"])]),
+					createBaseVNode("div", _hoisted_10$9, [createBaseVNode("p", _hoisted_11$8, [_cache[13] || (_cache[13] = createTextVNode(
+						" 当前角色卡：",
+						-1
+						/* CACHED */
+					)), createBaseVNode(
+						"strong",
+						null,
+						toDisplayString($setup.favorites.characterName.value || "（未打开单人角色卡）"),
+						1
+						/* TEXT */
+					)]), createVNode($setup["UbButton"], {
+						size: "sm",
+						variant: "primary",
+						icon: "fa-solid fa-link",
+						busy: $setup.favorites.mounting.value,
+						disabled: !$setup.favorites.canMount.value || $setup.favorites.selected.value.length === 0,
+						onClick: $setup.onMountFavorites
+					}, {
+						default: withCtx(() => [createTextVNode(
+							"挂载所选到当前角色卡（" + toDisplayString($setup.favorites.selected.value.length) + "）",
+							1
+							/* TEXT */
+						)]),
+						_: 1
+					}, 8, ["busy", "disabled"])])
+				])]),
 				_: 1
 			}),
 			createVNode($setup["UbSection"], {
@@ -187997,12 +188633,12 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 					"show-skillify-controls": "",
 					"show-agent-takeover-state": "",
 					"show-skill-editor": "",
-					"onUpdate:filter": _cache[2] || (_cache[2] = ($event) => $setup.entryFilter = $event),
-					onSkillifySelectAll: _cache[3] || (_cache[3] = ($event) => $setup.entries.selectAllForSkillify($event)),
-					onSkillifyDeselectAll: _cache[4] || (_cache[4] = ($event) => $setup.entries.deselectAllForSkillify($event)),
+					"onUpdate:filter": _cache[3] || (_cache[3] = ($event) => $setup.entryFilter = $event),
+					onSkillifySelectAll: _cache[4] || (_cache[4] = ($event) => $setup.entries.selectAllForSkillify($event)),
+					onSkillifyDeselectAll: _cache[5] || (_cache[5] = ($event) => $setup.entries.deselectAllForSkillify($event)),
 					onSkillifySelected: $setup.onSkillifySelected,
-					onToggleSkillify: _cache[5] || (_cache[5] = (bookName, uid, checked) => $setup.entries.toggleSkillifyEntry(bookName, uid, checked)),
-					onToggleGroup: _cache[6] || (_cache[6] = ($event) => $setup.entries.toggleGroupExpanded($event)),
+					onToggleSkillify: _cache[6] || (_cache[6] = (bookName, uid, checked) => $setup.entries.toggleSkillifyEntry(bookName, uid, checked)),
+					onToggleGroup: _cache[7] || (_cache[7] = ($event) => $setup.entries.toggleGroupExpanded($event)),
 					onSaveSkill: $setup.onSaveSkill,
 					onDeleteSkill: $setup.onDeleteSkill
 				}, null, 8, [
@@ -188032,7 +188668,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: !$setup.editingEnabled || $setup.disabledSkillCount === 0,
 							onClick: $setup.onEnableDisabledSkills
 						}, {
-							default: withCtx(() => [..._cache[9] || (_cache[9] = [createTextVNode(
+							default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
 								"执行",
 								-1
 								/* CACHED */
@@ -188051,7 +188687,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: !$setup.editingEnabled || $setup.blueSkillCount === 0,
 							onClick: $setup.onConvertBlueToGreen
 						}, {
-							default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
+							default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 								"执行",
 								-1
 								/* CACHED */
@@ -188071,7 +188707,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: !$setup.editingEnabled || $setup.combinedCount === 0,
 							onClick: $setup.onCombined
 						}, {
-							default: withCtx(() => [..._cache[11] || (_cache[11] = [createTextVNode(
+							default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
 								"执行",
 								-1
 								/* CACHED */
@@ -188086,14 +188722,14 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 			createVNode($setup["AgentAdvancedSheet"], {
 				open: $setup.advancedOpen,
 				"agent-control": $setup.agentControl,
-				onClose: _cache[7] || (_cache[7] = ($event) => $setup.advancedOpen = false),
+				onClose: _cache[8] || (_cache[8] = ($event) => $setup.advancedOpen = false),
 				onCurrentWorldbookChanged: $setup.refreshAll
 			}, null, 8, ["open", "agent-control"])
 		]),
 		_: 1
 	});
 }
-var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$x], ["__scopeId", "data-v-702abae8"]]);
+var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$x], ["__scopeId", "data-v-90faf24e"]]);
 
 const apiCopy = {
     panels: {
