@@ -152,6 +152,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
 import {
   processSummaryVectorIndexBeforeGeneration_ACU,
   resetSummaryVectorIndexRuntimeDedupeState_ACU,
+  shouldRestoreFullSummaryIndexAfterSkip_ACU,
 } from '../../../src/service/vector/summary-vector-index-runtime';
 
 
@@ -790,6 +791,34 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU mirror protocol recovery
     h.restoreFullIndex.mockRejectedValue(new Error('lorebook busy'));
     const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'restore-fails', source: 'restore-fail-test' });
     expect(result).toMatchObject({ skipped: true, reason: 'below_min_rows' });
+  });
+
+  it('发送内容为空时：纪要不到门槛才回填，过了门槛保留上一轮交火结果', async () => {
+    h.config = defaultConfig_ACU({ summaryIndexKeywordMinRows: 200 });
+    const below = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: '', source: 'empty-below' });
+    expect(below).toMatchObject({ skipped: true, reason: 'empty_user_input' });
+    expect(h.restoreFullIndex).toHaveBeenCalledTimes(1);
+
+    h.restoreFullIndex.mockClear();
+    h.config = defaultConfig_ACU({ summaryIndexKeywordMinRows: 1 });
+    const above = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: '', source: 'empty-above' });
+    expect(above).toMatchObject({ skipped: true, reason: 'empty_user_input' });
+    expect(h.restoreFullIndex).not.toHaveBeenCalled();
+  });
+
+  it('回填判定：已过门槛才会出现的「没检索到 / 没选上」不回填，结构性跳过照常回填', () => {
+    const above = () => false;
+    const below = () => true;
+    expect(shouldRestoreFullSummaryIndexAfterSkip_ACU('no_candidates', below)).toBe(false);
+    expect(shouldRestoreFullSummaryIndexAfterSkip_ACU('no_selected_rows', below)).toBe(false);
+    expect(shouldRestoreFullSummaryIndexAfterSkip_ACU('deduped', below)).toBe(false);
+    expect(shouldRestoreFullSummaryIndexAfterSkip_ACU('send_cancelled', below)).toBe(false);
+    expect(shouldRestoreFullSummaryIndexAfterSkip_ACU('summary_vector_index_disabled', below)).toBe(false);
+    expect(shouldRestoreFullSummaryIndexAfterSkip_ACU('empty_user_input', above)).toBe(false);
+    expect(shouldRestoreFullSummaryIndexAfterSkip_ACU('empty_user_input', below)).toBe(true);
+    expect(shouldRestoreFullSummaryIndexAfterSkip_ACU('below_min_rows', above)).toBe(true);
+    expect(shouldRestoreFullSummaryIndexAfterSkip_ACU('no_mirror', above)).toBe(true);
+    expect(shouldRestoreFullSummaryIndexAfterSkip_ACU('invalid_config', above)).toBe(true);
   });
 
   it('no_mirror 且存在 legacy 字段时要求确认重建', async () => {

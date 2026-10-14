@@ -92849,7 +92849,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261014-04"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261014-08"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92868,7 +92868,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261014-04";
+        const stamp = "20261014-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -130255,8 +130255,32 @@ async function materializeSummaryVectorMirrorHead_ACU(head, live) {
 }
 // 交火开着时导出不回写纪要索引正文；本轮没接管（门槛未到、镜像缺失、配置无效等）就回填完整正文，
 // 否则剧情推进 $5 和正文读到的一直是条目第一次创建时的旧内容。
-// 去重：同一次发送的前一次触发已处理；作废：这次发送不再继续；全局关闭：导出本身就会刷新正文。
-const SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU = new Set(['deduped', 'send_cancelled', 'summary_vector_index_disabled']);
+// 去重：同一次发送的前一次触发已处理；作废：这次发送不再继续；全局关闭：导出本身就会刷新正文；
+// 没检索到 / 没选上：只在纪要已过门槛时出现，回填会把整份大索引塞进去，保留上一轮交火结果。
+const SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU = new Set([
+    'deduped', 'send_cancelled', 'summary_vector_index_disabled', 'no_candidates', 'no_selected_rows',
+]);
+/** 发送内容为空时还没走到门槛判断：纪要不到门槛才回填，过了门槛同样保留上一轮结果。 */
+function shouldRestoreFullSummaryIndexAfterSkip_ACU(reason, isBelowMinRows) {
+    const key = String(reason || '');
+    if (SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU.has(key))
+        return false;
+    if (key === 'empty_user_input')
+        return isBelowMinRows();
+    return true;
+}
+/** 按实时纪要表判断是否不到召回门槛；读不到时按「已过门槛」处理，保留现有正文。 */
+function isLiveSummaryBelowMinRows_ACU() {
+    try {
+        const liveRows = buildLiveSummaryVectorRows_ACU();
+        if (!liveRows)
+            return false;
+        return liveRows.rows.length < getEffectiveSummaryVectorIndexConfig_ACU().summaryIndexKeywordMinRows;
+    }
+    catch {
+        return false;
+    }
+}
 async function restoreFullSummaryIndexAfterSkip_ACU(options, reason) {
     try {
         const restored = await restoreFullSummaryIndexContent_ACU(() => options.isActive?.() !== false);
@@ -130276,7 +130300,7 @@ async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
         if ((result.success !== true && result.skipped !== true) || result.reason === 'send_cancelled') {
             resetSummaryVectorIndexRuntimeDedupeState_ACU();
         }
-        if (result.skipped === true && !SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU.has(String(result.reason || ''))) {
+        if (result.skipped === true && shouldRestoreFullSummaryIndexAfterSkip_ACU(result.reason, isLiveSummaryBelowMinRows_ACU)) {
             await restoreFullSummaryIndexAfterSkip_ACU(options, result.reason);
         }
         return result;
@@ -153351,7 +153375,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261014-04";
+        const stamp = "20261014-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

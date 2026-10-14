@@ -511,8 +511,30 @@ async function materializeSummaryVectorMirrorHead_ACU(
 
 // 交火开着时导出不回写纪要索引正文；本轮没接管（门槛未到、镜像缺失、配置无效等）就回填完整正文，
 // 否则剧情推进 $5 和正文读到的一直是条目第一次创建时的旧内容。
-// 去重：同一次发送的前一次触发已处理；作废：这次发送不再继续；全局关闭：导出本身就会刷新正文。
-const SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU = new Set(['deduped', 'send_cancelled', 'summary_vector_index_disabled']);
+// 去重：同一次发送的前一次触发已处理；作废：这次发送不再继续；全局关闭：导出本身就会刷新正文；
+// 没检索到 / 没选上：只在纪要已过门槛时出现，回填会把整份大索引塞进去，保留上一轮交火结果。
+const SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU = new Set([
+    'deduped', 'send_cancelled', 'summary_vector_index_disabled', 'no_candidates', 'no_selected_rows',
+]);
+
+/** 发送内容为空时还没走到门槛判断：纪要不到门槛才回填，过了门槛同样保留上一轮结果。 */
+export function shouldRestoreFullSummaryIndexAfterSkip_ACU(reason: string | undefined, isBelowMinRows: () => boolean): boolean {
+    const key = String(reason || '');
+    if (SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU.has(key)) return false;
+    if (key === 'empty_user_input') return isBelowMinRows();
+    return true;
+}
+
+/** 按实时纪要表判断是否不到召回门槛；读不到时按「已过门槛」处理，保留现有正文。 */
+function isLiveSummaryBelowMinRows_ACU(): boolean {
+    try {
+        const liveRows = buildLiveSummaryVectorRows_ACU();
+        if (!liveRows) return false;
+        return liveRows.rows.length < getEffectiveSummaryVectorIndexConfig_ACU().summaryIndexKeywordMinRows;
+    } catch {
+        return false;
+    }
+}
 
 async function restoreFullSummaryIndexAfterSkip_ACU(options: SummaryVectorIndexRuntimeOptions_ACU, reason: string | undefined): Promise<void> {
     try {
@@ -535,7 +557,7 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         if ((result.success !== true && result.skipped !== true) || result.reason === 'send_cancelled') {
             resetSummaryVectorIndexRuntimeDedupeState_ACU();
         }
-        if (result.skipped === true && !SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU.has(String(result.reason || ''))) {
+        if (result.skipped === true && shouldRestoreFullSummaryIndexAfterSkip_ACU(result.reason, isLiveSummaryBelowMinRows_ACU)) {
             await restoreFullSummaryIndexAfterSkip_ACU(options, result.reason);
         }
         return result;
