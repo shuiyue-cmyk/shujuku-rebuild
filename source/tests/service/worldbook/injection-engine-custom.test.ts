@@ -140,7 +140,7 @@ vi.mock('../../../src/service/flight-mode/flight-mode-state', () => ({
   getCurrentFlightModeState_ACU: (...args: any[]) => mockGetCurrentFlightModeState(...args),
 }));
 
-import { updateCustomTableExports_ACU, __resetCustomTableExportStateForTests_ACU } from '../../../src/service/worldbook/injection-engine-custom';
+import { updateCustomTableExports_ACU, restoreFullSummaryIndexContent_ACU, __resetCustomTableExportStateForTests_ACU } from '../../../src/service/worldbook/injection-engine-custom';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -714,6 +714,43 @@ describe('交火纪要索引正文独占', () => {
     expect(deleted).toContain(firstUid);
     expect(readIndex(entries).uid).not.toBe(firstUid);
     expect(readIndex(entries).content).not.toBe('交火筛选正文');
+  });
+
+  it('交火未接管时回填最近一次导出的完整正文：新增纪要不再停在建条目时的旧内容（issue #3）', async () => {
+    useCrossfire();
+    const entries = memoryBook();
+    const oneRow: any = summaryData();
+    oneRow.sheet_chronicle.content = [['row_id', '内容'], ['1', '纪要A']];
+    await updateCustomTableExports_ACU(oneRow);
+    const uid = readIndex(entries).uid;
+    expect(readIndex(entries).content).not.toContain('纪要B');
+    // 新增一行后导出仍保护正文，条目停在只有纪要A的旧内容。
+    await updateCustomTableExports_ACU(summaryData());
+    expect(readIndex(entries).content).not.toContain('纪要B');
+
+    mockSetLorebookEntries.mockClear();
+    await expect(restoreFullSummaryIndexContent_ACU()).resolves.toBe(true);
+    expect(readIndex(entries)).toMatchObject({ uid });
+    expect(readIndex(entries).content).toContain('纪要A');
+    expect(readIndex(entries).content).toContain('纪要B');
+    // 只写正文，不碰 enabled 等属性（0TK 仍控制启用状态）。
+    expect(mockSetLorebookEntries.mock.calls.flatMap(call => call[1] || [])).toEqual([
+      { uid, content: readIndex(entries).content },
+    ]);
+    // 正文已是最新时不重复写。
+    await expect(restoreFullSummaryIndexContent_ACU()).resolves.toBe(false);
+  });
+
+  it('回填不跨聊天、不在发送作废后写入', async () => {
+    useCrossfire();
+    const entries = memoryBook();
+    await updateCustomTableExports_ACU(summaryData());
+    readIndex(entries).content = '旧正文';
+    mockRuntimeScope.chatKey = 'chat-2';
+    await expect(restoreFullSummaryIndexContent_ACU()).resolves.toBe(false);
+    mockRuntimeScope.chatKey = 'chat-1';
+    await expect(restoreFullSummaryIndexContent_ACU(() => false)).resolves.toBe(false);
+    expect(readIndex(entries).content).toBe('旧正文');
   });
 });
 

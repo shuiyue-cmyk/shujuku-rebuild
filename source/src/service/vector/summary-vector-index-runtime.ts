@@ -6,7 +6,7 @@ import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { callAIWithPreset_ACU } from '../ai/api-call';
 import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
 import { globalMeta_ACU } from '../../data/repositories/profile-repo';
-import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from '../worldbook/injection-engine';
+import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU, restoreFullSummaryIndexContent_ACU } from '../worldbook/injection-engine';
 import {
     createLorebookEntries_ACU,
     getLorebookEntries_ACU,
@@ -509,6 +509,20 @@ async function materializeSummaryVectorMirrorHead_ACU(
     return { rows, chunks, incompleteRowIds, contentMismatchedRowIds };
 }
 
+// 交火开着时导出不回写纪要索引正文；本轮没接管（门槛未到、镜像缺失、配置无效等）就回填完整正文，
+// 否则剧情推进 $5 和正文读到的一直是条目第一次创建时的旧内容。
+// 去重：同一次发送的前一次触发已处理；作废：这次发送不再继续；全局关闭：导出本身就会刷新正文。
+const SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU = new Set(['deduped', 'send_cancelled', 'summary_vector_index_disabled']);
+
+async function restoreFullSummaryIndexAfterSkip_ACU(options: SummaryVectorIndexRuntimeOptions_ACU, reason: string | undefined): Promise<void> {
+    try {
+        const restored = await restoreFullSummaryIndexContent_ACU(() => options.isActive?.() !== false);
+        if (restored) logDebug_ACU(`[交火模式纪要索引] 本轮跳过（${reason || 'unknown'}），已回填完整纪要索引。`);
+    } catch (error) {
+        logWarn_ACU('[交火模式纪要索引] 回填完整纪要索引失败:', error instanceof Error ? error.message : String(error));
+    }
+}
+
 // 向量模型上下文较小（如 512 token）时，长消息整段送去会被拒；截短后重试一次。
 const EMBEDDING_QUERY_RETRY_MAX_CHARS_ACU = 300;
 
@@ -520,6 +534,9 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         // 失败或这次发送已作废：放掉 8 秒去重签名，否则马上重发同一句会被当成「已召回过」直接放行
         if ((result.success !== true && result.skipped !== true) || result.reason === 'send_cancelled') {
             resetSummaryVectorIndexRuntimeDedupeState_ACU();
+        }
+        if (result.skipped === true && !SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU.has(String(result.reason || ''))) {
+            await restoreFullSummaryIndexAfterSkip_ACU(options, result.reason);
         }
         return result;
     } catch (error) {

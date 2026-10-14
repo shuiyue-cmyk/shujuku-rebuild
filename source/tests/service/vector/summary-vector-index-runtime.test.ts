@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   mirrorConflict: false,
   rebuild: vi.fn(),
   hasLegacy: false,
+  restoreFullIndex: vi.fn(),
 }));
 
 vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logWarn_ACU: vi.fn(), logError_ACU: vi.fn(), assertSafeHttpEndpoint_ACU: vi.fn() }));
@@ -71,7 +72,11 @@ vi.mock('../../../src/data/gateways/ai-gateway', async (importOriginal) => ({
 vi.mock('../../../src/data/gateways/vector-embedding-gateway', () => ({ createEmbeddings_ACU: (...a: any[]) => h.createEmbeddings(...a) }));
 vi.mock('../../../src/service/settings/settings-readers', () => ({ getCurrentWorldbookConfig_ACU: () => ({ zeroTkOccupyMode: false, summaryVectorIndexModeEnabled: true }) }));
 vi.mock('../../../src/data/repositories/profile-repo', () => ({ globalMeta_ACU: { summaryVectorIndexModeGlobal: true } }));
-vi.mock('../../../src/service/worldbook/injection-engine', () => ({ getInjectionTargetLorebook_ACU: async () => 'book', getIsolationPrefix_ACU: () => '' }));
+vi.mock('../../../src/service/worldbook/injection-engine', () => ({
+  getInjectionTargetLorebook_ACU: async () => 'book',
+  getIsolationPrefix_ACU: () => '',
+  restoreFullSummaryIndexContent_ACU: (...a: any[]) => h.restoreFullIndex(...a),
+}));
 vi.mock('../../../src/service/worldbook/worldbook-service', () => ({
   isWorldbookApiAvailable_ACU: () => true,
   getLorebookEntries_ACU: async () => h.entries,
@@ -232,6 +237,7 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     h.mirrorStale = false;
     h.mirrorConflict = false;
     h.hasLegacy = false;
+    h.restoreFullIndex.mockReset().mockResolvedValue(false);
     h.rebuild.mockResolvedValue({ success: true, skipped: false, indexedRowCount: 1, skippedRowCount: 0, chunkCount: 1, errors: [] });
     vi.stubGlobal('fetch', vi.fn());
     setFixture_ACU();
@@ -744,11 +750,46 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU mirror protocol recovery
     h.mirrorStale = false;
     h.mirrorConflict = false;
     h.hasLegacy = false;
+    h.restoreFullIndex.mockReset().mockResolvedValue(false);
     h.rebuild.mockResolvedValue({ success: true, skipped: false, indexedRowCount: 1, skippedRowCount: 0, chunkCount: 1, errors: [] });
     h.summaryTable = { summaryKey: 'summary-source', table: {} };
     h.preparedRows = [{ rowKey: 'r1', rowId: 'r1', rowOrder: 1, summary: 'summary', chronicleText: '' }];
     h.createEmbeddings.mockResolvedValue([{ index: 0, embedding: [1, 0] }]);
     h.createEntries.mockResolvedValue(undefined);
+  });
+
+  it('纪要行数不到门槛跳过时回填完整纪要索引，而不是留着旧正文（issue #3）', async () => {
+    h.config = defaultConfig_ACU({ summaryIndexKeywordMinRows: 200 });
+    let active = true;
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'below-min', source: 'min-rows-test', isActive: () => active });
+    expect(result).toMatchObject({ success: false, skipped: true, reason: 'below_min_rows' });
+    expect(h.restoreFullIndex).toHaveBeenCalledTimes(1);
+    const isActive = h.restoreFullIndex.mock.calls[0][0];
+    expect(isActive()).toBe(true);
+    active = false;
+    expect(isActive()).toBe(false);
+    expect(h.createEntries).not.toHaveBeenCalled();
+  });
+
+  it('镜像缺失跳过时同样回填；召回成功与去重时不回填', async () => {
+    h.mirrorStatus = 'no_mirror';
+    await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'no-mirror', source: 'no-mirror-test' });
+    expect(h.restoreFullIndex).toHaveBeenCalledTimes(1);
+
+    h.restoreFullIndex.mockClear();
+    h.mirrorStatus = 'ok';
+    const ok = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'recall-ok', source: 'a' });
+    expect(ok.success).toBe(true);
+    const deduped = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'recall-ok', source: 'b' });
+    expect(deduped).toMatchObject({ skipped: true, reason: 'deduped' });
+    expect(h.restoreFullIndex).not.toHaveBeenCalled();
+  });
+
+  it('回填失败只记 warn，不影响这次发送', async () => {
+    h.config = defaultConfig_ACU({ summaryIndexKeywordMinRows: 200 });
+    h.restoreFullIndex.mockRejectedValue(new Error('lorebook busy'));
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'restore-fails', source: 'restore-fail-test' });
+    expect(result).toMatchObject({ skipped: true, reason: 'below_min_rows' });
   });
 
   it('no_mirror 且存在 legacy 字段时要求确认重建', async () => {

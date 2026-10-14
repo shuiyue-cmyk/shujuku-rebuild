@@ -57,4 +57,5 @@ export {
 // ═══ 自定义表格导出 ═══
 export {
     updateCustomTableExports_ACU,
+    restoreFullSummaryIndexContent_ACU,
 } from './injection-engine-custom';

@@ -23,9 +23,35 @@ import { projectFlightModeHiddenChronicleRows_ACU } from '../flight-mode/flight-
 // 仅记录当前运行期成功导出的来源行身份，用于区分真实删除与无数据变化的楼层刷新。
 // 世界书正文仍由交火负责；不同聊天、隔离环境和目标世界书不共享删除基线。
 const summaryIndexSourceRowsByScope_ACU = new Map<string, Set<string>>();
+// 最近一次导出按当前纪要表算出的完整纪要索引正文。交火独占期间导出不回写正文，
+// 交火本轮没有接管（门槛未到、镜像缺失等跳过）时由交火用它回填，避免条目停在旧正文。
+const latestFullSummaryIndexByScope_ACU = new Map<string, string>();
+
+function buildSummaryIndexScope_ACU(lorebookName: string): string {
+    return JSON.stringify([currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU(), lorebookName]);
+}
 
 export function __resetCustomTableExportStateForTests_ACU(): void {
     summaryIndexSourceRowsByScope_ACU.clear();
+    latestFullSummaryIndexByScope_ACU.clear();
+}
+
+/** 交火本轮未接管纪要索引正文时，把最近一次导出算出的完整正文写回；返回是否写入。 */
+export async function restoreFullSummaryIndexContent_ACU(isActive: () => boolean = () => true): Promise<boolean> {
+    if (!isWorldbookApiAvailable_ACU()) return false;
+    const lorebookName = await getInjectionTargetLorebook_ACU();
+    if (!lorebookName) return false;
+    const content = latestFullSummaryIndexByScope_ACU.get(buildSummaryIndexScope_ACU(lorebookName));
+    if (content == null) return false;
+    const comment = `${getIsolationPrefix_ACU()}TavernDB-ACU-CustomExport-纪要索引`;
+    const entries = await getLorebookEntries_ACU(lorebookName);
+    const existing = entries.find((entry: any) => entry?.comment === comment);
+    if (existing?.uid == null || existing.content === content) return false;
+    if (!isActive()) return false;
+    // 只写正文：enabled 仍归 0TK 控制。
+    await setLorebookEntries_ACU(lorebookName, [{ uid: existing.uid, content }]);
+    logDebug_ACU('[CustomExport] 交火本轮未接管，纪要索引已回填为完整正文。');
+    return true;
 }
 
   // [新增] 处理自定义表格导出逻辑
@@ -76,9 +102,7 @@ export function __resetCustomTableExportStateForTests_ACU(): void {
       // [spv3.6.4 后续] 交火正文独占改为来源行身份判定：门槛与召回状态不可靠，
       // 普通刷新（删建同行）不得覆盖交火正文，只有来源行真实减少才重建。
       const summaryIndexComment = `${isoPrefix}TavernDB-ACU-CustomExport-纪要索引`;
-      const summaryIndexScope = JSON.stringify([
-          currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU(), primaryLorebookName,
-      ]);
+      const summaryIndexScope = buildSummaryIndexScope_ACU(primaryLorebookName);
       const summaryIndexSourceRows = new Set<string>();
 
       try {
@@ -133,6 +157,7 @@ export function __resetCustomTableExportStateForTests_ACU(): void {
               // 保存清理后的 knownNames
               if (!isImport) {
                   summaryIndexSourceRowsByScope_ACU.delete(summaryIndexScope);
+                  latestFullSummaryIndexByScope_ACU.delete(summaryIndexScope);
                   settings_ACU.knownCustomEntryNames = knownNames;
                   saveSettings_ACU();
               }
@@ -761,8 +786,10 @@ export function __resetCustomTableExportStateForTests_ACU(): void {
           if (!isImport) {
           if (summaryIndexPlan) {
               summaryIndexSourceRowsByScope_ACU.set(summaryIndexScope, summaryIndexSourceRows);
+              latestFullSummaryIndexByScope_ACU.set(summaryIndexScope, String(summaryIndexPlan.content ?? ''));
           } else {
               summaryIndexSourceRowsByScope_ACU.delete(summaryIndexScope);
+              latestFullSummaryIndexByScope_ACU.delete(summaryIndexScope);
           }
           settings_ACU.knownCustomEntryNames = [...knownNames, ...newGeneratedNames];
           settings_ACU.knownCustomEntryNames = [...new Set(settings_ACU.knownCustomEntryNames)];

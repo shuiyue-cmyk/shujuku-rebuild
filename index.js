@@ -92849,7 +92849,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261013-15"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261014-04"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92868,7 +92868,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261013-15";
+        const stamp = "20261014-04";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -99153,8 +99153,37 @@ async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, i
 // 仅记录当前运行期成功导出的来源行身份，用于区分真实删除与无数据变化的楼层刷新。
 // 世界书正文仍由交火负责；不同聊天、隔离环境和目标世界书不共享删除基线。
 const summaryIndexSourceRowsByScope_ACU = new Map();
+// 最近一次导出按当前纪要表算出的完整纪要索引正文。交火独占期间导出不回写正文，
+// 交火本轮没有接管（门槛未到、镜像缺失等跳过）时由交火用它回填，避免条目停在旧正文。
+const latestFullSummaryIndexByScope_ACU = new Map();
+function buildSummaryIndexScope_ACU(lorebookName) {
+    return JSON.stringify([currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU(), lorebookName]);
+}
 function __resetCustomTableExportStateForTests_ACU() {
     summaryIndexSourceRowsByScope_ACU.clear();
+    latestFullSummaryIndexByScope_ACU.clear();
+}
+/** 交火本轮未接管纪要索引正文时，把最近一次导出算出的完整正文写回；返回是否写入。 */
+async function restoreFullSummaryIndexContent_ACU(isActive = () => true) {
+    if (!isWorldbookApiAvailable_ACU())
+        return false;
+    const lorebookName = await getInjectionTargetLorebook_ACU();
+    if (!lorebookName)
+        return false;
+    const content = latestFullSummaryIndexByScope_ACU.get(buildSummaryIndexScope_ACU(lorebookName));
+    if (content == null)
+        return false;
+    const comment = `${getIsolationPrefix_ACU()}TavernDB-ACU-CustomExport-纪要索引`;
+    const entries = await getLorebookEntries_ACU(lorebookName);
+    const existing = entries.find((entry) => entry?.comment === comment);
+    if (existing?.uid == null || existing.content === content)
+        return false;
+    if (!isActive())
+        return false;
+    // 只写正文：enabled 仍归 0TK 控制。
+    await setLorebookEntries_ACU(lorebookName, [{ uid: existing.uid, content }]);
+    logDebug_ACU('[CustomExport] 交火本轮未接管，纪要索引已回填为完整正文。');
+    return true;
 }
 // [新增] 处理自定义表格导出逻辑
 // [修复] 当 mergedData 为空/null 时，仍需执行"清理旧自定义导出条目"逻辑，
@@ -99205,9 +99234,7 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
     // [spv3.6.4 后续] 交火正文独占改为来源行身份判定：门槛与召回状态不可靠，
     // 普通刷新（删建同行）不得覆盖交火正文，只有来源行真实减少才重建。
     const summaryIndexComment = `${isoPrefix}TavernDB-ACU-CustomExport-纪要索引`;
-    const summaryIndexScope = JSON.stringify([
-        currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU(), primaryLorebookName,
-    ]);
+    const summaryIndexScope = buildSummaryIndexScope_ACU(primaryLorebookName);
     const summaryIndexSourceRows = new Set();
     try {
         const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
@@ -99261,6 +99288,7 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
             // 保存清理后的 knownNames
             if (!isImport) {
                 summaryIndexSourceRowsByScope_ACU.delete(summaryIndexScope);
+                latestFullSummaryIndexByScope_ACU.delete(summaryIndexScope);
                 settings_ACU.knownCustomEntryNames = knownNames;
                 saveSettings_ACU();
             }
@@ -99852,9 +99880,11 @@ async function updateCustomTableExports_ACU(mergedData, isImport = false, target
         if (!isImport) {
             if (summaryIndexPlan) {
                 summaryIndexSourceRowsByScope_ACU.set(summaryIndexScope, summaryIndexSourceRows);
+                latestFullSummaryIndexByScope_ACU.set(summaryIndexScope, String(summaryIndexPlan.content ?? ''));
             }
             else {
                 summaryIndexSourceRowsByScope_ACU.delete(summaryIndexScope);
+                latestFullSummaryIndexByScope_ACU.delete(summaryIndexScope);
             }
             settings_ACU.knownCustomEntryNames = [...knownNames, ...newGeneratedNames];
             settings_ACU.knownCustomEntryNames = [...new Set(settings_ACU.knownCustomEntryNames)];
@@ -130223,6 +130253,20 @@ async function materializeSummaryVectorMirrorHead_ACU(head, live) {
     }
     return { rows, chunks, incompleteRowIds, contentMismatchedRowIds };
 }
+// 交火开着时导出不回写纪要索引正文；本轮没接管（门槛未到、镜像缺失、配置无效等）就回填完整正文，
+// 否则剧情推进 $5 和正文读到的一直是条目第一次创建时的旧内容。
+// 去重：同一次发送的前一次触发已处理；作废：这次发送不再继续；全局关闭：导出本身就会刷新正文。
+const SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU = new Set(['deduped', 'send_cancelled', 'summary_vector_index_disabled']);
+async function restoreFullSummaryIndexAfterSkip_ACU(options, reason) {
+    try {
+        const restored = await restoreFullSummaryIndexContent_ACU(() => options.isActive?.() !== false);
+        if (restored)
+            logDebug_ACU(`[交火模式纪要索引] 本轮跳过（${reason || 'unknown'}），已回填完整纪要索引。`);
+    }
+    catch (error) {
+        logWarn_ACU('[交火模式纪要索引] 回填完整纪要索引失败:', error instanceof Error ? error.message : String(error));
+    }
+}
 // 向量模型上下文较小（如 512 token）时，长消息整段送去会被拒；截短后重试一次。
 const EMBEDDING_QUERY_RETRY_MAX_CHARS_ACU = 300;
 async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
@@ -130231,6 +130275,9 @@ async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
         // 失败或这次发送已作废：放掉 8 秒去重签名，否则马上重发同一句会被当成「已召回过」直接放行
         if ((result.success !== true && result.skipped !== true) || result.reason === 'send_cancelled') {
             resetSummaryVectorIndexRuntimeDedupeState_ACU();
+        }
+        if (result.skipped === true && !SKIPS_KEEPING_SUMMARY_INDEX_CONTENT_ACU.has(String(result.reason || ''))) {
+            await restoreFullSummaryIndexAfterSkip_ACU(options, result.reason);
         }
         return result;
     }
@@ -153304,7 +153351,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261013-15";
+        const stamp = "20261014-04";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
