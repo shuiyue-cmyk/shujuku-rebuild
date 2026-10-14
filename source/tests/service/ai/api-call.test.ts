@@ -458,6 +458,46 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(String(notGo.custom_include_headers)).not.toMatch(/x-opencode-session/i);
   });
 
+  it('Gemini 3.6+ / 4.x（含中转前缀别名）走 Gemini 协议时，结尾的 assistant 预填改为 user，其余消息不动', () => {
+    const msgs = [
+      { role: 'system', content: 's' },
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'u2' },
+      { role: 'assistant', content: '<thinking>' },
+    ];
+    const roles = (model: string, format = 'gemini_generate_content') => buildCustomApiRequestBody_ACU(
+      msgs, { url: 'https://opencode.ai/inference/go/v1', model, apiKey: 'k', customApiFormat: format as any },
+    ).messages.map((m: any) => m.role);
+    expect(roles('gemini-4-argon-contributor')).toEqual(['system', 'user', 'assistant', 'user', 'user']);
+    expect(roles('relay/gemini-3.6-flash')).toEqual(['system', 'user', 'assistant', 'user', 'user']);
+    expect(roles('gemini-3.5-flash-lite')).toEqual(['system', 'user', 'assistant', 'user', 'user']);
+    // 仍支持预填的旧模型、非 Gemini 协议：原样保留
+    expect(roles('gemini-3.5-flash')).toEqual(['system', 'user', 'assistant', 'user', 'assistant']);
+    expect(roles('gemini-2.5-pro')).toEqual(['system', 'user', 'assistant', 'user', 'assistant']);
+    expect(roles('gemini-4-argon-contributor', 'openai_compat')).toEqual(['system', 'user', 'assistant', 'user', 'assistant']);
+    const body = buildCustomApiRequestBody_ACU(msgs, { url: 'https://x.test/v1', model: 'gemini-4-argon', apiKey: 'k', customApiFormat: 'gemini_generate_content' as any });
+    expect(body.messages[4]).toEqual({ role: 'user', content: '<thinking>' });
+  });
+
+  it('Gemini 4 Argon 走 Gemini 协议时思考强度收敛到它支持的 low/medium/high；ultra 在 Gemini 协议下按 max 发', () => {
+    const effort = (reasoningEffort: string, model = 'gemini-4-argon-contributor', format = 'gemini_generate_content') => buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 't' }],
+      { url: 'https://x.test/v1', model, apiKey: 'k', customApiFormat: format as any, reasoningEffort },
+    ).reasoning_effort;
+    expect(effort('minimal')).toBe('low');
+    expect(effort('low')).toBe('low');
+    expect(effort('medium')).toBe('medium');
+    expect(effort('high')).toBe('high');
+    expect(effort('xhigh')).toBe('high');
+    expect(effort('max')).toBe('high');
+    expect(effort('ultra')).toBe('high');
+    expect(effort('ultra', 'gemini-2.5-pro')).toBe('max');
+    expect(effort('minimal', 'gemini-2.5-pro')).toBe('minimal');
+    expect(effort('ultra', 'gemini-4-argon-contributor', 'openai_compat')).toBe('ultra');
+    expect(effort('minimal', 'gemini-4-argon-contributor', 'openai_compat')).toBe('minimal');
+  });
+
   it('用户已显式写 x-opencode-session 时不覆盖', () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],

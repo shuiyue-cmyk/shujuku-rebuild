@@ -330,6 +330,45 @@ function isValidNativeTools_ACU(tools: unknown): tools is unknown[] {
       && ((item as Record<string, any>).function.name as string).length > 0);
 }
 
+/**
+ * 请求模型名里的 Gemini 版本，与 TT 同口径：取第一个 `gemini-<数字>` 之后的 `主[.次]-名称`，
+ * 中转前缀别名（如 relay/gemini-4-argon、gemini-4-argon-contributor）同样识别。
+ */
+function parseGeminiModel_ACU(model: unknown): { version: [number, number]; name: string } | null {
+  const text = String(model || '').trim().toLowerCase();
+  const match = text.match(/gemini-(\d+)(?:\.(\d+))?-([^/\s]+)/);
+  if (!match) return null;
+  return { version: [Number(match[1]), Number(match[2] || 0)], name: match[3] };
+}
+
+function isGeminiFamily_ACU(gemini: { name: string }, family: string): boolean {
+  return gemini.name === family || gemini.name.startsWith(`${family}-`);
+}
+
+/**
+ * Gemini 3.6+、3.5 Flash-Lite 及之后的模型拒收以模型消息结尾的请求（实测 Gemini 4 Argon 回
+ * 400「Requests ending with a model turn are not supported」）。TT 只在它自带的 Google 通道里
+ * 把结尾预填改成 user，「自定义」通道（本库唯一通道）main/dev 都不改，所以在这里改。
+ */
+function geminiRejectsTrailingModelTurn_ACU(gemini: { version: [number, number]; name: string }): boolean {
+  const [major, minor] = gemini.version;
+  return major > 3 || (major === 3 && minor >= 6) || (major === 3 && minor === 5 && isGeminiFamily_ACU(gemini, 'flash-lite'));
+}
+
+/**
+ * Gemini 协议下的思考强度：Argon 只收 low/medium/high（实测 minimal、xhigh、max 均 400），
+ * TT main 认不出 Argon 会原样透传，按 TT dev 的同一映射先收敛；ultra 不是 Gemini 档位，
+ * TT 对已识别的 Gemini 模型直接报错，按 max 发。
+ */
+function adaptGeminiReasoningEffort_ACU(effort: string, gemini: { version: [number, number]; name: string } | null): string {
+  if (gemini && gemini.version[0] === 4 && isGeminiFamily_ACU(gemini, 'argon')) {
+    if (effort === 'minimal') return 'low';
+    if (effort === 'xhigh' || effort === 'max' || effort === 'ultra') return 'high';
+    return effort;
+  }
+  return effort === 'ultra' ? 'max' : effort;
+}
+
 export function buildCustomApiRequestBody_ACU(
   messages: any[],
   effectiveApiConfig: any,
@@ -399,6 +438,10 @@ export function buildCustomApiRequestBody_ACU(
   const promptPostProcessing_ACU = normalizePromptPostProcessing_ACU(effectiveApiConfig.promptPostProcessing);
 
   const effectiveMessages_ACU = Array.isArray(messages) ? [...messages] : messages;
+  const customApiFormat_ACU = (['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions', 'gemini_generate_content'] as const).includes(effectiveApiConfig.customApiFormat as any)
+    ? effectiveApiConfig.customApiFormat
+    : 'openai_compat';
+  const geminiModel_ACU = customApiFormat_ACU === 'gemini_generate_content' ? parseGeminiModel_ACU(model) : null;
 
   const body: Record<string, any> = {
     // 统一将 messages 的 role 归一为小写（system / user / assistant）。
@@ -426,7 +469,13 @@ export function buildCustomApiRequestBody_ACU(
                 content = `助手：\n${typeof content === 'string' ? content : String(content ?? '')}`;
               }
               return { ...m, role, ...(content !== undefined ? { content } : {}) };
-          })
+          }).map((m, index, all) => (
+              // 只改结尾的纯文本预填；工具调用等带结构的消息保留原角色（与 TT 同口径）
+              geminiModel_ACU && geminiRejectsTrailingModelTurn_ACU(geminiModel_ACU)
+                && index === all.length - 1 && m?.role === 'assistant' && typeof m.content === 'string' && !m.tool_calls
+                ? { ...m, role: 'user' }
+                : m
+          ))
         : effectiveMessages_ACU,
     model,
     max_tokens: maxTokens,
@@ -446,9 +495,7 @@ export function buildCustomApiRequestBody_ACU(
     // openai_responses→/responses、claude_messages→/messages、gemini_interactions→/interactions；
     // 非流式响应由 TT 归一化为 OpenAI 形态，流式 Claude 为原样 Anthropic SSE（解析见 prompt-api-call）。
     // 白名单兜底：调用点可能传未归一化的 config，非法值回退 openai_compat。
-    custom_api_format: (['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions', 'gemini_generate_content'] as const).includes(effectiveApiConfig.customApiFormat as any)
-      ? effectiveApiConfig.customApiFormat
-      : 'openai_compat',
+    custom_api_format: customApiFormat_ACU,
     group_names: [],
     include_reasoning: false,
     // 思考强度（预设级优先）：minimal/low/medium/high/xhigh/max/ultra 原样透传；'false' 传布尔 false 关闭思考；
@@ -457,7 +504,8 @@ export function buildCustomApiRequestBody_ACU(
       const raw = String(effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium').trim().toLowerCase();
       if (raw === 'auto') return {};
       if (raw === 'false') return { reasoning_effort: false };
-      return { reasoning_effort: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(raw) ? raw : 'medium' };
+      const effort = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(raw) ? raw : 'medium';
+      return { reasoning_effort: customApiFormat_ACU === 'gemini_generate_content' ? adaptGeminiReasoningEffort_ACU(effort, geminiModel_ACU) : effort };
     })()),
     enable_web_search: false,
     request_images: false,
