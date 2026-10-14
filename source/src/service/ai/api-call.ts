@@ -14,7 +14,8 @@ import { isDebugLogEnabled } from '../../shared/log-buffer';
 /**
  * OpenCode Go 会话头（x-opencode-session）：Go 官方要求所有请求携带该头做提示缓存优化，
  * 缺失的请求会被拒（2026-09-03 官方公告，09/06 起生效）。仅当目标端点是 Go 专属路径
- * （opencode.ai 主机 + /zen/go/ 路径前缀，见官方 Endpoints 表）时附加，其他端点
+ * （opencode.ai 主机 + /zen/go/ 或 /inference/go/ 路径前缀，见官方 Endpoints 表；2026-10 起官方表
+ * 改列 /inference/go/，Gemini 4 Argon 只在这条路径上）时附加，其他端点
  * （含 Zen 余额直连等非 Go 路径、其他服务商）一律不受影响；用户已在附加请求头里
  * 显式写了该头则尊重用户值。
  * 会话 id 按「端点 + 调用方命名空间 + 模型」稳定（进程内备忘，同端点同命名空间同会话
@@ -29,7 +30,7 @@ export function isOpencodeGoEndpoint_ACU(url: unknown): boolean {
         const parsed = new URL(String(url || ''));
         const host = parsed.hostname.toLowerCase();
         if (host !== 'opencode.ai' && !host.endsWith('.opencode.ai')) return false;
-        return /\/zen\/go(\/|$)/.test(parsed.pathname);
+        return /\/(?:zen|inference)\/go(\/|$)/.test(parsed.pathname);
     } catch {
         return false;
     }

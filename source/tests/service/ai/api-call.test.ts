@@ -444,6 +444,20 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(String(body.custom_include_headers)).not.toMatch(/x-opencode-session/i);
   });
 
+  it('Go 新地址 /inference/go/（Gemini 4 Argon 只在这条路径上）同样补会话头', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://opencode.ai/inference/go/v1', model: 'gemini-4-argon-contributor', apiKey: 'sk-go', customApiFormat: 'gemini_generate_content' as any },
+    );
+    expect(String(body.custom_include_headers)).toMatch(/^x-opencode-session: [0-9a-f-]{36}$/im);
+    expect(body.custom_api_format).toBe('gemini_generate_content');
+    const notGo = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://opencode.ai/inference/v1', model: 'm', apiKey: 'sk-x' },
+    );
+    expect(String(notGo.custom_include_headers)).not.toMatch(/x-opencode-session/i);
+  });
+
   it('用户已显式写 x-opencode-session 时不覆盖', () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],

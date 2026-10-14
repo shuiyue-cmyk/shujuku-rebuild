@@ -86702,7 +86702,8 @@ function saveCurrentConfigAsPreset_ACU(name) {
 /**
  * OpenCode Go 会话头（x-opencode-session）：Go 官方要求所有请求携带该头做提示缓存优化，
  * 缺失的请求会被拒（2026-09-03 官方公告，09/06 起生效）。仅当目标端点是 Go 专属路径
- * （opencode.ai 主机 + /zen/go/ 路径前缀，见官方 Endpoints 表）时附加，其他端点
+ * （opencode.ai 主机 + /zen/go/ 或 /inference/go/ 路径前缀，见官方 Endpoints 表；2026-10 起官方表
+ * 改列 /inference/go/，Gemini 4 Argon 只在这条路径上）时附加，其他端点
  * （含 Zen 余额直连等非 Go 路径、其他服务商）一律不受影响；用户已在附加请求头里
  * 显式写了该头则尊重用户值。
  * 会话 id 按「端点 + 调用方命名空间 + 模型」稳定（进程内备忘，同端点同命名空间同会话
@@ -86717,7 +86718,7 @@ function isOpencodeGoEndpoint_ACU(url) {
         const host = parsed.hostname.toLowerCase();
         if (host !== 'opencode.ai' && !host.endsWith('.opencode.ai'))
             return false;
-        return /\/zen\/go(\/|$)/.test(parsed.pathname);
+        return /\/(?:zen|inference)\/go(\/|$)/.test(parsed.pathname);
     }
     catch {
         return false;
@@ -92849,7 +92850,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261014-08"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261014-09"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -92868,7 +92869,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261014-08";
+        const stamp = "20261014-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -153375,7 +153376,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261014-08";
+        const stamp = "20261014-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
