@@ -61,6 +61,30 @@
       <p class="ub-agent__current">当前范围：<strong>{{ currentScopeLabel }}</strong></p>
     </UbSection>
 
+    <UbSection id="agent-entries" title="条目与 Skill" description="勾选「Skill 化」后点「对所选 Skill 化」；也可逐条手写 Skill 描述与触发时机。" icon="fa-solid fa-list-check" padded>
+      <WorldbookEntries
+        id-prefix="agent"
+        :groups="entries.groups.value"
+        :filter="entryFilter"
+        :loading="entries.status.value === 'loading'"
+        :status="entries.status.value"
+        :error="entries.error.value"
+        :empty-text="entryEmptyText"
+        :show-entry-toggle="false"
+        show-skillify-controls
+        show-agent-takeover-state
+        show-skill-editor
+        @update:filter="entryFilter = $event"
+        @skillify-select-all="entries.selectAllForSkillify($event)"
+        @skillify-deselect-all="entries.deselectAllForSkillify($event)"
+        @skillify-selected="onSkillifySelected"
+        @toggle-skillify="(bookName, uid, checked) => entries.toggleSkillifyEntry(bookName, uid, checked)"
+        @toggle-group="entries.toggleGroupExpanded($event)"
+        @save-skill="onSaveSkill"
+        @delete-skill="onDeleteSkill"
+      />
+    </UbSection>
+
     <UbSection
       id="agent-favorites"
       title="常用世界书"
@@ -122,30 +146,6 @@
           >挂载所选到当前角色卡（{{ favorites.selected.value.length }}）</UbButton>
         </div>
       </div>
-    </UbSection>
-
-    <UbSection id="agent-entries" title="条目与 Skill" description="勾选「Skill 化」后点「对所选 Skill 化」；也可逐条手写 Skill 描述与触发时机。" icon="fa-solid fa-list-check" padded>
-      <WorldbookEntries
-        id-prefix="agent"
-        :groups="entries.groups.value"
-        :filter="entryFilter"
-        :loading="entries.status.value === 'loading'"
-        :status="entries.status.value"
-        :error="entries.error.value"
-        :empty-text="entryEmptyText"
-        :show-entry-toggle="false"
-        show-skillify-controls
-        show-agent-takeover-state
-        show-skill-editor
-        @update:filter="entryFilter = $event"
-        @skillify-select-all="entries.selectAllForSkillify($event)"
-        @skillify-deselect-all="entries.deselectAllForSkillify($event)"
-        @skillify-selected="onSkillifySelected"
-        @toggle-skillify="(bookName, uid, checked) => entries.toggleSkillifyEntry(bookName, uid, checked)"
-        @toggle-group="entries.toggleGroupExpanded($event)"
-        @save-skill="onSaveSkill"
-        @delete-skill="onDeleteSkill"
-      />
     </UbSection>
 
     <UbSection
@@ -227,8 +227,8 @@ const entryEmptyText = ref('当前 Agent 世界书范围内无可 Skill 化的�
 const sections = [
   { id: 'agent-control', label: '总控' },
   { id: 'agent-scope', label: '范围' },
-  { id: 'agent-favorites', label: '常用世界书' },
   { id: 'agent-entries', label: '条目与 Skill' },
+  { id: 'agent-favorites', label: '常用世界书' },
   { id: 'agent-editing', label: '世界书编辑' },
 ];
 

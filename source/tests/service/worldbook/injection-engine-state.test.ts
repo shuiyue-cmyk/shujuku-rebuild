@@ -24,6 +24,8 @@ const {
   mockListLorebooks,
   mockResolveLorebookNameFromList,
   mockResetPlotAgentWorldbookSessionSnapshot,
+  mockReleaseGreenlightsForChatSwitch,
+  mockSetPendingFinalGenerationGreenlights,
 } = vi.hoisted(() => ({
   mockSettings: {
     dataIsolationEnabled: false,
@@ -90,6 +92,8 @@ const {
     return matches.length === 1 ? String(matches[0]) : null;
   }),
   mockResetPlotAgentWorldbookSessionSnapshot: vi.fn(),
+  mockReleaseGreenlightsForChatSwitch: vi.fn(async () => undefined),
+  mockSetPendingFinalGenerationGreenlights: vi.fn(),
 }));
 
 vi.mock('../../../src/service/settings/settings-readers', () => ({
@@ -111,6 +115,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   _set_currentJsonTableData_ACU: mockSetCurrentJsonTableData,
   _set_independentTableStates_ACU: mockSetIndependentTableStates,
   _set_lastTotalAiMessages_ACU: mockSetLastTotalAiMessages,
+  _set_pendingFinalGenerationGreenlights_ACU: mockSetPendingFinalGenerationGreenlights,
 }));
 
 vi.mock('../../../src/data/gateways/worldbook-gateway', () => ({
@@ -166,6 +171,7 @@ vi.mock('../../../src/service/table/table-write-transaction', () => ({
 
 vi.mock('../../../src/service/agent/agent-worldbook-takeover', () => ({
   resetPlotAgentWorldbookSessionSnapshot_ACU: mockResetPlotAgentWorldbookSessionSnapshot,
+  releaseFinalGenerationGreenlightsForChatSwitch_ACU: mockReleaseGreenlightsForChatSwitch,
 }));
 
 import {
@@ -295,6 +301,35 @@ describe('resetScriptStateForNewChat_ACU', () => {
     await resetScriptStateForNewChat_ACU('null');
     expect(mockSetCurrentChatFileIdentifier).toHaveBeenCalledWith('');
     expect(mockSetCurrentJsonTableData).toHaveBeenCalledWith(null);
+  });
+
+  it('切到另一个聊天：先收回上一聊天的正文绿灯（在丢弃内存快照之前取快照），并清空放行名单', async () => {
+    mockCurrentChatFileIdentifier.value = 'old-chat';
+    await resetScriptStateForNewChat_ACU('new-chat', { reason: 'chat_changed' });
+
+    expect(mockReleaseGreenlightsForChatSwitch).toHaveBeenCalledWith({ includeCurrentScope: true });
+    expect(mockReleaseGreenlightsForChatSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+      mockResetPlotAgentWorldbookSessionSnapshot.mock.invocationCallOrder[0],
+    );
+    expect(mockSetPendingFinalGenerationGreenlights).toHaveBeenCalledWith([]);
+  });
+
+  it('同一聊天重复 CHAT_CHANGED、启动恢复：不收回绿灯（保留本聊天上一轮的放行，供重新生成使用）', async () => {
+    mockCurrentChatFileIdentifier.value = 'same-chat';
+    await resetScriptStateForNewChat_ACU('same-chat', { reason: 'chat_changed' });
+    await resetScriptStateForNewChat_ACU('other-chat', { reason: 'startup_restore' });
+
+    expect(mockReleaseGreenlightsForChatSwitch).not.toHaveBeenCalled();
+  });
+
+  it('删聊天后没有活动聊天：只按切换前的快照收回，并清空放行名单', async () => {
+    await resetScriptStateForNewChat_ACU('null');
+
+    expect(mockReleaseGreenlightsForChatSwitch).toHaveBeenCalledWith({ includeCurrentScope: false });
+    expect(mockReleaseGreenlightsForChatSwitch.mock.invocationCallOrder[0]).toBeLessThan(
+      mockResetPlotAgentWorldbookSessionSnapshot.mock.invocationCallOrder[0],
+    );
+    expect(mockSetPendingFinalGenerationGreenlights).toHaveBeenCalledWith([]);
   });
 });
 

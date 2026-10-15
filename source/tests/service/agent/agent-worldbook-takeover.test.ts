@@ -111,6 +111,7 @@ import {
   readFinalGenerationGreenlights_ACU,
   resolvePreTakeoverWorldbookSnapshot_ACU,
   refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU,
+  releaseFinalGenerationGreenlightsForChatSwitch_ACU,
   resetPlotAgentWorldbookSessionSnapshot_ACU,
   restoreWorldbookGreenlights_ACU,
   setPlotAgentWorldbookSnapshot_ACU,
@@ -179,6 +180,54 @@ describe('agent worldbook session snapshot reset', () => {
     expect(getPlotAgentWorldbookSnapshot_ACU()).toEqual({ active: false, selectionSignature: '', createdAt: 0, books: {} });
     expect(mockWriteAgentWorldbookState).not.toHaveBeenCalled();
     expect(mockDeleteAgentWorldbookState).not.toHaveBeenCalled();
+  });
+});
+
+describe('切换聊天时收回上一聊天的正文绿灯', () => {
+  async function greenlightInBookA() {
+    mockEntriesByBook.set('角色A世界书', [
+      { uid: 1, enabled: true, keys: ['钥匙A'], type: 'selective', comment: skillComment_ACU, content: '内容A' },
+      { uid: 2, enabled: true, keys: ['钥匙B'], type: 'selective', comment: skillCommentB_ACU, content: '内容B' },
+    ]);
+    await takeoverWorldbookGreenlights_ACU();
+    await writeFinalGenerationGreenlights_ACU([{ bookName: '角色A世界书', uid: 1, reason: '上一聊天正文需要' }]);
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: true, type: 'constant' });
+  }
+
+  it('同一角色卡新开聊天：上一聊天放行的条目关回去，关键词不动，不碰接管账本', async () => {
+    await greenlightInBookA();
+
+    const release = releaseFinalGenerationGreenlightsForChatSwitch_ACU({ includeCurrentScope: true });
+    resetPlotAgentWorldbookSessionSnapshot_ACU();
+    await release;
+
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, keys: ['钥匙A'] });
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 2)).toMatchObject({ enabled: false });
+    expect(mockDeleteAgentWorldbookState).not.toHaveBeenCalled();
+  });
+
+  it('换到另一张角色卡：按切换前的快照收回上一张卡世界书里的绿灯', async () => {
+    await greenlightInBookA();
+    mockResolveBookNames.mockResolvedValue(['角色B世界书']);
+    mockEntriesByBook.set('角色B世界书', []);
+
+    const release = releaseFinalGenerationGreenlightsForChatSwitch_ACU({ includeCurrentScope: true });
+    resetPlotAgentWorldbookSessionSnapshot_ACU();
+    await release;
+
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, keys: ['钥匙A'] });
+  });
+
+  it('页面刷新后内存快照为空时，按当前聊天作用域收回；不含当前作用域时什么都不写', async () => {
+    await greenlightInBookA();
+    resetPlotAgentWorldbookSessionSnapshot_ACU();
+    mockSetLorebookEntries.mockClear();
+
+    await releaseFinalGenerationGreenlightsForChatSwitch_ACU({ includeCurrentScope: false });
+    expect(mockSetLorebookEntries).not.toHaveBeenCalled();
+
+    await releaseFinalGenerationGreenlightsForChatSwitch_ACU({ includeCurrentScope: true });
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false });
   });
 });
 

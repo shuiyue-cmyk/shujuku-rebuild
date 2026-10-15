@@ -56,6 +56,7 @@ import {
   loadSettings_ACU
 } from '../../service/settings/settings-service';
 import {
+  releaseAgentGreenlightsOfPreviousChat_ACU,
   resetScriptStateForNewChat_ACU
 } from '../../service/worldbook/injection-engine';
 import {
@@ -300,6 +301,7 @@ function clearDerivedRuntimeState_ACU(): void {
 }
 
 function clearRuntimeForNoActiveChat_ACU(chatFileName: unknown): void {
+  releaseAgentGreenlightsOfPreviousChat_ACU(false);
   resetPlotAgentWorldbookSessionSnapshot_ACU();
   clearDerivedRuntimeState_ACU();
   _set_currentChatFileIdentifier_ACU('');

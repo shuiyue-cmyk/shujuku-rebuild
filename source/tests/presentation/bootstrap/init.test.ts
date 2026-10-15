@@ -37,7 +37,7 @@ const m = vi.hoisted(() => ({
     eventSource: { on: vi.fn(), makeFirst: vi.fn(), makeLast: vi.fn(), emit: vi.fn() },
   } as any,
   gate: { lastUserMessageId: 7 as any, lastUserMessageText: 'stale', lastUserMessageAt: 1, lastUserSendIntentAt: 2, lastGeneration: { stale: true } as any, generationSeq: 0, activeGenerations: [] as any[] },
-  resetTakeover: vi.fn(), dispose: vi.fn(), setData: vi.fn(), setTables: vi.fn(), setMessages: vi.fn(), setTotal: vi.fn(), setChat: vi.fn(),
+  resetTakeover: vi.fn(), releaseGreenlights: vi.fn(), dispose: vi.fn(), setData: vi.fn(), setTables: vi.fn(), setMessages: vi.fn(), setTotal: vi.fn(), setChat: vi.fn(),
   setChatMutationTimer: vi.fn(),
   notify: vi.fn(), resetScript: vi.fn(), loadPreset: vi.fn(), loadMessages: vi.fn(), refresh: vi.fn(),
   preload: vi.fn(), shouldRebuild: vi.fn(), rebuild: vi.fn(), restoreFlush: vi.fn(),
@@ -93,7 +93,7 @@ vi.mock('../../../src/service/runtime/plot-runtime/plot-runtime-scope', () => ({
 }));
 
 vi.mock('../../../src/service/settings/settings-service', () => ({ applyTemplateScopeForCurrentChat_ACU: vi.fn(), loadSettings_ACU: vi.fn(), isSettingsStorageReadyForSave_ACU: vi.fn(() => true) }));
-vi.mock('../../../src/service/worldbook/injection-engine', () => ({ resetScriptStateForNewChat_ACU: m.resetScript }));
+vi.mock('../../../src/service/worldbook/injection-engine', () => ({ resetScriptStateForNewChat_ACU: m.resetScript, releaseAgentGreenlightsOfPreviousChat_ACU: m.releaseGreenlights }));
 // 续写宿主生成桥注册表：默认无注册实例（get 返回 undefined，init.ts 的 ?. 全部短路），
 // 需要观测事件分类的用例把 m.continuationBridge 换成带 spy 的对象即可。
 // register 必须返回可用的注销闭包——continuation-runtime 创建真实桥时会拿它做 dispose。
@@ -211,6 +211,9 @@ describe('mainInitialize_ACU CHAT_CHANGED 无活动聊天早退', () => {
     await m.chatChanged!('');
 
     expect(m.resetTakeover).toHaveBeenCalledOnce();
+    // 删聊天后没有活动聊天：先按切换前的快照收回上一聊天的正文绿灯，再丢弃内存快照
+    expect(m.releaseGreenlights).toHaveBeenCalledWith(false);
+    expect(m.releaseGreenlights.mock.invocationCallOrder[0]).toBeLessThan(m.resetTakeover.mock.invocationCallOrder[0]);
     expect(m.dispose).toHaveBeenCalledOnce();
     expect(m.setData).toHaveBeenCalledWith(null);
     expect(m.setTables).toHaveBeenCalledWith({});

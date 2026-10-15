@@ -1214,6 +1214,33 @@ async function clearFinalGenerationGreenlightsExclusive_ACU(
   };
 }
 
+/**
+ * 切换聊天时收回上一聊天的正文绿灯。绿灯直接写在世界书条目上（开启 + 常驻），世界书又是所有聊天
+ * 共用的，平时要到下一轮剧情推进开头才收回，于是删聊天 / 新开聊天后新聊天会一直显示并沿用上一聊天
+ * 的开关。须在 resetPlotAgentWorldbookSessionSnapshot_ACU 之前调用：同步取走切换前的内存快照
+ * （换了角色卡时那批书不在新作用域里），入队后先按它收回，再按当前聊天的作用域收回一遍
+ * （页面刷新后内存快照为空的情况）。只关亮着的绿灯，不动接管账本；失败只告警，下一轮剧情推进开头还会再清。
+ */
+export function releaseFinalGenerationGreenlightsForChatSwitch_ACU(options: { includeCurrentScope: boolean }): Promise<void> {
+  const previousUidSetByBook = buildSnapshotUidSetByBook_ACU(getPlotAgentWorldbookSnapshot_ACU());
+  return runExclusiveAgentWorldbookOperation_ACU(async () => {
+    if (previousUidSetByBook.size > 0) {
+      try {
+        await patchSnapshotEntries_ACU(previousUidSetByBook, (_bookName, entry) => (
+          isFinalGenerationBlueLightEntry_ACU(entry) ? { uid: entry.uid, enabled: false } : null
+        ));
+      } catch (error) {
+        logWarn_ACU('[Agent世界书] 切换聊天时收回上一聊天的正文绿灯失败，下一轮剧情推进开头会再清一次。', error);
+      }
+    }
+    if (!options.includeCurrentScope) return;
+    const result = await clearFinalGenerationGreenlightsExclusive_ACU();
+    if (result.status === 'failed') {
+      logWarn_ACU('[Agent世界书] 切换聊天时清理当前聊天的正文绿灯失败，下一轮剧情推进开头会再清一次。', result.error);
+    }
+  });
+}
+
 export function takeoverWorldbookGreenlights_ACU(): Promise<AgentWorldbookTakeoverResult_ACU> {
   return runExclusiveAgentWorldbookOperation_ACU(() => takeoverWorldbookGreenlightsExclusive_ACU());
 }

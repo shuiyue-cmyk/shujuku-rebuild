@@ -18,7 +18,8 @@ import {
   _set_allChatMessages_ACU,
   _set_currentJsonTableData_ACU,
   _set_independentTableStates_ACU,
-  _set_lastTotalAiMessages_ACU
+  _set_lastTotalAiMessages_ACU,
+  _set_pendingFinalGenerationGreenlights_ACU
 } from '../runtime/state-manager';
 import {
   getLorebookEntries_ACU,
@@ -63,8 +64,20 @@ import {
   runTableWriteTransaction_ACU
 } from '../table/table-write-transaction';
 import {
+  releaseFinalGenerationGreenlightsForChatSwitch_ACU,
   resetPlotAgentWorldbookSessionSnapshot_ACU
 } from '../agent/agent-worldbook-takeover';
+
+  /**
+   * 离开当前聊天时收回它的 Agent 正文绿灯（世界书条目上的开关 + 内存放行名单），
+   * 否则新聊天会沿用上一聊天最后一轮的开关。须在 resetPlotAgentWorldbookSessionSnapshot_ACU 之前调用。
+   */
+  export function releaseAgentGreenlightsOfPreviousChat_ACU(includeCurrentScope: boolean): void {
+    _set_pendingFinalGenerationGreenlights_ACU([]);
+    releaseFinalGenerationGreenlightsForChatSwitch_ACU({ includeCurrentScope }).catch(error => {
+      logWarn_ACU('[Agent世界书] 切换聊天时收回正文绿灯失败：', error);
+    });
+  }
 
   async function enforceCleanupOfCharacterWorldbook_ACU() {
       // 延迟一段时间，确保其他操作完成
@@ -106,6 +119,7 @@ import {
             // [L9] 此处手写清空与 presentation/bootstrap/init.ts 的 clearDerivedRuntimeState_ACU / clearRuntimeForNoActiveChat_ACU 保持同步；
             // 差异：init.ts 是 presentation 层，额外 disposeStorageProvider() 并 notifyRuntimeTableCleared_ACU()；本 service 层刻意不触碰 UI/storage 生命周期。字段变动需两边同步。
             logDebug_ACU(`ACU: Received invalid chat file name "${chatFileName}" with no active chat. Clearing runtime state.`);
+            releaseAgentGreenlightsOfPreviousChat_ACU(false);
             resetPlotAgentWorldbookSessionSnapshot_ACU();
             _set_currentChatFileIdentifier_ACU('');
             _set_currentJsonTableData_ACU(null);
@@ -129,7 +143,10 @@ import {
     logDebug_ACU(`ACU: Resetting script state for new chat: "${chatFileName}"`);
     
     // 直接使用有效的 chatFileName，不再需要调用 /getchatname 或其他回退逻辑。
+    const previousChatFileIdentifier_ACU = String(currentChatFileIdentifier_ACU || '');
     _set_currentChatFileIdentifier_ACU(cleanChatName_ACU(chatFileName));
+    // 同一聊天重复 CHAT_CHANGED、启动恢复不算离开：保留本聊天上一轮的放行，重新生成还要用
+    const switchedToAnotherChat_ACU = reason === 'chat_changed' && previousChatFileIdentifier_ACU !== cleanChatName_ACU(chatFileName);
 
     // [FIX] Reload all settings to ensure template is not stale for new chats.
     // MUST be called AFTER setting currentChatFileIdentifier_ACU so it loads the correct character settings.
@@ -141,7 +158,8 @@ import {
     logDebug_ACU(`ACU: Plot worldbook selection for "${plotSelection.scopeKey || '(deferred)'}" -> ${plotSelection.outcome} (reason: ${reason})`);
 
     // 当前角色卡绑定在后续读取时重新解析；这里只清除上一会话的内存快照。
-    // 不得删除或重写旧世界书中的持久 Agent state。
+    // 不得删除或重写旧世界书中的持久 Agent state（收回正文绿灯只关条目开关，不碰账本）。
+    if (switchedToAnotherChat_ACU) releaseAgentGreenlightsOfPreviousChat_ACU(true);
     resetPlotAgentWorldbookSessionSnapshot_ACU();
 
     _set_currentJsonTableData_ACU(null);

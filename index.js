@@ -83159,6 +83159,32 @@ async function clearFinalGenerationGreenlightsExclusive_ACU(readContext) {
         staleBookNames,
     };
 }
+/**
+ * 切换聊天时收回上一聊天的正文绿灯。绿灯直接写在世界书条目上（开启 + 常驻），世界书又是所有聊天
+ * 共用的，平时要到下一轮剧情推进开头才收回，于是删聊天 / 新开聊天后新聊天会一直显示并沿用上一聊天
+ * 的开关。须在 resetPlotAgentWorldbookSessionSnapshot_ACU 之前调用：同步取走切换前的内存快照
+ * （换了角色卡时那批书不在新作用域里），入队后先按它收回，再按当前聊天的作用域收回一遍
+ * （页面刷新后内存快照为空的情况）。只关亮着的绿灯，不动接管账本；失败只告警，下一轮剧情推进开头还会再清。
+ */
+function releaseFinalGenerationGreenlightsForChatSwitch_ACU(options) {
+    const previousUidSetByBook = buildSnapshotUidSetByBook_ACU(getPlotAgentWorldbookSnapshot_ACU());
+    return runExclusiveAgentWorldbookOperation_ACU(async () => {
+        if (previousUidSetByBook.size > 0) {
+            try {
+                await patchSnapshotEntries_ACU(previousUidSetByBook, (_bookName, entry) => (isFinalGenerationBlueLightEntry_ACU(entry) ? { uid: entry.uid, enabled: false } : null));
+            }
+            catch (error) {
+                logWarn_ACU('[Agent世界书] 切换聊天时收回上一聊天的正文绿灯失败，下一轮剧情推进开头会再清一次。', error);
+            }
+        }
+        if (!options.includeCurrentScope)
+            return;
+        const result = await clearFinalGenerationGreenlightsExclusive_ACU();
+        if (result.status === 'failed') {
+            logWarn_ACU('[Agent世界书] 切换聊天时清理当前聊天的正文绿灯失败，下一轮剧情推进开头会再清一次。', result.error);
+        }
+    });
+}
 function takeoverWorldbookGreenlights_ACU() {
     return runExclusiveAgentWorldbookOperation_ACU(() => takeoverWorldbookGreenlightsExclusive_ACU());
 }
@@ -98605,6 +98631,16 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
  * service/worldbook/injection-engine-state.ts — 状态重置、目标获取、隔离前缀、条目清理、聊天历史清理
  * 从 injection-engine.ts 拆出
  */
+/**
+ * 离开当前聊天时收回它的 Agent 正文绿灯（世界书条目上的开关 + 内存放行名单），
+ * 否则新聊天会沿用上一聊天最后一轮的开关。须在 resetPlotAgentWorldbookSessionSnapshot_ACU 之前调用。
+ */
+function releaseAgentGreenlightsOfPreviousChat_ACU(includeCurrentScope) {
+    _set_pendingFinalGenerationGreenlights_ACU([]);
+    releaseFinalGenerationGreenlightsForChatSwitch_ACU({ includeCurrentScope }).catch(error => {
+        logWarn_ACU('[Agent世界书] 切换聊天时收回正文绿灯失败：', error);
+    });
+}
 async function enforceCleanupOfCharacterWorldbook_ACU() {
     // 延迟一段时间，确保其他操作完成
     await new Promise(resolve => setTimeout(resolve, 1500));
@@ -98639,6 +98675,7 @@ async function resetScriptStateForNewChat_ACU(chatFileName, { reason = 'startup_
             // [L9] 此处手写清空与 presentation/bootstrap/init.ts 的 clearDerivedRuntimeState_ACU / clearRuntimeForNoActiveChat_ACU 保持同步；
             // 差异：init.ts 是 presentation 层，额外 disposeStorageProvider() 并 notifyRuntimeTableCleared_ACU()；本 service 层刻意不触碰 UI/storage 生命周期。字段变动需两边同步。
             logDebug_ACU(`ACU: Received invalid chat file name "${chatFileName}" with no active chat. Clearing runtime state.`);
+            releaseAgentGreenlightsOfPreviousChat_ACU(false);
             resetPlotAgentWorldbookSessionSnapshot_ACU();
             _set_currentChatFileIdentifier_ACU('');
             _set_currentJsonTableData_ACU(null);
@@ -98660,7 +98697,10 @@ async function resetScriptStateForNewChat_ACU(chatFileName, { reason = 'startup_
     }
     logDebug_ACU(`ACU: Resetting script state for new chat: "${chatFileName}"`);
     // 直接使用有效的 chatFileName，不再需要调用 /getchatname 或其他回退逻辑。
+    const previousChatFileIdentifier_ACU = String(currentChatFileIdentifier_ACU || '');
     _set_currentChatFileIdentifier_ACU(cleanChatName_ACU(chatFileName));
+    // 同一聊天重复 CHAT_CHANGED、启动恢复不算离开：保留本聊天上一轮的放行，重新生成还要用
+    const switchedToAnotherChat_ACU = reason === 'chat_changed' && previousChatFileIdentifier_ACU !== cleanChatName_ACU(chatFileName);
     // [FIX] Reload all settings to ensure template is not stale for new chats.
     // MUST be called AFTER setting currentChatFileIdentifier_ACU so it loads the correct character settings.
     loadSettings_ACU();
@@ -98669,7 +98709,9 @@ async function resetScriptStateForNewChat_ACU(chatFileName, { reason = 'startup_
     const plotSelection = applyPlotWorldbookSelectionForCurrentCharacter_ACU();
     logDebug_ACU(`ACU: Plot worldbook selection for "${plotSelection.scopeKey || '(deferred)'}" -> ${plotSelection.outcome} (reason: ${reason})`);
     // 当前角色卡绑定在后续读取时重新解析；这里只清除上一会话的内存快照。
-    // 不得删除或重写旧世界书中的持久 Agent state。
+    // 不得删除或重写旧世界书中的持久 Agent state（收回正文绿灯只关条目开关，不碰账本）。
+    if (switchedToAnotherChat_ACU)
+        releaseAgentGreenlightsOfPreviousChat_ACU(true);
     resetPlotAgentWorldbookSessionSnapshot_ACU();
     _set_currentJsonTableData_ACU(null);
     _set_independentTableStates_ACU({});
@@ -147034,6 +147076,7 @@ function clearDerivedRuntimeState_ACU() {
     _set_lastTotalAiMessages_ACU(0);
 }
 function clearRuntimeForNoActiveChat_ACU(chatFileName) {
+    releaseAgentGreenlightsOfPreviousChat_ACU(false);
     resetPlotAgentWorldbookSessionSnapshot_ACU();
     clearDerivedRuntimeState_ACU();
     _set_currentChatFileIdentifier_ACU('');
@@ -188233,8 +188276,8 @@ var _sfc_main$x = /*@__PURE__*/ defineComponent({
         const sections = [
             { id: 'agent-control', label: '总控' },
             { id: 'agent-scope', label: '范围' },
-            { id: 'agent-favorites', label: '常用世界书' },
             { id: 'agent-entries', label: '条目与 Skill' },
+            { id: 'agent-favorites', label: '常用世界书' },
             { id: 'agent-editing', label: '世界书编辑' },
         ];
         const modeOptions = [
@@ -188435,8 +188478,8 @@ var _sfc_main$x = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-agent__mode[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-agent__config[data-v-90faf24e] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-agent__actions[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\n}\n.ub-agent__current[data-v-90faf24e] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-agent__current strong[data-v-90faf24e] {\r\n  color: var(--ub-text);\n}\n.ub-agent-fav[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\n}\n.ub-agent-fav__list[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--ub-s1);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\n}\n.ub-agent-fav__item[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s1) 0;\n}\n.ub-agent-fav__item + .ub-agent-fav__item[data-v-90faf24e] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-agent-fav__check[data-v-90faf24e] {\r\n  display: flex;\r\n  flex: 1 1 calc(var(--ub-u) * 120);\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\r\n  min-height: var(--ub-control-h-sm);\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border: 0;\r\n  border-radius: calc(var(--ub-r-control) - 3px);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: left;\r\n  cursor: pointer;\r\n  overflow-wrap: anywhere;\n}\n.ub-agent-fav__check[data-v-90faf24e]:hover:not(:disabled) {\r\n  background: var(--ub-hover);\n}\n.ub-agent-fav__check[data-v-90faf24e]:disabled {\r\n  cursor: not-allowed;\r\n  opacity: 0.6;\n}\n.ub-agent-fav__check.is-on[data-v-90faf24e] {\r\n  color: var(--ub-text);\r\n  font-weight: 600;\n}\n.ub-agent-fav__check.is-on i[data-v-90faf24e] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-agent-fav__add[data-v-90faf24e],\r\n.ub-agent-fav__mount[data-v-90faf24e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-agent-fav__add[data-v-90faf24e] > :first-child {\r\n  flex: 1 1 calc(var(--ub-u) * 140);\r\n  min-width: 0;\n}\n.ub-agent-fav__mount .ub-agent__current[data-v-90faf24e] {\r\n  flex: 1 1 auto;\n}\r\n", "src/presentation-v3/pages/AgentPage.vue#style-0-90faf24e");
-var AgentPage_vue_vue_type_style_index_0_scoped_90faf24e_lang = null;
+injectSfcStyle("\n.ub-agent__mode[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-agent__config[data-v-f0fd1638] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-agent__actions[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\n}\n.ub-agent__current[data-v-f0fd1638] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-agent__current strong[data-v-f0fd1638] {\r\n  color: var(--ub-text);\n}\n.ub-agent-fav[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\n}\n.ub-agent-fav__list[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--ub-s1);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\n}\n.ub-agent-fav__item[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s1) 0;\n}\n.ub-agent-fav__item + .ub-agent-fav__item[data-v-f0fd1638] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-agent-fav__check[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex: 1 1 calc(var(--ub-u) * 120);\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\r\n  min-height: var(--ub-control-h-sm);\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border: 0;\r\n  border-radius: calc(var(--ub-r-control) - 3px);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: left;\r\n  cursor: pointer;\r\n  overflow-wrap: anywhere;\n}\n.ub-agent-fav__check[data-v-f0fd1638]:hover:not(:disabled) {\r\n  background: var(--ub-hover);\n}\n.ub-agent-fav__check[data-v-f0fd1638]:disabled {\r\n  cursor: not-allowed;\r\n  opacity: 0.6;\n}\n.ub-agent-fav__check.is-on[data-v-f0fd1638] {\r\n  color: var(--ub-text);\r\n  font-weight: 600;\n}\n.ub-agent-fav__check.is-on i[data-v-f0fd1638] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-agent-fav__add[data-v-f0fd1638],\r\n.ub-agent-fav__mount[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-agent-fav__add[data-v-f0fd1638] > :first-child {\r\n  flex: 1 1 calc(var(--ub-u) * 140);\r\n  min-width: 0;\n}\n.ub-agent-fav__mount .ub-agent__current[data-v-f0fd1638] {\r\n  flex: 1 1 auto;\n}\r\n", "src/presentation-v3/pages/AgentPage.vue#style-0-f0fd1638");
+var AgentPage_vue_vue_type_style_index_0_scoped_f0fd1638_lang = null;
 
 const _hoisted_1$t = { class: "ub-agent__mode" };
 const _hoisted_2$r = { class: "ub-agent__config" };
@@ -188636,6 +188679,43 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 				_: 1
 			}),
 			createVNode($setup["UbSection"], {
+				id: "agent-entries",
+				title: "条目与 Skill",
+				description: "勾选「Skill 化」后点「对所选 Skill 化」；也可逐条手写 Skill 描述与触发时机。",
+				icon: "fa-solid fa-list-check",
+				padded: ""
+			}, {
+				default: withCtx(() => [createVNode($setup["WorldbookEntries"], {
+					"id-prefix": "agent",
+					groups: $setup.entries.groups.value,
+					filter: $setup.entryFilter,
+					loading: $setup.entries.status.value === "loading",
+					status: $setup.entries.status.value,
+					error: $setup.entries.error.value,
+					"empty-text": $setup.entryEmptyText,
+					"show-entry-toggle": false,
+					"show-skillify-controls": "",
+					"show-agent-takeover-state": "",
+					"show-skill-editor": "",
+					"onUpdate:filter": _cache[2] || (_cache[2] = ($event) => $setup.entryFilter = $event),
+					onSkillifySelectAll: _cache[3] || (_cache[3] = ($event) => $setup.entries.selectAllForSkillify($event)),
+					onSkillifyDeselectAll: _cache[4] || (_cache[4] = ($event) => $setup.entries.deselectAllForSkillify($event)),
+					onSkillifySelected: $setup.onSkillifySelected,
+					onToggleSkillify: _cache[5] || (_cache[5] = (bookName, uid, checked) => $setup.entries.toggleSkillifyEntry(bookName, uid, checked)),
+					onToggleGroup: _cache[6] || (_cache[6] = ($event) => $setup.entries.toggleGroupExpanded($event)),
+					onSaveSkill: $setup.onSaveSkill,
+					onDeleteSkill: $setup.onDeleteSkill
+				}, null, 8, [
+					"groups",
+					"filter",
+					"loading",
+					"status",
+					"error",
+					"empty-text"
+				])]),
+				_: 1
+			}),
+			createVNode($setup["UbSection"], {
 				id: "agent-favorites",
 				title: "常用世界书",
 				description: "把常用的 Skill 世界书放进来，换新角色卡时勾选几本，一键复制成「角色卡名-原书名」并挂成这张卡的附加世界书。副本与原书互不影响。",
@@ -188727,7 +188807,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 						"model-value": $setup.favoriteToAdd,
 						placeholder: "选择要加入常用的世界书",
 						"aria-label": "加入常用世界书",
-						"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.favoriteToAdd = $event)
+						"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.favoriteToAdd = $event)
 					}, null, 8, ["options", "model-value"]), createVNode($setup["UbButton"], {
 						size: "sm",
 						icon: "fa-solid fa-plus",
@@ -188766,43 +188846,6 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 						)]),
 						_: 1
 					}, 8, ["busy", "disabled"])])
-				])]),
-				_: 1
-			}),
-			createVNode($setup["UbSection"], {
-				id: "agent-entries",
-				title: "条目与 Skill",
-				description: "勾选「Skill 化」后点「对所选 Skill 化」；也可逐条手写 Skill 描述与触发时机。",
-				icon: "fa-solid fa-list-check",
-				padded: ""
-			}, {
-				default: withCtx(() => [createVNode($setup["WorldbookEntries"], {
-					"id-prefix": "agent",
-					groups: $setup.entries.groups.value,
-					filter: $setup.entryFilter,
-					loading: $setup.entries.status.value === "loading",
-					status: $setup.entries.status.value,
-					error: $setup.entries.error.value,
-					"empty-text": $setup.entryEmptyText,
-					"show-entry-toggle": false,
-					"show-skillify-controls": "",
-					"show-agent-takeover-state": "",
-					"show-skill-editor": "",
-					"onUpdate:filter": _cache[3] || (_cache[3] = ($event) => $setup.entryFilter = $event),
-					onSkillifySelectAll: _cache[4] || (_cache[4] = ($event) => $setup.entries.selectAllForSkillify($event)),
-					onSkillifyDeselectAll: _cache[5] || (_cache[5] = ($event) => $setup.entries.deselectAllForSkillify($event)),
-					onSkillifySelected: $setup.onSkillifySelected,
-					onToggleSkillify: _cache[6] || (_cache[6] = (bookName, uid, checked) => $setup.entries.toggleSkillifyEntry(bookName, uid, checked)),
-					onToggleGroup: _cache[7] || (_cache[7] = ($event) => $setup.entries.toggleGroupExpanded($event)),
-					onSaveSkill: $setup.onSaveSkill,
-					onDeleteSkill: $setup.onDeleteSkill
-				}, null, 8, [
-					"groups",
-					"filter",
-					"loading",
-					"status",
-					"error",
-					"empty-text"
 				])]),
 				_: 1
 			}),
@@ -188884,7 +188927,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$x], ["__scopeId", "data-v-90faf24e"]]);
+var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$x], ["__scopeId", "data-v-f0fd1638"]]);
 
 const apiCopy = {
     panels: {

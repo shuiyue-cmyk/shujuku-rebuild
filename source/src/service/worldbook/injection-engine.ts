@@ -42,6 +42,7 @@ export {
 // ═══ 状态重置、目标获取、隔离前缀、条目清理、聊天历史清理 ═══
 export {
     resetScriptStateForNewChat_ACU,
+    releaseAgentGreenlightsOfPreviousChat_ACU,
     getInjectionTargetLorebook_ACU,
     getIsolationPrefix_ACU,
     purgeSheetKeysFromChatHistoryHard_ACU,
