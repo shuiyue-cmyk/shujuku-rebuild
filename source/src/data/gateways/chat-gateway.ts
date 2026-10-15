@@ -232,8 +232,12 @@ export async function listAllHostChatNames_ACU(): Promise<Set<string> | null> {
             return null;
         }
         for (const group of groups) {
-            const groupChats = Array.isArray(group?.chats) ? group.chats : [];
-            for (const chatId of groupChats) {
+            // 宿主的群组恒带 chats 数组；不是数组就无法知道这个群有哪些聊天，按枚举残缺处理（上游 #39）
+            if (!Array.isArray(group?.chats)) {
+                logWarn_ACU('[ChatGateway] 群组聊天列表不是数组，无法证明枚举完整');
+                return null;
+            }
+            for (const chatId of group.chats) {
                 const normalized = cleanChatName_ACU(String(chatId || ''));
                 if (normalized) names.add(normalized);
             }

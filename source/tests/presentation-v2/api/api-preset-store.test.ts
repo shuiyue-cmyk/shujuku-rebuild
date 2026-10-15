@@ -182,6 +182,54 @@ describe('useApiPresetStore', () => {
     expect(settings.apiPresets.map((p: any) => p.name)).toContain('renamed');
   });
 
+  describe('聊天未绑定预设时编辑页面显示的活动预设（上游 #37）', () => {
+    const editModel = (store: any, settings: any, name: string, model: string) => {
+      const edited = JSON.parse(JSON.stringify(settings.apiPresets.find((p: any) => p.name === name)));
+      edited.apiConfig.model = model;
+      return store.savePreset(edited, name);
+    };
+
+    it('活动项来自默认预设：保存后当前配置同步新模型，且不给聊天新建绑定', async () => {
+      const settings = createSettings();
+      settings.apiConfig = JSON.parse(JSON.stringify(settings.apiPresets[0].apiConfig));
+      const { store } = await importStore(settings);
+      store.refreshFromSettings();
+      expect(store.activePresetName).toBe('alpha');
+
+      expect(editModel(store, settings, 'alpha', 'ma-new')).toBe(true);
+
+      expect(settings.apiConfig.model).toBe('ma-new');
+      expect(settings.apiPresetBindingsByChat['chat-A']).toBeUndefined();
+      expect(store.activePresetName).toBe('alpha');
+    });
+
+    it('活动项来自与当前配置一致的预设：保存后当前配置同步新模型', async () => {
+      const settings = createSettings();
+      settings.defaultApiPresetName = '';
+      settings.apiConfig = JSON.parse(JSON.stringify(settings.apiPresets[1].apiConfig));
+      const { store } = await importStore(settings);
+      store.refreshFromSettings();
+      expect(store.activePresetName).toBe('beta');
+
+      expect(editModel(store, settings, 'beta', 'beta-new')).toBe(true);
+
+      expect(settings.apiConfig.model).toBe('beta-new');
+      expect(store.activePresetName).toBe('beta');
+    });
+
+    it('编辑页面没显示为活动的预设：当前配置不动', async () => {
+      const settings = createSettings();
+      settings.apiConfig = JSON.parse(JSON.stringify(settings.apiPresets[0].apiConfig));
+      const { store } = await importStore(settings);
+      store.refreshFromSettings();
+
+      expect(editModel(store, settings, 'beta', 'beta-new')).toBe(true);
+
+      expect(settings.apiConfig.model).toBe('ma');
+      expect(store.activePresetName).toBe('alpha');
+    });
+  });
+
   it('保存非活动预设时不覆盖当前聊天 apiConfig', async () => {
     const settings = createSettings();
     settings.apiPresetBindingsByChat['chat-A'] = { presetName: 'alpha', updatedAt: 1 };

@@ -155,12 +155,23 @@ describe('listAllHostChatNames_ACU', () => {
   it('groups 与角色聊天都可用时枚举两者', async () => {
     stubHost({
       characters: [{ avatar: 'aria.png' }],
-      contextGroups: [{ chats: ['group-live.jsonl'] }, { chats: null }],
+      contextGroups: [{ chats: ['group-live.jsonl'] }, { chats: [] }],
       chatsByAvatar: { 'aria.png': ['role-chat.jsonl'] },
     });
     const names = await listAllHostChatNames_ACU();
     expect(names).not.toBeNull();
     expect([...(names as Set<string>)].sort()).toEqual(['group-live', 'role-chat']);
+  });
+
+  it('某个群组的聊天列表不是数组时返回 null，不能当成这个群没有聊天（上游 #39）', async () => {
+    for (const badGroup of [{ chats: null }, {}, null, { chats: 'group-live.jsonl' }]) {
+      stubHost({
+        characters: [{ avatar: 'aria.png' }],
+        contextGroups: [{ chats: ['group-live.jsonl'] }, badGroup],
+        chatsByAvatar: { 'aria.png': ['role-chat.jsonl'] },
+      });
+      expect(await listAllHostChatNames_ACU()).toBeNull();
+    }
   });
 
   it('groups 字段缺失（老宿主 / 派生 context）时返回 null，不能只交角色枚举', async () => {

@@ -4683,6 +4683,9 @@ function loadGlobalMeta_ACU() {
     }
     const parsed = safeJsonParse_ACU(raw, null);
     if (!parsed || typeof parsed !== 'object') {
+        // 原文存在但解析不出对象：启动链随后会把默认值写回同一键（隔离标识列表、当前标识、全局向量配置
+        // 随之丢失），先把原文备份到旁路键（上游 #38，与 profile 设置的 H1 备份同口径）。
+        backupRawBeforeDegradation_ACU(STORAGE_KEY_GLOBAL_META_ACU, '[GlobalMeta] 全局元数据');
         globalMeta_ACU = buildDefaultGlobalMeta_ACU();
         return globalMeta_ACU;
     }
@@ -4691,6 +4694,23 @@ function loadGlobalMeta_ACU() {
     if (!Array.isArray(globalMeta_ACU.isolationCodeList))
         globalMeta_ACU.isolationCodeList = [];
     return globalMeta_ACU;
+}
+/** 把即将被默认值覆盖的原始存储串复制到 `${key}.bak`；内容相同跳过重复写，失败只告警。 */
+function backupRawBeforeDegradation_ACU(key, label) {
+    try {
+        const store = getConfigStorage_ACU();
+        const raw = store?.getItem?.(key);
+        if (typeof raw !== 'string' || !raw.trim())
+            return;
+        const backupKey = `${key}.bak`;
+        if (store.getItem(backupKey) === raw)
+            return;
+        store.setItem(backupKey, raw);
+        logWarn_ACU(`${label}无法解析，已把原始内容备份到旁路键后再降级默认值：${backupKey}`);
+    }
+    catch (e) {
+        logWarn_ACU(`${label}原始串旁路备份失败（继续按默认值降级）:`, e);
+    }
 }
 function saveGlobalMeta_ACU() {
     try {
@@ -5494,8 +5514,12 @@ async function listAllHostChatNames_ACU() {
             return null;
         }
         for (const group of groups) {
-            const groupChats = Array.isArray(group?.chats) ? group.chats : [];
-            for (const chatId of groupChats) {
+            // 宿主的群组恒带 chats 数组；不是数组就无法知道这个群有哪些聊天，按枚举残缺处理（上游 #39）
+            if (!Array.isArray(group?.chats)) {
+                logWarn_ACU('[ChatGateway] 群组聊天列表不是数组，无法证明枚举完整');
+                return null;
+            }
+            for (const chatId of group.chats) {
                 const normalized = cleanChatName_ACU(String(chatId || ''));
                 if (normalized)
                     names.add(normalized);
@@ -86364,6 +86388,33 @@ function getBoundPresetNameForChat_ACU(chatKey) {
     const preset = findPresetByName_ACU(settings_ACU.apiPresets, binding.presetName);
     return preset ? preset.name : '';
 }
+/** 与当前运行配置（apiMode/apiConfig）逐键一致的预设；同名异协议/异后处理不算一致。 */
+function findPresetMatchingCurrentApiConfig_ACU(presets) {
+    ensureApiSettingsShape_ACU();
+    const current = normalizeApiConfig_ACU(settings_ACU.apiConfig);
+    return presets.find(preset => (preset.apiConfig.url === current.url &&
+        preset.apiConfig.apiKey === current.apiKey &&
+        preset.apiConfig.model === current.model &&
+        preset.apiConfig.max_tokens === current.max_tokens &&
+        preset.apiConfig.temperature === current.temperature &&
+        preset.apiConfig.bodyParams === current.bodyParams &&
+        preset.apiConfig.excludeBodyParams === current.excludeBodyParams &&
+        preset.apiConfig.requestHeaders === current.requestHeaders &&
+        // 同名异协议/异后处理预设不得误判为同一：两字段都参与匹配（缺失由归一化补为默认值后比较）。
+        preset.apiConfig.promptPostProcessing === current.promptPostProcessing &&
+        preset.apiConfig.customApiFormat === current.customApiFormat)) ?? null;
+}
+/** API 页显示为「当前」的预设：聊天绑定 > 全局默认 > 与当前运行配置一致的预设。 */
+function resolveDisplayedActiveApiPresetName_ACU(chatKey) {
+    ensureApiSettingsShape_ACU();
+    const defaultName = findPresetByName_ACU(settings_ACU.apiPresets, settings_ACU.defaultApiPresetName)
+        ? settings_ACU.defaultApiPresetName
+        : '';
+    return getBoundPresetNameForChat_ACU(chatKey)
+        || defaultName
+        || findPresetMatchingCurrentApiConfig_ACU(settings_ACU.apiPresets)?.name
+        || '';
+}
 /** 预设解析 memo：命中即跳过全量归一 + 线性查找。键=settings 对象身份 + 内容指纹；写时（内容变）自然失效。 */
 const PRESET_RESOLVE_CACHE_CAP_ACU = 8;
 const presetResolveCache_ACU = new Map();
@@ -86620,6 +86671,8 @@ function saveApiPreset_ACU(presetInput, originalName = '') {
     ensureApiSettingsShape_ACU();
     const snapshot = snapshotApiFields_ACU();
     const oldName = String(originalName || '').trim();
+    // 改动前页面显示的当前预设（改完后运行配置就和它对不上了，必须先取）
+    const displayedActiveName = resolveDisplayedActiveApiPresetName_ACU();
     const existingByNewName = settings_ACU.apiPresets.findIndex((p) => p.name === preset.name);
     if (existingByNewName >= 0 && settings_ACU.apiPresets[existingByNewName].name !== oldName) {
         // 重命名/新建撞上已有名称：拒绝覆盖，避免静默销毁已有预设（不可逆数据丢失）
@@ -86656,6 +86709,12 @@ function saveApiPreset_ACU(presetInput, originalName = '') {
             presetName: preset.name,
             updatedAt: Date.now(),
         };
+        settings_ACU.apiMode = preset.apiMode;
+        settings_ACU.apiConfig = clone$7(preset.apiConfig);
+    }
+    else if (oldName && displayedActiveName === oldName && findPresetByName_ACU(settings_ACU.apiPresets, preset.name)) {
+        // 聊天没绑定预设、页面显示的当前预设来自全局默认或与当前配置一致：编辑它要同步到当前配置，
+        // 否则页面和预设都是新模型，「跟随当前配置」的请求还发旧模型（上游 #37）。不新建聊天绑定。
         settings_ACU.apiMode = preset.apiMode;
         settings_ACU.apiConfig = clone$7(preset.apiConfig);
     }
@@ -169862,30 +169921,6 @@ async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat)
 function clone$4(value) {
     return JSON.parse(JSON.stringify(value ?? null));
 }
-function getCurrentConfigAsPreset(name) {
-    ensureApiSettingsShape_ACU();
-    return {
-        name,
-        apiMode: normalizeApiMode_ACU(settings_ACU.apiMode),
-        apiConfig: normalizeApiConfig_ACU(settings_ACU.apiConfig),
-    };
-}
-function findPresetMatchingCurrentConfig(presets) {
-    const current = getCurrentConfigAsPreset('');
-    return presets.find(preset => {
-        return (preset.apiConfig.url === current.apiConfig.url &&
-            preset.apiConfig.apiKey === current.apiConfig.apiKey &&
-            preset.apiConfig.model === current.apiConfig.model &&
-            preset.apiConfig.max_tokens === current.apiConfig.max_tokens &&
-            preset.apiConfig.temperature === current.apiConfig.temperature &&
-            preset.apiConfig.bodyParams === current.apiConfig.bodyParams &&
-            preset.apiConfig.excludeBodyParams === current.apiConfig.excludeBodyParams &&
-            preset.apiConfig.requestHeaders === current.apiConfig.requestHeaders &&
-            // 同名异协议/异后处理预设不得误判为同一：两字段都参与匹配（缺失由归一化补为默认值后比较）。
-            preset.apiConfig.promptPostProcessing === current.apiConfig.promptPostProcessing &&
-            preset.apiConfig.customApiFormat === current.apiConfig.customApiFormat);
-    }) ?? null;
-}
 function resolveCurrentConfigStatus() {
     ensureApiSettingsShape_ACU();
     const config = normalizeApiConfig_ACU(settings_ACU.apiConfig);
@@ -169930,9 +169965,7 @@ const useApiPresetStore = defineStore('acu-v2-api-presets', {
                 ? settings_ACU.defaultApiPresetName
                 : '';
             this.defaultApiPresetName = defaultName;
-            const boundName = getBoundPresetNameForChat_ACU(this.currentChatKey);
-            const matchedCurrentName = findPresetMatchingCurrentConfig(this.presets)?.name ?? '';
-            this.activePresetName = boundName || defaultName || matchedCurrentName;
+            this.activePresetName = resolveDisplayedActiveApiPresetName_ACU(this.currentChatKey);
             const currentConfig = resolveCurrentConfigStatus();
             this.currentConfigReady = currentConfig.ready;
             this.currentConfigLabel = currentConfig.label;
@@ -187214,7 +187247,11 @@ function useWorldbookSelector() {
     const charPrimary = ref(null);
     const status = ref('idle');
     const error = ref('');
+    // 加载代次：挂载与切换聊天会叠加刷新，只有最新一次能发布结果（上游 #45：旧聊天较慢的刷新
+    // 后到会把角色主世界书覆盖回旧角色）。
+    let loadSeq = 0;
     async function refresh() {
+        const seq = ++loadSeq;
         status.value = 'loading';
         error.value = '';
         try {
@@ -187223,11 +187260,15 @@ function useWorldbookSelector() {
                 getWorldbookNames_ACU(),
                 getCurrentCharPrimaryLorebook_ACU().catch(() => null),
             ]);
+            if (seq !== loadSeq)
+                return;
             names.value = Array.isArray(list) ? list.slice() : [];
             charPrimary.value = typeof primary === 'string' && primary ? primary : null;
             status.value = 'success';
         }
         catch (e) {
+            if (seq !== loadSeq)
+                return;
             logError_ACU('[ACU-V2] useWorldbookSelector refresh failed', e);
             error.value = e?.message ?? '世界书列表加载失败';
             status.value = 'error';

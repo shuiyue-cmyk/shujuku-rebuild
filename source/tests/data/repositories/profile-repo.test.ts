@@ -77,6 +77,38 @@ describe('loadGlobalMeta_ACU', () => {
     expect(meta.version).toBe(1);
     expect(meta.activeIsolationCode).toBe('');
   });
+
+  it('损坏时先把原文备份到旁路键，之后启动写回默认值也不会丢原文（上游 #38）', () => {
+    const corrupt = '{"activeIsolationCode":"saved-code","vectorMemoryConfigGlobal":';
+    mockStore._store.set('acu_global_meta', corrupt);
+
+    loadGlobalMeta_ACU();
+    saveGlobalMeta_ACU();
+
+    expect(mockStore._store.get('acu_global_meta.bak')).toBe(corrupt);
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('acu_global_meta.bak'));
+  });
+
+  it('JSON 合法但不是对象（如 null、数字）同样按损坏备份', () => {
+    mockStore._store.set('acu_global_meta', '42');
+    loadGlobalMeta_ACU();
+    expect(mockStore._store.get('acu_global_meta.bak')).toBe('42');
+  });
+
+  it('正常读取与首次使用（无存储）不写备份', () => {
+    loadGlobalMeta_ACU();
+    mockStore._store.set('acu_global_meta', '{"activeIsolationCode":"c1"}');
+    expect(loadGlobalMeta_ACU().activeIsolationCode).toBe('c1');
+    expect(mockStore._store.has('acu_global_meta.bak')).toBe(false);
+  });
+
+  it('同样的损坏内容已备份过时不重复写', () => {
+    mockStore._store.set('acu_global_meta', 'broken');
+    loadGlobalMeta_ACU();
+    mockStore.setItem.mockClear();
+    loadGlobalMeta_ACU();
+    expect(mockStore.setItem).not.toHaveBeenCalled();
+  });
 });
 
 // ═══ saveGlobalMeta_ACU ═══

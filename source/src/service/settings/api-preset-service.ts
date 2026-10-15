@@ -252,6 +252,37 @@ export function getBoundPresetNameForChat_ACU(chatKey?: string): string {
   return preset ? preset.name : '';
 }
 
+/** 与当前运行配置（apiMode/apiConfig）逐键一致的预设；同名异协议/异后处理不算一致。 */
+export function findPresetMatchingCurrentApiConfig_ACU(presets: ApiPreset_ACU[]): ApiPreset_ACU | null {
+  ensureApiSettingsShape_ACU();
+  const current = normalizeApiConfig_ACU(settings_ACU.apiConfig);
+  return presets.find(preset => (
+    preset.apiConfig.url === current.url &&
+    preset.apiConfig.apiKey === current.apiKey &&
+    preset.apiConfig.model === current.model &&
+    preset.apiConfig.max_tokens === current.max_tokens &&
+    preset.apiConfig.temperature === current.temperature &&
+    preset.apiConfig.bodyParams === current.bodyParams &&
+    preset.apiConfig.excludeBodyParams === current.excludeBodyParams &&
+    preset.apiConfig.requestHeaders === current.requestHeaders &&
+    // 同名异协议/异后处理预设不得误判为同一：两字段都参与匹配（缺失由归一化补为默认值后比较）。
+    preset.apiConfig.promptPostProcessing === current.promptPostProcessing &&
+    preset.apiConfig.customApiFormat === current.customApiFormat
+  )) ?? null;
+}
+
+/** API 页显示为「当前」的预设：聊天绑定 > 全局默认 > 与当前运行配置一致的预设。 */
+export function resolveDisplayedActiveApiPresetName_ACU(chatKey?: string): string {
+  ensureApiSettingsShape_ACU();
+  const defaultName = findPresetByName_ACU(settings_ACU.apiPresets, settings_ACU.defaultApiPresetName)
+    ? settings_ACU.defaultApiPresetName
+    : '';
+  return getBoundPresetNameForChat_ACU(chatKey)
+    || defaultName
+    || findPresetMatchingCurrentApiConfig_ACU(settings_ACU.apiPresets)?.name
+    || '';
+}
+
 /** 按预设名解析运行配置；空名或悬挂引用返回可断言结果（不静默复用当前配置） */
 /** resolveApiConfigByPreset_ACU 的解析结果（memo 读写同一形状）。 */
 export interface ResolvedApiPresetConfig_ACU {
@@ -524,6 +555,8 @@ export function saveApiPreset_ACU(presetInput: ApiPreset_ACU, originalName = '')
   ensureApiSettingsShape_ACU();
   const snapshot = snapshotApiFields_ACU();
   const oldName = String(originalName || '').trim();
+  // 改动前页面显示的当前预设（改完后运行配置就和它对不上了，必须先取）
+  const displayedActiveName = resolveDisplayedActiveApiPresetName_ACU();
   const existingByNewName = settings_ACU.apiPresets.findIndex((p: ApiPreset_ACU) => p.name === preset.name);
   if (existingByNewName >= 0 && settings_ACU.apiPresets[existingByNewName].name !== oldName) {
     // 重命名/新建撞上已有名称：拒绝覆盖，避免静默销毁已有预设（不可逆数据丢失）
@@ -556,6 +589,11 @@ export function saveApiPreset_ACU(presetInput: ApiPreset_ACU, originalName = '')
       presetName: preset.name,
       updatedAt: Date.now(),
     };
+    settings_ACU.apiMode = preset.apiMode;
+    settings_ACU.apiConfig = clone(preset.apiConfig);
+  } else if (oldName && displayedActiveName === oldName && findPresetByName_ACU(settings_ACU.apiPresets, preset.name)) {
+    // 聊天没绑定预设、页面显示的当前预设来自全局默认或与当前配置一致：编辑它要同步到当前配置，
+    // 否则页面和预设都是新模型，「跟随当前配置」的请求还发旧模型（上游 #37）。不新建聊天绑定。
     settings_ACU.apiMode = preset.apiMode;
     settings_ACU.apiConfig = clone(preset.apiConfig);
   }

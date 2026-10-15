@@ -14,10 +14,9 @@ import {
 import {
   ensureApiSettingsShape_ACU,
   findPresetByName_ACU,
-  getBoundPresetNameForChat_ACU,
   getCurrentChatKey_ACU,
-  normalizeApiMode_ACU,
   normalizeApiConfig_ACU,
+  resolveDisplayedActiveApiPresetName_ACU,
   saveApiPreset_ACU,
   saveCurrentConfigAsPreset_ACU,
   deleteApiPreset_ACU,
@@ -55,34 +54,6 @@ interface ApiPresetState {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value ?? null));
-}
-
-function getCurrentConfigAsPreset(name: string): AcuV2ApiPreset {
-  ensureApiSettingsShape_ACU();
-  return {
-    name,
-    apiMode: normalizeApiMode_ACU(settings_ACU.apiMode),
-    apiConfig: normalizeApiConfig_ACU(settings_ACU.apiConfig),
-  };
-}
-
-function findPresetMatchingCurrentConfig(presets: AcuV2ApiPreset[]): AcuV2ApiPreset | null {
-  const current = getCurrentConfigAsPreset('');
-  return presets.find(preset => {
-    return (
-      preset.apiConfig.url === current.apiConfig.url &&
-      preset.apiConfig.apiKey === current.apiConfig.apiKey &&
-      preset.apiConfig.model === current.apiConfig.model &&
-      preset.apiConfig.max_tokens === current.apiConfig.max_tokens &&
-      preset.apiConfig.temperature === current.apiConfig.temperature &&
-      preset.apiConfig.bodyParams === current.apiConfig.bodyParams &&
-      preset.apiConfig.excludeBodyParams === current.apiConfig.excludeBodyParams &&
-      preset.apiConfig.requestHeaders === current.apiConfig.requestHeaders &&
-      // 同名异协议/异后处理预设不得误判为同一：两字段都参与匹配（缺失由归一化补为默认值后比较）。
-      preset.apiConfig.promptPostProcessing === current.apiConfig.promptPostProcessing &&
-      preset.apiConfig.customApiFormat === current.apiConfig.customApiFormat
-    );
-  }) ?? null;
 }
 
 function resolveCurrentConfigStatus(): { ready: boolean; label: string } {
@@ -133,9 +104,7 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
         : '';
       this.defaultApiPresetName = defaultName;
 
-      const boundName = getBoundPresetNameForChat_ACU(this.currentChatKey);
-      const matchedCurrentName = findPresetMatchingCurrentConfig(this.presets)?.name ?? '';
-      this.activePresetName = boundName || defaultName || matchedCurrentName;
+      this.activePresetName = resolveDisplayedActiveApiPresetName_ACU(this.currentChatKey);
       const currentConfig = resolveCurrentConfigStatus();
       this.currentConfigReady = currentConfig.ready;
       this.currentConfigLabel = currentConfig.label;
