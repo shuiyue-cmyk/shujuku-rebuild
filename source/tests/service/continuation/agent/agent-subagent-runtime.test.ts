@@ -433,6 +433,69 @@ describe('总纲空交付改要一条 SQL（上游 3c4beb9 的 TT 子集）', ()
   });
 });
 
+describe('写入任务失效即停（上游 37948da1）', () => {
+  it('回执报聊天或目标楼层已变化时按任务失效抛出，不让模型继续重试写入', async () => {
+    const input = input_ACU();
+    input.delegation = { agentName: 'arc-architect', prompt: '立总纲', reads: [] };
+    input.writeSql = async () => ({
+      status: 'rejected', accepted: [], rejected: [{ path: 'chat', reason: '当前聊天或目标楼层已变化：末楼位置已变化' }],
+      partials: null, revisions: null, constraintProposals: [],
+    }) as any;
+    let calls = 0;
+    const runtime = new AgentSubagentRuntime_ACU({
+      resolveApiPreset: (() => preset_ACU) as any,
+      callInternalAi: async () => {
+        calls += 1;
+        return JSON.stringify({ action: 'write_sql', sql: "UPDATE story_arc SET title = '题' WHERE id = 'STORY-01'" });
+      },
+    });
+    await expect(runtime.run(input)).rejects.toMatchObject({ error: { code: 'CONTINUATION_INTERNAL_REQUEST_STALE' } });
+    expect(calls).toBe(1);
+  });
+
+  it('写入带上派工修订号窗口，基线取派工读集，同一派工多次写入共用同一窗口（上游 5c02f861）', async () => {
+    const input = input_ACU();
+    input.delegation = { agentName: 'arc-architect', prompt: '立总纲', reads: [] };
+    input.resolveContext.moduleSnapshot = { ...input.resolveContext.moduleSnapshot,
+      revisions: { ...input.resolveContext.moduleSnapshot.revisions, storyArc: 4 } };
+    const windows: unknown[] = [];
+    input.writeSql = async write => {
+      windows.push(write.revisionWindow);
+      return { status: 'committed', accepted: [], rejected: [], partials: [], revisions: input.resolveContext.moduleSnapshot.revisions, constraintProposals: [] } as any;
+    };
+    let calls = 0;
+    const runtime = new AgentSubagentRuntime_ACU({
+      resolveApiPreset: (() => preset_ACU) as any,
+      callInternalAi: async () => {
+        calls += 1;
+        return calls <= 2
+          ? JSON.stringify({ action: 'write_sql', sql: "UPDATE story_arc SET title = '题' WHERE id = 'STORY-01'" })
+          : '{"summary":"交付","delta":{}}';
+      },
+    });
+    await runtime.run(input).catch(() => undefined);
+    expect(windows.length).toBeGreaterThanOrEqual(2);
+    expect(windows[0]).toMatchObject({ storyArc: { base: 4, head: 4 } });
+    expect(windows[1]).toBe(windows[0]);
+  });
+
+  it('写入后租约失效同样直接抛出，不被当成一条普通拒绝回执', async () => {
+    const input = input_ACU();
+    input.delegation = { agentName: 'arc-architect', prompt: '立总纲', reads: [] };
+    let current = true;
+    input.isCurrent = () => current;
+    input.writeSql = async () => {
+      current = false;
+      return { status: 'committed', accepted: [], rejected: [], partials: [], revisions: input.resolveContext.moduleSnapshot.revisions, constraintProposals: [] } as any;
+    };
+    const runtime = new AgentSubagentRuntime_ACU({
+      resolveApiPreset: (() => preset_ACU) as any,
+      callInternalAi: async () => JSON.stringify({ action: 'write_sql', sql: "UPDATE story_arc SET title = '题' WHERE id = 'STORY-01'" }),
+    });
+    await expect(runtime.run(input)).rejects.toMatchObject({ error: { code: 'CONTINUATION_INTERNAL_REQUEST_STALE', message: '写入回执已失效' } });
+  });
+});
+
 describe('TT 读取门禁保持（不移植上游依赖全文注入的 read 拒绝）', () => {
   it('子代理 read 世界书地址仍按读取门禁注入条目全文', async () => {
     const input = input_ACU();

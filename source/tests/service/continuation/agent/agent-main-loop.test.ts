@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ContinuationAgentTurnPlanner_ACU, evaluateArcArchitectDispatch_ACU, rangeHasAiFloor_ACU, renderAgentBudget_ACU, renderUnsettledRangeText_ACU } from '../../../../src/service/continuation/agent/agent-main-loop';
+import { ContinuationAgentTurnPlanner_ACU, evaluateArcArchitectDispatch_ACU, rangeHasAiFloor_ACU, renderAgentBudget_ACU, renderMainProtocolRejection_ACU, renderUnsettledRangeText_ACU } from '../../../../src/service/continuation/agent/agent-main-loop';
 import { AgentSubagentRuntime_ACU } from '../../../../src/service/continuation/agent/agent-subagent-runtime';
 import { buildEmptyAgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-module-store';
 import { appendAgentConversation_ACU, buildEmptyAgentConversation_ACU } from '../../../../src/service/continuation/agent/agent-conversation-store';
@@ -592,6 +592,23 @@ describe('主 Agent read/search 工具批次', () => {
   });
 });
 
+describe('主 Agent 协议纠错样例（上游 37948da1）', () => {
+  it('正常续写首推 open_round，不再示范手动委派维护或策划', () => {
+    const text = renderMainProtocolRejection_ACU('缺少 action', { turn: { id: 't' } } as any, true);
+    expect(text).toContain('"action":"open_round"');
+    expect(text).not.toContain('hook-cognition-maintainer');
+    expect(text).not.toContain('mainline-planner');
+    expect(text).toContain('"action":"finalize"');
+  });
+
+  it('资料纠正被拒时只给纠正结构，提示没有实际纠正就改用 open_round', () => {
+    const text = renderMainProtocolRejection_ACU('correct_materials 必须提供 reason 与 sql 或 settlementStartIndex', { turn: null } as any, true);
+    expect(text).toContain('"action":"correct_materials"');
+    expect(text).toContain('没有实际纠正时改用 open_round');
+    expect(text).not.toContain('"action":"finalize"');
+  });
+});
+
 describe('预算渲染', () => {
   const budget_ACU: AgentRunBudget_ACU = { maxIterations: 3, maxDelegations: 6, maxSameAgent: 2, maxConcurrent: 3, maxReads: 8, maxExtraReads: 1 };
 
@@ -1099,6 +1116,21 @@ describe('open_round 固定结构工作流', () => {
     expect(h.subCalls).toHaveLength(5);
   });
 
+  it('固定工作流产出的新大纲需要确认时，会话日志记「等待大纲确认」，不记「本轮已终止」（上游 c9afb631）', async () => {
+    const h = harness_ACU({
+      snapshot: snapshotWithArc_ACU(),
+      context: preOutlineContext_ACU,
+      mainReplies: ['{"action":"open_round","focus":"围绕晶屑继续试探"}'],
+      applyOutline: () => ({ op: 'continue', requiresReview: true, stopped: null, summary: '已产出新大纲' }),
+    });
+
+    await expect(h.planner.plan(h.request)).rejects.toMatchObject({ error: { code: 'CONTINUATION_AGENT_OUTLINE_REPLANNED' } });
+    const log = readAgentSessionLog_ACU();
+    expect(log.some(entry => entry.kind === 'run_failed')).toBe(false);
+    expect(log.some(entry => entry.kind === 'block' && entry.title === '等待大纲确认')).toBe(true);
+    expect(isAgentSessionRunning_ACU()).toBe(false);
+  });
+
   it('已有可用总纲但没有阶段大纲时，只自动准备大纲，不重复运行 arc-architect', async () => {
     const h = harness_ACU({
       snapshot: snapshotWithArc_ACU(),
@@ -1155,6 +1187,18 @@ describe('派工与写集落盘', () => {
     expect(feedback).toContain('requirements-maintainer｜失败');
     expect(feedback).toContain('只能由会话压缩后的系统派工触发');
     expect(feedback).toContain('未消耗派工额度');
+  });
+
+  it('并行派工里有子代理判定任务失效时整体按失效终止，不把它当成普通未采用回喂（上游 37948da1）', async () => {
+    const h = harness_ACU({
+      mainReplies: [
+        '{"action":"delegate","delegations":[{"agentName":"mainline-planner","prompt":"策划本轮","reads":[]}]}',
+        '{"action":"finalize","instruction":"不该交付的指导"}',
+      ],
+      isCurrent: identity => identity.source !== 'agent_subagent',
+    });
+    await expect(h.planner.plan(h.request)).rejects.toMatchObject({ error: { code: 'CONTINUATION_INTERNAL_REQUEST_STALE' } });
+    expect(h.mainCalls).toHaveLength(1);
   });
 
   it('维护类子代理的 delta 串行落盘，结果与约束提议回灌给主 Agent', async () => {

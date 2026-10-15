@@ -1386,7 +1386,7 @@ function assertChatContext_ACU(context: ReturnType<typeof captureChatContext_ACU
  */
 let validatedEnvelopeMemo_ACU: WeakMap<object, ContinuationEnvelope_ACU> = new WeakMap();
 
-function cloneValidatedEnvelope_ACU(envelope: ContinuationEnvelope_ACU): ContinuationEnvelope_ACU {
+function cloneValidatedEnvelope_ACU<T>(envelope: T): T {
   // 校验产物是纯 JSON 数据（无 Date/Map/类实例），structuredClone 可用；
   // 万一宿主环境缺失则退回 JSON 往返。
   return typeof structuredClone === 'function' ? structuredClone(envelope) : JSON.parse(JSON.stringify(envelope));
@@ -1400,7 +1400,9 @@ function readRawEnvelope_ACU(firstMessage: Record<string, unknown>): Continuatio
   if (memo) {
     return cloneValidatedEnvelope_ACU(memo);
   }
-  const validated = validateContinuationEnvelope_ACU(raw);
+  // 迁移校验会就地改写候选（删退役字段、补默认、强刷提示词）：只交给副本，读取不得改动首楼原始数据，
+  // 校验中途失败也不能留下半迁移的对象被宿主下次保存聊天写回（上游 bf3bc1dc）。
+  const validated = validateContinuationEnvelope_ACU(cloneValidatedEnvelope_ACU(raw));
   validatedEnvelopeMemo_ACU.set(raw, cloneValidatedEnvelope_ACU(validated));
   return validated;
 }

@@ -27,7 +27,7 @@ import { USER_PREFILL_CONTENT_ACU } from '../../../shared/user-prefill.js';
 import { findAgentSubagentDefinition_ACU, renderAgentReadCatalog_ACU, renderAgentWebToolCatalog_ACU, type AgentSubagentDefinition_ACU } from './agent-catalog';
 import { hasActiveStoryArc_ACU, readAgentModuleFoldState_ACU, readAgentModuleSnapshot_ACU } from './agent-module-store';
 import { continuationWorkflowContractTouched_ACU } from './agent-workflow';
-import type { AgentFieldPage_ACU, AgentModuleFieldReceipt_ACU } from './agent-module-store';
+import type { AgentFieldPage_ACU, AgentModuleFieldReceipt_ACU, AgentModuleRevisionWindow_ACU } from './agent-module-store';
 import { renderAgentUserRequirements_ACU } from './agent-user-requirements';
 import {
   compactAgentProtocolError_ACU,
@@ -176,7 +176,7 @@ export interface AgentSubagentRunInput_ACU {
   /** 修正轮只允许维护员触碰仍待修复的模块；首轮不传则使用职责固定写集。 */
   targetModules?: readonly AgentWritableModule_ACU[];
   /** 受控逐栏即时保存端口（S11-TT Mode F）；不传时子代理只有只读工具。 */
-  writeSql?: (input: { role: AgentSubagentName_ACU; sql: string; resolvePage: (handle: string) => AgentFieldPage_ACU | null; isCurrent?: () => boolean }) => Promise<AgentModuleFieldReceipt_ACU>;
+  writeSql?: (input: { role: AgentSubagentName_ACU; sql: string; resolvePage: (handle: string) => AgentFieldPage_ACU | null; isCurrent?: () => boolean; revisionWindow?: AgentModuleRevisionWindow_ACU }) => Promise<AgentModuleFieldReceipt_ACU>;
 }
 
 /** 终审由 finalize 前的受控状态机调用，不接受普通 delegation。 */
@@ -635,6 +635,13 @@ export class AgentSubagentRuntime_ACU {
     let writeRoundsUsed = 0;
     const maxWriteRounds = fieldWritable ? Math.max(1, input.budget.maxIterations) : 0;
     let usedFieldWrites = false;
+    // 本派工的修订号窗口：自身提交推进的模块号由提交口接管，外部写入会让提交口把窗口重置到最新版（上游 5c02f861）。
+    const revisionWindow: AgentModuleRevisionWindow_ACU = {};
+    for (const module of writes) {
+      if (module === 'hooks' || module === 'infoGap' || module === 'storyArc' || module === 'chronology' || module === 'webRefs') {
+        revisionWindow[module] = { base: readRevisions[module], head: readRevisions[module] };
+      }
+    }
     let protocolRejections = 0;
     let attempt = 0;
     let lastReason = '';
@@ -846,12 +853,15 @@ export class AgentSubagentRuntime_ACU {
                 throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '写入请求已失效', false));
               }
               try {
-                const receipt = await input.writeSql!({ role: definition.name, sql: call.sql,
+                const receipt = await input.writeSql!({ role: definition.name, sql: call.sql, revisionWindow,
                   isCurrent: () => input.isCurrent(identity) && !input.signal?.aborted, resolvePage: handle => {
                   const page = pageCache.pages.get(handle.trim().toUpperCase());
                   return page?.status === 'ok' && page.text ? { title: page.title, source: page.source, url: page.url, query: page.query, sourceStatus: page.status } : null;
                 } });
                 if (!input.isCurrent(identity) || input.signal?.aborted) throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '写入回执已失效', false));
+                // 聊天或目标楼层已变：这不是字段错误，旧任务不再读写，按失效终止（上游 37948da1）。
+                const staleChat = receipt.rejected.find(item => item.path === 'chat');
+                if (staleChat) throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', staleChat.reason, false));
                 if (receipt.status === 'committed') {
                   usedFieldWrites = true;
                   // 弹回后的成功写轮视为模型合规（余量已移入逐栏）：清除弃置拦截。
@@ -873,6 +883,8 @@ export class AgentSubagentRuntime_ACU {
                 const receiptText = JSON.stringify({ action: 'write_sql', ...receipt, readAddresses });
                 sections.push(repair ? `${receiptText}\n${repair}` : receiptText);
               } catch (error) {
+                // 失效不能被折成一条普通拒绝回执，否则模型会在作废的任务里继续重试写入。
+                if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE') throw error;
                 sections.push(JSON.stringify({ action: 'write_sql', status: 'rejected', accepted: [],
                   reason: error instanceof Error ? error.message : String(error) }));
               }

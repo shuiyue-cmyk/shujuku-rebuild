@@ -866,6 +866,17 @@ export interface AgentModuleFieldReceipt_ACU {
 }
 
 type FieldCommitModule_ACU = 'hooks' | 'infoGap' | 'storyArc' | 'chronology' | 'webRefs';
+/** 本次派工的修订号窗口：base 是子代理读到的版本，head 是本派工最近一次确认的权威版本（上游 5c02f861）。 */
+export type AgentModuleRevisionWindow_ACU = Partial<Record<FieldCommitModule_ACU, { base: number; head: number }>>;
+
+/** 提交结束后维护窗口：状态不明即撤销窗口、退回严格比对；成功提交把 head 推到权威新版。 */
+function syncRevisionWindow_ACU(window: AgentModuleRevisionWindow_ACU | undefined, receipt: AgentModuleFieldReceipt_ACU): void {
+  if (!window) return;
+  for (const module of Object.keys(window) as FieldCommitModule_ACU[]) {
+    if (receipt.revisions === null) delete window[module];
+    else if (receipt.status === 'committed') window[module]!.head = receipt.revisions[module];
+  }
+}
 
 const FIELD_COMMIT_ROLE_MODULES_ACU: Readonly<Partial<Record<AgentModuleWriterRole_ACU, readonly AgentWritableModule_ACU[]>>> = {
   'arc-architect': ['storyArc'],
@@ -1129,6 +1140,8 @@ export function commitAgentModuleFieldWrites_ACU(input: {
   isCurrent?: () => boolean;
   /** 真实完成的阶段号；写齐的卷条目提升为正式条目时按它校验阶段登记。缺省视为没有完成阶段。 */
   completedStageNumbers?: readonly number[];
+  /** 本次派工的修订号窗口；提交口在同一串行队列内维护，调用方只负责派工时初始化。 */
+  revisionWindow?: AgentModuleRevisionWindow_ACU;
 }): Promise<AgentModuleFieldReceipt_ACU> {
   const prior = fieldCommitQueue_ACU.get(input.chat) ?? Promise.resolve();
   const run = prior.catch(() => {}).then(async (): Promise<AgentModuleFieldReceipt_ACU> => {
@@ -1142,20 +1155,24 @@ export function commitAgentModuleFieldWrites_ACU(input: {
     if (input.isCurrent?.() === false || getChatArray_ACU() !== input.chat
       || !input.chat[input.targetIndex] || (input.chat[input.targetIndex] as { is_user?: unknown }).is_user === true
       || input.targetIndex !== input.chat.length - 1) {
-      // 尾楼是用户楼时给准确的原因：那不是「楼层已变化」，而是派工在途时用户又发了新消息，
-      // 模型据此重写同一份 SQL 是白烧写轮。
-      const tailIsUserFloor = !!(input.chat[input.targetIndex] as { is_user?: unknown } | undefined)?.is_user;
-      receipt.rejected.push({
-        path: 'chat',
-        reason: tailIsUserFloor
-          ? '目标楼层现在是用户楼（派工在途时聊天已追加新消息），本次逐栏写入作废'
-          : '当前聊天或目标楼层已变化',
-      });
+      // 给出具体原因（上游 37948da1）：这不是字段错误，子代理据此按任务失效终止，不重写同一份 SQL 白烧写轮。
+      const target = input.chat[input.targetIndex] as { is_user?: unknown } | undefined;
+      const cause = input.isCurrent?.() === false ? '派工租约已失效'
+        : getChatArray_ACU() !== input.chat ? '活动聊天已切换'
+        : !target ? '目标消息不存在'
+        : target.is_user === true ? '目标楼层现在是用户楼（派工在途时聊天已追加新消息）'
+        : '末楼位置已变化';
+      receipt.rejected.push({ path: 'chat', reason: `当前聊天或目标楼层已变化：${cause}。本次逐栏写入作废，停止旧任务，不重发 SQL` });
       receipt.partials = null; receipt.revisions = null; return receipt;
     }
     if (folded.salvaged || folded.candidates.some(item => !item.valid)) {
       receipt.rejected.push({ path: 'frame', reason: '资料帧损坏，拒绝在宽容抢救结果上写入' });
       receipt.partials = null; receipt.revisions = null; return receipt;
+    }
+    // 窗口 head 与当前权威修订号不符，说明有本派工之外的写入：基线重置到最新版，之后只认模型重新读到的号。
+    if (input.revisionWindow) for (const module of Object.keys(input.revisionWindow) as FieldCommitModule_ACU[]) {
+      const current = folded.snapshot.revisions[module];
+      if (input.revisionWindow[module]!.head !== current) input.revisionWindow[module] = { base: current, head: current };
     }
     const evidence = new Set<number>();
     input.chat.forEach((message, index) => {
@@ -1227,6 +1244,11 @@ export function commitAgentModuleFieldWrites_ACU(input: {
       // 新行固定 0；省略修订号时按该规则自动补，模块修订号只约束显式写错的已有行（移植上游 56540c9+2a8472e）。
       const newInsert = intent.kind === 'insert' && !existing && !record && !reserved.has(key);
       if (intent.expectedRevision === undefined) intent.expectedRevision = newInsert ? 0 : folded.snapshot.revisions[module];
+      // 派工基线到当前之间的修订号只被本派工自己的提交推进过，模型抄到其中哪一版都指向同一读集，
+      // 由运行时接管为当前号；越过当前或早于基线的号仍按冲突拒绝（上游 5c02f861）。
+      const window = input.revisionWindow?.[module];
+      if (window && window.head === folded.snapshot.revisions[module]
+        && intent.expectedRevision >= window.base && intent.expectedRevision <= window.head) intent.expectedRevision = window.head;
       const revisionOk = intent.expectedRevision === folded.snapshot.revisions[module] || (newInsert && intent.expectedRevision === 0);
       if (!revisionOk) {
         receipt.rejected.push({ path, reason: `revision_conflict: expected=${intent.expectedRevision}, actual=${folded.snapshot.revisions[module]}` }); continue;
@@ -1445,7 +1467,7 @@ export function commitAgentModuleFieldWrites_ACU(input: {
     }
     receipt.accepted = accepted.map(item => ({ ...item, revision: confirmed.fields.records[item.module]?.[item.id]?.fields[item.field]?.revision ?? 0 }));
     return receipt;
-  });
+  }).then(receipt => { syncRevisionWindow_ACU(input.revisionWindow, receipt); return receipt; });
   fieldCommitQueue_ACU.set(input.chat, run.then(() => {}, () => {}));
   return run;
 }

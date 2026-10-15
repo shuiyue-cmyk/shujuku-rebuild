@@ -116,6 +116,13 @@ describe('主 Agent 动作解析', () => {
     }, true)).toThrowError(/userMessageId/);
   });
 
+  it('correct_materials 缺参时报出各字段实际状态，指出思考文字不算参数（上游 231a5f80）', () => {
+    expect(() => parseAgentMainAction_ACU({ action: 'correct_materials', thought: 'UPDATE hooks ...', reason: '依据', sql: '  ' }, true))
+      .toThrowError(/reason=nonempty，sql=empty，settlementStartIndex=missing/);
+    expect(() => parseAgentMainAction_ACU({ action: 'correct_materials', thought: 'x', sql: 3 }, true))
+      .toThrowError(/reason=missing，sql=type:number.*思考文字不算参数.*open_round/);
+  });
+
   it('adjust_progress 进度校准：nextTurnId 与 completeStage 必须且只能给一项（移植上游 e35f758d）', () => {
     const next = parseAgentMainAction_ACU({
       action: 'adjust_progress', thought: '对准实际剧情', reason: '正文已演到第二阶段',

@@ -178,7 +178,10 @@ describe('ContinuationOrchestrator_ACU', () => {
     await expectCode(() => orchestrator.createTask({ originInstruction: '   ' }), 'CONTINUATION_ORIGIN_INSTRUCTION_EMPTY');
     await orchestrator.createTask({ originInstruction: '推进剧情' });
 
-    await expectCode(() => orchestrator.continueTask(), 'CONTINUATION_AGENT_OUTLINE_REPLANNED');
+    // 新大纲等待确认是正常交接，不当错误抛给界面（上游 c9afb631）
+    const waiting = await orchestrator.continueTask();
+    expect(waiting.task).toMatchObject({ status: 'awaiting_outline_review', lastError: null });
+    expect('preparedTurn' in waiting && waiting.preparedTurn).toBeFalsy();
     const preview = store.readPersisted()!.activeTask!;
     expect(preview.status).toBe('awaiting_outline_review');
     expect(preview.stages[0].revisions[0].frozen).toBe(false);
@@ -187,6 +190,17 @@ describe('ContinuationOrchestrator_ACU', () => {
     expect(accepted.task).toMatchObject({ status: 'paused' });
     expect(accepted.task.stages[0].revisions[0].frozen).toBe(true);
     expect(store.readPersisted()?.activeTask?.status).toBe('paused');
+  });
+
+  it('收到大纲待确认错误但任务并未进入等待确认时，仍按失败暂停并抛出', async () => {
+    const { orchestrator, executionEngine, store } = createOrchestrator();
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    executionEngine.prepareCurrentTurnInstruction.mockImplementationOnce(async () => {
+      throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_OUTLINE_REPLANNED', 'agent_loop', '新大纲等待确认', false));
+    });
+
+    await expectCode(() => orchestrator.continueTask(), 'CONTINUATION_AGENT_OUTLINE_REPLANNED');
+    expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'paused', lastError: { code: 'CONTINUATION_AGENT_OUTLINE_REPLANNED' } });
   });
 
   it('sets one persistent deadline on continue and never calls the engine after it expires', async () => {
@@ -1044,7 +1058,7 @@ describe('ContinuationOrchestrator_ACU', () => {
   it('sendAgentMessage 接收专用流程状态中的消息但不穿透大纲确认门禁', async () => {
     const { orchestrator, store } = createOrchestrator({ preview: true });
     await orchestrator.createTask({ originInstruction: '推进剧情' });
-    await expectCode(() => orchestrator.continueTask(), 'CONTINUATION_AGENT_OUTLINE_REPLANNED');
+    await orchestrator.continueTask();
     expect(store.readPersisted()!.activeTask!.status).toBe('awaiting_outline_review');
 
     const result = await orchestrator.sendAgentMessage({ text: '确认前先把节奏放慢' });

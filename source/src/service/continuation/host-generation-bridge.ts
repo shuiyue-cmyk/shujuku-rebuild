@@ -270,6 +270,14 @@ export class ContinuationHostGenerationBridge_ACU {
       }
       const message = chat[messageIndex];
       const body = String(message.mes ?? '');
+      if (!body.trim()) {
+        // 空正文是生成失败，不是合格正文：没配标签、没设最短长度时也不能确认（上游 80096e51）。
+        // 空楼会被宿主 regenerate 删掉重生成，同样先作废待填表防抖。
+        try { this.dependencies.invalidatePendingAutoFill?.(); } catch { /* 填表作废失败不阻断重试链 */ }
+        await this.dependencies.runtime.rejectHostTurnForFailedGeneration(claimedIdentity);
+        await this.autoRetryHostGenerationIfReady_ACU(claimedIdentity, snapshot.settings.retryDelaySeconds ?? 0);
+        return;
+      }
       if (!message || !validateLoopTags_ACU(body, snapshot.settings.loopTags)) {
         // [双写互斥] 坏标签楼将由宿主 regenerate 删掉重生成：本轮正文对应的
         // 自动填表防抖（GENERATION_ENDED 派发，500ms 窗口）此刻指向即将被删掉的楼，若让它到期

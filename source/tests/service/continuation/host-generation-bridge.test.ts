@@ -219,6 +219,37 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
     expect(h.runtime.confirmCurrentTurn).not.toHaveBeenCalled();
   });
 
+  it('空正文按生成失败重试（没配标签、没设最短长度时也不能当合格正文确认；上游 80096e51）', async () => {
+    for (const mes of ['', '  \n\t']) {
+      const invalidatePendingAutoFill = vi.fn();
+      const h = createHarness({ tags: '', minTokens: 0, invalidatePendingAutoFill });
+      h.hostInput.send.mockImplementation(() => { h.bridge.onGenerationStarted(7); return true; });
+      h.hostInput.retryGeneration.mockImplementation(() => { h.bridge.onGenerationStarted(8); return true; });
+      await h.bridge.send(prepared);
+      h.setChat([{ is_user: true }, { is_user: false, mes, message_id: 9 }]);
+      await h.bridge.onGenerationEnded(9, 7);
+
+      expect(h.runtime.confirmCurrentTurn).not.toHaveBeenCalled();
+      expect(h.runtime.rejectHostTurnForFailedGeneration).toHaveBeenCalledWith(identity);
+      expect(h.runtime.rejectHostTurnForMissingTags).not.toHaveBeenCalled();
+      // 空楼同样会被宿主 regenerate 删掉重生成：先作废待填表防抖。
+      expect(invalidatePendingAutoFill).toHaveBeenCalledOnce();
+      expect(h.hostInput.retryGeneration).toHaveBeenCalledWith('regenerate');
+    }
+  });
+
+  it('配了循环标签时，空正文同样按生成失败处理，不按缺标签', async () => {
+    const h = createHarness({ tags: '<required>' });
+    h.hostInput.send.mockImplementation(() => { h.bridge.onGenerationStarted(7); return true; });
+    h.hostInput.retryGeneration.mockImplementation(() => { h.bridge.onGenerationStarted(8); return true; });
+    await h.bridge.send(prepared);
+    h.setChat([{ is_user: true }, { is_user: false, mes: '', message_id: 9 }]);
+    await h.bridge.onGenerationEnded(9, 7);
+
+    expect(h.runtime.rejectHostTurnForFailedGeneration).toHaveBeenCalledWith(identity);
+    expect(h.runtime.rejectHostTurnForMissingTags).not.toHaveBeenCalled();
+  });
+
   it('confirms short bodies directly when the token threshold is 0 (gate off)', async () => {
     const h = createHarness({ minTokens: 0, tokens: 5 });
     h.hostInput.send.mockImplementation(() => { h.bridge.onGenerationStarted(7); return true; });

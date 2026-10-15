@@ -641,6 +641,14 @@ export class ContinuationOrchestrator_ACU {
         this.assertLeaseCurrent_ACU(chatIdentity, lease, 'turn_call');
         return { ...taskResult_ACU(this.dependencies.store.readPersisted() ?? started!), preparedTurn };
       } catch (error) {
+        // 新大纲已落盘为「等待确认」是正常交接，不是失败：按等待状态返回，界面显示确认面板而不是报错（上游 c9afb631）。
+        if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_AGENT_OUTLINE_REPLANNED'
+          && this.isLeaseCurrent_ACU(chatIdentity, lease)) {
+          const waiting = this.dependencies.store.readPersisted();
+          if (waiting?.activeTask?.taskId === task.taskId && waiting.activeTask.status === 'awaiting_outline_review') {
+            return taskResult_ACU(waiting);
+          }
+        }
         await this.pauseWithError_ACU(chatIdentity, task.taskId, error, 'turn_call', '每轮指令生成失败', lease);
         throw error;
       } finally {

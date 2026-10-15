@@ -178,6 +178,59 @@ describe('useContinuationRuntime', () => {
     expect(harness.bridgeSend).not.toHaveBeenCalled();
   });
 
+  it('确认大纲后接着续跑（上游 c9afb631）；确认期间点了停止则不再点火', async () => {
+    const pausedEnvelope = {
+      schemaVersion: 1, settings: {},
+      activeTask: { taskId: 'task-1', status: 'paused', stopReason: null, activeStageId: 'stage-1',
+        stages: [{ stageId: 'stage-1', status: 'running', activeRevision: 1, revisions: [] }] },
+    } as any;
+    harness.acceptOutline.mockResolvedValue({ envelope: pausedEnvelope, task: pausedEnvelope.activeTask });
+    harness.read.mockReturnValue(pausedEnvelope);
+    harness.continueTask.mockResolvedValue({ ...result, preparedTurn });
+    const { useContinuationRuntime } = await import('../../../src/presentation-v2/composables/useContinuationRuntime');
+    const continuation = useContinuationRuntime();
+    const outline = { schemaVersion: 1, title: '阶段', goal: '目标', totalTurns: 6, nodes: [] } as any;
+
+    await expect(continuation.acceptOutline(outline)).resolves.toBe(true);
+    expect(harness.continueTask).toHaveBeenCalledOnce();
+    expect(harness.bridgeSend).toHaveBeenCalledWith(preparedTurn);
+
+    harness.continueTask.mockClear();
+    let release!: (value: unknown) => void;
+    harness.acceptOutline.mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+    const pending = continuation.acceptOutline(outline);
+    const stopping = continuation.stopTask();
+    release({ envelope: pausedEnvelope, task: pausedEnvelope.activeTask });
+    await pending;
+    await stopping;
+    expect(harness.continueTask).not.toHaveBeenCalled();
+  });
+
+  it('关页重开后在新页面点停止，旧页面确认中的大纲同样不再点火（上游 e520bb8d）', async () => {
+    const pausedEnvelope = {
+      schemaVersion: 1, settings: {},
+      activeTask: { taskId: 'task-1', status: 'paused', stopReason: 'manual', activeStageId: 'stage-1',
+        stages: [{ stageId: 'stage-1', status: 'running', activeRevision: 1, revisions: [] }] },
+    } as any;
+    harness.read.mockReturnValue(pausedEnvelope);
+    const { effectScope } = await import('vue');
+    const { useContinuationRuntime } = await import('../../../src/presentation-v2/composables/useContinuationRuntime');
+    const outline = { schemaVersion: 1, title: '阶段', goal: '目标', totalTurns: 6, nodes: [] } as any;
+    const oldScope = effectScope();
+    const oldPage = oldScope.run(() => useContinuationRuntime())!;
+    let release!: (value: unknown) => void;
+    harness.acceptOutline.mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+    const pending = oldPage.acceptOutline(outline);
+    oldScope.stop();
+    const newScope = effectScope();
+    const reopened = newScope.run(() => useContinuationRuntime())!;
+    await reopened.stopTask();
+    release({ envelope: pausedEnvelope, task: pausedEnvelope.activeTask });
+    await pending;
+    expect(harness.continueTask).not.toHaveBeenCalled();
+    newScope.stop();
+  });
+
   it('切聊天后迟到的旧设置保存结果不得写入当前 runtime 视图', async () => {
     let release!: (value: unknown) => void;
     const oldEnvelope = { schemaVersion: 1, settings: { marker: 'A' }, activeTask: null } as any;

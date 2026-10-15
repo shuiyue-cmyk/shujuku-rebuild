@@ -115,6 +115,27 @@ describe('FirstFloorContinuationStore_ACU', () => {
     expect(store.read()).toEqual(candidate);
   });
 
+  it('读取不就地改写首楼原始信封：迁移只作用于副本，校验失败也不留半迁移数据（上游 bf3bc1dc）', () => {
+    const legacy: any = buildEnvelope_ACU();
+    delete legacy.settings.agentPrompts;
+    legacy.settings.turnInstructionPrompt = [{ role: 'system', content: '旧段' }];
+    const before = JSON.stringify(legacy);
+    const chat: any[] = [{ _qrf_continuation: legacy }];
+    _set_SillyTavern_API_ACU({ chat, chatMetadata: {}, chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+
+    const read = new FirstFloorContinuationStore_ACU().read();
+    expect(read?.settings.agentPrompts).toBeDefined();
+    expect(JSON.stringify(chat[0]._qrf_continuation)).toBe(before);
+
+    const broken: any = buildEnvelope_ACU();
+    broken.settings.turnInstructionPrompt = [{ role: 'system', content: '旧段' }];
+    broken.settings.unknownKey = true;
+    const brokenBefore = JSON.stringify(broken);
+    chat[0]._qrf_continuation = broken;
+    expect(() => new FirstFloorContinuationStore_ACU().readPersisted()).toThrow(ContinuationValidationError_ACU);
+    expect(JSON.stringify(chat[0]._qrf_continuation)).toBe(brokenBefore);
+  });
+
   it('rejects corrupted raw snapshots without replacing them', () => {
     const chat: any[] = [{ _qrf_continuation: { schemaVersion: 1, settings: undefined, activeTask: null } }];
     _set_SillyTavern_API_ACU({ chat, chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);

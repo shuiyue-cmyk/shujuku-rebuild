@@ -600,7 +600,15 @@ export function parseAgentMainAction_ACU(payload: Record<string, unknown>, allow
     const sql = readText_ACU(payload.sql).trim();
     const start = payload.settlementStartIndex;
     const user = payload.userMessageId;
-    if (!reason || (!sql && start === undefined)) failProtocol_ACU('correct_materials 必须提供 reason 与 sql 或 settlementStartIndex');
+    if (!reason || (!sql && start === undefined)) {
+      // 报出各字段实际状态：模型常把 SQL 写进 thought 或给空串，只说「必须提供」它看不出错在哪（上游 231a5f80）。
+      const state = (value: unknown): string => value === undefined ? 'missing'
+        : value === null ? 'null' : typeof value !== 'string' ? `type:${typeof value}`
+          : value.trim() ? 'nonempty' : 'empty';
+      failProtocol_ACU(`correct_materials 必须提供 reason 与 sql 或 settlementStartIndex；实际字段状态：reason=${state(payload.reason)}，sql=${state(payload.sql)}，settlementStartIndex=${start === undefined ? 'missing' : typeof start}。`
+        + 'reason 与 sql 必须是动作顶层的非空字符串；思考文字不算参数。'
+        + '没有业务纠正时使用 open_round，不用空 SQL 或虚构追溯起点。');
+    }
     if (payload.sql !== undefined && (typeof payload.sql !== 'string' || !sql)) failProtocol_ACU('sql 必须是非空字符串');
     if (start !== undefined && (typeof start !== 'number' || !Number.isInteger(start) || start < 0)) failProtocol_ACU('settlementStartIndex 必须是非负整数');
     if (start !== undefined && (typeof user !== 'number' || !Number.isInteger(user) || user < 1)) failProtocol_ACU('改变追溯起点必须引用真实用户消息 userMessageId');

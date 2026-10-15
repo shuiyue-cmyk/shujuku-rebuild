@@ -48,6 +48,8 @@ export interface ContinuationWorkflowAgentCall_ACU {
   billing: ContinuationWorkflowBilling_ACU;
   repair: boolean;
   targetModules?: AgentWritableModule_ACU[];
+  /** 工作流此刻的资料快照（已含本轮结算）；缺省时调用方沿用运行起点快照。 */
+  snapshot?: AgentModuleSnapshot_ACU;
 }
 
 export interface ContinuationWorkflowUnresolvedIssue_ACU {
@@ -108,8 +110,8 @@ export interface ContinuationWorkflowInput_ACU {
   runAgent: (call: ContinuationWorkflowAgentCall_ACU) => Promise<ContinuationWorkflowAgentPayload_ACU>;
   /** 已即时保存时读回提交后快照；不传则沿用传入快照（旧行为）。 */
   readCommittedSnapshot?: () => AgentModuleSnapshot_ACU;
-  runComposer: (call: { prompt: string; revisionFeedback: string; priorInstruction: string }) => Promise<AgentComposerOutput_ACU>;
-  runFinalReview: (instruction: string, summary: string) => Promise<AgentFinalReviewerOutput_ACU>;
+  runComposer: (call: { prompt: string; revisionFeedback: string; priorInstruction: string; snapshot?: AgentModuleSnapshot_ACU }) => Promise<AgentComposerOutput_ACU>;
+  runFinalReview: (instruction: string, summary: string, snapshot?: AgentModuleSnapshot_ACU) => Promise<AgentFinalReviewerOutput_ACU>;
   /** 本轮实际注入的正文起点；缺省保留既有完整结算语义。 */
   settlementStartIndex?: number;
   /** 窗口外仍有未处理正文时，不得推进连续结算水位。 */
@@ -222,7 +224,8 @@ function maintainerPrompt_ACU(focus: string, snapshot: AgentModuleSnapshot_ACU, 
   const fixes = snapshot.pendingFixes.filter(item => (MAINTAINER_MODULES_ACU as readonly string[]).includes(item.module));
   return [
     repair ? '这是独立预算的自动修复。只提交违规模块的增量 patch，不要重写无关模块。' : `本轮焦点：${focus}`,
-    '只逐楼结算 $HISTORY_UNSETTLED 实际提供的窗口内正文；窗口外省略内容不得宣称已读或已结算。没有新事实时 delta 留空并在 summary 写明 no_change。',
+    '只逐楼结算 $HISTORY_UNSETTLED 实际提供的窗口内正文；窗口外省略内容不得宣称已读或已结算。没有新事实时不调用 write_sql，delta 留空并在 summary 写明 no_change 与逐项核对结果，不用 SELECT 1 等空操作代替核对。',
+    'expected_revision 只用于 UPDATE/DELETE 的 WHERE 校验，不放进 SET，也不自行递增。被拒的写入不等于资料损坏；按回执区分实际缺栏、未保存的业务变化和任务失效。',
     `待修复：${formatFixes_ACU(fixes)}`,
   ].join('\n');
 }
@@ -562,9 +565,10 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
   const outsidePending = snapshot.pendingFixes.filter(item => !pendingWithinSettlement_ACU(item, settlementStartIndex, settlementEndIndex));
   const previousCompletion = input.snapshot.materialCompletion;
 
+  // 每次派工带上工作流此刻的资料：结算后的策划、补足与编排必须看到本轮刚结算的账本。
   const runSafe_ACU = async (call: ContinuationWorkflowAgentCall_ACU): Promise<ContinuationWorkflowAgentPayload_ACU> => {
     try {
-      return await input.runAgent(call);
+      return await input.runAgent({ ...call, snapshot });
     } catch (error) {
       if (isStale_ACU(error)) throw error;
       return { ok: false, summary: errorText_ACU(error) };
@@ -765,8 +769,12 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
   for (let index = 0; index < planners.length; index += 1) {
     const planner = planners[index];
     steps.push({ agentName: plannerCalls[index].agentName, status: planner.ok ? 'ok' : 'failed', summary: planner.summary });
-    if (planner.planner) {
-      plannerNotes.push(planner.planner.recommendation);
+    // 交接整份策划交付（来源、必须保留、风险），不只摘 recommendation；失败的策划明确标失败（上游 37948da1）。
+    if (planner.ok && planner.planner) {
+      plannerNotes.push(JSON.stringify({ agentName: plannerCalls[index].agentName, ...planner.planner }));
+    } else {
+      plannerNotes.push(JSON.stringify({ agentName: plannerCalls[index].agentName, status: 'failed',
+        summary: planner.summary || '本轮没有可用策划交付', recommendation: '', mustPreserve: [], risks: [] }));
     }
   }
 
@@ -777,6 +785,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     input.opening.summary ? `开局摘要：${input.opening.summary}` : '',
     `策划建议：${plannerNotes.join('\n') || '无'}`,
     `待修复：${formatFixes_ACU(snapshot.pendingFixes)}`,
+    '每份策划交接保留来源、summary、recommendation、mustPreserve 和 risks。逐项核对保留条件与风险，不只摘录 recommendation；失败的策划不是可用建议。它们是待核实的建议，不高于正文、权威账本或用户要求；存在冲突时在 summary 说明取舍，不能静默丢弃保留条件或补编缺失事实。',
     '通读结算后的资料、用户要求与活跃约束，产出本轮写作指令。产出前自查：策划建议之间是否互相冲突、是否与本轮 pacing 冲突、是否与已结算的硬事实/长期约束冲突；发现冲突时取更保守的一方并在 summary 注明取舍，不得原样拼接两份矛盾建议。',
   ].filter(Boolean).join('\n');
 
@@ -792,7 +801,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     };
   });
   const repairPromise = Promise.all(repairCalls.map(call => runSafe_ACU(call)));
-  const composerPromise = input.runComposer({ prompt: composerBase, revisionFeedback: '', priorInstruction: '' }).catch(error => {
+  const composerPromise = input.runComposer({ prompt: composerBase, revisionFeedback: '', priorInstruction: '', snapshot }).catch(error => {
     if (isStale_ACU(error)) throw error;
     const failed: AgentComposerOutput_ACU = { instruction: '', summary: errorText_ACU(error), constraints: null };
     return failed;
@@ -879,7 +888,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     while (failures < limit) {
       let review: AgentFinalReviewerOutput_ACU;
       try {
-        review = await input.runFinalReview(instruction, composer.summary);
+        review = await input.runFinalReview(instruction, composer.summary, snapshot);
       } catch (error) {
         if (isStale_ACU(error)) throw error;
         failures += 1;
@@ -898,9 +907,11 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       let revised: AgentComposerOutput_ACU;
       try {
         revised = await input.runComposer({
-          prompt: `按反馈清单增量修订，不要全量重写。\n原指令：\n${instruction}`,
-          revisionFeedback: review.requiredFixes.join('\n'),
+          // 修订仍带本轮焦点与策划交接，并列出终审要求保留的内容，避免增量修订丢上下文（上游 37948da1）。
+          prompt: `${composerBase}\n\n按反馈清单增量修订，不要全量重写。\n原指令：\n${instruction}`,
+          revisionFeedback: `修正清单：\n${review.requiredFixes.join('\n')}\n必须保留：\n${review.preserve.join('\n') || '未另列；保留原指令未被反馈涉及的内容'}`,
           priorInstruction: instruction,
+          snapshot,
         });
       } catch (error) {
         if (isStale_ACU(error)) throw error;

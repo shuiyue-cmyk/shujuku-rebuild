@@ -241,6 +241,70 @@ describe('续写固定工作流（TT）', () => {
     expect(harness.composerPrompts[0]).toContain('不得原样拼接');
   });
 
+  it('策划交接保留来源、必须保留与风险，失败的策划标为失败而不是静默缺席（上游 37948da1）', async () => {
+    const harness = harness_ACU({
+      hasUnsettledHistory: false,
+      turnNumber: 2,
+      runAgent: async call => {
+        if (call.agentName === 'beat-planner') return { ok: false, summary: '节拍策划超时' };
+        return { ok: true, summary: call.agentName,
+          planner: { summary: '建议', recommendation: '安静地问一句', mustPreserve: ['守门人不说谎'], risks: ['提前揭底'] } };
+      },
+    });
+    await harness.run();
+    const prompt = harness.composerPrompts[0];
+    expect(prompt).toContain('mainline-planner');
+    expect(prompt).toContain('守门人不说谎');
+    expect(prompt).toContain('提前揭底');
+    expect(prompt).toMatch(/beat-planner[^\n]*failed/);
+    expect(prompt).toContain('节拍策划超时');
+  });
+
+  it('终审打回后的修订带上本轮上下文与终审要求保留的内容（上游 37948da1）', async () => {
+    const settings = buildDefaultContinuationSettings_ACU();
+    settings.finalReview.enabled = true;
+    settings.workflow.reviseLimit = 3;
+    const verdicts: AgentFinalReviewerOutput_ACU['verdict'][] = ['revise', 'pass'];
+    const harness = harness_ACU({
+      settings,
+      hasUnsettledHistory: false,
+      runFinalReview: async () => ({ ...review_ACU(verdicts.shift() ?? 'pass', ['补上时间锚']), preserve: ['结尾的沉默'] }),
+    });
+    await harness.run();
+    const revision = harness.composerPrompts[1];
+    expect(revision).toContain('本轮焦点：守门人的回避');
+    expect(revision).toContain('安静地问一句');
+    expect(revision).toContain('补上时间锚');
+    expect(revision).toContain('结尾的沉默');
+  });
+
+  it('结算后的策划、指导与终审拿到工作流当前资料，而不是结算前的旧快照', async () => {
+    const settings = buildDefaultContinuationSettings_ACU();
+    settings.finalReview.enabled = true;
+    const seen: Record<string, string[]> = {};
+    const record = (who: string, snapshot: AgentModuleSnapshot_ACU | undefined) => {
+      seen[who] = (snapshot?.hooks ?? []).map(item => item.id);
+    };
+    const base = harness_ACU({ settings });
+    const maintainerRun = base.input.runAgent;
+    base.input.runAgent = async call => {
+      if (call.agentName !== 'hook-cognition-maintainer') record(call.agentName, call.snapshot);
+      return maintainerRun(call);
+    };
+    base.input.runComposer = async call => {
+      record('composer', call.snapshot);
+      return { instruction: '从守门人的回避写起', summary: '试探', constraints: null };
+    };
+    base.input.runFinalReview = async (_instruction, _summary, snapshot) => {
+      record('final', snapshot);
+      return review_ACU('pass');
+    };
+    await base.run();
+    expect(seen['mainline-planner']).toEqual(['H1']);
+    expect(seen.composer).toEqual(['H1']);
+    expect(seen.final).toEqual(['H1']);
+  });
+
   it('没有未结算正文时 maintainer 短路，不调用模型', async () => {
     const harness = harness_ACU({ hasUnsettledHistory: false });
     const result = await harness.run();

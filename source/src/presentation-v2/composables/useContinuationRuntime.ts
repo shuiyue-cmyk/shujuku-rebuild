@@ -37,6 +37,10 @@ export interface ContinuationPromptBundle_ACU {
 type ContinuationActionResult_ACU = ContinuationOrchestratorResult_ACU & { preparedTurn?: ContinuationPreparedTurnInstruction_ACU; retryHostGeneration?: boolean };
 type ContinuationRuntimeActionResult_ACU = ContinuationActionResult_ACU | ContinuationEnvelope_ACU;
 
+// 用户点停止后递增：挡住「发送已落盘、continueTask 尚未启动」这一空档把停止吞掉再开跑。
+// 放在模块级而非页面实例：关页重开后在新页面点停止，旧页面仍在途的动作也要看得到（上游 e520bb8d）。
+let stopEpoch = 0;
+
 function errorMessage_ACU(error: unknown): string {
   if (error instanceof ContinuationValidationError_ACU) return error.error.message;
   return error instanceof Error ? error.message : '智能续写操作失败';
@@ -52,8 +56,6 @@ export function useContinuationRuntime() {
   const originInstruction = ref('');
   let initialization: Promise<void> | null = null;
   let activeAction: Promise<boolean> | null = null;
-  // 用户点停止后递增：挡住「发送已落盘、continueTask 尚未启动」这一空档把停止吞掉再开跑。
-  let stopEpoch = 0;
   const viewChatIdentity = ref(String(currentChatFileIdentifier_ACU || ''));
   let viewEpoch = 0;
 
@@ -376,7 +378,11 @@ export function useContinuationRuntime() {
   }
 
   async function acceptOutline(outline: StageOutline_ACU): Promise<boolean> {
-    return run_ACU(() => runtime.orchestrator.acceptOutline({ outline }));
+    const epochAtStart = stopEpoch;
+    const accepted = await run_ACU(() => runtime.orchestrator.acceptOutline({ outline }));
+    // 「确认大纲并继续」：确认落盘后接着续跑；确认期间点了停止则不再点火（上游 c9afb631）。
+    if (accepted && stopEpoch === epochAtStart && canContinue.value) await continueTask();
+    return accepted;
   }
 
   async function abandonAndCreate(newOriginInstruction: string): Promise<boolean> {
