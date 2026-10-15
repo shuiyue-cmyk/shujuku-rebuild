@@ -369,6 +369,50 @@ function adaptGeminiReasoningEffort_ACU(effort: string, gemini: { version: [numb
   return effort === 'ultra' ? 'max' : effort;
 }
 
+/**
+ * 思考强度按接口协议落到上游真正认的字段：effort 为 undefined 时请求体省略 reasoning_effort，
+ * thinking 经 custom_include_body 补进上游请求体。
+ * - Claude 协议：TT（main/dev）只把 reasoning_effort 转成 output_config.effort，该字段只认
+ *   low/medium/high/xhigh/max；关闭思考时 effort:false 各家都拒（实测 Claude、MiniMax、Qwen 均 400），
+ *   改发 thinking: disabled。OpenCode Go 上的非 Claude 模型（MiniMax M3）不带 thinking 就完全不思考、
+ *   effort 被忽略，补 thinking: adaptive 后按 effort 思考（Qwen、MiniMax M2.7 同样接受）。
+ * - 关闭思考的布尔 false：OpenAI Responses 规范只认 'none'；Go 的兼容接口多数模型同样只认 'none'
+ *   （实测 Kimi、MiMo、Hy 收 false 回 400）。其他 OpenAI 兼容端点保持 false 不变。
+ */
+function resolveReasoningControl_ACU(
+  raw: string,
+  format: string,
+  model: unknown,
+  url: unknown,
+  gemini: { version: [number, number]; name: string } | null,
+): { effort?: string | false; thinking?: Record<string, string> } {
+  if (raw === 'auto') return {};
+  if (raw === 'false') {
+    if (format === 'claude_messages') return { thinking: { type: 'disabled' } };
+    if (format === 'openai_responses' || (format === 'openai_compat' && isOpencodeGoEndpoint_ACU(url))) return { effort: 'none' };
+    return { effort: false };
+  }
+  const effort = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(raw) ? raw : 'medium';
+  if (format === 'gemini_generate_content') return { effort: adaptGeminiReasoningEffort_ACU(effort, gemini) };
+  if (format === 'claude_messages') {
+    const claudeEffort = effort === 'minimal' ? 'low' : effort === 'ultra' ? 'max' : effort;
+    const needsThinking = isOpencodeGoEndpoint_ACU(url) && !/claude/i.test(String(model || ''));
+    return { effort: claudeEffort, ...(needsThinking ? { thinking: { type: 'adaptive' } } : {}) };
+  }
+  return { effort };
+}
+
+/** 用户自定义请求体（YAML 映射或序列）顶层是否写了某个键；解析失败按已写处理（插件字段反正会被跳过）。 */
+function userBodyDefinesKey_ACU(userBodyParams: string, key: string): boolean {
+  if (!userBodyParams.trim()) return false;
+  try {
+    const parsed = parseYaml_ACU(userBodyParams);
+    return (Array.isArray(parsed) ? parsed : [parsed]).some(item => isRecord_ACU(item) && Object.prototype.hasOwnProperty.call(item, key));
+  } catch {
+    return true;
+  }
+}
+
 export function buildCustomApiRequestBody_ACU(
   messages: any[],
   effectiveApiConfig: any,
@@ -426,6 +470,18 @@ export function buildCustomApiRequestBody_ACU(
   if (opts.responseFormat && typeof opts.responseFormat === 'object') {
     pluginFields.response_format = opts.responseFormat;
   }
+  const customApiFormat_ACU = (['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions', 'gemini_generate_content'] as const).includes(effectiveApiConfig.customApiFormat as any)
+    ? effectiveApiConfig.customApiFormat
+    : 'openai_compat';
+  const geminiModel_ACU = customApiFormat_ACU === 'gemini_generate_content' ? parseGeminiModel_ACU(model) : null;
+  // 思考强度（预设级优先）：'auto' 省略；非法值回退 medium；各协议的落地字段见 resolveReasoningControl_ACU
+  const reasoningControl_ACU = resolveReasoningControl_ACU(
+    String(effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium').trim().toLowerCase(),
+    customApiFormat_ACU, model, effectiveApiConfig.url, geminiModel_ACU,
+  );
+  if (reasoningControl_ACU.thinking && !userBodyDefinesKey_ACU(userBodyParams, 'thinking')) {
+    pluginFields.thinking = reasoningControl_ACU.thinking;
+  }
   const composedIncludeBody = composeCustomIncludeBody_ACU(userBodyParams, pluginFields);
   if (composedIncludeBody.diagnostic.reason === 'parse_error' || composedIncludeBody.diagnostic.reason === 'unsupported_root') {
     logWarn_ACU('[buildCustomApiRequestBody] 跳过插件请求体字段', composedIncludeBody.diagnostic);
@@ -438,10 +494,6 @@ export function buildCustomApiRequestBody_ACU(
   const promptPostProcessing_ACU = normalizePromptPostProcessing_ACU(effectiveApiConfig.promptPostProcessing);
 
   const effectiveMessages_ACU = Array.isArray(messages) ? [...messages] : messages;
-  const customApiFormat_ACU = (['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions', 'gemini_generate_content'] as const).includes(effectiveApiConfig.customApiFormat as any)
-    ? effectiveApiConfig.customApiFormat
-    : 'openai_compat';
-  const geminiModel_ACU = customApiFormat_ACU === 'gemini_generate_content' ? parseGeminiModel_ACU(model) : null;
 
   const body: Record<string, any> = {
     // 统一将 messages 的 role 归一为小写（system / user / assistant）。
@@ -498,15 +550,7 @@ export function buildCustomApiRequestBody_ACU(
     custom_api_format: customApiFormat_ACU,
     group_names: [],
     include_reasoning: false,
-    // 思考强度（预设级优先）：minimal/low/medium/high/xhigh/max/ultra 原样透传；'false' 传布尔 false 关闭思考；
-    // 'auto' 则省略该参数由服务端自定；非法值回退 medium
-    ...(((): Record<string, unknown> => {
-      const raw = String(effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium').trim().toLowerCase();
-      if (raw === 'auto') return {};
-      if (raw === 'false') return { reasoning_effort: false };
-      const effort = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(raw) ? raw : 'medium';
-      return { reasoning_effort: customApiFormat_ACU === 'gemini_generate_content' ? adaptGeminiReasoningEffort_ACU(effort, geminiModel_ACU) : effort };
-    })()),
+    ...(reasoningControl_ACU.effort !== undefined ? { reasoning_effort: reasoningControl_ACU.effort } : {}),
     enable_web_search: false,
     request_images: false,
     // 提示词后处理：'strict' 等合法值透传；显式 '' 时省略该键（后端按 none 原样透传）。

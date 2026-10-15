@@ -498,6 +498,49 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(effort('minimal', 'gemini-4-argon-contributor', 'openai_compat')).toBe('minimal');
   });
 
+  describe('Claude 协议 / 关闭思考按上游认的字段发', () => {
+    const GO = 'https://opencode.ai/inference/go/v1';
+    const build = (reasoningEffort: string, model: string, format: string, url = GO, bodyParams = '') => buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 't' }],
+      { url, model, apiKey: 'k', customApiFormat: format as any, reasoningEffort, bodyParams },
+    );
+    const includeBody = (body: any) => (body.custom_include_body ? parse(body.custom_include_body) : {});
+
+    it('Claude 协议的 effort 只认 low~max：minimal 按 low、ultra 按 max 发，其余原样', () => {
+      const effort = (value: string, url = GO) => build(value, 'minimax-m3', 'claude_messages', url).reasoning_effort;
+      expect(effort('minimal')).toBe('low');
+      expect(effort('ultra')).toBe('max');
+      for (const value of ['low', 'medium', 'high', 'xhigh', 'max']) expect(effort(value)).toBe(value);
+      expect(effort('ultra', 'https://api.anthropic.com/v1')).toBe('max');
+    });
+
+    it('Go 上 Claude 协议的非 Claude 模型（MiniMax M3 等不带 thinking 就不思考）补 thinking: adaptive', () => {
+      expect(includeBody(build('high', 'minimax-m3', 'claude_messages')).thinking).toEqual({ type: 'adaptive' });
+      expect(includeBody(build('minimal', 'qwen3.8-max', 'claude_messages')).thinking).toEqual({ type: 'adaptive' });
+      // Claude 模型自己按 effort 思考；非 Go 端点、非 Claude 协议都不补
+      expect(includeBody(build('high', 'claude-haiku-5-5', 'claude_messages'))).not.toHaveProperty('thinking');
+      expect(includeBody(build('high', 'minimax-m3', 'claude_messages', 'https://api.minimaxi.com/anthropic'))).not.toHaveProperty('thinking');
+      expect(includeBody(build('high', 'glm-5.3', 'openai_compat'))).not.toHaveProperty('thinking');
+      // Auto 不传思考参数
+      expect(includeBody(build('auto', 'minimax-m3', 'claude_messages'))).not.toHaveProperty('thinking');
+    });
+
+    it('用户在自定义请求体里写了 thinking 时以用户为准', () => {
+      const body = build('high', 'minimax-m3', 'claude_messages', GO, 'thinking:\n  type: enabled\n  budget_tokens: 2048');
+      expect(includeBody(body).thinking).toEqual({ type: 'enabled', budget_tokens: 2048 });
+    });
+
+    it('关闭思考：Claude 协议改发 thinking: disabled 且不带 effort；Responses 与 Go 的兼容接口发 none', () => {
+      const claude = build('false', 'minimax-m3', 'claude_messages', 'https://api.anthropic.com/v1');
+      expect(claude).not.toHaveProperty('reasoning_effort');
+      expect(includeBody(claude).thinking).toEqual({ type: 'disabled' });
+      expect(build('false', 'gpt-6-luna', 'openai_responses', 'https://api.openai.com/v1').reasoning_effort).toBe('none');
+      expect(build('false', 'kimi-k3', 'openai_compat').reasoning_effort).toBe('none');
+      // 其他 OpenAI 兼容端点保持布尔 false
+      expect(build('false', 'gpt-4', 'openai_compat', 'https://api.example.com').reasoning_effort).toBe(false);
+    });
+  });
+
   it('用户已显式写 x-opencode-session 时不覆盖', () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],

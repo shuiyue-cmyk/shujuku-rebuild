@@ -15,7 +15,7 @@ import { logWarn_ACU } from '../../shared/utils';
 
 export type ApiPresetApiMode_ACU = 'custom';
 
-/** 思考强度等级（reasoning_effort）：'false' 传 false 关闭思考，'auto' 则请求体省略该参数由服务端自定 */
+/** 思考强度等级（reasoning_effort）：'false' 关闭思考（各协议的落地字段见 api-call 的 resolveReasoningControl_ACU），'auto' 则请求体省略该参数由服务端自定 */
 export type ReasoningEffort_ACU = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'false' | 'auto';
 
 /** 接口协议（预设级）：对齐 TauriTavern 主 API 的四个「自定义」选项（custom_api_format 四值契约） */
