@@ -25,15 +25,16 @@ function createSettings(): any {
 
 async function mountApiPage(settings = createSettings()) {
   const fetchModels = vi.fn(async () => ({ success: true, models: ['m1'] }));
+  const testConnection = vi.fn(async (): Promise<any> => ({ ok: true, elapsedMs: 1234, reply: '连接成功' }));
   vi.doMock('../../src/service/ai/ai-service', async () => {
     const actual = await vi.importActual<any>('../../src/service/ai/ai-service');
-    return { ...actual, getConnectionManagerProfiles_ACU: () => [], fetchAvailableModels_ACU: fetchModels };
+    return { ...actual, getConnectionManagerProfiles_ACU: () => [], fetchAvailableModels_ACU: fetchModels, testApiConnection_ACU: testConnection };
   });
   const ctx = await mountV3({ settings, uiState: { router: { activePageId: 'api' } } });
   cleanup = ctx.mount.__resetAcuV2MountForTests;
   const page = () => document.querySelector<HTMLElement>('[data-ub-main]')!;
   const input = (label: string) => page().querySelector<HTMLInputElement>(`[data-ub-row="${label}"] input`)!;
-  return { ...ctx, fetchModels, page, input };
+  return { ...ctx, fetchModels, testConnection, page, input };
 }
 
 function typeValue(el: HTMLInputElement, value: string): void {
@@ -126,6 +127,23 @@ describe('API 页', () => {
     expect(settings.apiPresets.some((preset: any) => preset.name === 'first-api')).toBe(true);
     expect(settings.apiPresetBindingsByChat['chat-v3'].presetName).toBe('first-api');
     expect(document.body.textContent).toContain('已保存当前 API 预设');
+  });
+
+  it('「测试连接」用未保存的填写内容发测试，显示成功回复与耗时；失败时显示原因', { timeout: 60_000 }, async () => {
+    const { page, input, testConnection, settings } = await mountApiPage();
+    typeValue(input('模型名'), 'draft-model');
+    await flush();
+    byText<HTMLButtonElement>('button', '测试连接', page())!.click();
+    await flush();
+    expect(testConnection).toHaveBeenCalledTimes(1);
+    expect((testConnection.mock.calls[0] as any[])[0]).toMatchObject({ url: 'https://beta.test', model: 'draft-model' });
+    expect(settings.apiPresets.find((preset: any) => preset.name === 'beta').apiConfig.model).toBe('beta-model');
+    expect(page().textContent).toContain('连接成功（1.2 秒）：连接成功');
+
+    testConnection.mockResolvedValueOnce({ ok: false, elapsedMs: 300, status: 401, error: 'API请求失败: 401 invalid key' });
+    byText<HTMLButtonElement>('button', '测试连接', page())!.click();
+    await flush();
+    expect(page().textContent).toContain('连接失败（300 毫秒）：API请求失败: 401 invalid key');
   });
 
   it('「加载模型」按草稿的接口协议探活：customApiFormat 透传', { timeout: 60_000 }, async () => {

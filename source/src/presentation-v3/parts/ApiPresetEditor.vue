@@ -97,6 +97,22 @@
           />
           <p v-if="store.modelLoadStatus === 'error'" class="ub-api__error">{{ store.modelLoadError }}</p>
         </UbRow>
+        <UbRow
+          label="测试连接"
+          hint="用上面填写的内容（不用先保存）发一条很短的测试消息，看能不能收到模型回复。会按所选的发送方式、接口协议和请求改写发出，消耗少量额度。"
+          stack
+        >
+          <div class="ub-api__test">
+            <UbButton :busy="connectionTesting" icon="fa-solid fa-plug-circle-check" @click="testConnectionForActive">测试连接</UbButton>
+            <p v-if="connectionResult" class="ub-api__test-result" :class="connectionResult.ok ? 'is-ok' : 'is-error'" role="status">
+              <template v-if="connectionResult.ok">
+                连接成功（{{ formatElapsed(connectionResult.elapsedMs) }}）<template v-if="connectionResult.reply">：{{ truncateReply(connectionResult.reply) }}</template>
+                <span v-if="connectionResult.note" class="ub-api__test-note">{{ connectionResult.note }}</span>
+              </template>
+              <template v-else>连接失败<template v-if="connectionResult.elapsedMs">（{{ formatElapsed(connectionResult.elapsedMs) }}）</template>：{{ connectionResult.error }}</template>
+            </p>
+          </div>
+        </UbRow>
       </UbSection>
 
       <UbSection :id="`${idPrefix}-generation`" title="生成参数" icon="fa-solid fa-gauge-high">
@@ -221,6 +237,7 @@ import { useUiCloseGuard } from '../../presentation-v2/composables/useUiCloseGua
 import { useApiPresetStore } from '../../presentation-v2/stores/api-preset-store';
 import { useDialogStore } from '../../presentation-v2/stores/dialog-store';
 import { useToastStore } from '../../presentation-v2/stores/toast-store';
+import type { ApiConnectionTestResult_ACU } from '../../service/ai/ai-service';
 import { assertSafeHttpEndpoint_ACU } from '../../shared/utils';
 import UbButton from '../ui/UbButton.vue';
 import UbCallout from '../ui/UbCallout.vue';
@@ -284,6 +301,9 @@ const draft = reactive<ApiPresetDraft>(createEmptyApiPresetDraft());
 const draftOriginalName = ref('');
 const draftSnapshot = ref('');
 const draftError = ref('');
+const connectionTesting = ref(false);
+// 测试结果只对应当时填写的内容：切换预设、新建或放弃修改时清掉，避免张冠李戴
+const connectionResult = ref<ApiConnectionTestResult_ACU | null>(null);
 
 const draftDirty = computed(() => {
   if (formMode.value === 'create') return JSON.stringify(draft) !== draftSnapshot.value;
@@ -343,6 +363,7 @@ function syncActiveDraft(): void {
   }
   draftSnapshot.value = JSON.stringify(draft);
   draftError.value = '';
+  connectionResult.value = null;
 }
 
 function startCreateDraft(): void {
@@ -351,6 +372,7 @@ function startCreateDraft(): void {
   formMode.value = 'create';
   draftSnapshot.value = JSON.stringify(draft);
   draftError.value = '';
+  connectionResult.value = null;
 }
 
 async function selectPreset(name: string): Promise<void> {
@@ -417,6 +439,26 @@ function saveActiveDraft(): void {
   toast.success('已保存当前 API 预设。');
 }
 
+function formatElapsed(ms: number): string {
+  return ms < 1000 ? `${ms} 毫秒` : `${(ms / 1000).toFixed(1)} 秒`;
+}
+
+function truncateReply(text: string): string {
+  return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+}
+
+async function testConnectionForActive(): Promise<void> {
+  if (connectionTesting.value) return;
+  connectionTesting.value = true;
+  connectionResult.value = null;
+  try {
+    const preset = apiPresetFromDraft(draft);
+    connectionResult.value = await store.testConnectionForConfig(preset.apiConfig, { nonPrefillSupport: preset.nonPrefillSupport === true });
+  } finally {
+    connectionTesting.value = false;
+  }
+}
+
 async function loadModelsForActive(): Promise<void> {
   // 探活必须带接口协议：非 OpenAI 兼容端点的模型列表不同源
   await store.loadModelsForConfig({
@@ -478,6 +520,33 @@ watch(() => store.activePresetName, () => syncActiveDraft(), { flush: 'sync' });
 .ub-api__error {
   color: var(--ub-danger);
   font-size: var(--ub-fs-xs);
+}
+
+.ub-api__test {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--ub-s2);
+  width: 100%;
+}
+
+.ub-api__test-result {
+  margin: 0;
+  font-size: var(--ub-fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.ub-api__test-result.is-ok {
+  color: var(--ub-ok);
+}
+
+.ub-api__test-result.is-error {
+  color: var(--ub-danger);
+}
+
+.ub-api__test-note {
+  display: block;
+  color: var(--ub-text-2);
 }
 
 .ub-api__danger-hint {

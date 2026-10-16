@@ -29,7 +29,9 @@ import {
   type ApiPresetWriteResult_ACU,
 } from '../../service/settings/api-preset-service';
 import {
-  fetchAvailableModels_ACU
+  fetchAvailableModels_ACU,
+  testApiConnection_ACU,
+  type ApiConnectionTestResult_ACU,
 } from '../../service/ai/ai-service';
 
 export type AcuV2ApiMode = ApiPresetApiMode_ACU;
@@ -133,6 +135,13 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
      * 模型探活（status）：customApiFormat 允许未归一化的草稿值，
      * service 侧按五值白名单校验、非法降级 ''（等价 TT 默认 openai_compat）。
      */
+    /** 测试连接：用填写中的配置（可未保存）发一条最短请求；结果由调用方展示，不改 store 状态。 */
+    testConnectionForConfig(
+      apiConfig: Partial<AcuV2ApiConfig>,
+      options?: { nonPrefillSupport?: boolean },
+    ): Promise<ApiConnectionTestResult_ACU> {
+      return testApiConnection_ACU(apiConfig, options);
+    },
     async loadModelsForConfig(
       apiConfig: Partial<Omit<AcuV2ApiConfig, 'customApiFormat'>> & { customApiFormat?: string },
     ): Promise<boolean> {

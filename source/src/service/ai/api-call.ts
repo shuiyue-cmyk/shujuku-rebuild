@@ -782,6 +782,67 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
     return content ? content.trim() : null;
 }
 
+export interface ApiConnectionTestResult_ACU {
+    ok: boolean;
+    elapsedMs: number;
+    /** 接通时模型的回复（已去首尾空白，可能为空串） */
+    reply?: string;
+    /** 接通但有需要说明的情况（如没有返回正文） */
+    note?: string;
+    /** HTTP 失败时的状态码 */
+    status?: number;
+    error?: string;
+}
+
+const API_CONNECTION_TEST_TIMEOUT_MS_ACU = 60_000;
+const API_CONNECTION_TEST_MAX_TOKENS_ACU = 1024;
+
+/**
+ * API 页「测试连接」：按填写中的配置（含发送方式、接口协议、附加参数，尚未保存也可）发一条最短请求。
+ * 走与正式调用相同的请求组装与发送口；回复长度压到 1024 以内，不经公益站限速。从不抛错，结果结构化返回。
+ */
+export async function testApiConnection_ACU(
+    apiConfig: any,
+    options?: { nonPrefillSupport?: boolean; timeoutMs?: number },
+): Promise<ApiConnectionTestResult_ACU> {
+    const startedAt = Date.now();
+    const elapsed = () => Date.now() - startedAt;
+    if (!apiConfig?.url || !String(apiConfig.url).trim()) return { ok: false, elapsedMs: 0, error: '请先填写端点（基础 URL）。' };
+    if (!apiConfig?.model || !String(apiConfig.model).trim()) return { ok: false, elapsedMs: 0, error: '请先填写模型名。' };
+    const timeoutMs = options?.timeoutMs ?? API_CONNECTION_TEST_TIMEOUT_MS_ACU;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const presetMaxTokens = Number(apiConfig.max_tokens ?? apiConfig.maxTokens);
+        const maxTokens = Number.isFinite(presetMaxTokens) && presetMaxTokens > 0
+            ? Math.min(presetMaxTokens, API_CONNECTION_TEST_MAX_TOKENS_ACU)
+            : API_CONNECTION_TEST_MAX_TOKENS_ACU;
+        const body = buildCustomApiRequestBody_ACU(
+            [{ role: 'user', content: '这是一条连接测试，请只回复「连接成功」。' }],
+            apiConfig,
+            { maxTokens, stripModelPrefix: false, nonPrefillSupport: options?.nonPrefillSupport === true },
+        );
+        const content = await postChatCompletion_ACU(body, controller.signal);
+        const reply = typeof content === 'string' ? content.trim() : '';
+        return reply
+            ? { ok: true, elapsedMs: elapsed(), reply }
+            : { ok: true, elapsedMs: elapsed(), reply: '', note: '已接通，但模型没有返回正文（思考可能占满了回复长度，或模型只返回了思考内容）。' };
+    } catch (error: any) {
+        if (controller.signal.aborted) {
+            return { ok: false, elapsedMs: elapsed(), error: `测试请求超时：${Math.round(timeoutMs / 1000)} 秒内没有完成，请检查端点与网络。` };
+        }
+        const status = Number(error?.status);
+        return {
+            ok: false,
+            elapsedMs: elapsed(),
+            ...(Number.isFinite(status) ? { status } : {}),
+            error: String(error?.message || error || '未知错误'),
+        };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 /**
  * 已解析预设的调用生命周期回调。
  */

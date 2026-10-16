@@ -13,6 +13,7 @@ export {
 
 import { getHostRequestHeaders_ACU as _getHeaders } from '../../data/gateways/ai-gateway';
 import { withOpencodeSessionHeader_ACU } from './api-call';
+export { testApiConnection_ACU, type ApiConnectionTestResult_ACU } from './api-call';
 import { buildDirectModelListRequest_ACU, directUnreachableHint_ACU } from './direct-send';
 import type { ApiSendChannel_ACU } from '../settings/api-preset-service';
 import { hashUserInput_ACU, logDebug_ACU } from '../../shared/utils';
