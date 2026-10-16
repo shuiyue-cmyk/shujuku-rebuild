@@ -94,5 +94,55 @@ describe('v3 外壳', () => {
     expect(router.activePageId).toBe('dashboard');
     unregister();
   });
-});
 
+  it('界面风格：外观里切到 Claude，根节点换风格、配色跟着换成同明暗的 Claude 主题；侧栏可收起', async () => {
+    const { mount } = await mountV3({ uiState: { theme: { activeId: 'default-dark' } } });
+    cleanup = () => mount.__resetAcuV2MountForTests();
+    const app = document.querySelector<HTMLElement>('.ub-app')!;
+    expect(app.dataset.ubStyle).toBe('default');
+    expect(document.querySelector('.ub-rail__collapse')).toBeNull();
+
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-rail button'))
+      .find(button => button.textContent?.includes('外观与界面'))!.click();
+    await flush();
+    const claudeOption = Array.from(document.querySelectorAll<HTMLButtonElement>('[aria-label="界面风格"] button'))
+      .find(button => button.textContent?.trim() === 'Claude')!;
+    claudeOption.click();
+    await flush();
+
+    expect(app.dataset.ubStyle).toBe('claude');
+    const { useThemeStore } = await import('../../src/presentation-v2/stores/theme-store');
+    expect(useThemeStore().activeId).toBe('claude-night');
+    expect(document.body.textContent).toContain('已同时换成 Claude 配色');
+
+    const collapse = document.querySelector<HTMLButtonElement>('.ub-rail__collapse')!;
+    expect(collapse).not.toBeNull();
+    collapse.click();
+    await flush();
+    expect(document.querySelector('.ub-shell')?.classList.contains('is-rail-collapsed')).toBe(true);
+    expect(document.querySelector('.ub-rail [data-page-id="dashboard"]')?.getAttribute('title')).toBeTruthy();
+    expect(document.querySelector('.ub-rail .ub-nav__group-title')).toBeNull();
+
+    // 切回默认风格：侧栏照常展开，主题不动
+    Array.from(document.querySelectorAll<HTMLButtonElement>('[aria-label="界面风格"] button'))
+      .find(button => button.textContent?.trim() === '默认')!.click();
+    await flush();
+    expect(app.dataset.ubStyle).toBe('default');
+    expect(document.querySelector('.ub-shell')?.classList.contains('is-rail-collapsed')).toBe(false);
+    expect(useThemeStore().activeId).toBe('claude-night');
+  });
+
+  it('界面风格：已在用 Claude 配色时切换风格不改主题、不弹提示', async () => {
+    const { mount } = await mountV3({ uiState: { theme: { activeId: 'claude' } } });
+    cleanup = () => mount.__resetAcuV2MountForTests();
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-rail button'))
+      .find(button => button.textContent?.includes('外观与界面'))!.click();
+    await flush();
+    Array.from(document.querySelectorAll<HTMLButtonElement>('[aria-label="界面风格"] button'))
+      .find(button => button.textContent?.trim() === 'Claude')!.click();
+    await flush();
+    const { useThemeStore } = await import('../../src/presentation-v2/stores/theme-store');
+    expect(useThemeStore().activeId).toBe('claude');
+    expect(document.body.textContent).not.toContain('已同时换成 Claude 配色');
+  });
+});

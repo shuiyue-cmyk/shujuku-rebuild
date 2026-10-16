@@ -39,6 +39,15 @@
     </UbSection>
 
     <UbSection title="显示">
+      <UbRow label="界面风格" hint="Claude 风格换成更柔和的层次、圆角和衬线标题，侧栏可收起；颜色仍跟随上面的主题。">
+        <UbSegmented
+          :options="styleOptions"
+          :model-value="appearanceStore.uiStyle"
+          aria-label="界面风格"
+          size="sm"
+          @update:model-value="setStyle($event as AcuUiStyle)"
+        />
+      </UbRow>
       <UbRow label="界面缩放" :hint="`当前 ${appearanceStore.uiScaleLabel}`">
         <UbSegmented
           :options="scaleOptions"
@@ -64,7 +73,13 @@
 
 <script setup lang="ts">
 import { downloadJsonToHost_ACU } from '../../presentation-v2/bootstrap/host-download';
-import { ACU_UI_SCALE_OPTIONS, useAppearanceStore, type AcuUiScale } from '../../presentation-v2/stores/appearance-store';
+import {
+  ACU_UI_SCALE_OPTIONS,
+  ACU_UI_STYLE_OPTIONS,
+  useAppearanceStore,
+  type AcuUiScale,
+  type AcuUiStyle,
+} from '../../presentation-v2/stores/appearance-store';
 import { useDialogStore } from '../../presentation-v2/stores/dialog-store';
 import { useRouterStore } from '../../presentation-v2/stores/router-store';
 import { isCustomThemeId, useThemeStore } from '../../presentation-v2/stores/theme-store';
@@ -91,6 +106,23 @@ const dialogStore = useDialogStore();
 const toastStore = useToastStore();
 
 const scaleOptions = ACU_UI_SCALE_OPTIONS.map(option => ({ value: option.value, label: option.label }));
+const styleOptions = ACU_UI_STYLE_OPTIONS.map(option => ({ value: option.value, label: option.label }));
+
+const CLAUDE_THEME_IDS: readonly AcuV2ThemeId[] = ['claude', 'claude-night'];
+
+/**
+ * 切到 Claude 风格时，若当前不是 Claude 配色，顺手换成同明暗的 Claude / Claude 夜，
+ * 并提示可以改回；切回默认风格不动主题。
+ */
+function setStyle(value: AcuUiStyle): void {
+  if (value === appearanceStore.uiStyle) return;
+  appearanceStore.setUiStyle(value);
+  if (value !== 'claude' || CLAUDE_THEME_IDS.includes(themeStore.activeId)) return;
+  const target: AcuV2ThemeId = themeStore.activeTheme.colorScheme === 'dark' ? 'claude-night' : 'claude';
+  if (!themeStore.themes.some(t => t.id === target)) return;
+  themeStore.setTheme(target);
+  toastStore.info('已同时换成 Claude 配色，可在上方「主题」里改回。');
+}
 const modeOptions = [
   { value: 'basic', label: '基础' },
   { value: 'advanced', label: '高手' },

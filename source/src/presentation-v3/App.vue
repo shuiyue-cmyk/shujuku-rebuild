@@ -1,28 +1,39 @@
 <template>
-  <div class="ub-app" :data-ub-color-scheme="themeStore.activeTheme.colorScheme">
+  <div class="ub-app" :data-ub-color-scheme="themeStore.activeTheme.colorScheme" :data-ub-style="appearanceStore.uiStyle">
     <div id="ub-portal" class="ub-portal"></div>
-    <div v-show="rootShell.isOpen" class="ub-shell">
+    <div v-show="rootShell.isOpen" class="ub-shell" :class="{ 'is-rail-collapsed': railCollapsed }">
       <VisualizerSurface v-if="visualizer.isActive" @close="closeApp" />
       <template v-else>
         <aside class="ub-rail">
-          <div class="ub-brand">
-            <span class="ub-brand__mark" aria-hidden="true">UB</span>
-            <span class="ub-brand__text">
-              <span class="ub-brand__name">UnbirthDB</span>
-              <span class="ub-brand__tag">{{ uiMode.isBasicMode ? '基础模式' : '高手模式' }}</span>
-            </span>
+          <div class="ub-rail__head">
+            <div class="ub-brand">
+              <span class="ub-brand__mark" aria-hidden="true">UB</span>
+              <span class="ub-brand__text">
+                <span class="ub-brand__name">UnbirthDB</span>
+                <span class="ub-brand__tag">{{ uiMode.isBasicMode ? '基础模式' : '高手模式' }}</span>
+              </span>
+            </div>
+            <UbIconButton
+              v-if="appearanceStore.isClaudeStyle"
+              class="ub-rail__collapse"
+              icon="fa-solid fa-table-columns"
+              size="sm"
+              :title="railCollapsed ? '展开侧栏' : '收起侧栏'"
+              :aria-expanded="railCollapsed ? 'false' : 'true'"
+              @click="appearanceStore.toggleRailCollapsed()"
+            />
           </div>
           <div class="ub-rail__nav">
-            <NavList />
+            <NavList :icon-only="railCollapsed" />
           </div>
           <div class="ub-rail__foot">
-            <button type="button" class="ub-rail__foot-btn" @click="toggleMode">
+            <button type="button" class="ub-rail__foot-btn" :title="modeToggleLabel" @click="toggleMode">
               <i class="fa-solid fa-repeat" aria-hidden="true"></i>
-              {{ uiMode.isBasicMode ? '切换到高手模式' : '返回基础模式' }}
+              <span class="ub-rail__foot-label">{{ modeToggleLabel }}</span>
             </button>
-            <button type="button" class="ub-rail__foot-btn" @click="appearanceOpen = true">
+            <button type="button" class="ub-rail__foot-btn" title="外观与界面" @click="appearanceOpen = true">
               <i class="fa-solid fa-palette" aria-hidden="true"></i>
-              外观与界面
+              <span class="ub-rail__foot-label">外观与界面</span>
             </button>
           </div>
         </aside>
@@ -99,9 +110,11 @@
  * 新版界面外壳（v3）。
  * 状态全部放在 presentation-v2 的 Pinia store：路由、模式、主题、可视化编辑器、提示框、对话框。
  * 桌面：左侧导航栏；手机（≤760px）：顶栏＋全屏页面目录。
+ * 界面风格（外观里选「默认 / Claude」）只切根节点的 data-ub-style，样式见 shell/ClaudeStyle.vue。
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { acuRequestAnimationFrame } from '../presentation-v2/bootstrap/host-env';
+import { useAppearanceStore } from '../presentation-v2/stores/appearance-store';
 import { useChatChangedListener, watchChatChanged_ACU } from '../presentation-v2/composables/useChatChangedListener';
 import { useDevOptions } from '../presentation-v2/composables/useDevOptions';
 import { useTemplateRuntimeChangeListener } from '../presentation-v2/composables/useTemplateRuntimeChangeListener';
@@ -120,6 +133,8 @@ import UbButton from './ui/UbButton.vue';
 import UbDialogHost from './ui/UbDialogHost.vue';
 import UbIconButton from './ui/UbIconButton.vue';
 import UbToastHost from './ui/UbToastHost.vue';
+// Claude 风格只是一份全局样式（全部限定在 data-ub-style="claude" 下），随模块加载注入
+import './shell/ClaudeStyle.vue';
 
 const emit = defineEmits<{ (event: 'close'): void }>();
 
@@ -127,6 +142,7 @@ const rootShell = useRootShellStore();
 const router = useRouterStore();
 const uiMode = useUiModeStore();
 const themeStore = useThemeStore();
+const appearanceStore = useAppearanceStore();
 const toastStore = useToastStore();
 const visualizer = useVisualizerStore();
 const devOptions = useDevOptions();
@@ -136,6 +152,9 @@ const appearanceOpen = ref(false);
 const scroller = ref<HTMLElement | null>(null);
 
 const activeEntry = computed(() => ubPageEntry(router.activePageId));
+/** 侧栏收起只在 Claude 风格下生效；切回默认风格时照常展开，偏好保留。 */
+const railCollapsed = computed(() => appearanceStore.isClaudeStyle && appearanceStore.railCollapsed);
+const modeToggleLabel = computed(() => (uiMode.isBasicMode ? '切换到高手模式' : '返回基础模式'));
 
 /** 手机端没有侧栏，外观入口放在「全部页面」面板里；打开外观时先收起面板。 */
 function openAppearanceFromLauncher(): void {
@@ -353,6 +372,14 @@ watch(() => rootShell.scrollResetTick, resetScroll);
   padding: var(--ub-s5) var(--ub-s3) var(--ub-s3);
   border-right: 1px solid var(--ub-line-soft);
   background: var(--ub-nav-bg);
+}
+
+.ub-rail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ub-s2);
+  min-width: 0;
 }
 
 .ub-rail__nav {

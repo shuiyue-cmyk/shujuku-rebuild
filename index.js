@@ -93597,7 +93597,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261016-06"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261016-11"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -93616,7 +93616,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261016-06";
+        const stamp = "20261016-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -155197,7 +155197,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261016-06";
+        const stamp = "20261016-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -171117,6 +171117,173 @@ function acuCancelAnimationFrame(handle) {
     win.clearTimeout(handle);
 }
 
+/**
+ * persistence — 新 UI 自己的 localStorage 持久化层（D14 / P0-4）
+ *
+ * - 不复用旧 settings_ACU + saveSettingsAndNotify_ACU；新 UI 状态走独立 key
+ * - 单一根 key：acu_v2_ui_state，值是 JSON。各 store 通过 sectionKey 读写自己的子节
+ * - localStorage 不可用（SSR / 隐私模式）时静默降级到内存
+ *
+ * 当前子节：theme、appearance、router（activePageId）、uiMode、devOptions。
+ */
+let memoryFallback = {};
+let warned = false;
+function getStorage() {
+    try {
+        if (typeof window === 'undefined')
+            return null;
+        return window.localStorage ?? null;
+    }
+    catch (err) {
+        if (!warned) {
+            logWarn_ACU('[ACU-V2] localStorage unavailable; falling back to memory.', err);
+            warned = true;
+        }
+        return null;
+    }
+}
+function readAll() {
+    const storage = getStorage();
+    if (!storage)
+        return { ...memoryFallback };
+    const raw = storage.getItem(ACU_V2_STORAGE_KEY);
+    if (!raw)
+        return {};
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
+function writeAll(next) {
+    const storage = getStorage();
+    if (!storage) {
+        memoryFallback = { ...next };
+        return;
+    }
+    try {
+        storage.setItem(ACU_V2_STORAGE_KEY, JSON.stringify(next));
+    }
+    catch (err) {
+        if (!warned) {
+            logWarn_ACU('[ACU-V2] localStorage write failed; falling back to memory.', err);
+            warned = true;
+        }
+        memoryFallback = { ...next };
+    }
+}
+function readSection(sectionKey) {
+    const all = readAll();
+    return all[sectionKey];
+}
+function writeSection(sectionKey, value) {
+    const all = readAll();
+    all[sectionKey] = value;
+    writeAll(all);
+}
+function __resetPersistenceForTests() {
+    memoryFallback = {};
+    warned = false;
+    const storage = getStorage();
+    if (storage) {
+        try {
+            storage.removeItem(ACU_V2_STORAGE_KEY);
+        }
+        catch {
+            /* ignore */
+        }
+    }
+}
+
+/**
+ * appearance-store — 新 UI 外观偏好。
+ *
+ * 界面缩放、界面风格（默认 / Claude）与侧栏收起都是本机显示偏好，独立持久化到 acu_v2_ui_state.appearance；
+ * 不进入主题导入/导出，也不触碰业务配置。
+ */
+const ACU_UI_SCALE_OPTIONS = [
+    { value: '100', label: '100%', cssScale: '1' },
+    { value: '110', label: '110%', cssScale: '1.1' },
+    { value: '125', label: '125%', cssScale: '1.25' },
+];
+const ACU_DEFAULT_UI_SCALE = '100';
+const ACU_UI_STYLE_OPTIONS = [
+    { value: 'default', label: '默认' },
+    { value: 'claude', label: 'Claude' },
+];
+const ACU_DEFAULT_UI_STYLE = 'default';
+const SECTION_KEY$4 = 'appearance';
+function isUiScale(value) {
+    return typeof value === 'string' && ACU_UI_SCALE_OPTIONS.some(option => option.value === value);
+}
+function normalizeUiScale(value) {
+    return isUiScale(value) ? value : ACU_DEFAULT_UI_SCALE;
+}
+function isUiStyle(value) {
+    return typeof value === 'string' && ACU_UI_STYLE_OPTIONS.some(option => option.value === value);
+}
+function normalizeUiStyle(value) {
+    return isUiStyle(value) ? value : ACU_DEFAULT_UI_STYLE;
+}
+function getScaleOption(value) {
+    return ACU_UI_SCALE_OPTIONS.find(option => option.value === value) ?? ACU_UI_SCALE_OPTIONS[0];
+}
+function readInitialAppearanceState() {
+    const persisted = readSection(SECTION_KEY$4);
+    return {
+        uiScale: normalizeUiScale(persisted?.uiScale),
+        uiStyle: normalizeUiStyle(persisted?.uiStyle),
+        railCollapsed: persisted?.railCollapsed === true,
+    };
+}
+function buildPersistedAppearance(state) {
+    return { uiScale: state.uiScale, uiStyle: state.uiStyle, railCollapsed: state.railCollapsed };
+}
+const useAppearanceStore = defineStore('acu-v2-appearance', {
+    state: () => readInitialAppearanceState(),
+    getters: {
+        uiScaleOption(state) {
+            return getScaleOption(state.uiScale);
+        },
+        uiScaleLabel(state) {
+            return getScaleOption(state.uiScale).label;
+        },
+        uiScaleCssValue(state) {
+            return getScaleOption(state.uiScale).cssScale;
+        },
+        isClaudeStyle(state) {
+            return state.uiStyle === 'claude';
+        },
+    },
+    actions: {
+        setUiScale(value) {
+            if (!isUiScale(value))
+                return;
+            if (this.uiScale === value)
+                return;
+            this.uiScale = value;
+            this.persist();
+        },
+        setUiStyle(value) {
+            if (!isUiStyle(value))
+                return;
+            if (this.uiStyle === value)
+                return;
+            this.uiStyle = value;
+            this.persist();
+        },
+        toggleRailCollapsed() {
+            this.railCollapsed = !this.railCollapsed;
+            this.persist();
+        },
+        persist() {
+            writeSection(SECTION_KEY$4, buildPersistedAppearance(this.$state));
+        },
+    },
+});
+
 let nextDialogId = 1;
 function makeDialogId() {
     return `dialog-${nextDialogId++}`;
@@ -172419,86 +172586,6 @@ function useChatChangedListener() {
 }
 
 /**
- * persistence — 新 UI 自己的 localStorage 持久化层（D14 / P0-4）
- *
- * - 不复用旧 settings_ACU + saveSettingsAndNotify_ACU；新 UI 状态走独立 key
- * - 单一根 key：acu_v2_ui_state，值是 JSON。各 store 通过 sectionKey 读写自己的子节
- * - localStorage 不可用（SSR / 隐私模式）时静默降级到内存
- *
- * 当前子节：theme、appearance、router（activePageId）、uiMode、devOptions。
- */
-let memoryFallback = {};
-let warned = false;
-function getStorage() {
-    try {
-        if (typeof window === 'undefined')
-            return null;
-        return window.localStorage ?? null;
-    }
-    catch (err) {
-        if (!warned) {
-            logWarn_ACU('[ACU-V2] localStorage unavailable; falling back to memory.', err);
-            warned = true;
-        }
-        return null;
-    }
-}
-function readAll() {
-    const storage = getStorage();
-    if (!storage)
-        return { ...memoryFallback };
-    const raw = storage.getItem(ACU_V2_STORAGE_KEY);
-    if (!raw)
-        return {};
-    try {
-        const parsed = JSON.parse(raw);
-        return parsed && typeof parsed === 'object' ? parsed : {};
-    }
-    catch {
-        return {};
-    }
-}
-function writeAll(next) {
-    const storage = getStorage();
-    if (!storage) {
-        memoryFallback = { ...next };
-        return;
-    }
-    try {
-        storage.setItem(ACU_V2_STORAGE_KEY, JSON.stringify(next));
-    }
-    catch (err) {
-        if (!warned) {
-            logWarn_ACU('[ACU-V2] localStorage write failed; falling back to memory.', err);
-            warned = true;
-        }
-        memoryFallback = { ...next };
-    }
-}
-function readSection(sectionKey) {
-    const all = readAll();
-    return all[sectionKey];
-}
-function writeSection(sectionKey, value) {
-    const all = readAll();
-    all[sectionKey] = value;
-    writeAll(all);
-}
-function __resetPersistenceForTests() {
-    memoryFallback = {};
-    warned = false;
-    const storage = getStorage();
-    if (storage) {
-        try {
-            storage.removeItem(ACU_V2_STORAGE_KEY);
-        }
-        catch {
-            /* ignore */
-        }
-    }
-}
-
-/**
  * dev-options-store — 仪表盘"启用开发者选项"总开关 + 各开发者 gated 字段的共享 store
  *
  * 字段：
@@ -172514,9 +172601,9 @@ function __resetPersistenceForTests() {
  *
  * 新 UI 自有持久化，物理隔离于 settings_ACU。
  */
-const SECTION_KEY$4 = 'devOptions';
+const SECTION_KEY$3 = 'devOptions';
 function loadFromStorage$1() {
-    const raw = readSection(SECTION_KEY$4) ?? {};
+    const raw = readSection(SECTION_KEY$3) ?? {};
     return {
         developerOptionsEnabled: raw.developerOptionsEnabled === true,
         plotAdvanced: raw.plotAdvanced === true,
@@ -172525,7 +172612,7 @@ function loadFromStorage$1() {
     };
 }
 function persist$2(state) {
-    writeSection(SECTION_KEY$4, {
+    writeSection(SECTION_KEY$3, {
         developerOptionsEnabled: state.developerOptionsEnabled,
         plotAdvanced: state.plotAdvanced,
         warnLogEnabled: state.warnLogEnabled,
@@ -172910,13 +172997,13 @@ const ACU_V2_PAGE_GROUPS = [
  * 这是新 UI 自己的展示模式，不写入旧 settings_ACU。基础模式只保留一个
  * “基础配置”入口；高手模式恢复完整工作台。
  */
-const SECTION_KEY$3 = 'uiMode';
+const SECTION_KEY$2 = 'uiMode';
 const ROUTER_SECTION_KEY = 'router';
 function normalizeMode(value) {
     return value === 'advanced' ? 'advanced' : 'basic';
 }
 function loadFromStorage() {
-    const raw = readSection(SECTION_KEY$3) ?? {};
+    const raw = readSection(SECTION_KEY$2) ?? {};
     if (raw.mode !== undefined)
         return normalizeMode(raw.mode);
     const router = readSection(ROUTER_SECTION_KEY);
@@ -172926,7 +173013,7 @@ function loadFromStorage() {
     return normalizeMode(raw.mode);
 }
 function persist$1(mode) {
-    writeSection(SECTION_KEY$3, { mode });
+    writeSection(SECTION_KEY$2, { mode });
 }
 const useUiModeStore = defineStore('acu-v2-ui-mode', {
     state: () => ({
@@ -172992,7 +173079,7 @@ function syncContentReplaceAvailability() {
  * - P0-6：activePageId 持久化到 acu_v2_ui_state.router；关闭后再开保留页面
  *   抽屉 / 滚动是页面内部状态，不在路由层处理（关闭/重开不持久化）
  */
-const SECTION_KEY$2 = 'router';
+const SECTION_KEY$1 = 'router';
 const LEGACY_PAGE_ID_ALIASES = {
     'sql-console': 'advanced-tools',
     'log-viewer': 'advanced-tools',
@@ -173015,7 +173102,7 @@ function readInitialFeatureGates() {
     };
 }
 function readInitialActiveId(featureGates) {
-    const persisted = readSection(SECTION_KEY$2);
+    const persisted = readSection(SECTION_KEY$1);
     if (persisted && isKnownPage(persisted.activePageId)) {
         const activePageId = normalizePageId(persisted.activePageId) || persisted.activePageId;
         // 重载后先留出可操作入口，避免重型续写页因历史数据异常反复卡住面板。
@@ -173121,7 +173208,7 @@ const useRouterStore = defineStore('acu-v2-router', {
             this.persist();
         },
         persist() {
-            writeSection(SECTION_KEY$2, { activePageId: this.activePageId });
+            writeSection(SECTION_KEY$1, { activePageId: this.activePageId });
         },
     },
 });
@@ -174640,7 +174727,7 @@ const TOKEN_VAR_MAP = {
  * - 切换 / 初始化时通过订阅触发 theme-injector 把 tokens 写到 host document
  *   的 <style id="acu-v2-theme">；注入逻辑放 theme-injector.ts，store 只发数据
  */
-const SECTION_KEY$1 = 'theme';
+const SECTION_KEY = 'theme';
 const CUSTOM_THEME_ID_PREFIX = 'custom:';
 const LEGACY_BUILTIN_THEME_ID_ALIASES = {
     'strawberry-dragon': 'creamy-minimal',
@@ -174789,7 +174876,7 @@ function sanitizePersistedCustomThemes(value) {
     return { customThemes: themes, builtinOverridesByCustomId };
 }
 function readInitialThemeState() {
-    const persisted = readSection(SECTION_KEY$1);
+    const persisted = readSection(SECTION_KEY);
     const { customThemes, builtinOverridesByCustomId } = sanitizePersistedCustomThemes(persisted?.customThemes);
     const activeId = normalizePersistedActiveThemeId(persisted?.activeId, customThemes, builtinOverridesByCustomId);
     return { activeId, customThemes };
@@ -174897,7 +174984,7 @@ const useThemeStore = defineStore('acu-v2-theme', {
             };
         },
         persist() {
-            writeSection(SECTION_KEY$1, buildPersistedTheme(this.$state));
+            writeSection(SECTION_KEY, buildPersistedTheme(this.$state));
         },
     },
 });
@@ -176862,7 +176949,7 @@ function useVisualizerSave(interactions = {}) {
     };
 }
 
-var _sfc_main$_ = /*@__PURE__*/ defineComponent({
+var _sfc_main$$ = /*@__PURE__*/ defineComponent({
     __name: 'UbBadge',
     props: {
         variant: { default: 'neutral' }
@@ -176895,9 +176982,9 @@ function _sfc_render$_(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbBadge = /* @__PURE__ */ _export_sfc(_sfc_main$_, [["render", _sfc_render$_], ["__scopeId", "data-v-5a041c45"]]);
+var UbBadge = /* @__PURE__ */ _export_sfc(_sfc_main$$, [["render", _sfc_render$_], ["__scopeId", "data-v-5a041c45"]]);
 
-var _sfc_main$Z = /*@__PURE__*/ defineComponent({
+var _sfc_main$_ = /*@__PURE__*/ defineComponent({
     __name: 'UbButton',
     props: {
         variant: { default: 'default' },
@@ -176989,9 +177076,9 @@ function _sfc_render$Z(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	)) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_5$x, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_3$I));
 }
-var UbButton = /* @__PURE__ */ _export_sfc(_sfc_main$Z, [["render", _sfc_render$Z], ["__scopeId", "data-v-3521ab51"]]);
+var UbButton = /* @__PURE__ */ _export_sfc(_sfc_main$_, [["render", _sfc_render$Z], ["__scopeId", "data-v-3521ab51"]]);
 
-var _sfc_main$Y = /*@__PURE__*/ defineComponent({
+var _sfc_main$Z = /*@__PURE__*/ defineComponent({
     __name: 'UbCallout',
     props: {
         kind: { default: 'info' }
@@ -177031,9 +177118,9 @@ function _sfc_render$Y(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	), createBaseVNode("div", _hoisted_2$M, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])], 10, _hoisted_1$T);
 }
-var UbCallout = /* @__PURE__ */ _export_sfc(_sfc_main$Y, [["render", _sfc_render$Y], ["__scopeId", "data-v-a3348fcd"]]);
+var UbCallout = /* @__PURE__ */ _export_sfc(_sfc_main$Z, [["render", _sfc_render$Y], ["__scopeId", "data-v-a3348fcd"]]);
 
-var _sfc_main$X = /*@__PURE__*/ defineComponent({
+var _sfc_main$Y = /*@__PURE__*/ defineComponent({
     __name: 'UbIconButton',
     props: {
         icon: {},
@@ -177077,9 +177164,9 @@ function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	)], 10, _hoisted_1$S);
 }
-var UbIconButton = /* @__PURE__ */ _export_sfc(_sfc_main$X, [["render", _sfc_render$X], ["__scopeId", "data-v-09c99ba6"]]);
+var UbIconButton = /* @__PURE__ */ _export_sfc(_sfc_main$Y, [["render", _sfc_render$X], ["__scopeId", "data-v-09c99ba6"]]);
 
-var _sfc_main$W = /*@__PURE__*/ defineComponent({
+var _sfc_main$X = /*@__PURE__*/ defineComponent({
     __name: 'UbSegmented',
     props: {
         options: {},
@@ -177154,10 +177241,10 @@ function _sfc_render$W(_ctx, _cache, $props, $setup, $data, $options) {
 		/* KEYED_FRAGMENT */
 	))], 10, _hoisted_1$R);
 }
-var UbSegmented = /* @__PURE__ */ _export_sfc(_sfc_main$W, [["render", _sfc_render$W], ["__scopeId", "data-v-a4a2b8e5"]]);
+var UbSegmented = /* @__PURE__ */ _export_sfc(_sfc_main$X, [["render", _sfc_render$W], ["__scopeId", "data-v-a4a2b8e5"]]);
 
 const LEAVE_MS$1 = 180;
-var _sfc_main$V = /*@__PURE__*/ defineComponent({
+var _sfc_main$W = /*@__PURE__*/ defineComponent({
     __name: 'UbSheet',
     props: {
         isOpen: { type: Boolean },
@@ -177297,7 +177384,7 @@ function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
 		_ctx.$slots.footer ? (openBlock(), createElementBlock("footer", _hoisted_8$n, [renderSlot(_ctx.$slots, "footer", {}, undefined, true)])) : createCommentVNode("v-if", true)
 	], 12, _hoisted_2$K)], 42, _hoisted_1$Q)) : createCommentVNode("v-if", true)]);
 }
-var UbSheet = /* @__PURE__ */ _export_sfc(_sfc_main$V, [["render", _sfc_render$V], ["__scopeId", "data-v-34c6aa88"]]);
+var UbSheet = /* @__PURE__ */ _export_sfc(_sfc_main$W, [["render", _sfc_render$V], ["__scopeId", "data-v-34c6aa88"]]);
 
 function clone_ACU$1(value) {
     if (value === undefined)
@@ -181219,7 +181306,7 @@ function useVisualizerAssistant() {
     };
 }
 
-var _sfc_main$U = /*@__PURE__*/ defineComponent({
+var _sfc_main$V = /*@__PURE__*/ defineComponent({
     __name: 'UbFileButton',
     props: {
         accept: { default: undefined },
@@ -181302,9 +181389,9 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbFileButton = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-2a899a2f"]]);
+var UbFileButton = /* @__PURE__ */ _export_sfc(_sfc_main$V, [["render", _sfc_render$U], ["__scopeId", "data-v-2a899a2f"]]);
 
-var _sfc_main$T = /*@__PURE__*/ defineComponent({
+var _sfc_main$U = /*@__PURE__*/ defineComponent({
     __name: 'UbSelect',
     props: {
         options: {},
@@ -181440,9 +181527,9 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbSelect = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-4fd7ac21"]]);
+var UbSelect = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$T], ["__scopeId", "data-v-4fd7ac21"]]);
 
-var _sfc_main$S = /*@__PURE__*/ defineComponent({
+var _sfc_main$T = /*@__PURE__*/ defineComponent({
     __name: 'UbSwitch',
     props: {
         modelValue: { type: Boolean },
@@ -181487,9 +181574,9 @@ function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CACHED */
 	)])], 10, _hoisted_1$N);
 }
-var UbSwitch = /* @__PURE__ */ _export_sfc(_sfc_main$S, [["render", _sfc_render$S], ["__scopeId", "data-v-97e8c2ad"]]);
+var UbSwitch = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$S], ["__scopeId", "data-v-97e8c2ad"]]);
 
-var _sfc_main$R = /*@__PURE__*/ defineComponent({
+var _sfc_main$S = /*@__PURE__*/ defineComponent({
     __name: 'UbTextarea',
     props: {
         modelValue: {},
@@ -181583,7 +181670,7 @@ function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbTextarea = /* @__PURE__ */ _export_sfc(_sfc_main$R, [["render", _sfc_render$R], ["__scopeId", "data-v-29d0f7ce"]]);
+var UbTextarea = /* @__PURE__ */ _export_sfc(_sfc_main$S, [["render", _sfc_render$R], ["__scopeId", "data-v-29d0f7ce"]]);
 
 const DEFAULT_ROLE_OPTIONS = [
     { value: 'SYSTEM', label: 'SYSTEM' },
@@ -181595,7 +181682,7 @@ const DEFAULT_SLOT_OPTIONS = [
     { value: 'A', label: '主插槽 A' },
     { value: 'B', label: '主插槽 B' },
 ];
-var _sfc_main$Q = /*@__PURE__*/ defineComponent({
+var _sfc_main$R = /*@__PURE__*/ defineComponent({
     __name: 'UbPromptSegments',
     props: {
         segments: {},
@@ -181809,9 +181896,9 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 		})
 	]);
 }
-var UbPromptSegments = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-f68c779d"]]);
+var UbPromptSegments = /* @__PURE__ */ _export_sfc(_sfc_main$R, [["render", _sfc_render$Q], ["__scopeId", "data-v-f68c779d"]]);
 
-var _sfc_main$P = /*@__PURE__*/ defineComponent({
+var _sfc_main$Q = /*@__PURE__*/ defineComponent({
     __name: 'PromptSegmentsSheet',
     props: {
         isOpen: { type: Boolean },
@@ -181961,9 +182048,9 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 		"subtitle"
 	]);
 }
-var PromptSegmentsSheet = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-9a55233b"]]);
+var PromptSegmentsSheet = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$P], ["__scopeId", "data-v-9a55233b"]]);
 
-var _sfc_main$O = /*@__PURE__*/ defineComponent({
+var _sfc_main$P = /*@__PURE__*/ defineComponent({
     __name: 'UbCheck',
     props: {
         modelValue: { type: Boolean },
@@ -182022,9 +182109,9 @@ function _sfc_render$O(_ctx, _cache, $props, $setup, $data, $options) {
 		)], true)])) : createCommentVNode("v-if", true)
 	], 10, _hoisted_1$K);
 }
-var UbCheck = /* @__PURE__ */ _export_sfc(_sfc_main$O, [["render", _sfc_render$O], ["__scopeId", "data-v-58a3daf7"]]);
+var UbCheck = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$O], ["__scopeId", "data-v-58a3daf7"]]);
 
-var _sfc_main$N = /*@__PURE__*/ defineComponent({
+var _sfc_main$O = /*@__PURE__*/ defineComponent({
     __name: 'UbDisclosure',
     props: {
         label: {},
@@ -182105,9 +182192,9 @@ function _sfc_render$N(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbDisclosure = /* @__PURE__ */ _export_sfc(_sfc_main$N, [["render", _sfc_render$N], ["__scopeId", "data-v-8841c368"]]);
+var UbDisclosure = /* @__PURE__ */ _export_sfc(_sfc_main$O, [["render", _sfc_render$N], ["__scopeId", "data-v-8841c368"]]);
 
-var _sfc_main$M = /*@__PURE__*/ defineComponent({
+var _sfc_main$N = /*@__PURE__*/ defineComponent({
     __name: 'VizAssistantView',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -182662,9 +182749,9 @@ function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_PATCH */
 	);
 }
-var VizAssistantView = /* @__PURE__ */ _export_sfc(_sfc_main$M, [["render", _sfc_render$M], ["__scopeId", "data-v-549c1194"]]);
+var VizAssistantView = /* @__PURE__ */ _export_sfc(_sfc_main$N, [["render", _sfc_render$M], ["__scopeId", "data-v-549c1194"]]);
 
-var _sfc_main$L = /*@__PURE__*/ defineComponent({
+var _sfc_main$M = /*@__PURE__*/ defineComponent({
     __name: 'UbInput',
     props: {
         modelValue: {},
@@ -182767,9 +182854,9 @@ function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbInput = /* @__PURE__ */ _export_sfc(_sfc_main$L, [["render", _sfc_render$L], ["__scopeId", "data-v-17f68171"]]);
+var UbInput = /* @__PURE__ */ _export_sfc(_sfc_main$M, [["render", _sfc_render$L], ["__scopeId", "data-v-17f68171"]]);
 
-var _sfc_main$K = /*@__PURE__*/ defineComponent({
+var _sfc_main$L = /*@__PURE__*/ defineComponent({
     __name: 'UbRow',
     props: {
         label: { default: undefined },
@@ -182826,9 +182913,9 @@ function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 		/* TEXT */
 	)], true)])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("div", _hoisted_5$t, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_1$G);
 }
-var UbRow = /* @__PURE__ */ _export_sfc(_sfc_main$K, [["render", _sfc_render$K], ["__scopeId", "data-v-085151b3"]]);
+var UbRow = /* @__PURE__ */ _export_sfc(_sfc_main$L, [["render", _sfc_render$K], ["__scopeId", "data-v-085151b3"]]);
 
-var _sfc_main$J = /*@__PURE__*/ defineComponent({
+var _sfc_main$K = /*@__PURE__*/ defineComponent({
     __name: 'UbSection',
     props: {
         id: { default: undefined },
@@ -182915,9 +183002,9 @@ function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
 		)
 	], 8, _hoisted_1$F);
 }
-var UbSection = /* @__PURE__ */ _export_sfc(_sfc_main$J, [["render", _sfc_render$J], ["__scopeId", "data-v-ce2a775d"]]);
+var UbSection = /* @__PURE__ */ _export_sfc(_sfc_main$K, [["render", _sfc_render$J], ["__scopeId", "data-v-ce2a775d"]]);
 
-var _sfc_main$I = /*@__PURE__*/ defineComponent({
+var _sfc_main$J = /*@__PURE__*/ defineComponent({
     __name: 'VizPlacement',
     props: {
         title: {},
@@ -182996,10 +183083,10 @@ function _sfc_render$I(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["label", "hint"]);
 }
-var VizPlacement = /* @__PURE__ */ _export_sfc(_sfc_main$I, [["render", _sfc_render$I], ["__scopeId", "data-v-989a4ff8"]]);
+var VizPlacement = /* @__PURE__ */ _export_sfc(_sfc_main$J, [["render", _sfc_render$I], ["__scopeId", "data-v-989a4ff8"]]);
 
 const sqlInjectionPlaceholder = '留空则使用默认表格内容。支持 {[sql "SELECT ..."]} / {[db.表名.where(...).get(...)]}，会原样写入世界书并在发送前展开。';
-var _sfc_main$H = /*@__PURE__*/ defineComponent({
+var _sfc_main$I = /*@__PURE__*/ defineComponent({
     __name: 'VizConfigView',
     emits: ["request-add-column", "request-delete-column"],
     setup(__props, { expose: __expose, emit: __emit }) {
@@ -183560,7 +183647,7 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var VizConfigView = /* @__PURE__ */ _export_sfc(_sfc_main$H, [["render", _sfc_render$H], ["__scopeId", "data-v-2658197b"]]);
+var VizConfigView = /* @__PURE__ */ _export_sfc(_sfc_main$I, [["render", _sfc_render$H], ["__scopeId", "data-v-2658197b"]]);
 
 /** 数据库编辑器（v3）数据视图的纯布局计算：短字段并排、分页窗口。 */
 const VIZ_PAGE_SIZE = 30;
@@ -183596,7 +183683,7 @@ function pageWindow(rowCount, requestedPage, pageSize = VIZ_PAGE_SIZE) {
     return { page, pageCount, start, end: Math.min(rowCount, start + pageSize) };
 }
 
-var _sfc_main$G = /*@__PURE__*/ defineComponent({
+var _sfc_main$H = /*@__PURE__*/ defineComponent({
     __name: 'VizDataView',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -184154,9 +184241,9 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION, NEED_PATCH */
 	);
 }
-var VizDataView = /* @__PURE__ */ _export_sfc(_sfc_main$G, [["render", _sfc_render$G], ["__scopeId", "data-v-2b80fc88"]]);
+var VizDataView = /* @__PURE__ */ _export_sfc(_sfc_main$H, [["render", _sfc_render$G], ["__scopeId", "data-v-2b80fc88"]]);
 
-var _sfc_main$F = /*@__PURE__*/ defineComponent({
+var _sfc_main$G = /*@__PURE__*/ defineComponent({
     __name: 'VizManageView',
     props: {
         sheetItems: {}
@@ -184300,9 +184387,9 @@ function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var VizManageView = /* @__PURE__ */ _export_sfc(_sfc_main$F, [["render", _sfc_render$F], ["__scopeId", "data-v-c5bedf6c"]]);
+var VizManageView = /* @__PURE__ */ _export_sfc(_sfc_main$G, [["render", _sfc_render$F], ["__scopeId", "data-v-c5bedf6c"]]);
 
-var _sfc_main$E = /*@__PURE__*/ defineComponent({
+var _sfc_main$F = /*@__PURE__*/ defineComponent({
     __name: 'VizTableNav',
     props: {
         sheetItems: {},
@@ -184445,9 +184532,9 @@ function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 		)
 	]);
 }
-var VizTableNav = /* @__PURE__ */ _export_sfc(_sfc_main$E, [["render", _sfc_render$E], ["__scopeId", "data-v-cbdbabef"]]);
+var VizTableNav = /* @__PURE__ */ _export_sfc(_sfc_main$F, [["render", _sfc_render$E], ["__scopeId", "data-v-cbdbabef"]]);
 
-var _sfc_main$D = /*@__PURE__*/ defineComponent({
+var _sfc_main$E = /*@__PURE__*/ defineComponent({
     __name: 'VisualizerSurface',
     emits: ["close"],
     setup(__props, { expose: __expose, emit: __emit }) {
@@ -184693,7 +184780,7 @@ const _hoisted_21$4 = {
 	"data-ub-viz-footer": "",
 	"aria-label": "保存"
 };
-const _hoisted_22$3 = { class: "ub-viz__save" };
+const _hoisted_22$4 = { class: "ub-viz__save" };
 function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$z, [
 		createBaseVNode("aside", _hoisted_2$w, [createBaseVNode("div", _hoisted_3$u, [_cache[5] || (_cache[5] = createBaseVNode(
@@ -184945,7 +185032,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 				)],
 				2
 				/* CLASS */
-			), createBaseVNode("div", _hoisted_22$3, [
+			), createBaseVNode("div", _hoisted_22$4, [
 				createVNode($setup["UbButton"], {
 					class: "ub-viz__save-main",
 					variant: "primary",
@@ -185021,7 +185108,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 		}, 8, ["is-open", "subtitle"])
 	]);
 }
-var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$D], ["__scopeId", "data-v-e4f3077e"]]);
+var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$E, [["render", _sfc_render$D], ["__scopeId", "data-v-e4f3077e"]]);
 
 /**
  * presentation-v2/composables/debug-issue-link.ts — Debug 面板「前往 GitHub 提交 issue」链接
@@ -186426,7 +186513,7 @@ const advancedToolsCopy = {
     },
 };
 
-var _sfc_main$C = /*@__PURE__*/ defineComponent({
+var _sfc_main$D = /*@__PURE__*/ defineComponent({
     __name: 'UbPage',
     props: {
         lead: { default: undefined },
@@ -186506,9 +186593,9 @@ function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbPage = /* @__PURE__ */ _export_sfc(_sfc_main$C, [["render", _sfc_render$C], ["__scopeId", "data-v-2ff73a0a"]]);
+var UbPage = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$C], ["__scopeId", "data-v-2ff73a0a"]]);
 
-var _sfc_main$B = /*@__PURE__*/ defineComponent({
+var _sfc_main$C = /*@__PURE__*/ defineComponent({
     __name: 'AdvancedToolsPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -186626,8 +186713,8 @@ const _hoisted_21$3 = {
 	key: 0,
 	class: "ub-at__empty"
 };
-const _hoisted_22$2 = { class: "ub-at__log-meta" };
-const _hoisted_23$1 = { class: "ub-at__log-tag" };
+const _hoisted_22$3 = { class: "ub-at__log-meta" };
+const _hoisted_23$2 = { class: "ub-at__log-tag" };
 const _hoisted_24$1 = { class: "ub-at__log-msg" };
 const _hoisted_25$1 = ["data-hint-id"];
 const _hoisted_26$1 = { class: "ub-at__row" };
@@ -186982,7 +187069,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 										class: normalizeClass(["ub-at__log", `is-${entry.level}`])
 									},
 									[
-										createBaseVNode("div", _hoisted_22$2, [
+										createBaseVNode("div", _hoisted_22$3, [
 											createBaseVNode(
 												"span",
 												null,
@@ -187000,7 +187087,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 											}, 1032, ["variant"]),
 											createBaseVNode(
 												"span",
-												_hoisted_23$1,
+												_hoisted_23$2,
 												toDisplayString(entry.tag),
 												1
 												/* TEXT */
@@ -187155,7 +187242,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$B, [["render", _sfc_render$B], ["__scopeId", "data-v-1f0a7747"]]);
+var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$C, [["render", _sfc_render$B], ["__scopeId", "data-v-1f0a7747"]]);
 
 function buildWorldbookSnapshotEntryIndexByBook_ACU(snapshot) {
     const result = new Map();
@@ -188938,7 +189025,7 @@ function useWorldbookSelector() {
     return { names, charPrimary, status, error, refresh };
 }
 
-var _sfc_main$A = /*@__PURE__*/ defineComponent({
+var _sfc_main$B = /*@__PURE__*/ defineComponent({
     __name: 'AgentAdvancedSheet',
     props: {
         open: { type: Boolean },
@@ -189376,10 +189463,10 @@ function _sfc_render$A(_ctx, _cache, $props, $setup, $data, $options) {
 		"subtitle"
 	]);
 }
-var AgentAdvancedSheet = /* @__PURE__ */ _export_sfc(_sfc_main$A, [["render", _sfc_render$A], ["__scopeId", "data-v-2ccfbde7"]]);
+var AgentAdvancedSheet = /* @__PURE__ */ _export_sfc(_sfc_main$B, [["render", _sfc_render$A], ["__scopeId", "data-v-2ccfbde7"]]);
 
 const PAGE_SIZE = 200;
-var _sfc_main$z = /*@__PURE__*/ defineComponent({
+var _sfc_main$A = /*@__PURE__*/ defineComponent({
     __name: 'WorldbookEntries',
     props: {
         groups: {},
@@ -189820,9 +189907,9 @@ function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 		/* KEYED_FRAGMENT */
 	))]))]);
 }
-var WorldbookEntries = /* @__PURE__ */ _export_sfc(_sfc_main$z, [["render", _sfc_render$z], ["__scopeId", "data-v-63ba3c51"]]);
+var WorldbookEntries = /* @__PURE__ */ _export_sfc(_sfc_main$A, [["render", _sfc_render$z], ["__scopeId", "data-v-63ba3c51"]]);
 
-var _sfc_main$y = /*@__PURE__*/ defineComponent({
+var _sfc_main$z = /*@__PURE__*/ defineComponent({
     __name: 'WorldbookSourcePicker',
     props: {
         source: {},
@@ -189950,9 +190037,9 @@ function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
 		)) : createCommentVNode("v-if", true)
 	]);
 }
-var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$y, [["render", _sfc_render$y], ["__scopeId", "data-v-fa1a6bea"]]);
+var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$z, [["render", _sfc_render$y], ["__scopeId", "data-v-fa1a6bea"]]);
 
-var _sfc_main$x = /*@__PURE__*/ defineComponent({
+var _sfc_main$y = /*@__PURE__*/ defineComponent({
     __name: 'AgentPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -190629,7 +190716,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$x], ["__scopeId", "data-v-f0fd1638"]]);
+var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$y, [["render", _sfc_render$x], ["__scopeId", "data-v-f0fd1638"]]);
 
 const apiCopy = {
     panels: {
@@ -190986,7 +191073,7 @@ function apiPresetFromDraft(draft) {
     };
 }
 
-var _sfc_main$w = /*@__PURE__*/ defineComponent({
+var _sfc_main$x = /*@__PURE__*/ defineComponent({
     __name: 'UbPresetPicker',
     props: {
         items: {},
@@ -191185,9 +191272,9 @@ function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbPresetPicker = /* @__PURE__ */ _export_sfc(_sfc_main$w, [["render", _sfc_render$w], ["__scopeId", "data-v-2ea232e6"]]);
+var UbPresetPicker = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$w], ["__scopeId", "data-v-2ea232e6"]]);
 
-var _sfc_main$v = /*@__PURE__*/ defineComponent({
+var _sfc_main$w = /*@__PURE__*/ defineComponent({
     __name: 'ApiPresetEditor',
     props: {
         idPrefix: { default: 'api' }
@@ -191991,9 +192078,9 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION */
 	)) : createCommentVNode("v-if", true)]);
 }
-var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-b21a9225"]]);
+var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$w, [["render", _sfc_render$v], ["__scopeId", "data-v-b21a9225"]]);
 
-var _sfc_main$u = /*@__PURE__*/ defineComponent({
+var _sfc_main$v = /*@__PURE__*/ defineComponent({
     __name: 'ApiPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -192019,7 +192106,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["lead"]);
 }
-var ApiPage = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$u]]);
+var ApiPage = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$u]]);
 
 const basicConfigCopy = {
     nav: {
@@ -192655,7 +192742,7 @@ function sanitizeFilename_UB(value, fallback) {
         .slice(0, 48) || fallback;
 }
 
-var _sfc_main$t = /*@__PURE__*/ defineComponent({
+var _sfc_main$u = /*@__PURE__*/ defineComponent({
     __name: 'UbRulePairs',
     props: {
         modelValue: {},
@@ -192780,9 +192867,9 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 		})
 	]);
 }
-var UbRulePairs = /* @__PURE__ */ _export_sfc(_sfc_main$t, [["render", _sfc_render$t], ["__scopeId", "data-v-17445fad"]]);
+var UbRulePairs = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$t], ["__scopeId", "data-v-17445fad"]]);
 
-var _sfc_main$s = /*@__PURE__*/ defineComponent({
+var _sfc_main$t = /*@__PURE__*/ defineComponent({
     __name: 'PlotTaskEditor',
     props: {
         task: {},
@@ -193106,9 +193193,9 @@ function _sfc_render$s(_ctx, _cache, $props, $setup, $data, $options) {
 		})
 	])) : (openBlock(), createElementBlock("p", _hoisted_3$l, "请先在上方选择一个任务。"));
 }
-var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$s, [["render", _sfc_render$s], ["__scopeId", "data-v-5bbd16c6"]]);
+var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$t, [["render", _sfc_render$s], ["__scopeId", "data-v-5bbd16c6"]]);
 
-var _sfc_main$r = /*@__PURE__*/ defineComponent({
+var _sfc_main$s = /*@__PURE__*/ defineComponent({
     __name: 'PlotPresetSheet',
     props: {
         isOpen: { type: Boolean },
@@ -193507,9 +193594,9 @@ function _sfc_render$r(_ctx, _cache, $props, $setup, $data, $options) {
 		"before-close"
 	]);
 }
-var PlotPresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$r, [["render", _sfc_render$r], ["__scopeId", "data-v-3b300f52"]]);
+var PlotPresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$s, [["render", _sfc_render$r], ["__scopeId", "data-v-3b300f52"]]);
 
-var _sfc_main$q = /*@__PURE__*/ defineComponent({
+var _sfc_main$r = /*@__PURE__*/ defineComponent({
     __name: 'PlotPresetSection',
     props: {
         id: { default: undefined },
@@ -193760,7 +193847,7 @@ function _sfc_render$q(_ctx, _cache, $props, $setup, $data, $options) {
 		"description"
 	]);
 }
-var PlotPresetSection = /* @__PURE__ */ _export_sfc(_sfc_main$q, [["render", _sfc_render$q], ["__scopeId", "data-v-0c48a73a"]]);
+var PlotPresetSection = /* @__PURE__ */ _export_sfc(_sfc_main$r, [["render", _sfc_render$q], ["__scopeId", "data-v-0c48a73a"]]);
 
 function buildTemplateRecoveryConfirmMessage_ACU(action, error) {
     const actionText = action === 'save-template' ? '保存这次聊天模板修改' : '切换并保存当前聊天模板';
@@ -194812,7 +194899,7 @@ const tableCopy = {
     worldbook: worldbookEntriesCopy,
 };
 
-var _sfc_main$p = /*@__PURE__*/ defineComponent({
+var _sfc_main$q = /*@__PURE__*/ defineComponent({
     __name: 'TablePresetSheet',
     props: {
         isOpen: { type: Boolean },
@@ -194985,9 +195072,9 @@ function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["is-open", "title"]);
 }
-var TablePresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$p, [["render", _sfc_render$p], ["__scopeId", "data-v-aed3eab6"]]);
+var TablePresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$q, [["render", _sfc_render$p], ["__scopeId", "data-v-aed3eab6"]]);
 
-var _sfc_main$o = /*@__PURE__*/ defineComponent({
+var _sfc_main$p = /*@__PURE__*/ defineComponent({
     __name: 'TableTemplateSection',
     props: {
         id: { default: undefined }
@@ -195215,7 +195302,7 @@ function _sfc_render$o(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["id", "title"]);
 }
-var TableTemplateSection = /* @__PURE__ */ _export_sfc(_sfc_main$o, [["render", _sfc_render$o], ["__scopeId", "data-v-4bb4a8a2"]]);
+var TableTemplateSection = /* @__PURE__ */ _export_sfc(_sfc_main$p, [["render", _sfc_render$o], ["__scopeId", "data-v-4bb4a8a2"]]);
 
 const NUMBER_FIELD_META = [
     {
@@ -195781,7 +195868,7 @@ const formFillCopy = {
     },
 };
 
-var _sfc_main$n = /*@__PURE__*/ defineComponent({
+var _sfc_main$o = /*@__PURE__*/ defineComponent({
     __name: 'UpdateSettingsSection',
     props: {
         id: { default: undefined },
@@ -196008,9 +196095,9 @@ function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
 		"description"
 	]);
 }
-var UpdateSettingsSection = /* @__PURE__ */ _export_sfc(_sfc_main$n, [["render", _sfc_render$n], ["__scopeId", "data-v-efd558d2"]]);
+var UpdateSettingsSection = /* @__PURE__ */ _export_sfc(_sfc_main$o, [["render", _sfc_render$n], ["__scopeId", "data-v-efd558d2"]]);
 
-var _sfc_main$m = /*@__PURE__*/ defineComponent({
+var _sfc_main$n = /*@__PURE__*/ defineComponent({
     __name: 'BasicConfigPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -196043,7 +196130,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var BasicConfigPage = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$m]]);
+var BasicConfigPage = /* @__PURE__ */ _export_sfc(_sfc_main$n, [["render", _sfc_render$m]]);
 
 const contentReplaceCopy = {
     nav: {
@@ -196854,7 +196941,7 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
 });
 
 const DECISION_PROVIDER_SWITCH_HINT_ACU = '两家各存各的 Key 和模型，切换不会丢掉另一家的设置。';
-var _sfc_main$l = /*@__PURE__*/ defineComponent({
+var _sfc_main$m = /*@__PURE__*/ defineComponent({
     __name: 'ContentReplacePage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -197698,7 +197785,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-5e9dccf5"]]);
+var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$l], ["__scopeId", "data-v-5e9dccf5"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;
@@ -198333,7 +198420,7 @@ function useContinuationSession() {
 }
 
 const FOLD_STEP = 40;
-var _sfc_main$k = /*@__PURE__*/ defineComponent({
+var _sfc_main$l = /*@__PURE__*/ defineComponent({
     __name: 'ContinuationSessionFeed',
     props: {
         entries: {},
@@ -198465,7 +198552,7 @@ const _hoisted_21$2 = {
 	key: 1,
 	class: "ub-feed__detail"
 };
-const _hoisted_22$1 = {
+const _hoisted_22$2 = {
 	key: 2,
 	class: "ub-feed__running"
 };
@@ -198622,7 +198709,7 @@ function _sfc_render$k(_ctx, _cache, $props, $setup, $data, $options) {
 				128
 				/* KEYED_FRAGMENT */
 			)),
-			$props.running ? (openBlock(), createElementBlock("div", _hoisted_22$1, [..._cache[1] || (_cache[1] = [createBaseVNode(
+			$props.running ? (openBlock(), createElementBlock("div", _hoisted_22$2, [..._cache[1] || (_cache[1] = [createBaseVNode(
 				"span",
 				{
 					class: "ub-feed__pulse",
@@ -198641,9 +198728,9 @@ function _sfc_render$k(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_PATCH */
 	);
 }
-var ContinuationSessionFeed = /* @__PURE__ */ _export_sfc(_sfc_main$k, [["render", _sfc_render$k], ["__scopeId", "data-v-be3d44d3"]]);
+var ContinuationSessionFeed = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$k], ["__scopeId", "data-v-be3d44d3"]]);
 
-var _sfc_main$j = /*@__PURE__*/ defineComponent({
+var _sfc_main$k = /*@__PURE__*/ defineComponent({
     __name: 'ContinuationChat',
     props: {
         task: {},
@@ -198841,7 +198928,7 @@ function _sfc_render$j(_ctx, _cache, $props, $setup, $data, $options) {
 		}, 8, ["disabled"]))])])
 	]);
 }
-var ContinuationChat = /* @__PURE__ */ _export_sfc(_sfc_main$j, [["render", _sfc_render$j], ["__scopeId", "data-v-acb581a2"]]);
+var ContinuationChat = /* @__PURE__ */ _export_sfc(_sfc_main$k, [["render", _sfc_render$j], ["__scopeId", "data-v-acb581a2"]]);
 
 /**
  * 续写资料模块的显示名：资料面板、待修复卡片、保存提示共用这一份（R10B-18：曾有三份映射，
@@ -199034,7 +199121,7 @@ function buildMaterialCompletionCards_ACU(input) {
     });
 }
 
-var _sfc_main$i = /*@__PURE__*/ defineComponent({
+var _sfc_main$j = /*@__PURE__*/ defineComponent({
     __name: 'JsonDraftEditor',
     props: {
         draft: {},
@@ -199180,10 +199267,10 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var JsonDraftEditor = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$i], ["__scopeId", "data-v-c21c1478"]]);
+var JsonDraftEditor = /* @__PURE__ */ _export_sfc(_sfc_main$j, [["render", _sfc_render$i], ["__scopeId", "data-v-c21c1478"]]);
 
 const OUTLINE_STALE_MESSAGE = '底稿已过期：编辑期间大纲已被更新，保存会覆盖新大纲。请放弃草稿后基于最新大纲重新编辑。';
-var _sfc_main$h = /*@__PURE__*/ defineComponent({
+var _sfc_main$i = /*@__PURE__*/ defineComponent({
     __name: 'ContinuationMaterials',
     props: {
         task: {},
@@ -199481,8 +199568,8 @@ const _hoisted_21$1 = {
 	key: 0,
 	class: "ub-cm__history-body"
 };
-const _hoisted_22 = { class: "ub-cm__node-head" };
-const _hoisted_23 = { class: "ub-cm__body" };
+const _hoisted_22$1 = { class: "ub-cm__node-head" };
+const _hoisted_23$1 = { class: "ub-cm__body" };
 const _hoisted_24 = { class: "ub-cm__list" };
 const _hoisted_25 = {
 	key: 1,
@@ -200030,7 +200117,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 									Fragment,
 									{ key: revision?.revision ?? "no-revision" },
 									[revision ? (openBlock(), createElementBlock("div", _hoisted_21$1, [
-										createBaseVNode("div", _hoisted_22, [
+										createBaseVNode("div", _hoisted_22$1, [
 											createBaseVNode(
 												"strong",
 												null,
@@ -200083,7 +200170,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 										]),
 										createBaseVNode(
 											"p",
-											_hoisted_23,
+											_hoisted_23$1,
 											"阶段目标：" + toDisplayString(revision.outline.goal),
 											1
 											/* TEXT */
@@ -201396,10 +201483,10 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 		)) : createCommentVNode("v-if", true)
 	]);
 }
-var ContinuationMaterials = /* @__PURE__ */ _export_sfc(_sfc_main$h, [["render", _sfc_render$h], ["__scopeId", "data-v-72041ca5"]]);
+var ContinuationMaterials = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$h], ["__scopeId", "data-v-72041ca5"]]);
 
 const INHERIT_CHANNEL_VALUE = '__inherit__';
-var _sfc_main$g = /*@__PURE__*/ defineComponent({
+var _sfc_main$h = /*@__PURE__*/ defineComponent({
     __name: 'ContinuationPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -203145,7 +203232,7 @@ function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["sections"]);
 }
-var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$g, [["render", _sfc_render$g], ["__scopeId", "data-v-57f4a57a"]]);
+var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$h, [["render", _sfc_render$g], ["__scopeId", "data-v-57f4a57a"]]);
 
 const FLIGHT_MODE_BIG_SUMMARY_ENTRY_PLACEMENT_ACU = {
     position: 'at_depth_as_system',
@@ -204316,7 +204403,7 @@ function syncFeaturePageGates_UB(router, contentReplaceEnabled, plotEnabled) {
     router.syncFeatureGate(FEATURE_GATE_VECTOR_INDEX, settings_ACU.summaryVectorIndexModeDefault === true);
 }
 
-var _sfc_main$f = /*@__PURE__*/ defineComponent({
+var _sfc_main$g = /*@__PURE__*/ defineComponent({
     __name: 'DashboardPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -204571,7 +204658,7 @@ function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["lead"]);
 }
-var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$f], ["__scopeId", "data-v-5180a11f"]]);
+var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$g, [["render", _sfc_render$f], ["__scopeId", "data-v-5180a11f"]]);
 
 /**
  * service/worldbook/worldbook-cleanup.ts — 世界书条目清理（service 层：纯业务逻辑）
@@ -206051,7 +206138,7 @@ function useDormantData() {
     };
 }
 
-var _sfc_main$e = /*@__PURE__*/ defineComponent({
+var _sfc_main$f = /*@__PURE__*/ defineComponent({
     __name: 'DormantDataSection',
     props: {
         id: { default: undefined }
@@ -206270,9 +206357,9 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["id"]);
 }
-var DormantDataSection = /* @__PURE__ */ _export_sfc(_sfc_main$e, [["render", _sfc_render$e], ["__scopeId", "data-v-527fd598"]]);
+var DormantDataSection = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-527fd598"]]);
 
-var _sfc_main$d = /*@__PURE__*/ defineComponent({
+var _sfc_main$e = /*@__PURE__*/ defineComponent({
     __name: 'DataMgmtPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -206944,7 +207031,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["sections"]);
 }
-var DataMgmtPage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-847ff87c"]]);
+var DataMgmtPage = /* @__PURE__ */ _export_sfc(_sfc_main$e, [["render", _sfc_render$d], ["__scopeId", "data-v-847ff87c"]]);
 
 const developerCopy = {
     panels: {
@@ -206959,7 +207046,7 @@ const developerCopy = {
     },
 };
 
-var _sfc_main$c = /*@__PURE__*/ defineComponent({
+var _sfc_main$d = /*@__PURE__*/ defineComponent({
     __name: 'DeveloperPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -207040,7 +207127,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c]]);
+var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$c]]);
 
 /** 宿主世界书 API 挂起时确认弹窗不能被无限期拖住，超过该时长即降级为提示文案。 */
 const INJECTION_TARGET_RESOLVE_TIMEOUT_MS = 1500;
@@ -207713,7 +207800,7 @@ function useManualUpdate() {
     };
 }
 
-var _sfc_main$b = /*@__PURE__*/ defineComponent({
+var _sfc_main$c = /*@__PURE__*/ defineComponent({
     __name: 'TablePicker',
     props: {
         sheetKeys: {},
@@ -207862,9 +207949,9 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		/* STABLE_FRAGMENT */
 	))]);
 }
-var TablePicker = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-2e8b677d"]]);
+var TablePicker = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$b], ["__scopeId", "data-v-2e8b677d"]]);
 
-var _sfc_main$a = /*@__PURE__*/ defineComponent({
+var _sfc_main$b = /*@__PURE__*/ defineComponent({
     __name: 'FormFillPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -208237,7 +208324,7 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$a, [["render", _sfc_render$a], ["__scopeId", "data-v-fea2a562"]]);
+var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$a], ["__scopeId", "data-v-fea2a562"]]);
 
 /**
  * usePlotWorldbookConfig — 剧情推进世界书配置（D23.1）
@@ -208524,7 +208611,7 @@ function usePlotWorldbookEntries() {
     };
 }
 
-var _sfc_main$9 = /*@__PURE__*/ defineComponent({
+var _sfc_main$a = /*@__PURE__*/ defineComponent({
     __name: 'PlotPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -208682,7 +208769,7 @@ function _sfc_render$9(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$9, [["render", _sfc_render$9], ["__scopeId", "data-v-273ced2e"]]);
+var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$a, [["render", _sfc_render$9], ["__scopeId", "data-v-273ced2e"]]);
 
 /**
  * useFormFillInjectionTarget — 填表"注入目标世界书"（Component A，§4.2）
@@ -209105,7 +209192,7 @@ function useFormFillWorldbookEntries() {
     };
 }
 
-var _sfc_main$8 = /*@__PURE__*/ defineComponent({
+var _sfc_main$9 = /*@__PURE__*/ defineComponent({
     __name: 'WorldbookTargetSelect',
     props: {
         modelValue: {},
@@ -209188,9 +209275,9 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 		)) : createCommentVNode("v-if", true)
 	]);
 }
-var WorldbookTargetSelect = /* @__PURE__ */ _export_sfc(_sfc_main$8, [["render", _sfc_render$8], ["__scopeId", "data-v-479991ba"]]);
+var WorldbookTargetSelect = /* @__PURE__ */ _export_sfc(_sfc_main$9, [["render", _sfc_render$8], ["__scopeId", "data-v-479991ba"]]);
 
-var _sfc_main$7 = /*@__PURE__*/ defineComponent({
+var _sfc_main$8 = /*@__PURE__*/ defineComponent({
     __name: 'TablePage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -209529,7 +209616,7 @@ function _sfc_render$7(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$7, [["render", _sfc_render$7], ["__scopeId", "data-v-a5eb1b7f"]]);
+var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$8, [["render", _sfc_render$7], ["__scopeId", "data-v-a5eb1b7f"]]);
 
 const RERANK_BATCH_SIZE_LIMITS = {
     min: VECTOR_RERANK_MIN_BATCH_SIZE_ACU,
@@ -210223,7 +210310,7 @@ const vectorIndexCopy = {
     },
 };
 
-var _sfc_main$6 = /*@__PURE__*/ defineComponent({
+var _sfc_main$7 = /*@__PURE__*/ defineComponent({
     __name: 'UbStats',
     props: {
         items: {},
@@ -210309,10 +210396,10 @@ function _sfc_render$6(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbStats = /* @__PURE__ */ _export_sfc(_sfc_main$6, [["render", _sfc_render$6], ["__scopeId", "data-v-05d62386"]]);
+var UbStats = /* @__PURE__ */ _export_sfc(_sfc_main$7, [["render", _sfc_render$6], ["__scopeId", "data-v-05d62386"]]);
 
 const FLUSH_ERROR_MAX_CHARS = 60;
-var _sfc_main$5 = /*@__PURE__*/ defineComponent({
+var _sfc_main$6 = /*@__PURE__*/ defineComponent({
     __name: 'VectorIndexPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -210981,7 +211068,7 @@ function _sfc_render$5(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-5d536c50"]]);
+var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$6, [["render", _sfc_render$5], ["__scopeId", "data-v-5d536c50"]]);
 
 /**
  * page-catalog — 新版界面的页面目录
@@ -211008,64 +211095,7 @@ function ubPageEntry(id) {
     return (id && UB_PAGE_CATALOG[id]) || null;
 }
 
-/**
- * appearance-store — 新 UI 外观偏好。
- *
- * 界面缩放是本机显示偏好，独立持久化到 acu_v2_ui_state.appearance；
- * 不进入主题导入/导出，也不触碰业务配置。
- */
-const ACU_UI_SCALE_OPTIONS = [
-    { value: '100', label: '100%', cssScale: '1' },
-    { value: '110', label: '110%', cssScale: '1.1' },
-    { value: '125', label: '125%', cssScale: '1.25' },
-];
-const ACU_DEFAULT_UI_SCALE = '100';
-const SECTION_KEY = 'appearance';
-function isUiScale(value) {
-    return typeof value === 'string' && ACU_UI_SCALE_OPTIONS.some(option => option.value === value);
-}
-function normalizeUiScale(value) {
-    return isUiScale(value) ? value : ACU_DEFAULT_UI_SCALE;
-}
-function getScaleOption(value) {
-    return ACU_UI_SCALE_OPTIONS.find(option => option.value === value) ?? ACU_UI_SCALE_OPTIONS[0];
-}
-function readInitialAppearanceState() {
-    const persisted = readSection(SECTION_KEY);
-    return { uiScale: normalizeUiScale(persisted?.uiScale) };
-}
-function buildPersistedAppearance(state) {
-    return { uiScale: state.uiScale };
-}
-const useAppearanceStore = defineStore('acu-v2-appearance', {
-    state: () => readInitialAppearanceState(),
-    getters: {
-        uiScaleOption(state) {
-            return getScaleOption(state.uiScale);
-        },
-        uiScaleLabel(state) {
-            return getScaleOption(state.uiScale).label;
-        },
-        uiScaleCssValue(state) {
-            return getScaleOption(state.uiScale).cssScale;
-        },
-    },
-    actions: {
-        setUiScale(value) {
-            if (!isUiScale(value))
-                return;
-            if (this.uiScale === value)
-                return;
-            this.uiScale = value;
-            this.persist();
-        },
-        persist() {
-            writeSection(SECTION_KEY, buildPersistedAppearance(this.$state));
-        },
-    },
-});
-
-var _sfc_main$4 = /*@__PURE__*/ defineComponent({
+var _sfc_main$5 = /*@__PURE__*/ defineComponent({
     __name: 'AppearanceSheet',
     props: {
         isOpen: { type: Boolean }
@@ -211081,6 +211111,24 @@ var _sfc_main$4 = /*@__PURE__*/ defineComponent({
         const dialogStore = useDialogStore();
         const toastStore = useToastStore();
         const scaleOptions = ACU_UI_SCALE_OPTIONS.map(option => ({ value: option.value, label: option.label }));
+        const styleOptions = ACU_UI_STYLE_OPTIONS.map(option => ({ value: option.value, label: option.label }));
+        const CLAUDE_THEME_IDS = ['claude', 'claude-night'];
+        /**
+         * 切到 Claude 风格时，若当前不是 Claude 配色，顺手换成同明暗的 Claude / Claude 夜，
+         * 并提示可以改回；切回默认风格不动主题。
+         */
+        function setStyle(value) {
+            if (value === appearanceStore.uiStyle)
+                return;
+            appearanceStore.setUiStyle(value);
+            if (value !== 'claude' || CLAUDE_THEME_IDS.includes(themeStore.activeId))
+                return;
+            const target = themeStore.activeTheme.colorScheme === 'dark' ? 'claude-night' : 'claude';
+            if (!themeStore.themes.some(t => t.id === target))
+                return;
+            themeStore.setTheme(target);
+            toastStore.info('已同时换成 Claude 配色，可在上方「主题」里改回。');
+        }
         const modeOptions = [
             { value: 'basic', label: '基础' },
             { value: 'advanced', label: '高手' },
@@ -211120,14 +211168,14 @@ var _sfc_main$4 = /*@__PURE__*/ defineComponent({
             if (confirmed)
                 themeStore.deleteCustomTheme(id);
         }
-        const __returned__ = { emit, themeStore, appearanceStore, uiMode, router, dialogStore, toastStore, scaleOptions, modeOptions, setMode, importThemeFile, exportTheme, deleteTheme, get isCustomThemeId() { return isCustomThemeId; }, UbBadge, UbFileButton, UbIconButton, UbRow, UbSection, UbSegmented, UbSheet };
+        const __returned__ = { emit, themeStore, appearanceStore, uiMode, router, dialogStore, toastStore, scaleOptions, styleOptions, CLAUDE_THEME_IDS, setStyle, modeOptions, setMode, importThemeFile, exportTheme, deleteTheme, get isCustomThemeId() { return isCustomThemeId; }, UbBadge, UbFileButton, UbIconButton, UbRow, UbSection, UbSegmented, UbSheet };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-themes[data-v-384f09b2] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-theme[data-v-384f09b2] {\r\n  position: relative;\r\n  min-width: 0;\r\n  border: 1.5px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-bg);\r\n  overflow: hidden;\n}\n.ub-theme.is-active[data-v-384f09b2] {\r\n  border-color: var(--ub-accent);\n}\n.ub-theme__pick[data-v-384f09b2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  width: 100%;\r\n  padding: 0;\r\n  border: 0;\r\n  background: transparent;\r\n  color: inherit;\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-theme__swatch[data-v-384f09b2] {\r\n  display: flex;\r\n  align-items: flex-end;\r\n  height: calc(var(--ub-u) * 64);\r\n  padding: 10px 10px 0;\n}\n.ub-theme__swatch-card[data-v-384f09b2] {\r\n  position: relative;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 5px;\r\n  width: 100%;\r\n  height: 100%;\r\n  padding: 9px 10px;\r\n  border: 1px solid;\r\n  border-bottom: 0;\r\n  border-radius: 8px 8px 0 0;\n}\n.ub-theme__swatch-line[data-v-384f09b2] {\r\n  width: 64%;\r\n  height: 5px;\r\n  border-radius: 3px;\n}\n.ub-theme__swatch-line.is-short[data-v-384f09b2] {\r\n  width: 40%;\n}\n.ub-theme__swatch-dot[data-v-384f09b2] {\r\n  position: absolute;\r\n  right: 10px;\r\n  top: 9px;\r\n  width: 14px;\r\n  height: 14px;\r\n  border-radius: 50%;\n}\n.ub-theme__name[data-v-384f09b2] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  min-width: 0;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s3);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-panel);\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\n}\n.ub-theme__name .fa-check[data-v-384f09b2] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-theme__tools[data-v-384f09b2] {\r\n  position: absolute;\r\n  top: 4px;\r\n  right: 4px;\r\n  display: flex;\r\n  gap: 2px;\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-toast-bg);\r\n  opacity: 0;\r\n  transition: opacity 0.14s ease;\n}\n.ub-theme:hover .ub-theme__tools[data-v-384f09b2],\r\n.ub-theme:focus-within .ub-theme__tools[data-v-384f09b2],\r\n.ub-theme.is-active .ub-theme__tools[data-v-384f09b2] {\r\n  opacity: 1;\n}\n@media (hover: none) {\n.ub-theme__tools[data-v-384f09b2] {\r\n    opacity: 1;\n}\n}\r\n", "src/presentation-v3/shell/AppearanceSheet.vue#style-0-384f09b2");
-var AppearanceSheet_vue_vue_type_style_index_0_scoped_384f09b2_lang = null;
+injectSfcStyle("\n.ub-themes[data-v-602b259d] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-theme[data-v-602b259d] {\r\n  position: relative;\r\n  min-width: 0;\r\n  border: 1.5px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-bg);\r\n  overflow: hidden;\n}\n.ub-theme.is-active[data-v-602b259d] {\r\n  border-color: var(--ub-accent);\n}\n.ub-theme__pick[data-v-602b259d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  width: 100%;\r\n  padding: 0;\r\n  border: 0;\r\n  background: transparent;\r\n  color: inherit;\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-theme__swatch[data-v-602b259d] {\r\n  display: flex;\r\n  align-items: flex-end;\r\n  height: calc(var(--ub-u) * 64);\r\n  padding: 10px 10px 0;\n}\n.ub-theme__swatch-card[data-v-602b259d] {\r\n  position: relative;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 5px;\r\n  width: 100%;\r\n  height: 100%;\r\n  padding: 9px 10px;\r\n  border: 1px solid;\r\n  border-bottom: 0;\r\n  border-radius: 8px 8px 0 0;\n}\n.ub-theme__swatch-line[data-v-602b259d] {\r\n  width: 64%;\r\n  height: 5px;\r\n  border-radius: 3px;\n}\n.ub-theme__swatch-line.is-short[data-v-602b259d] {\r\n  width: 40%;\n}\n.ub-theme__swatch-dot[data-v-602b259d] {\r\n  position: absolute;\r\n  right: 10px;\r\n  top: 9px;\r\n  width: 14px;\r\n  height: 14px;\r\n  border-radius: 50%;\n}\n.ub-theme__name[data-v-602b259d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  min-width: 0;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s3);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-panel);\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\n}\n.ub-theme__name .fa-check[data-v-602b259d] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-theme__tools[data-v-602b259d] {\r\n  position: absolute;\r\n  top: 4px;\r\n  right: 4px;\r\n  display: flex;\r\n  gap: 2px;\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-toast-bg);\r\n  opacity: 0;\r\n  transition: opacity 0.14s ease;\n}\n.ub-theme:hover .ub-theme__tools[data-v-602b259d],\r\n.ub-theme:focus-within .ub-theme__tools[data-v-602b259d],\r\n.ub-theme.is-active .ub-theme__tools[data-v-602b259d] {\r\n  opacity: 1;\n}\n@media (hover: none) {\n.ub-theme__tools[data-v-602b259d] {\r\n    opacity: 1;\n}\n}\r\n", "src/presentation-v3/shell/AppearanceSheet.vue#style-0-602b259d");
+var AppearanceSheet_vue_vue_type_style_index_0_scoped_602b259d_lang = null;
 
 const _hoisted_1$4 = { class: "ub-themes" };
 const _hoisted_2$4 = ["aria-pressed", "onClick"];
@@ -211144,7 +211192,7 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 		title: "外观与界面",
 		subtitle: "只影响本机显示，不改动任何数据",
 		width: "460px",
-		onClose: _cache[1] || (_cache[1] = ($event) => $setup.emit("close"))
+		onClose: _cache[2] || (_cache[2] = ($event) => $setup.emit("close"))
 	}, {
 		default: withCtx(() => [createVNode($setup["UbSection"], {
 			title: "主题",
@@ -211230,7 +211278,7 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 								key: 1,
 								variant: "accent"
 							}, {
-								default: withCtx(() => [..._cache[2] || (_cache[2] = [createTextVNode(
+								default: withCtx(() => [..._cache[3] || (_cache[3] = [createTextVNode(
 									"自定义",
 									-1
 									/* CACHED */
@@ -211263,7 +211311,7 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 				block: "",
 				onFile: $setup.importThemeFile
 			}, {
-				default: withCtx(() => [..._cache[3] || (_cache[3] = [createTextVNode(
+				default: withCtx(() => [..._cache[4] || (_cache[4] = [createTextVNode(
 					"导入主题",
 					-1
 					/* CACHED */
@@ -211272,42 +211320,60 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 			})]),
 			_: 1
 		}), createVNode($setup["UbSection"], { title: "显示" }, {
-			default: withCtx(() => [createVNode($setup["UbRow"], {
-				label: "界面缩放",
-				hint: `当前 ${$setup.appearanceStore.uiScaleLabel}`
-			}, {
-				default: withCtx(() => [createVNode($setup["UbSegmented"], {
-					options: $setup.scaleOptions,
-					"model-value": $setup.appearanceStore.uiScale,
-					"aria-label": "界面缩放",
-					size: "sm",
-					"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.appearanceStore.setUiScale($event))
-				}, null, 8, ["options", "model-value"])]),
-				_: 1
-			}, 8, ["hint"]), createVNode($setup["UbRow"], {
-				label: "界面模式",
-				hint: "基础模式只保留一页必要设置；高手模式展开全部功能页。"
-			}, {
-				default: withCtx(() => [createVNode($setup["UbSegmented"], {
-					options: $setup.modeOptions,
-					"model-value": $setup.uiMode.mode,
-					"aria-label": "界面模式",
-					size: "sm",
-					"onUpdate:modelValue": $setup.setMode
-				}, null, 8, ["model-value"])]),
-				_: 1
-			})]),
+			default: withCtx(() => [
+				createVNode($setup["UbRow"], {
+					label: "界面风格",
+					hint: "Claude 风格换成更柔和的层次、圆角和衬线标题，侧栏可收起；颜色仍跟随上面的主题。"
+				}, {
+					default: withCtx(() => [createVNode($setup["UbSegmented"], {
+						options: $setup.styleOptions,
+						"model-value": $setup.appearanceStore.uiStyle,
+						"aria-label": "界面风格",
+						size: "sm",
+						"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.setStyle($event))
+					}, null, 8, ["options", "model-value"])]),
+					_: 1
+				}),
+				createVNode($setup["UbRow"], {
+					label: "界面缩放",
+					hint: `当前 ${$setup.appearanceStore.uiScaleLabel}`
+				}, {
+					default: withCtx(() => [createVNode($setup["UbSegmented"], {
+						options: $setup.scaleOptions,
+						"model-value": $setup.appearanceStore.uiScale,
+						"aria-label": "界面缩放",
+						size: "sm",
+						"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.appearanceStore.setUiScale($event))
+					}, null, 8, ["options", "model-value"])]),
+					_: 1
+				}, 8, ["hint"]),
+				createVNode($setup["UbRow"], {
+					label: "界面模式",
+					hint: "基础模式只保留一页必要设置；高手模式展开全部功能页。"
+				}, {
+					default: withCtx(() => [createVNode($setup["UbSegmented"], {
+						options: $setup.modeOptions,
+						"model-value": $setup.uiMode.mode,
+						"aria-label": "界面模式",
+						size: "sm",
+						"onUpdate:modelValue": $setup.setMode
+					}, null, 8, ["model-value"])]),
+					_: 1
+				})
+			]),
 			_: 1
 		})]),
 		_: 1
 	}, 8, ["is-open"]);
 }
-var AppearanceSheet = /* @__PURE__ */ _export_sfc(_sfc_main$4, [["render", _sfc_render$4], ["__scopeId", "data-v-384f09b2"]]);
+var AppearanceSheet = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$4], ["__scopeId", "data-v-602b259d"]]);
 
-var _sfc_main$3 = /*@__PURE__*/ defineComponent({
+/** iconOnly：侧栏收起时只显示图标，标题改放悬停提示。 */
+var _sfc_main$4 = /*@__PURE__*/ defineComponent({
     __name: 'NavList',
     props: {
-        variant: { default: 'rail' }
+        variant: { default: 'rail' },
+        iconOnly: { type: Boolean, default: false }
     },
     emits: ["navigate"],
     setup(__props, { expose: __expose, emit: __emit }) {
@@ -211316,7 +211382,7 @@ var _sfc_main$3 = /*@__PURE__*/ defineComponent({
         const emit = __emit;
         const router = useRouterStore();
         const uiMode = useUiModeStore();
-        const showGroupTitles = computed(() => !uiMode.isBasicMode || props.variant === 'tiles');
+        const showGroupTitles = computed(() => !props.iconOnly && (!uiMode.isBasicMode || props.variant === 'tiles'));
         function iconOf(id) {
             return ubPageEntry(id)?.icon ?? 'fa-solid fa-circle';
         }
@@ -211335,8 +211401,8 @@ var _sfc_main$3 = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-nav[data-v-1ecfbfbb] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s4);\n}\n.ub-nav__group-title[data-v-1ecfbfbb] {\r\n  margin: 0 var(--ub-s3) var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\r\n  letter-spacing: 0.08em;\n}\n.ub-nav__items[data-v-1ecfbfbb] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\n}\n.ub-nav__item[data-v-1ecfbfbb] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  width: 100%;\r\n  min-height: calc(var(--ub-u) * 38);\r\n  padding: var(--ub-s1) var(--ub-s3);\r\n  border: 0;\r\n  border-radius: var(--ub-r-control);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.14s ease, color 0.14s ease;\n}\n.ub-nav__item[data-v-1ecfbfbb]:hover:not(.is-active) {\r\n  background: var(--ub-hover);\r\n  color: var(--ub-text);\n}\n.ub-nav__item.is-active[data-v-1ecfbfbb] {\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-nav__icon[data-v-1ecfbfbb] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 20);\r\n  font-size: var(--ub-fs-sm);\r\n  opacity: 0.9;\n}\n.ub-nav__text[data-v-1ecfbfbb] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\n}\n.ub-nav__title[data-v-1ecfbfbb] {\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\r\n\r\n/* 平铺（手机目录）：两列卡片，带一句话说明 */\n.ub-nav--tiles .ub-nav__items[data-v-1ecfbfbb] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-nav--tiles .ub-nav__item[data-v-1ecfbfbb] {\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s2);\r\n  min-height: calc(var(--ub-u) * 96);\r\n  padding: var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\n}\n.ub-nav--tiles .ub-nav__item.is-active[data-v-1ecfbfbb] {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\n}\n.ub-nav--tiles .ub-nav__icon[data-v-1ecfbfbb] {\r\n  width: calc(var(--ub-u) * 32);\r\n  height: calc(var(--ub-u) * 32);\r\n  border-radius: 10px;\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-nav--tiles .ub-nav__title[data-v-1ecfbfbb] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  white-space: normal;\n}\n.ub-nav--tiles .ub-nav__blurb[data-v-1ecfbfbb] {\r\n  display: -webkit-box;\r\n  margin-top: 2px;\r\n  overflow: hidden;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 500;\r\n  line-height: 1.45;\r\n  -webkit-line-clamp: 2;\r\n  -webkit-box-orient: vertical;\n}\r\n", "src/presentation-v3/shell/NavList.vue#style-0-1ecfbfbb");
-var NavList_vue_vue_type_style_index_0_scoped_1ecfbfbb_lang = null;
+injectSfcStyle("\n.ub-nav[data-v-69b74dc2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s4);\n}\n.ub-nav__group-title[data-v-69b74dc2] {\r\n  margin: 0 var(--ub-s3) var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\r\n  letter-spacing: 0.08em;\n}\n.ub-nav__items[data-v-69b74dc2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\n}\n.ub-nav__item[data-v-69b74dc2] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  width: 100%;\r\n  min-height: calc(var(--ub-u) * 38);\r\n  padding: var(--ub-s1) var(--ub-s3);\r\n  border: 0;\r\n  border-radius: var(--ub-r-control);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.14s ease, color 0.14s ease;\n}\n.ub-nav__item[data-v-69b74dc2]:hover:not(.is-active) {\r\n  background: var(--ub-hover);\r\n  color: var(--ub-text);\n}\n.ub-nav__item.is-active[data-v-69b74dc2] {\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-nav__icon[data-v-69b74dc2] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 20);\r\n  font-size: var(--ub-fs-sm);\r\n  opacity: 0.9;\n}\n.ub-nav__text[data-v-69b74dc2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\n}\n.ub-nav__title[data-v-69b74dc2] {\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\r\n\r\n/* 平铺（手机目录）：两列卡片，带一句话说明 */\n.ub-nav--tiles .ub-nav__items[data-v-69b74dc2] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-nav--tiles .ub-nav__item[data-v-69b74dc2] {\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s2);\r\n  min-height: calc(var(--ub-u) * 96);\r\n  padding: var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\n}\n.ub-nav--tiles .ub-nav__item.is-active[data-v-69b74dc2] {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\n}\n.ub-nav--tiles .ub-nav__icon[data-v-69b74dc2] {\r\n  width: calc(var(--ub-u) * 32);\r\n  height: calc(var(--ub-u) * 32);\r\n  border-radius: 10px;\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-nav--tiles .ub-nav__title[data-v-69b74dc2] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  white-space: normal;\n}\n.ub-nav--tiles .ub-nav__blurb[data-v-69b74dc2] {\r\n  display: -webkit-box;\r\n  margin-top: 2px;\r\n  overflow: hidden;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 500;\r\n  line-height: 1.45;\r\n  -webkit-line-clamp: 2;\r\n  -webkit-box-orient: vertical;\n}\r\n", "src/presentation-v3/shell/NavList.vue#style-0-69b74dc2");
+var NavList_vue_vue_type_style_index_0_scoped_69b74dc2_lang = null;
 
 const _hoisted_1$3 = {
 	key: 0,
@@ -211350,6 +211416,7 @@ const _hoisted_3$3 = { class: "ub-nav__items" };
 const _hoisted_4$2 = [
 	"aria-current",
 	"data-page-id",
+	"title",
 	"onClick"
 ];
 const _hoisted_5$2 = {
@@ -211366,7 +211433,7 @@ function _sfc_render$3(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"nav",
 		{
-			class: normalizeClass(["ub-nav", `ub-nav--${$props.variant}`]),
+			class: normalizeClass(["ub-nav", [`ub-nav--${$props.variant}`, { "ub-nav--icon-only": $props.iconOnly }]]),
 			"aria-label": "页面导航"
 		},
 		[(openBlock(true), createElementBlock(
@@ -211392,6 +211459,7 @@ function _sfc_render$3(_ctx, _cache, $props, $setup, $data, $options) {
 								class: normalizeClass(["ub-nav__item", { "is-active": page.id === $setup.router.activePageId }]),
 								"aria-current": page.id === $setup.router.activePageId ? "page" : undefined,
 								"data-page-id": page.id,
+								title: $props.iconOnly ? page.title : undefined,
 								onClick: ($event) => $setup.go(page.id)
 							}, [createBaseVNode("span", _hoisted_5$2, [createBaseVNode(
 								"i",
@@ -211427,11 +211495,11 @@ function _sfc_render$3(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var NavList = /* @__PURE__ */ _export_sfc(_sfc_main$3, [["render", _sfc_render$3], ["__scopeId", "data-v-1ecfbfbb"]]);
+var NavList = /* @__PURE__ */ _export_sfc(_sfc_main$4, [["render", _sfc_render$3], ["__scopeId", "data-v-69b74dc2"]]);
 
 const LEAVE_MS = 150;
 const titleId = 'ub-dialog-title';
-var _sfc_main$2 = /*@__PURE__*/ defineComponent({
+var _sfc_main$3 = /*@__PURE__*/ defineComponent({
     __name: 'UbDialogHost',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -211724,9 +211792,9 @@ function _sfc_render$2(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	)) : createCommentVNode("v-if", true)]);
 }
-var UbDialogHost = /* @__PURE__ */ _export_sfc(_sfc_main$2, [["render", _sfc_render$2], ["__scopeId", "data-v-485a1d99"]]);
+var UbDialogHost = /* @__PURE__ */ _export_sfc(_sfc_main$3, [["render", _sfc_render$2], ["__scopeId", "data-v-485a1d99"]]);
 
-var _sfc_main$1 = /*@__PURE__*/ defineComponent({
+var _sfc_main$2 = /*@__PURE__*/ defineComponent({
     __name: 'UbToastHost',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -211829,7 +211897,31 @@ function _sfc_render$1(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})])) : createCommentVNode("v-if", true)]);
 }
-var UbToastHost = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1], ["__scopeId", "data-v-e625d808"]]);
+var UbToastHost = /* @__PURE__ */ _export_sfc(_sfc_main$2, [["render", _sfc_render$1], ["__scopeId", "data-v-e625d808"]]);
+
+var _sfc_main$1 = /*@__PURE__*/ defineComponent({
+    __name: 'ClaudeStyle',
+    setup(__props, { expose: __expose }) {
+        __expose();
+        /**
+         * Claude 风格（外观 → 界面风格 → Claude）。
+         *
+         * 只是一份全局样式，全部限定在 .ub-app[data-ub-style="claude"] 之下，不改任何组件结构与行为。
+         * 颜色仍取当前主题（--acu-*），这里只换表面层次、形状、排版与动效：
+         * - 表面：画布 / 侧栏 / 卡片三层微对比，边线用低透明度墨色，深色下改内侧高光；
+         * - 形状：控件 8px、卡片 12px、弹窗 16px，页内跳转胶囊全圆角；
+         * - 排版：页面标题与弹窗标题用衬线，正文 500 字重为主，导航选中用中性底色而非强调色；
+         * - 主按钮用墨色实底，次级按钮去强调色，聚焦用强调色三层光环。
+         * 参考的是公开的界面设计规范，不含任何品牌字体、图标或标识。
+         */
+        const __returned__ = {};
+        Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
+        return __returned__;
+    }
+});
+
+injectSfcStyle("\n/* ═══ 令牌 ═══ */\n.ub-app[data-ub-style=\"claude\"] {\n  --ub-r-card: 12px;\n  --ub-r-control: 8px;\n  --ub-r-overlay: 16px;\n  --ub-control-h: calc(var(--ub-u) * 34);\n  --ub-control-h-sm: calc(var(--ub-u) * 28);\n  --ub-rail-w: calc(var(--ub-u) * 256);\n  --ub-rail-w-collapsed: calc(var(--ub-u) * 60);\n  --ub-page-max: calc(var(--ub-u) * 768);\n\n  --ub-serif: ui-serif, Georgia, Cambria, \"Times New Roman\", \"Songti SC\", \"STSong\", \"Noto Serif CJK SC\", \"Source Han Serif SC\", serif;\n  --ub-ease: cubic-bezier(0.16, 1, 0.3, 1);\n\n  --ub-ink: var(--acu-text-1);\n  --ub-hover: color-mix(in srgb, var(--acu-text-1) 5%, transparent);\n  --ub-selected: color-mix(in srgb, var(--acu-text-1) 8%, transparent);\n  --ub-sunken: color-mix(in srgb, var(--acu-text-1) 5%, transparent);\n  --ub-line: color-mix(in srgb, var(--acu-text-1) 14%, transparent);\n  --ub-line-soft: color-mix(in srgb, var(--acu-text-1) 9%, transparent);\n  --ub-line-strong: color-mix(in srgb, var(--acu-text-1) 24%, transparent);\n  --ub-accent-soft: color-mix(in srgb, var(--acu-accent) 12%, transparent);\n  --ub-accent-soft-2: color-mix(in srgb, var(--acu-accent) 20%, transparent);\n  --ub-focus-ring: 0 0 0 1px var(--ub-bg), 0 0 0 2.5px var(--ub-accent), 0 0 6px 2px color-mix(in srgb, var(--acu-accent) 25%, transparent);\n\n  letter-spacing: -0.003em;\n}\n.ub-app[data-ub-style=\"claude\"][data-ub-color-scheme=\"light\"] {\n  --ub-bg: var(--acu-bg-1);\n  --ub-nav-bg: color-mix(in srgb, var(--acu-sidebar-bg) 45%, var(--acu-bg-1));\n  --ub-panel: color-mix(in srgb, var(--acu-bg-1) 30%, #fff);\n  --ub-input-bg: color-mix(in srgb, var(--acu-bg-1) 30%, #fff);\n  --ub-hover-strong: color-mix(in srgb, var(--acu-text-1) 6%, var(--ub-panel));\n  --ub-seg-thumb: color-mix(in srgb, var(--acu-bg-1) 20%, #fff);\n  --ub-on-ink: var(--acu-bg-1);\n  --ub-scrim: rgba(20, 20, 19, 0.3);\n  --ub-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 2px 8px rgba(0, 0, 0, 0.025);\n  --ub-overlay-shadow: 0 0 0 1px var(--ub-line-soft), 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);\n  --ub-toast-bg: color-mix(in srgb, var(--ub-panel) 96%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"][data-ub-color-scheme=\"dark\"] {\n  --ub-bg: color-mix(in srgb, var(--acu-bg-0) 55%, var(--acu-bg-1));\n  --ub-nav-bg: color-mix(in srgb, var(--acu-sidebar-bg) 70%, var(--acu-bg-0));\n  --ub-panel: color-mix(in srgb, var(--acu-bg-1) 70%, var(--acu-bg-2));\n  --ub-input-bg: color-mix(in srgb, var(--acu-bg-0) 35%, var(--acu-bg-1));\n  --ub-hover-strong: color-mix(in srgb, var(--acu-text-1) 8%, var(--ub-panel));\n  --ub-seg-thumb: color-mix(in srgb, var(--acu-text-1) 10%, var(--ub-panel));\n  --ub-on-ink: var(--acu-bg-0);\n  --ub-scrim: rgba(0, 0, 0, 0.55);\n  --ub-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3);\n  --ub-overlay-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 8px 28px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);\n  --ub-toast-bg: color-mix(in srgb, var(--ub-panel) 96%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] ::selection {\n  background: color-mix(in srgb, var(--acu-accent) 28%, transparent);\n}\n\n/* ═══ 外壳 ═══ */\n.ub-app[data-ub-style=\"claude\"] .ub-rail {\n  padding: var(--ub-s3) var(--ub-s2) var(--ub-s2);\n  border-right-color: var(--ub-line-soft);\n  transition: flex-basis 0.22s var(--ub-ease), width 0.22s var(--ub-ease);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__head {\n  min-height: calc(var(--ub-u) * 40);\n  padding: 0 var(--ub-s1) 0 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__collapse {\n  color: var(--ub-text-3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__nav {\n  margin-top: var(--ub-s4);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand {\n  gap: var(--ub-s2);\n  padding: 0 var(--ub-s2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand__mark {\n  width: calc(var(--ub-u) * 28);\n  height: calc(var(--ub-u) * 28);\n  border-radius: 8px;\n  background: var(--ub-accent);\n  font-size: var(--ub-fs-2xs);\n  letter-spacing: 0.02em;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand__name {\n  font-family: var(--ub-serif);\n  font-size: calc(var(--ub-u) * 17);\n  font-weight: 600;\n  letter-spacing: -0.015em;\n  line-height: 1.15;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand__tag {\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot {\n  border-top: 0;\n  padding-top: var(--ub-s2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot-btn {\n  min-height: calc(var(--ub-u) * 32);\n  border-radius: var(--ub-r-control);\n  color: var(--ub-text-2);\n  font-weight: 500;\n  transition: background 0.15s var(--ub-ease), color 0.15s ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot-btn:hover {\n  background: var(--ub-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot-btn:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n\n/* 侧栏收起：只留图标，文字改悬停提示 */\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-rail {\n  flex-basis: var(--ub-rail-w-collapsed);\n  width: var(--ub-rail-w-collapsed);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-rail__head {\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-brand {\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed :is(.ub-brand__text, .ub-rail__foot-label) {\n  display: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-rail__foot-btn {\n  justify-content: center;\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--icon-only .ub-nav__item {\n  justify-content: center;\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--icon-only .ub-nav__text {\n  display: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top {\n  min-height: calc(var(--ub-u) * 60);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__title {\n  font-family: var(--ub-serif);\n  font-size: calc(var(--ub-u) * 24);\n  font-weight: 500;\n  letter-spacing: -0.012em;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__icon {\n  display: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-scroll {\n  scrollbar-width: thin;\n  scrollbar-color: var(--ub-line) transparent;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-launcher__panel {\n  background: var(--ub-bg);\n}\n@media (max-width: 760px) {\n.ub-app[data-ub-style=\"claude\"] .ub-top {\n    min-height: calc(var(--ub-u) * 52);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__title {\n    font-size: calc(var(--ub-u) * 20);\n}\n}\n\n/* ═══ 导航 ═══ */\n.ub-app[data-ub-style=\"claude\"] .ub-nav {\n  gap: var(--ub-s4);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__group-title {\n  margin: 0 var(--ub-s3) var(--ub-s1);\n  font-size: var(--ub-fs-xs);\n  font-weight: 500;\n  letter-spacing: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item {\n  min-height: calc(var(--ub-u) * 34);\n  border-radius: var(--ub-r-control);\n  color: var(--ub-text-2);\n  font-weight: 500;\n  transition: background 0.15s var(--ub-ease), color 0.15s ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item:hover:not(.is-active) {\n  background: var(--ub-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item:active {\n  transform: scale(0.99);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item.is-active {\n  background: var(--ub-selected);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__icon {\n  color: var(--ub-text-3);\n  opacity: 1;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item.is-active .ub-nav__icon {\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__item {\n  border-color: var(--ub-line-soft);\n  border-radius: var(--ub-r-card);\n  background: var(--ub-panel);\n  box-shadow: var(--ub-card-shadow);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__item.is-active {\n  border-color: var(--ub-line-strong);\n  background: var(--ub-panel);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__icon {\n  border-radius: var(--ub-r-control);\n  background: var(--ub-sunken);\n  color: var(--ub-text-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__item.is-active .ub-nav__icon {\n  background: var(--ub-accent-soft);\n  color: var(--ub-accent-ink);\n}\n\n/* ═══ 页面骨架 ═══ */\n.ub-app[data-ub-style=\"claude\"] .ub-page__body {\n  gap: calc(var(--ub-u) * 32);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__lead {\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-md);\n  line-height: 1.7;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__chip {\n  border-color: var(--ub-line-soft);\n  background: transparent;\n  color: var(--ub-text-2);\n  font-weight: 500;\n  transition: background 0.15s var(--ub-ease), color 0.15s ease, border-color 0.15s ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__chip:hover {\n  border-color: var(--ub-line);\n  background: var(--ub-hover);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__head {\n  margin-bottom: var(--ub-s3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__title {\n  font-size: calc(var(--ub-u) * 15);\n  font-weight: 600;\n  letter-spacing: -0.008em;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__icon {\n  color: var(--ub-text-3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__card {\n  border-color: var(--ub-line-soft);\n  border-radius: var(--ub-r-card);\n  background: var(--ub-panel);\n  box-shadow: var(--ub-card-shadow);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__card.is-padded {\n  padding: calc(var(--ub-u) * 18);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__card.is-bare {\n  border: 0;\n  background: transparent;\n  box-shadow: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-row {\n  padding: calc(var(--ub-u) * 14) calc(var(--ub-u) * 18);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-row + .ub-row {\n  border-top-color: var(--ub-line-soft);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-row__label {\n  font-size: var(--ub-fs-sm);\n  font-weight: 500;\n}\n\n/* ═══ 按钮 ═══ */\n.ub-app[data-ub-style=\"claude\"] :is(.ub-btn, .ub-icon-btn) {\n  transition: background 0.15s var(--ub-ease), border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn {\n  border-color: var(--ub-line);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-panel);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn:hover:not(:disabled) {\n  border-color: var(--ub-line-strong);\n  background: var(--ub-hover-strong);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-btn, .ub-icon-btn):focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--primary {\n  border-color: transparent;\n  background: var(--ub-ink);\n  color: var(--ub-on-ink);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--primary:hover:not(:disabled) {\n  border-color: transparent;\n  background: color-mix(in srgb, var(--ub-ink) 84%, var(--ub-bg));\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--soft {\n  border-color: transparent;\n  background: var(--ub-sunken);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--soft:hover:not(:disabled) {\n  border-color: transparent;\n  background: color-mix(in srgb, var(--acu-text-1) 10%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--ghost {\n  border-color: transparent;\n  background: transparent;\n  color: var(--ub-text-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--ghost:hover:not(:disabled) {\n  border-color: transparent;\n  background: var(--ub-hover);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--danger {\n  border-color: transparent;\n  background: var(--ub-danger-soft);\n  color: var(--ub-danger);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--danger:hover:not(:disabled) {\n  border-color: transparent;\n  background: var(--ub-danger);\n  color: #fff;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn {\n  border-radius: var(--ub-r-control);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn:hover:not(:disabled) {\n  background: var(--ub-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn--danger:hover:not(:disabled) {\n  background: var(--ub-danger-soft);\n  color: var(--ub-danger);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn--solid {\n  border-color: var(--ub-line);\n  background: var(--ub-panel);\n}\n\n/* ═══ 输入类控件 ═══ */\n.ub-app[data-ub-style=\"claude\"] :is(.ub-field__input, .ub-select__native, .ub-textarea__input, .ub-dialog__input, .ub-picker__trigger) {\n  border-color: var(--ub-line);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-input-bg);\n  transition: border-color 0.15s ease, box-shadow 0.2s var(--ub-ease);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-textarea__input {\n  border-radius: 10px;\n  line-height: 1.65;\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-field__input, .ub-select__native, .ub-textarea__input, .ub-dialog__input, .ub-picker__trigger):hover:not(:disabled):not(:focus) {\n  border-color: var(--ub-line-strong);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-field__input:focus, .ub-textarea__input:focus, .ub-dialog__input:focus, .ub-select__native:focus-visible) {\n  border-color: color-mix(in srgb, var(--acu-text-1) 32%, transparent);\n  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acu-text-1) 6%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker__trigger {\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker__trigger:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n\n/* 分段：中性轨道＋浮起滑块 */\n.ub-app[data-ub-style=\"claude\"] .ub-seg {\n  border-radius: calc(var(--ub-r-control) + 3px);\n  background: var(--ub-sunken);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-seg__item {\n  border-radius: var(--ub-r-control);\n  font-weight: 500;\n  transition: background 0.18s var(--ub-ease), color 0.15s ease, box-shadow 0.18s var(--ub-ease);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-seg__item.is-active {\n  background: var(--ub-seg-thumb);\n  color: var(--ub-text);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 0.5px var(--ub-line);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-seg__item:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n\n/* 开关：更小巧，滑块阻尼回弹 */\n.ub-app[data-ub-style=\"claude\"] .ub-switch {\n  width: calc(var(--ub-u) * 38);\n  height: calc(var(--ub-u) * 22);\n  background: var(--ub-line-strong);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch.is-on {\n  background: var(--ub-accent);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch__thumb {\n  top: calc(var(--ub-u) * 2);\n  left: calc(var(--ub-u) * 2);\n  width: calc(var(--ub-u) * 18);\n  height: calc(var(--ub-u) * 18);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 0 0.5px rgba(0, 0, 0, 0.04);\n  transition: transform 0.24s cubic-bezier(0.34, 1.36, 0.64, 1);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch.is-on .ub-switch__thumb {\n  transform: translateX(calc(var(--ub-u) * 16));\n}\n.ub-app[data-ub-style=\"claude\"] .ub-check__box {\n  border-width: 1.5px;\n  border-color: var(--ub-line-strong);\n  border-radius: calc(var(--ub-u) * 4);\n  background: var(--ub-input-bg);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-check.is-on .ub-check__box {\n  border-color: var(--ub-accent);\n  background: var(--ub-accent);\n}\n\n/* ═══ 提示与标签 ═══ */\n.ub-app[data-ub-style=\"claude\"] .ub-callout {\n  border-radius: 10px;\n  line-height: 1.6;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-badge {\n  border-radius: 6px;\n  font-weight: 600;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc {\n  border-color: var(--ub-line-soft);\n  border-radius: 10px;\n  background: var(--ub-panel);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc--flat {\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc__head {\n  font-weight: 500;\n}\n\n/* ═══ 浮层：抽屉 / 对话框 / 选择面板 / 提示条 ═══ */\n.ub-app[data-ub-style=\"claude\"] .ub-sheet {\n  background: var(--ub-bg);\n}\n@media (min-width: 761px) {\n.ub-app[data-ub-style=\"claude\"] .ub-sheet-layer {\n    padding: calc(var(--ub-safe-top) + 8px) calc(var(--ub-safe-right) + 8px) calc(var(--ub-safe-bottom) + 8px) var(--ub-safe-left);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet {\n    border-radius: var(--ub-r-overlay);\n    overflow: hidden;\n}\n}\n@media (max-width: 760px) {\n.ub-app[data-ub-style=\"claude\"] .ub-sheet {\n    border-radius: var(--ub-r-overlay) var(--ub-r-overlay) 0 0;\n    overflow: hidden;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet-layer {\n    padding-top: calc(var(--ub-safe-top) + 12px);\n}\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet__head {\n  border-bottom-color: var(--ub-line-soft);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-sheet__title, .ub-dialog__title, .ub-picker-panel__title) {\n  font-family: var(--ub-serif);\n  font-weight: 500;\n  letter-spacing: -0.01em;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet__title {\n  font-size: calc(var(--ub-u) * 19);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet__foot {\n  border-top-color: var(--ub-line-soft);\n  background: var(--ub-bg);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog {\n  padding: calc(var(--ub-u) * 22);\n  border: 0;\n  border-radius: var(--ub-r-overlay);\n  background: var(--ub-panel);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__title {\n  font-size: calc(var(--ub-u) * 19);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__glyph {\n  background: var(--ub-sunken);\n  color: var(--ub-text-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__glyph.is-danger {\n  background: var(--ub-danger-soft);\n  color: var(--ub-danger);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__danger {\n  border-radius: 10px;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker-panel {\n  border: 0;\n  border-radius: var(--ub-r-overlay);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker-panel__item {\n  border-radius: var(--ub-r-control);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-toast {\n  border: 0;\n  border-radius: 12px;\n}\n@media (prefers-reduced-motion: reduce) {\n.ub-app[data-ub-style=\"claude\"] *,\n  .ub-app[data-ub-style=\"claude\"] *::before,\n  .ub-app[data-ub-style=\"claude\"] *::after {\n    transition-duration: 0.01ms !important;\n}\n}\n", "src/presentation-v3/shell/ClaudeStyle.vue#style-0");
+var ClaudeStyle_vue_vue_type_style_index_0_lang = null;
 
 var _sfc_main = /*@__PURE__*/ defineComponent({
     __name: 'App',
@@ -211840,12 +211932,14 @@ var _sfc_main = /*@__PURE__*/ defineComponent({
          * 新版界面外壳（v3）。
          * 状态全部放在 presentation-v2 的 Pinia store：路由、模式、主题、可视化编辑器、提示框、对话框。
          * 桌面：左侧导航栏；手机（≤760px）：顶栏＋全屏页面目录。
+         * 界面风格（外观里选「默认 / Claude」）只切根节点的 data-ub-style，样式见 shell/ClaudeStyle.vue。
          */
         const emit = __emit;
         const rootShell = useRootShellStore();
         const router = useRouterStore();
         const uiMode = useUiModeStore();
         const themeStore = useThemeStore();
+        const appearanceStore = useAppearanceStore();
         const toastStore = useToastStore();
         const visualizer = useVisualizerStore();
         const devOptions = useDevOptions();
@@ -211853,6 +211947,9 @@ var _sfc_main = /*@__PURE__*/ defineComponent({
         const appearanceOpen = ref(false);
         const scroller = ref(null);
         const activeEntry = computed(() => ubPageEntry(router.activePageId));
+        /** 侧栏收起只在 Claude 风格下生效；切回默认风格时照常展开，偏好保留。 */
+        const railCollapsed = computed(() => appearanceStore.isClaudeStyle && appearanceStore.railCollapsed);
+        const modeToggleLabel = computed(() => (uiMode.isBasicMode ? '切换到高手模式' : '返回基础模式'));
         /** 手机端没有侧栏，外观入口放在「全部页面」面板里；打开外观时先收起面板。 */
         function openAppearanceFromLauncher() {
             launcherOpen.value = false;
@@ -211918,56 +212015,59 @@ var _sfc_main = /*@__PURE__*/ defineComponent({
         watch(() => router.activePageId, resetScrollSettled);
         watch(() => rootShell.openRefreshTick, resetScrollSettled);
         watch(() => rootShell.scrollResetTick, resetScroll);
-        const __returned__ = { emit, rootShell, router, uiMode, themeStore, toastStore, visualizer, devOptions, launcherOpen, appearanceOpen, scroller, activeEntry, openAppearanceFromLauncher, toggleMode, closeApp, resetScroll, resetScrollSettled, VisualizerSurface, AppearanceSheet, NavList, UbButton, UbDialogHost, UbIconButton, UbToastHost };
+        const __returned__ = { emit, rootShell, router, uiMode, themeStore, appearanceStore, toastStore, visualizer, devOptions, launcherOpen, appearanceOpen, scroller, activeEntry, railCollapsed, modeToggleLabel, openAppearanceFromLauncher, toggleMode, closeApp, resetScroll, resetScrollSettled, VisualizerSurface, AppearanceSheet, NavList, UbButton, UbDialogHost, UbIconButton, UbToastHost };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\r\n/* ── 挂载根 ── TT 移动端 geometry firewall 会把 fullscreen-window root（本元素）强制 position:fixed\r\n   并形成层叠上下文；预置与 shell 同级的 z-index 保持整体层级不回退。非定位元素（桌面/原版 ST）忽略此声明。 */\n#acu-app-v2 {\r\n  z-index: 9000;\r\n  box-sizing: border-box;\n}\n#acu-app-v2 button {\r\n  appearance: none;\r\n  -webkit-appearance: none;\r\n  -webkit-tap-highlight-color: transparent;\n}\n#acu-app-v2 button:focus:not(:focus-visible) {\r\n  outline: none;\r\n  box-shadow: none;\n}\r\n\r\n/* ── 设计令牌：颜色取自当前主题，尺寸随\"界面缩放\"等比变化 ── */\n.ub-app {\r\n  --ub-u: calc(1px * var(--acu-ui-scale, 1));\r\n\r\n  --ub-fs-2xs: calc(var(--ub-u) * 11);\r\n  --ub-fs-xs: calc(var(--ub-u) * 12);\r\n  --ub-fs-sm: calc(var(--ub-u) * 13.5);\r\n  --ub-fs-md: calc(var(--ub-u) * 14.5);\r\n  --ub-fs-lg: calc(var(--ub-u) * 16.5);\r\n  --ub-fs-xl: calc(var(--ub-u) * 20);\r\n  --ub-fs-2xl: calc(var(--ub-u) * 26);\r\n\r\n  --ub-s1: calc(var(--ub-u) * 4);\r\n  --ub-s2: calc(var(--ub-u) * 8);\r\n  --ub-s3: calc(var(--ub-u) * 12);\r\n  --ub-s4: calc(var(--ub-u) * 16);\r\n  --ub-s5: calc(var(--ub-u) * 20);\r\n  --ub-s6: calc(var(--ub-u) * 28);\r\n  --ub-s8: calc(var(--ub-u) * 40);\r\n\r\n  --ub-control-h: calc(var(--ub-u) * 36);\r\n  --ub-control-h-sm: calc(var(--ub-u) * 28);\r\n  --ub-rail-w: calc(var(--ub-u) * 244);\r\n  --ub-page-pad: calc(var(--ub-u) * 28);\r\n  --ub-page-max: calc(var(--ub-u) * 800);\r\n  --ub-page-max-wide: calc(var(--ub-u) * 1180);\r\n\r\n  --ub-r-card: max(var(--acu-radius-lg, 0px), 14px);\r\n  --ub-r-control: max(var(--acu-radius-sm, 0px), 9px);\r\n\r\n  --ub-bg: var(--acu-bg-0);\r\n  --ub-panel: var(--acu-bg-1);\r\n  --ub-sunken: color-mix(in srgb, var(--acu-bg-2) 70%, var(--acu-bg-0));\r\n  --ub-nav-bg: var(--acu-sidebar-bg);\r\n  --ub-input-bg: color-mix(in srgb, var(--acu-bg-0) 55%, var(--acu-bg-1));\r\n  --ub-hover: var(--acu-hover-overlay);\r\n  --ub-hover-strong: color-mix(in srgb, var(--acu-text-1) 7%, var(--acu-bg-1));\r\n  --ub-line: var(--acu-border-2);\r\n  --ub-line-soft: var(--acu-border);\r\n  --ub-line-strong: color-mix(in srgb, var(--acu-text-3) 55%, transparent);\r\n  --ub-text: var(--acu-text-1);\r\n  --ub-text-2: var(--acu-text-2);\r\n  --ub-text-3: var(--acu-text-3);\r\n  --ub-accent: var(--acu-accent);\r\n  --ub-accent-2: var(--acu-accent-2);\r\n  --ub-accent-ink: color-mix(in srgb, var(--acu-accent) 82%, var(--acu-text-1));\r\n  --ub-on-accent: var(--acu-on-accent);\r\n  --ub-accent-soft: color-mix(in srgb, var(--acu-accent) 14%, transparent);\r\n  --ub-accent-soft-2: color-mix(in srgb, var(--acu-accent) 24%, transparent);\r\n  --ub-ok: var(--acu-success);\r\n  --ub-ok-soft: color-mix(in srgb, var(--acu-success) 15%, transparent);\r\n  --ub-warn: var(--acu-warning);\r\n  --ub-warn-soft: color-mix(in srgb, var(--acu-warning) 16%, transparent);\r\n  --ub-danger: var(--acu-danger);\r\n  --ub-danger-soft: color-mix(in srgb, var(--acu-danger) 14%, transparent);\r\n  --ub-switch-off: color-mix(in srgb, var(--acu-text-3) 42%, transparent);\r\n  --ub-scrim: rgba(6, 8, 12, 0.52);\r\n  --ub-toast-bg: color-mix(in srgb, var(--acu-bg-1) 94%, transparent);\r\n  --ub-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);\r\n  --ub-overlay-shadow: var(--acu-shadow);\r\n  --ub-font: var(--acu-font-ui);\r\n  --ub-mono: var(--acu-font-mono);\r\n\r\n  /* TT Layout ABI：安全区绑定宿主 --tt-inset-*，底部并入键盘高度；原版宿主回退 0 */\r\n  --ub-safe-top: max(env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));\r\n  --ub-safe-right: max(env(safe-area-inset-right, 0px), var(--tt-inset-right, 0px));\r\n  --ub-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px));\r\n  --ub-safe-left: max(env(safe-area-inset-left, 0px), var(--tt-inset-left, 0px));\r\n\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-font);\r\n  font-size: var(--ub-fs-md);\r\n  line-height: 1.5;\r\n  -webkit-font-smoothing: antialiased;\n}\n.ub-app *,\r\n.ub-app *::before,\r\n.ub-app *::after {\r\n  box-sizing: border-box;\n}\n.ub-app button {\r\n  -webkit-tap-highlight-color: transparent;\n}\n.ub-app :where(h1, h2, h3, h4, p) {\r\n  margin: 0;\n}\n@media (max-width: 760px) {\n.ub-app {\r\n    --ub-page-pad: calc(var(--ub-u) * 16);\n}\n}\n@keyframes ub-fade-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes ub-fade-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes ub-pop-in {\nfrom { opacity: 0; transform: translateY(6px) scale(0.98);\n}\nto { opacity: 1; transform: none;\n}\n}\n@keyframes ub-sheet-in-right {\nfrom { transform: translateX(100%);\n}\nto { transform: none;\n}\n}\n@keyframes ub-sheet-out-right {\nfrom { transform: none;\n}\nto { transform: translateX(100%);\n}\n}\n@keyframes ub-sheet-in-up {\nfrom { transform: translateY(100%);\n}\nto { transform: none;\n}\n}\n@keyframes ub-sheet-out-down {\nfrom { transform: none;\n}\nto { transform: translateY(100%);\n}\n}\r\n", "src/presentation-v3/App.vue#style-0");
+injectSfcStyle("\n/* ── 挂载根 ── TT 移动端 geometry firewall 会把 fullscreen-window root（本元素）强制 position:fixed\n   并形成层叠上下文；预置与 shell 同级的 z-index 保持整体层级不回退。非定位元素（桌面/原版 ST）忽略此声明。 */\n#acu-app-v2 {\n  z-index: 9000;\n  box-sizing: border-box;\n}\n#acu-app-v2 button {\n  appearance: none;\n  -webkit-appearance: none;\n  -webkit-tap-highlight-color: transparent;\n}\n#acu-app-v2 button:focus:not(:focus-visible) {\n  outline: none;\n  box-shadow: none;\n}\n\n/* ── 设计令牌：颜色取自当前主题，尺寸随\"界面缩放\"等比变化 ── */\n.ub-app {\n  --ub-u: calc(1px * var(--acu-ui-scale, 1));\n\n  --ub-fs-2xs: calc(var(--ub-u) * 11);\n  --ub-fs-xs: calc(var(--ub-u) * 12);\n  --ub-fs-sm: calc(var(--ub-u) * 13.5);\n  --ub-fs-md: calc(var(--ub-u) * 14.5);\n  --ub-fs-lg: calc(var(--ub-u) * 16.5);\n  --ub-fs-xl: calc(var(--ub-u) * 20);\n  --ub-fs-2xl: calc(var(--ub-u) * 26);\n\n  --ub-s1: calc(var(--ub-u) * 4);\n  --ub-s2: calc(var(--ub-u) * 8);\n  --ub-s3: calc(var(--ub-u) * 12);\n  --ub-s4: calc(var(--ub-u) * 16);\n  --ub-s5: calc(var(--ub-u) * 20);\n  --ub-s6: calc(var(--ub-u) * 28);\n  --ub-s8: calc(var(--ub-u) * 40);\n\n  --ub-control-h: calc(var(--ub-u) * 36);\n  --ub-control-h-sm: calc(var(--ub-u) * 28);\n  --ub-rail-w: calc(var(--ub-u) * 244);\n  --ub-page-pad: calc(var(--ub-u) * 28);\n  --ub-page-max: calc(var(--ub-u) * 800);\n  --ub-page-max-wide: calc(var(--ub-u) * 1180);\n\n  --ub-r-card: max(var(--acu-radius-lg, 0px), 14px);\n  --ub-r-control: max(var(--acu-radius-sm, 0px), 9px);\n\n  --ub-bg: var(--acu-bg-0);\n  --ub-panel: var(--acu-bg-1);\n  --ub-sunken: color-mix(in srgb, var(--acu-bg-2) 70%, var(--acu-bg-0));\n  --ub-nav-bg: var(--acu-sidebar-bg);\n  --ub-input-bg: color-mix(in srgb, var(--acu-bg-0) 55%, var(--acu-bg-1));\n  --ub-hover: var(--acu-hover-overlay);\n  --ub-hover-strong: color-mix(in srgb, var(--acu-text-1) 7%, var(--acu-bg-1));\n  --ub-line: var(--acu-border-2);\n  --ub-line-soft: var(--acu-border);\n  --ub-line-strong: color-mix(in srgb, var(--acu-text-3) 55%, transparent);\n  --ub-text: var(--acu-text-1);\n  --ub-text-2: var(--acu-text-2);\n  --ub-text-3: var(--acu-text-3);\n  --ub-accent: var(--acu-accent);\n  --ub-accent-2: var(--acu-accent-2);\n  --ub-accent-ink: color-mix(in srgb, var(--acu-accent) 82%, var(--acu-text-1));\n  --ub-on-accent: var(--acu-on-accent);\n  --ub-accent-soft: color-mix(in srgb, var(--acu-accent) 14%, transparent);\n  --ub-accent-soft-2: color-mix(in srgb, var(--acu-accent) 24%, transparent);\n  --ub-ok: var(--acu-success);\n  --ub-ok-soft: color-mix(in srgb, var(--acu-success) 15%, transparent);\n  --ub-warn: var(--acu-warning);\n  --ub-warn-soft: color-mix(in srgb, var(--acu-warning) 16%, transparent);\n  --ub-danger: var(--acu-danger);\n  --ub-danger-soft: color-mix(in srgb, var(--acu-danger) 14%, transparent);\n  --ub-switch-off: color-mix(in srgb, var(--acu-text-3) 42%, transparent);\n  --ub-scrim: rgba(6, 8, 12, 0.52);\n  --ub-toast-bg: color-mix(in srgb, var(--acu-bg-1) 94%, transparent);\n  --ub-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);\n  --ub-overlay-shadow: var(--acu-shadow);\n  --ub-font: var(--acu-font-ui);\n  --ub-mono: var(--acu-font-mono);\n\n  /* TT Layout ABI：安全区绑定宿主 --tt-inset-*，底部并入键盘高度；原版宿主回退 0 */\n  --ub-safe-top: max(env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));\n  --ub-safe-right: max(env(safe-area-inset-right, 0px), var(--tt-inset-right, 0px));\n  --ub-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px));\n  --ub-safe-left: max(env(safe-area-inset-left, 0px), var(--tt-inset-left, 0px));\n\n  color: var(--ub-text);\n  font-family: var(--ub-font);\n  font-size: var(--ub-fs-md);\n  line-height: 1.5;\n  -webkit-font-smoothing: antialiased;\n}\n.ub-app *,\n.ub-app *::before,\n.ub-app *::after {\n  box-sizing: border-box;\n}\n.ub-app button {\n  -webkit-tap-highlight-color: transparent;\n}\n.ub-app :where(h1, h2, h3, h4, p) {\n  margin: 0;\n}\n@media (max-width: 760px) {\n.ub-app {\n    --ub-page-pad: calc(var(--ub-u) * 16);\n}\n}\n@keyframes ub-fade-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes ub-fade-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes ub-pop-in {\nfrom { opacity: 0; transform: translateY(6px) scale(0.98);\n}\nto { opacity: 1; transform: none;\n}\n}\n@keyframes ub-sheet-in-right {\nfrom { transform: translateX(100%);\n}\nto { transform: none;\n}\n}\n@keyframes ub-sheet-out-right {\nfrom { transform: none;\n}\nto { transform: translateX(100%);\n}\n}\n@keyframes ub-sheet-in-up {\nfrom { transform: translateY(100%);\n}\nto { transform: none;\n}\n}\n@keyframes ub-sheet-out-down {\nfrom { transform: none;\n}\nto { transform: translateY(100%);\n}\n}\n", "src/presentation-v3/App.vue#style-0");
 var App_vue_vue_type_style_index_0_lang = null;
 
-injectSfcStyle("\n.ub-shell[data-v-0c1f0cbc] {\r\n  position: fixed;\r\n  inset: 0;\r\n  z-index: 9000;\r\n  display: flex;\r\n  width: 100%;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: var(--tt-base-viewport-height, 100dvh);\r\n  padding: var(--ub-safe-top) var(--ub-safe-right) var(--ub-safe-bottom) var(--ub-safe-left);\r\n  overflow: hidden;\r\n  background: var(--ub-bg);\n}\n.ub-rail[data-v-0c1f0cbc] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 0 0 var(--ub-rail-w);\r\n  width: var(--ub-rail-w);\r\n  min-height: 0;\r\n  padding: var(--ub-s5) var(--ub-s3) var(--ub-s3);\r\n  border-right: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-nav-bg);\n}\n.ub-rail__nav[data-v-0c1f0cbc] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  margin: var(--ub-s5) calc(var(--ub-s1) * -1) 0;\r\n  padding: 0 var(--ub-s1);\r\n  overflow-y: auto;\n}\n.ub-rail__foot[data-v-0c1f0cbc] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  margin-top: var(--ub-s3);\r\n  padding-top: var(--ub-s3);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-rail__foot-btn[data-v-0c1f0cbc] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  width: 100%;\r\n  min-height: calc(var(--ub-u) * 34);\r\n  padding: 0 var(--ub-s3);\r\n  border: 0;\r\n  border-radius: var(--ub-r-control);\r\n  background: transparent;\r\n  color: var(--ub-text-3);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-rail__foot-btn[data-v-0c1f0cbc]:hover {\r\n  background: var(--ub-hover);\r\n  color: var(--ub-text);\n}\n.ub-brand[data-v-0c1f0cbc] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\r\n  padding: 0 var(--ub-s2);\n}\n.ub-brand__mark[data-v-0c1f0cbc] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 36);\r\n  height: calc(var(--ub-u) * 36);\r\n  border-radius: 11px;\r\n  background: linear-gradient(140deg, var(--ub-accent), color-mix(in srgb, var(--ub-accent) 55%, var(--ub-text)));\r\n  color: var(--ub-on-accent);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 800;\r\n  letter-spacing: 0.04em;\n}\n.ub-brand__text[data-v-0c1f0cbc] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\n}\n.ub-brand__name[data-v-0c1f0cbc] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\r\n  font-weight: 800;\r\n  letter-spacing: -0.01em;\n}\n.ub-brand__tag[data-v-0c1f0cbc] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 600;\n}\n.ub-main[data-v-0c1f0cbc] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\n}\n.ub-top[data-v-0c1f0cbc] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  flex: 0 0 auto;\r\n  min-height: calc(var(--ub-u) * 60);\r\n  padding: var(--ub-s2) var(--ub-s3) var(--ub-s2) var(--ub-page-pad);\n}\n.ub-top__menu[data-v-0c1f0cbc] {\r\n  display: none;\n}\n.ub-top__titles[data-v-0c1f0cbc] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-top__title[data-v-0c1f0cbc] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-2xl);\r\n  font-weight: 800;\r\n  letter-spacing: -0.02em;\r\n  line-height: 1.2;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-top__icon[data-v-0c1f0cbc] {\r\n  color: var(--ub-accent-ink);\r\n  font-size: 0.72em;\n}\n.ub-scroll[data-v-0c1f0cbc] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  overflow-y: auto;\r\n  overflow-x: hidden;\r\n  scrollbar-gutter: stable;\r\n  overscroll-behavior: contain;\n}\n.ub-scroll__empty[data-v-0c1f0cbc] {\r\n  padding: var(--ub-s6);\r\n  color: var(--ub-text-3);\n}\n.ub-launcher[data-v-0c1f0cbc] {\r\n  --ub-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px));\r\n  position: fixed;\r\n  inset: 0;\r\n  z-index: 9200;\r\n  display: flex;\r\n  padding: var(--ub-safe-top) var(--ub-safe-right) var(--ub-safe-bottom) var(--ub-safe-left);\r\n  background: var(--ub-scrim);\r\n  animation: ub-fade-in 0.16s ease-out both;\n}\n.ub-launcher__panel[data-v-0c1f0cbc] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  width: 100%;\r\n  height: 100%;\r\n  background: var(--ub-bg);\r\n  animation: ub-sheet-in-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;\n}\n.ub-launcher__head[data-v-0c1f0cbc] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  padding: var(--ub-s4) var(--ub-s3) var(--ub-s3) var(--ub-s3);\n}\n.ub-launcher__body[data-v-0c1f0cbc] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  padding: var(--ub-s2) var(--ub-s4) var(--ub-s4);\r\n  overflow-y: auto;\n}\n.ub-launcher__foot[data-v-0c1f0cbc] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n@media (max-width: 760px) {\n.ub-rail[data-v-0c1f0cbc] {\r\n    display: none;\n}\n.ub-top[data-v-0c1f0cbc] {\r\n    min-height: calc(var(--ub-u) * 52);\r\n    padding: var(--ub-s1) var(--ub-s2);\n}\n.ub-top__menu[data-v-0c1f0cbc] {\r\n    display: inline-flex;\n}\n.ub-top__title[data-v-0c1f0cbc] {\r\n    gap: var(--ub-s2);\r\n    font-size: var(--ub-fs-xl);\n}\n}\r\n", "src/presentation-v3/App.vue#style-1-0c1f0cbc");
-var App_vue_vue_type_style_index_1_scoped_0c1f0cbc_lang = null;
+injectSfcStyle("\n.ub-shell[data-v-32113246] {\n  position: fixed;\n  inset: 0;\n  z-index: 9000;\n  display: flex;\n  width: 100%;\n  width: 100dvw;\n  height: 100%;\n  height: var(--tt-base-viewport-height, 100dvh);\n  padding: var(--ub-safe-top) var(--ub-safe-right) var(--ub-safe-bottom) var(--ub-safe-left);\n  overflow: hidden;\n  background: var(--ub-bg);\n}\n.ub-rail[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  flex: 0 0 var(--ub-rail-w);\n  width: var(--ub-rail-w);\n  min-height: 0;\n  padding: var(--ub-s5) var(--ub-s3) var(--ub-s3);\n  border-right: 1px solid var(--ub-line-soft);\n  background: var(--ub-nav-bg);\n}\n.ub-rail__head[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ub-s2);\n  min-width: 0;\n}\n.ub-rail__nav[data-v-32113246] {\n  flex: 1 1 auto;\n  min-height: 0;\n  margin: var(--ub-s5) calc(var(--ub-s1) * -1) 0;\n  padding: 0 var(--ub-s1);\n  overflow-y: auto;\n}\n.ub-rail__foot[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  margin-top: var(--ub-s3);\n  padding-top: var(--ub-s3);\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-rail__foot-btn[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  width: 100%;\n  min-height: calc(var(--ub-u) * 34);\n  padding: 0 var(--ub-s3);\n  border: 0;\n  border-radius: var(--ub-r-control);\n  background: transparent;\n  color: var(--ub-text-3);\n  font: inherit;\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n  text-align: left;\n  cursor: pointer;\n}\n.ub-rail__foot-btn[data-v-32113246]:hover {\n  background: var(--ub-hover);\n  color: var(--ub-text);\n}\n.ub-brand[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  min-width: 0;\n  padding: 0 var(--ub-s2);\n}\n.ub-brand__mark[data-v-32113246] {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  flex: 0 0 auto;\n  width: calc(var(--ub-u) * 36);\n  height: calc(var(--ub-u) * 36);\n  border-radius: 11px;\n  background: linear-gradient(140deg, var(--ub-accent), color-mix(in srgb, var(--ub-accent) 55%, var(--ub-text)));\n  color: var(--ub-on-accent);\n  font-size: var(--ub-fs-xs);\n  font-weight: 800;\n  letter-spacing: 0.04em;\n}\n.ub-brand__text[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n}\n.ub-brand__name[data-v-32113246] {\n  color: var(--ub-text);\n  font-size: var(--ub-fs-md);\n  font-weight: 800;\n  letter-spacing: -0.01em;\n}\n.ub-brand__tag[data-v-32113246] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 600;\n}\n.ub-main[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n}\n.ub-top[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s1);\n  flex: 0 0 auto;\n  min-height: calc(var(--ub-u) * 60);\n  padding: var(--ub-s2) var(--ub-s3) var(--ub-s2) var(--ub-page-pad);\n}\n.ub-top__menu[data-v-32113246] {\n  display: none;\n}\n.ub-top__titles[data-v-32113246] {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n.ub-top__title[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  overflow: hidden;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-2xl);\n  font-weight: 800;\n  letter-spacing: -0.02em;\n  line-height: 1.2;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.ub-top__icon[data-v-32113246] {\n  color: var(--ub-accent-ink);\n  font-size: 0.72em;\n}\n.ub-scroll[data-v-32113246] {\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow-y: auto;\n  overflow-x: hidden;\n  scrollbar-gutter: stable;\n  overscroll-behavior: contain;\n}\n.ub-scroll__empty[data-v-32113246] {\n  padding: var(--ub-s6);\n  color: var(--ub-text-3);\n}\n.ub-launcher[data-v-32113246] {\n  --ub-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px));\n  position: fixed;\n  inset: 0;\n  z-index: 9200;\n  display: flex;\n  padding: var(--ub-safe-top) var(--ub-safe-right) var(--ub-safe-bottom) var(--ub-safe-left);\n  background: var(--ub-scrim);\n  animation: ub-fade-in 0.16s ease-out both;\n}\n.ub-launcher__panel[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  width: 100%;\n  height: 100%;\n  background: var(--ub-bg);\n  animation: ub-sheet-in-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;\n}\n.ub-launcher__head[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: var(--ub-s4) var(--ub-s3) var(--ub-s3) var(--ub-s3);\n}\n.ub-launcher__body[data-v-32113246] {\n  flex: 1 1 auto;\n  min-height: 0;\n  padding: var(--ub-s2) var(--ub-s4) var(--ub-s4);\n  overflow-y: auto;\n}\n.ub-launcher__foot[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\n  border-top: 1px solid var(--ub-line-soft);\n}\n@media (max-width: 760px) {\n.ub-rail[data-v-32113246] {\n    display: none;\n}\n.ub-top[data-v-32113246] {\n    min-height: calc(var(--ub-u) * 52);\n    padding: var(--ub-s1) var(--ub-s2);\n}\n.ub-top__menu[data-v-32113246] {\n    display: inline-flex;\n}\n.ub-top__title[data-v-32113246] {\n    gap: var(--ub-s2);\n    font-size: var(--ub-fs-xl);\n}\n}\n", "src/presentation-v3/App.vue#style-1-32113246");
+var App_vue_vue_type_style_index_1_scoped_32113246_lang = null;
 
-const _hoisted_1 = ["data-ub-color-scheme"];
-const _hoisted_2 = { class: "ub-shell" };
-const _hoisted_3 = { class: "ub-rail" };
+const _hoisted_1 = ["data-ub-color-scheme", "data-ub-style"];
+const _hoisted_2 = { class: "ub-rail" };
+const _hoisted_3 = { class: "ub-rail__head" };
 const _hoisted_4 = { class: "ub-brand" };
 const _hoisted_5 = { class: "ub-brand__text" };
 const _hoisted_6 = { class: "ub-brand__tag" };
 const _hoisted_7 = { class: "ub-rail__nav" };
 const _hoisted_8 = { class: "ub-rail__foot" };
-const _hoisted_9 = { class: "ub-main" };
-const _hoisted_10 = { class: "ub-top" };
-const _hoisted_11 = { class: "ub-top__titles" };
-const _hoisted_12 = { class: "ub-top__title" };
-const _hoisted_13 = {
+const _hoisted_9 = ["title"];
+const _hoisted_10 = { class: "ub-rail__foot-label" };
+const _hoisted_11 = { class: "ub-main" };
+const _hoisted_12 = { class: "ub-top" };
+const _hoisted_13 = { class: "ub-top__titles" };
+const _hoisted_14 = { class: "ub-top__title" };
+const _hoisted_15 = {
 	ref: "scroller",
 	class: "ub-scroll",
 	"data-ub-main": ""
 };
-const _hoisted_14 = {
+const _hoisted_16 = {
 	key: 1,
 	class: "ub-scroll__empty"
 };
-const _hoisted_15 = {
+const _hoisted_17 = {
 	class: "ub-launcher__panel",
 	role: "dialog",
 	"aria-modal": "true",
 	"aria-label": "全部页面"
 };
-const _hoisted_16 = { class: "ub-launcher__head" };
-const _hoisted_17 = { class: "ub-brand" };
-const _hoisted_18 = { class: "ub-brand__text" };
-const _hoisted_19 = { class: "ub-brand__tag" };
-const _hoisted_20 = { class: "ub-launcher__body" };
-const _hoisted_21 = { class: "ub-launcher__foot" };
+const _hoisted_18 = { class: "ub-launcher__head" };
+const _hoisted_19 = { class: "ub-brand" };
+const _hoisted_20 = { class: "ub-brand__text" };
+const _hoisted_21 = { class: "ub-brand__tag" };
+const _hoisted_22 = { class: "ub-launcher__body" };
+const _hoisted_23 = { class: "ub-launcher__foot" };
 function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", {
 		class: "ub-app",
-		"data-ub-color-scheme": $setup.themeStore.activeTheme.colorScheme
-	}, [_cache[13] || (_cache[13] = createBaseVNode(
+		"data-ub-color-scheme": $setup.themeStore.activeTheme.colorScheme,
+		"data-ub-style": $setup.appearanceStore.uiStyle
+	}, [_cache[14] || (_cache[14] = createBaseVNode(
 		"div",
 		{
 			id: "ub-portal",
@@ -211978,7 +212078,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CACHED */
 	)), withDirectives(createBaseVNode(
 		"div",
-		_hoisted_2,
+		{ class: normalizeClass(["ub-shell", { "is-rail-collapsed": $setup.railCollapsed }]) },
 		[
 			$setup.visualizer.isActive ? (openBlock(), createBlock($setup["VisualizerSurface"], {
 				key: 0,
@@ -211986,8 +212086,8 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 			})) : (openBlock(), createElementBlock(
 				Fragment,
 				{ key: 1 },
-				[createBaseVNode("aside", _hoisted_3, [
-					createBaseVNode("div", _hoisted_4, [_cache[7] || (_cache[7] = createBaseVNode(
+				[createBaseVNode("aside", _hoisted_2, [
+					createBaseVNode("div", _hoisted_3, [createBaseVNode("div", _hoisted_4, [_cache[8] || (_cache[8] = createBaseVNode(
 						"span",
 						{
 							class: "ub-brand__mark",
@@ -211996,7 +212096,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 						"UB",
 						-1
 						/* CACHED */
-					)), createBaseVNode("span", _hoisted_5, [_cache[6] || (_cache[6] = createBaseVNode(
+					)), createBaseVNode("span", _hoisted_5, [_cache[7] || (_cache[7] = createBaseVNode(
 						"span",
 						{ class: "ub-brand__name" },
 						"UnbirthDB",
@@ -212008,13 +212108,22 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 						toDisplayString($setup.uiMode.isBasicMode ? "基础模式" : "高手模式"),
 						1
 						/* TEXT */
-					)])]),
-					createBaseVNode("div", _hoisted_7, [createVNode($setup["NavList"])]),
+					)])]), $setup.appearanceStore.isClaudeStyle ? (openBlock(), createBlock($setup["UbIconButton"], {
+						key: 0,
+						class: "ub-rail__collapse",
+						icon: "fa-solid fa-table-columns",
+						size: "sm",
+						title: $setup.railCollapsed ? "展开侧栏" : "收起侧栏",
+						"aria-expanded": $setup.railCollapsed ? "false" : "true",
+						onClick: _cache[0] || (_cache[0] = ($event) => $setup.appearanceStore.toggleRailCollapsed())
+					}, null, 8, ["title", "aria-expanded"])) : createCommentVNode("v-if", true)]),
+					createBaseVNode("div", _hoisted_7, [createVNode($setup["NavList"], { "icon-only": $setup.railCollapsed }, null, 8, ["icon-only"])]),
 					createBaseVNode("div", _hoisted_8, [createBaseVNode("button", {
 						type: "button",
 						class: "ub-rail__foot-btn",
+						title: $setup.modeToggleLabel,
 						onClick: $setup.toggleMode
-					}, [_cache[8] || (_cache[8] = createBaseVNode(
+					}, [_cache[9] || (_cache[9] = createBaseVNode(
 						"i",
 						{
 							class: "fa-solid fa-repeat",
@@ -212023,15 +212132,18 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 						null,
 						-1
 						/* CACHED */
-					)), createTextVNode(
-						" " + toDisplayString($setup.uiMode.isBasicMode ? "切换到高手模式" : "返回基础模式"),
+					)), createBaseVNode(
+						"span",
+						_hoisted_10,
+						toDisplayString($setup.modeToggleLabel),
 						1
 						/* TEXT */
-					)]), createBaseVNode("button", {
+					)], 8, _hoisted_9), createBaseVNode("button", {
 						type: "button",
 						class: "ub-rail__foot-btn",
-						onClick: _cache[0] || (_cache[0] = ($event) => $setup.appearanceOpen = true)
-					}, [..._cache[9] || (_cache[9] = [createBaseVNode(
+						title: "外观与界面",
+						onClick: _cache[1] || (_cache[1] = ($event) => $setup.appearanceOpen = true)
+					}, [..._cache[10] || (_cache[10] = [createBaseVNode(
 						"i",
 						{
 							class: "fa-solid fa-palette",
@@ -212040,20 +212152,22 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 						null,
 						-1
 						/* CACHED */
-					), createTextVNode(
-						" 外观与界面 ",
+					), createBaseVNode(
+						"span",
+						{ class: "ub-rail__foot-label" },
+						"外观与界面",
 						-1
 						/* CACHED */
 					)])])])
-				]), createBaseVNode("div", _hoisted_9, [createBaseVNode("header", _hoisted_10, [
+				]), createBaseVNode("div", _hoisted_11, [createBaseVNode("header", _hoisted_12, [
 					createVNode($setup["UbIconButton"], {
 						class: "ub-top__menu",
 						icon: "fa-solid fa-grip",
 						title: "全部页面",
 						"aria-expanded": $setup.launcherOpen ? "true" : "false",
-						onClick: _cache[1] || (_cache[1] = ($event) => $setup.launcherOpen = true)
+						onClick: _cache[2] || (_cache[2] = ($event) => $setup.launcherOpen = true)
 					}, null, 8, ["aria-expanded"]),
-					createBaseVNode("div", _hoisted_11, [createBaseVNode("h1", _hoisted_12, [$setup.activeEntry ? (openBlock(), createElementBlock(
+					createBaseVNode("div", _hoisted_13, [createBaseVNode("h1", _hoisted_14, [$setup.activeEntry ? (openBlock(), createElementBlock(
 						"i",
 						{
 							key: 0,
@@ -212075,8 +212189,8 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 					})
 				]), createBaseVNode(
 					"main",
-					_hoisted_13,
-					[$setup.activeEntry ? (openBlock(), createBlock(resolveDynamicComponent($setup.activeEntry.component), { key: `${$setup.router.activePageId}:${$setup.rootShell.openRefreshTick}` })) : (openBlock(), createElementBlock("p", _hoisted_14, "没有可显示的页面。"))],
+					_hoisted_15,
+					[$setup.activeEntry ? (openBlock(), createBlock(resolveDynamicComponent($setup.activeEntry.component), { key: `${$setup.router.activePageId}:${$setup.rootShell.openRefreshTick}` })) : (openBlock(), createElementBlock("p", _hoisted_16, "没有可显示的页面。"))],
 					512
 					/* NEED_PATCH */
 				)])],
@@ -212087,9 +212201,9 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 2,
 				class: "ub-launcher",
 				"data-tt-mobile-surface": "backdrop",
-				onClick: _cache[4] || (_cache[4] = withModifiers(($event) => $setup.launcherOpen = false, ["self"]))
-			}, [createBaseVNode("div", _hoisted_15, [
-				createBaseVNode("header", _hoisted_16, [createBaseVNode("div", _hoisted_17, [_cache[11] || (_cache[11] = createBaseVNode(
+				onClick: _cache[5] || (_cache[5] = withModifiers(($event) => $setup.launcherOpen = false, ["self"]))
+			}, [createBaseVNode("div", _hoisted_17, [
+				createBaseVNode("header", _hoisted_18, [createBaseVNode("div", _hoisted_19, [_cache[12] || (_cache[12] = createBaseVNode(
 					"span",
 					{
 						class: "ub-brand__mark",
@@ -212098,7 +212212,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 					"UB",
 					-1
 					/* CACHED */
-				)), createBaseVNode("span", _hoisted_18, [_cache[10] || (_cache[10] = createBaseVNode(
+				)), createBaseVNode("span", _hoisted_20, [_cache[11] || (_cache[11] = createBaseVNode(
 					"span",
 					{ class: "ub-brand__name" },
 					"UnbirthDB",
@@ -212106,20 +212220,20 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 					/* CACHED */
 				)), createBaseVNode(
 					"span",
-					_hoisted_19,
+					_hoisted_21,
 					toDisplayString($setup.uiMode.isBasicMode ? "基础模式" : "高手模式"),
 					1
 					/* TEXT */
 				)])]), createVNode($setup["UbIconButton"], {
 					icon: "fa-solid fa-xmark",
 					title: "收起",
-					onClick: _cache[2] || (_cache[2] = ($event) => $setup.launcherOpen = false)
+					onClick: _cache[3] || (_cache[3] = ($event) => $setup.launcherOpen = false)
 				})]),
-				createBaseVNode("div", _hoisted_20, [createVNode($setup["NavList"], {
+				createBaseVNode("div", _hoisted_22, [createVNode($setup["NavList"], {
 					variant: "tiles",
-					onNavigate: _cache[3] || (_cache[3] = ($event) => $setup.launcherOpen = false)
+					onNavigate: _cache[4] || (_cache[4] = ($event) => $setup.launcherOpen = false)
 				})]),
-				createBaseVNode("footer", _hoisted_21, [createVNode($setup["UbButton"], {
+				createBaseVNode("footer", _hoisted_23, [createVNode($setup["UbButton"], {
 					icon: "fa-solid fa-repeat",
 					variant: "soft",
 					block: "",
@@ -212137,7 +212251,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 					block: "",
 					onClick: $setup.openAppearanceFromLauncher
 				}, {
-					default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
+					default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
 						" 外观与界面 ",
 						-1
 						/* CACHED */
@@ -212147,16 +212261,16 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 			])])) : createCommentVNode("v-if", true),
 			createVNode($setup["AppearanceSheet"], {
 				"is-open": $setup.appearanceOpen,
-				onClose: _cache[5] || (_cache[5] = ($event) => $setup.appearanceOpen = false)
+				onClose: _cache[6] || (_cache[6] = ($event) => $setup.appearanceOpen = false)
 			}, null, 8, ["is-open"]),
 			createVNode($setup["UbDialogHost"]),
 			createVNode($setup["UbToastHost"])
 		],
-		512
-		/* NEED_PATCH */
+		2
+		/* CLASS */
 	), [[vShow, $setup.rootShell.isOpen]])], 8, _hoisted_1);
 }
-var App = /* @__PURE__ */ _export_sfc(_sfc_main, [["render", _sfc_render], ["__scopeId", "data-v-0c1f0cbc"]]);
+var App = /* @__PURE__ */ _export_sfc(_sfc_main, [["render", _sfc_render], ["__scopeId", "data-v-32113246"]]);
 
 const THEME_STYLE_NODE_ID = 'acu-v2-theme';
 const APP_ROOT_ID = 'acu-app-v2';

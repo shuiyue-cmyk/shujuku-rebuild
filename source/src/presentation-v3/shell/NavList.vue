@@ -1,5 +1,5 @@
 <template>
-  <nav class="ub-nav" :class="`ub-nav--${variant}`" aria-label="页面导航">
+  <nav class="ub-nav" :class="[`ub-nav--${variant}`, { 'ub-nav--icon-only': iconOnly }]" aria-label="页面导航">
     <template v-for="group in router.groups" :key="group.id">
       <div v-if="(router.visiblePagesByGroup[group.id] || []).length" class="ub-nav__group">
         <div v-if="showGroupTitles" class="ub-nav__group-title">{{ group.title }}</div>
@@ -12,6 +12,7 @@
             :class="{ 'is-active': page.id === router.activePageId }"
             :aria-current="page.id === router.activePageId ? 'page' : undefined"
             :data-page-id="page.id"
+            :title="iconOnly ? page.title : undefined"
             @click="go(page.id)"
           >
             <span class="ub-nav__icon" aria-hidden="true"><i :class="iconOf(page.id)"></i></span>
@@ -33,12 +34,13 @@ import { useRouterStore } from '../../presentation-v2/stores/router-store';
 import { useUiModeStore } from '../../presentation-v2/stores/ui-mode-store';
 import { ubPageEntry } from '../router/page-catalog';
 
-const props = withDefaults(defineProps<{ variant?: 'rail' | 'tiles' }>(), { variant: 'rail' });
+/** iconOnly：侧栏收起时只显示图标，标题改放悬停提示。 */
+const props = withDefaults(defineProps<{ variant?: 'rail' | 'tiles'; iconOnly?: boolean }>(), { variant: 'rail', iconOnly: false });
 const emit = defineEmits<{ (e: 'navigate', pageId: string): void }>();
 
 const router = useRouterStore();
 const uiMode = useUiModeStore();
-const showGroupTitles = computed(() => !uiMode.isBasicMode || props.variant === 'tiles');
+const showGroupTitles = computed(() => !props.iconOnly && (!uiMode.isBasicMode || props.variant === 'tiles'));
 
 function iconOf(id: string): string {
   return ubPageEntry(id)?.icon ?? 'fa-solid fa-circle';

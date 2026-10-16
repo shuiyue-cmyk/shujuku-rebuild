@@ -61,7 +61,7 @@ describe('appearance-store', () => {
     expect(store.uiScale).toBe('110');
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({
       theme: { activeId: 'default-light' },
-      appearance: { uiScale: '110' },
+      appearance: { uiScale: '110', uiStyle: 'default', railCollapsed: false },
     });
   });
 
@@ -74,5 +74,59 @@ describe('appearance-store', () => {
 
     expect(store.uiScale).toBe('100');
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('界面风格默认是「默认」，侧栏默认展开', async () => {
+    const m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    const store = m.appearanceStore.useAppearanceStore();
+
+    expect(store.uiStyle).toBe('default');
+    expect(store.isClaudeStyle).toBe(false);
+    expect(store.railCollapsed).toBe(false);
+  });
+
+  it('setUiStyle 切到 Claude 风格并持久化；非法值不写', async () => {
+    const m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    const store = m.appearanceStore.useAppearanceStore();
+
+    (store.setUiStyle as any)('material');
+    expect(store.uiStyle).toBe('default');
+    expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+
+    store.setUiStyle('claude');
+    expect(store.isClaudeStyle).toBe(true);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).appearance).toEqual({
+      uiScale: '100', uiStyle: 'claude', railCollapsed: false,
+    });
+  });
+
+  it('按持久化值恢复界面风格与侧栏收起；坏值回落默认', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ appearance: { uiScale: '110', uiStyle: 'claude', railCollapsed: true } }));
+    let m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    let store = m.appearanceStore.useAppearanceStore();
+    expect(store.uiStyle).toBe('claude');
+    expect(store.railCollapsed).toBe(true);
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ appearance: { uiStyle: 'neon', railCollapsed: 'yes' } }));
+    m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    store = m.appearanceStore.useAppearanceStore();
+    expect(store.uiStyle).toBe('default');
+    expect(store.railCollapsed).toBe(false);
+  });
+
+  it('toggleRailCollapsed 翻转并持久化', async () => {
+    const m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    const store = m.appearanceStore.useAppearanceStore();
+
+    store.toggleRailCollapsed();
+    expect(store.railCollapsed).toBe(true);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).appearance.railCollapsed).toBe(true);
+    store.toggleRailCollapsed();
+    expect(store.railCollapsed).toBe(false);
   });
 });
