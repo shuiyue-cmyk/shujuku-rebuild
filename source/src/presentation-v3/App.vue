@@ -7,7 +7,7 @@
         <aside class="ub-rail">
           <div class="ub-rail__head">
             <div class="ub-brand">
-              <span class="ub-brand__mark" aria-hidden="true">UB</span>
+              <UbBrandMark />
               <span class="ub-brand__text">
                 <span class="ub-brand__name">UnbirthDB</span>
                 <span class="ub-brand__tag">{{ uiMode.isBasicMode ? '基础模式' : '高手模式' }}</span>
@@ -81,7 +81,7 @@
         <div class="ub-launcher__panel" role="dialog" aria-modal="true" aria-label="全部页面">
           <header class="ub-launcher__head">
             <div class="ub-brand">
-              <span class="ub-brand__mark" aria-hidden="true">UB</span>
+              <UbBrandMark />
               <span class="ub-brand__text">
                 <span class="ub-brand__name">UnbirthDB</span>
                 <span class="ub-brand__tag">{{ uiMode.isBasicMode ? '基础模式' : '高手模式' }}</span>
@@ -135,6 +135,7 @@ import { ubPageEntry } from './router/page-catalog';
 import AppearanceSheet from './shell/AppearanceSheet.vue';
 import { claudeGreeting } from './shell/claude-greeting';
 import NavList from './shell/NavList.vue';
+import UbBrandMark from './shell/UbBrandMark.vue';
 import UbButton from './ui/UbButton.vue';
 import UbDialogHost from './ui/UbDialogHost.vue';
 import UbIconButton from './ui/UbIconButton.vue';
@@ -441,21 +442,6 @@ watch(() => rootShell.scrollResetTick, resetScroll);
   gap: var(--ub-s3);
   min-width: 0;
   padding: 0 var(--ub-s2);
-}
-
-.ub-brand__mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: calc(var(--ub-u) * 36);
-  height: calc(var(--ub-u) * 36);
-  border-radius: 11px;
-  background: linear-gradient(140deg, var(--ub-accent), color-mix(in srgb, var(--ub-accent) 55%, var(--ub-text)));
-  color: var(--ub-on-accent);
-  font-size: var(--ub-fs-xs);
-  font-weight: 800;
-  letter-spacing: 0.04em;
 }
 
 .ub-brand__text {

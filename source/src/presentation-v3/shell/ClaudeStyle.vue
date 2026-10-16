@@ -249,15 +249,20 @@
   padding: 0;
 }
 
+/* 品牌图标换陶土底白线；尺寸小，去掉圆柱中间的分层线、线条略收细 */
 .ub-app[data-ub-style="claude"] .ub-brand__mark {
+  --ub-mark-line: #ffffff;
+  --ub-mark-orbit: rgba(255, 255, 255, 0.92);
+  --ub-mark-star: #ffffff;
+  --ub-mark-stroke: calc(var(--ub-u) * 1.25);
   width: calc(var(--ub-u) * 22);
   height: calc(var(--ub-u) * 22);
   border-radius: 6px;
-  background: var(--ub-text);
-  color: var(--ub-bg);
-  font-size: calc(var(--ub-u) * 9.5);
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  background: var(--cds-clay, #d97757);
+}
+
+.ub-app[data-ub-style="claude"] .ub-brand__mark .ub-mark__layer {
+  display: none;
 }
 
 .ub-app[data-ub-style="claude"] .ub-brand__text {
