@@ -166,6 +166,21 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 平板与窄窗口：侧栏按屏宽收窄（288px 只适合宽屏），页边距随之收紧；
+   iPad 竖屏（约 820px）在 110% 缩放下侧栏约 246px，内容区不被挤成窄条 */
+@media (max-width: 1180px) {
+  .ub-app[data-ub-style="claude"] {
+    --ub-rail-w: calc(var(--ub-u) * 248);
+  }
+}
+
+@media (min-width: 761px) and (max-width: 1024px) {
+  .ub-app[data-ub-style="claude"] {
+    --ub-rail-w: calc(var(--ub-u) * 224);
+    --ub-page-pad: calc(var(--ub-u) * 20);
+  }
+}
+
 .ub-app[data-ub-style="claude"] ::selection {
   background: color-mix(in srgb, var(--cds-clay) 26%, transparent);
 }
