@@ -100,6 +100,7 @@ import { isCustomThemeId, useThemeStore } from '../../presentation-v2/stores/the
 import { useToastStore } from '../../presentation-v2/stores/toast-store';
 import { useUiModeStore, type AcuV2UiMode } from '../../presentation-v2/stores/ui-mode-store';
 import type { AcuV2ThemeId } from '../../presentation-v2/theme/theme-types';
+import { suggestClaudeStyleOnce_UB } from './claude-style-suggestion';
 import UbBadge from '../ui/UbBadge.vue';
 import UbFileButton from '../ui/UbFileButton.vue';
 import UbIconButton from '../ui/UbIconButton.vue';
@@ -128,23 +129,10 @@ const modeOptions = [
   { value: 'advanced', label: '高手' },
 ];
 
-/** 默认风格下选了 Claude 配色主题：提示还有完整的 Claude 界面风格，只问一次（不论是否切换）。 */
-async function pickTheme(id: AcuV2ThemeId): Promise<void> {
+/** 默认风格下选了 Claude 配色主题：提示还有完整的 Claude 界面风格（只问一次，见 claude-style-suggestion）。 */
+function pickTheme(id: AcuV2ThemeId): void {
   themeStore.setTheme(id);
-  if (id !== 'claude' && id !== 'claude-night') return;
-  if (appearanceStore.isClaudeStyle || appearanceStore.claudeStyleSuggested) return;
-  // 弹窗前就记下：关掉面板或刷新也不会再问
-  appearanceStore.markClaudeStyleSuggested();
-  const confirmed = await dialogStore.confirm({
-    title: '试试 Claude 整体风格？',
-    message: '除了 Claude 配色，数据库还有完整的 Claude 界面风格：按 Claude 的界面规范重排层次、字号和控件，侧栏可以收起。要现在切换吗？之后可在「外观与界面 → 界面风格」随时切回默认。',
-    confirmLabel: '切换到 Claude 风格',
-    cancelLabel: '保持当前',
-  });
-  if (!confirmed) return;
-  // 明暗跟所选主题一致：Claude → 浅色，Claude 夜 → 深色
-  appearanceStore.setClaudeColorMode(id === 'claude-night' ? 'dark' : 'light');
-  appearanceStore.setUiStyle('claude');
+  void suggestClaudeStyleOnce_UB(id);
 }
 
 function setMode(value: string): void {

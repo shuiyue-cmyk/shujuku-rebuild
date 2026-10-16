@@ -127,6 +127,7 @@ import { useTemplateRuntimeChangeListener } from '../presentation-v2/composables
 import { canCloseUi, canLeaveCurrentPage } from '../presentation-v2/composables/useUiCloseGuard';
 import { useRootShellStore } from '../presentation-v2/stores/root-shell-store';
 import { useRouterStore } from '../presentation-v2/stores/router-store';
+import { useThemeStore } from '../presentation-v2/stores/theme-store';
 import { useToastStore } from '../presentation-v2/stores/toast-store';
 import { useUiModeStore } from '../presentation-v2/stores/ui-mode-store';
 import { useVisualizerStore } from '../presentation-v2/stores/visualizer-store';
@@ -134,6 +135,7 @@ import VisualizerSurface from './surfaces/VisualizerSurface.vue';
 import { ubPageEntry } from './router/page-catalog';
 import AppearanceSheet from './shell/AppearanceSheet.vue';
 import { claudeGreeting } from './shell/claude-greeting';
+import { suggestClaudeStyleOnce_UB } from './shell/claude-style-suggestion';
 import NavList from './shell/NavList.vue';
 import UbBrandMark from './shell/UbBrandMark.vue';
 import UbButton from './ui/UbButton.vue';
@@ -223,6 +225,8 @@ useTemplateRuntimeChangeListener();
 
 onMounted(() => {
   router.ensureActiveVisible();
+  // 这一提示上线前就在默认风格下选好 Claude 主题的用户：打开面板时同样问一次
+  void suggestClaudeStyleOnce_UB(useThemeStore().activeId);
 });
 
 watch(() => devOptions.developerOptionsEnabled.value, () => router.ensureActiveVisible());

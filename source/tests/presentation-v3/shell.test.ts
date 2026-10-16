@@ -134,7 +134,7 @@ describe('v3 外壳', () => {
   });
 
   it('默认风格下选非 Claude 主题不提示', async () => {
-    const { mount } = await mountV3({ uiState: { theme: { activeId: 'claude' } } });
+    const { mount } = await mountV3({ uiState: { theme: { activeId: 'jirai-kei' } } });
     cleanup = () => mount.__resetAcuV2MountForTests();
     const { useDialogStore } = await import('../../src/presentation-v2/stores/dialog-store');
     Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-rail button'))
@@ -145,6 +145,33 @@ describe('v3 外壳', () => {
     other.click();
     await flush();
     expect(useDialogStore().active).toBeNull();
+  });
+
+  it('更新前就在默认风格下用着 Claude 主题：打开面板时也问一次，同意后按主题定明暗', async () => {
+    const { mount } = await mountV3({ uiState: { theme: { activeId: 'claude-night' } } });
+    cleanup = () => mount.__resetAcuV2MountForTests();
+    await flush();
+    const { useDialogStore } = await import('../../src/presentation-v2/stores/dialog-store');
+    const { useAppearanceStore } = await import('../../src/presentation-v2/stores/appearance-store');
+    const dialog = useDialogStore();
+    expect(dialog.active?.kind).toBe('confirm');
+    expect(dialog.active?.message).toContain('Claude 界面风格');
+    expect(useAppearanceStore().claudeStyleSuggested).toBe(true);
+    dialog.submitActive();
+    await flush();
+    const app = document.querySelector<HTMLElement>('.ub-app')!;
+    expect(app.dataset.ubStyle).toBe('claude');
+    expect(app.dataset.ubColorScheme).toBe('dark');
+  });
+
+  it('已经问过、或已是 Claude 风格时，打开面板不再问', async () => {
+    for (const appearance of [{ claudeStyleSuggested: true }, { uiStyle: 'claude' }]) {
+      const { mount } = await mountV3({ uiState: { theme: { activeId: 'claude' }, appearance } });
+      await flush();
+      const { useDialogStore } = await import('../../src/presentation-v2/stores/dialog-store');
+      expect(useDialogStore().active).toBeNull();
+      mount.__resetAcuV2MountForTests();
+    }
   });
 
   it('界面风格：切到 Claude 后用自带配色，明暗按颜色模式走、不改所选主题；仪表盘页首出现问候语；侧栏可收起', async () => {
