@@ -93597,7 +93597,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261016-11"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261016-12"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -93616,7 +93616,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261016-11";
+        const stamp = "20261016-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -155197,7 +155197,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261016-11";
+        const stamp = "20261016-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -171200,7 +171200,7 @@ function __resetPersistenceForTests() {
 /**
  * appearance-store — 新 UI 外观偏好。
  *
- * 界面缩放、界面风格（默认 / Claude）与侧栏收起都是本机显示偏好，独立持久化到 acu_v2_ui_state.appearance；
+ * 界面缩放、界面风格（默认 / Claude）、Claude 风格的颜色模式与侧栏收起都是本机显示偏好，独立持久化到 acu_v2_ui_state.appearance；
  * 不进入主题导入/导出，也不触碰业务配置。
  */
 const ACU_UI_SCALE_OPTIONS = [
@@ -171214,6 +171214,12 @@ const ACU_UI_STYLE_OPTIONS = [
     { value: 'claude', label: 'Claude' },
 ];
 const ACU_DEFAULT_UI_STYLE = 'default';
+const ACU_CLAUDE_COLOR_MODE_OPTIONS = [
+    { value: 'light', label: '浅色' },
+    { value: 'system', label: '跟随系统' },
+    { value: 'dark', label: '深色' },
+];
+const ACU_DEFAULT_CLAUDE_COLOR_MODE = 'system';
 const SECTION_KEY$4 = 'appearance';
 function isUiScale(value) {
     return typeof value === 'string' && ACU_UI_SCALE_OPTIONS.some(option => option.value === value);
@@ -171227,6 +171233,11 @@ function isUiStyle(value) {
 function normalizeUiStyle(value) {
     return isUiStyle(value) ? value : ACU_DEFAULT_UI_STYLE;
 }
+function normalizeClaudeColorMode(value) {
+    return ACU_CLAUDE_COLOR_MODE_OPTIONS.some(option => option.value === value)
+        ? value
+        : ACU_DEFAULT_CLAUDE_COLOR_MODE;
+}
 function getScaleOption(value) {
     return ACU_UI_SCALE_OPTIONS.find(option => option.value === value) ?? ACU_UI_SCALE_OPTIONS[0];
 }
@@ -171236,10 +171247,17 @@ function readInitialAppearanceState() {
         uiScale: normalizeUiScale(persisted?.uiScale),
         uiStyle: normalizeUiStyle(persisted?.uiStyle),
         railCollapsed: persisted?.railCollapsed === true,
+        claudeColorMode: normalizeClaudeColorMode(persisted?.claudeColorMode),
+        systemPrefersDark: false,
     };
 }
 function buildPersistedAppearance(state) {
-    return { uiScale: state.uiScale, uiStyle: state.uiStyle, railCollapsed: state.railCollapsed };
+    return {
+        uiScale: state.uiScale,
+        uiStyle: state.uiStyle,
+        railCollapsed: state.railCollapsed,
+        claudeColorMode: state.claudeColorMode,
+    };
 }
 const useAppearanceStore = defineStore('acu-v2-appearance', {
     state: () => readInitialAppearanceState(),
@@ -171274,6 +171292,17 @@ const useAppearanceStore = defineStore('acu-v2-appearance', {
             this.uiStyle = value;
             this.persist();
         },
+        setClaudeColorMode(value) {
+            if (normalizeClaudeColorMode(value) !== value)
+                return;
+            if (this.claudeColorMode === value)
+                return;
+            this.claudeColorMode = value;
+            this.persist();
+        },
+        setSystemPrefersDark(value) {
+            this.systemPrefersDark = value === true;
+        },
         toggleRailCollapsed() {
             this.railCollapsed = !this.railCollapsed;
             this.persist();
@@ -171283,6 +171312,696 @@ const useAppearanceStore = defineStore('acu-v2-appearance', {
         },
     },
 });
+
+const THEME_DEFAULT_LIGHT = {
+    id: "default-light",
+    name: "浅色",
+    colorScheme: "light",
+    tokens: {
+        bg0: "#F2F1ED",
+        bg1: "#FFFFFF",
+        bg2: "#EBE9E3",
+        sidebarBg: "#EEEDE8",
+        hoverOverlay: "rgba(28, 27, 24, 0.06)",
+        border: "rgba(28, 27, 24, 0.08)",
+        border2: "rgba(28, 27, 24, 0.12)",
+        text1: "#1C1B18",
+        text2: "#4A4842",
+        text3: "#75726A",
+        accent: "#2F5FD0",
+        accent2: "#264FB0",
+        onAccent: "#FFFFFF",
+        accentGlow: "rgba(47, 95, 208, 0.20)",
+        success: "#3F7A55",
+        warning: "#8F6420",
+        danger: "#B4483F",
+        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+        radiusLg: "12px",
+        radiusMd: "10px",
+        radiusSm: "8px",
+        shadow: "0 12px 32px rgba(28, 27, 24, 0.12)",
+    },
+};
+const THEME_DEFAULT_DARK = {
+    id: "default-dark",
+    name: "深色",
+    colorScheme: "dark",
+    tokens: {
+        bg0: "#15181C",
+        bg1: "#1E2227",
+        bg2: "#272C32",
+        sidebarBg: "#121519",
+        hoverOverlay: "rgba(201, 209, 217, 0.07)",
+        border: "rgba(205, 217, 229, 0.07)",
+        border2: "rgba(205, 217, 229, 0.12)",
+        text1: "#EEF1F4",
+        text2: "#BAC2CB",
+        text3: "#8A949F",
+        accent: "#7FD6CA",
+        accent2: "#69C7BC",
+        onAccent: "#15181C",
+        accentGlow: "rgba(127, 214, 202, 0.24)",
+        success: "#8DBA9A",
+        warning: "#C9A35E",
+        danger: "#D07A74",
+        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+        radiusLg: "12px",
+        radiusMd: "10px",
+        radiusSm: "8px",
+        shadow: "0 18px 48px rgba(0, 0, 0, 0.45)",
+    },
+};
+const THEME_CREAMY_MINIMAL = {
+    id: "creamy-minimal",
+    name: "奶油风",
+    colorScheme: "light",
+    tokens: {
+        bg0: "#F2E8DA",
+        bg1: "#FFFBF5",
+        bg2: "#EBDFCF",
+        sidebarBg: "#F0E5D5",
+        hoverOverlay: "rgba(116, 91, 62, 0.08)",
+        border: "rgba(116, 91, 62, 0.10)",
+        border2: "rgba(116, 91, 62, 0.16)",
+        text1: "#463B2F",
+        text2: "#6B5844",
+        text3: "#8E7860",
+        accent: "#5A7A44",
+        accent2: "#4D6A3A",
+        onAccent: "#FFFBF5",
+        accentGlow: "rgba(90, 122, 68, 0.22)",
+        success: "#6E8F57",
+        warning: "#A2773F",
+        danger: "#A75A55",
+        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+        radiusLg: "18px",
+        radiusMd: "16px",
+        radiusSm: "12px",
+        shadow: "0 8px 24px rgba(92, 70, 44, 0.10)",
+    },
+};
+const THEME_JIRAI_KEI = {
+    id: "jirai-kei",
+    name: "地雷色",
+    colorScheme: "dark",
+    tokens: {
+        bg0: "#2B2B2B",
+        bg1: "#1F1F1F",
+        bg2: "rgba(255, 196, 212, 0.08)",
+        sidebarBg: "#1F1F1F",
+        hoverOverlay: "rgba(255, 196, 212, 0.12)",
+        border: "transparent",
+        border2: "transparent",
+        text1: "#FFFFFF",
+        text2: "rgba(255, 255, 255, 0.70)",
+        text3: "rgba(255, 255, 255, 0.50)",
+        accent: "#FFC4D4",
+        accent2: "#FFD9E4",
+        onAccent: "#2B2B2B",
+        accentGlow: "rgba(255, 196, 212, 0.25)",
+        success: "#E5A0B5",
+        warning: "#FFB38B",
+        danger: "#D96C6C",
+        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+        radiusLg: "18px",
+        radiusMd: "16px",
+        radiusSm: "12px",
+        shadow: "0 8px 24px rgba(0, 0, 0, 0.45)",
+    },
+};
+/** 暖象牙底 + 赤陶 accent，取自 Claude 的配色气质。 */
+const THEME_CLAUDE = {
+    id: "claude",
+    name: "Claude",
+    colorScheme: "light",
+    tokens: {
+        bg0: "#F0EEE6",
+        bg1: "#FAF9F5",
+        bg2: "#E8E5DA",
+        sidebarBg: "#EBE8DE",
+        hoverOverlay: "rgba(31, 30, 29, 0.06)",
+        border: "rgba(31, 30, 29, 0.09)",
+        border2: "rgba(31, 30, 29, 0.15)",
+        text1: "#1F1E1D",
+        text2: "#3D3D3A",
+        text3: "#73726C",
+        accent: "#BA5A36",
+        accent2: "#A64E2D",
+        onAccent: "#FFFFFF",
+        accentGlow: "rgba(217, 119, 87, 0.22)",
+        success: "#5C7F4E",
+        warning: "#A06A1E",
+        danger: "#B5453A",
+        fontUi: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+        radiusLg: "14px",
+        radiusMd: "10px",
+        radiusSm: "8px",
+        shadow: "0 10px 30px rgba(31, 30, 29, 0.10)",
+    },
+};
+const THEME_CLAUDE_NIGHT = {
+    id: "claude-night",
+    name: "Claude 夜",
+    colorScheme: "dark",
+    tokens: {
+        bg0: "#1F1E1D",
+        bg1: "#2A2927",
+        bg2: "#34332F",
+        sidebarBg: "#1A1918",
+        hoverOverlay: "rgba(250, 249, 245, 0.06)",
+        border: "rgba(250, 249, 245, 0.07)",
+        border2: "rgba(250, 249, 245, 0.12)",
+        text1: "#FAF9F5",
+        text2: "#C2C0B6",
+        text3: "#97958C",
+        accent: "#D97757",
+        accent2: "#E28B6E",
+        onAccent: "#1F1E1D",
+        accentGlow: "rgba(217, 119, 87, 0.26)",
+        success: "#8FB27F",
+        warning: "#D4A35A",
+        danger: "#E07B6E",
+        fontUi: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+        radiusLg: "14px",
+        radiusMd: "10px",
+        radiusSm: "8px",
+        shadow: "0 18px 48px rgba(0, 0, 0, 0.50)",
+    },
+};
+const THEME_MIST_BLUE = {
+    id: "mist-blue",
+    name: "雾蓝",
+    colorScheme: "light",
+    tokens: {
+        bg0: "#E9EEF3",
+        bg1: "#F8FAFC",
+        bg2: "#DFE6ED",
+        sidebarBg: "#E3E9EF",
+        hoverOverlay: "rgba(27, 36, 48, 0.06)",
+        border: "rgba(27, 36, 48, 0.08)",
+        border2: "rgba(27, 36, 48, 0.12)",
+        text1: "#1B2430",
+        text2: "#43505F",
+        text3: "#647183",
+        accent: "#3B6FB6",
+        accent2: "#315E9C",
+        onAccent: "#FFFFFF",
+        accentGlow: "rgba(59, 111, 182, 0.22)",
+        success: "#3E7D63",
+        warning: "#9A6B22",
+        danger: "#B04A4A",
+        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+        radiusLg: "14px",
+        radiusMd: "12px",
+        radiusSm: "10px",
+        shadow: "0 12px 32px rgba(27, 36, 48, 0.12)",
+    },
+};
+const THEME_MIDNIGHT = {
+    id: "midnight",
+    name: "午夜紫",
+    colorScheme: "dark",
+    tokens: {
+        bg0: "#0F1020",
+        bg1: "#191A2E",
+        bg2: "#23243B",
+        sidebarBg: "#0C0D1A",
+        hoverOverlay: "rgba(169, 155, 255, 0.08)",
+        border: "rgba(169, 155, 255, 0.09)",
+        border2: "rgba(169, 155, 255, 0.16)",
+        text1: "#ECEBFA",
+        text2: "#B9B8D6",
+        text3: "#8786A8",
+        accent: "#A99BFF",
+        accent2: "#BDB2FF",
+        onAccent: "#14132A",
+        accentGlow: "rgba(169, 155, 255, 0.28)",
+        success: "#7FC8A9",
+        warning: "#E0B36A",
+        danger: "#F07E8C",
+        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
+        radiusLg: "16px",
+        radiusMd: "12px",
+        radiusSm: "10px",
+        shadow: "0 18px 48px rgba(0, 0, 0, 0.55)",
+    },
+};
+const ACU_V2_BUILTIN_THEMES = [
+    THEME_DEFAULT_LIGHT,
+    THEME_DEFAULT_DARK,
+    THEME_CREAMY_MINIMAL,
+    THEME_JIRAI_KEI,
+    THEME_CLAUDE,
+    THEME_CLAUDE_NIGHT,
+    THEME_MIST_BLUE,
+    THEME_MIDNIGHT,
+];
+const ACU_V2_DEFAULT_THEME_ID = THEME_DEFAULT_DARK.id;
+
+/**
+ * theme-types — 新主题系统类型（D14）
+ *
+ * 与旧 src/presentation/theme/theme-types.ts 互不依赖。新主题不暴露兼容旧
+ * inline-style 的兼容变量、不暴露 visualizer / toast / window-chrome 子集，
+ * 也不维护 ACUThemeFile 导入导出契约。这些都按 D14 的"丢弃"决策处理。
+ */
+const ACU_V2_CUSTOM_THEME_FILE_KIND = 'acu-v2-theme';
+const ACU_V2_CUSTOM_THEME_FILE_VERSION = 1;
+/** token key 到 CSS 变量名的映射，集中保存供 store 与注入器共用。 */
+const TOKEN_VAR_MAP = {
+    bg0: '--acu-bg-0',
+    bg1: '--acu-bg-1',
+    bg2: '--acu-bg-2',
+    sidebarBg: '--acu-sidebar-bg',
+    hoverOverlay: '--acu-hover-overlay',
+    border: '--acu-border',
+    border2: '--acu-border-2',
+    text1: '--acu-text-1',
+    text2: '--acu-text-2',
+    text3: '--acu-text-3',
+    accent: '--acu-accent',
+    accent2: '--acu-accent-2',
+    onAccent: '--acu-on-accent',
+    accentGlow: '--acu-accent-glow',
+    success: '--acu-success',
+    warning: '--acu-warning',
+    danger: '--acu-danger',
+    fontUi: '--acu-font-ui',
+    fontMono: '--acu-font-mono',
+    radiusLg: '--acu-radius-lg',
+    radiusMd: '--acu-radius-md',
+    radiusSm: '--acu-radius-sm',
+    shadow: '--acu-shadow',
+};
+
+/**
+ * theme-store — 新 UI 主题状态（D14 / D16 / P0-4）
+ *
+ * 设计要点：
+ * - 内置主题 id 不可变，切换主题 = 切 activeId
+ * - 持久化走 acu_v2_ui_state.theme（独立于旧 settings_ACU）
+ * - 切换 / 初始化时通过订阅触发 theme-injector 把 tokens 写到 host document
+ *   的 <style id="acu-v2-theme">；注入逻辑放 theme-injector.ts，store 只发数据
+ */
+const SECTION_KEY$3 = 'theme';
+const CUSTOM_THEME_ID_PREFIX = 'custom:';
+const LEGACY_BUILTIN_THEME_ID_ALIASES = {
+    'strawberry-dragon': 'creamy-minimal',
+};
+const MAX_CUSTOM_THEMES = 24;
+const MAX_THEME_NAME_LENGTH = 40;
+const MAX_TOKEN_VALUE_LENGTH = 240;
+function isBuiltinThemeId(id) {
+    return typeof id === 'string' && ACU_V2_BUILTIN_THEMES.some(t => t.id === id);
+}
+function isCustomThemeId(id) {
+    return typeof id === 'string' && id.startsWith(CUSTOM_THEME_ID_PREFIX);
+}
+function isSafeCustomThemeId(id) {
+    return isCustomThemeId(id) && /^custom:[a-z0-9][a-z0-9_-]{2,48}$/i.test(id);
+}
+function themeExists(id, customThemes) {
+    return isBuiltinThemeId(id) || customThemes.some(t => t.id === id);
+}
+function normalizePersistedActiveThemeId(id, customThemes, builtinOverridesByCustomId = {}) {
+    if (themeExists(id, customThemes))
+        return id;
+    if (typeof id === 'string' && builtinOverridesByCustomId[id]) {
+        return builtinOverridesByCustomId[id];
+    }
+    if (typeof id === 'string' && LEGACY_BUILTIN_THEME_ID_ALIASES[id]) {
+        return LEGACY_BUILTIN_THEME_ID_ALIASES[id];
+    }
+    return ACU_V2_DEFAULT_THEME_ID;
+}
+function sanitizeThemeName(value) {
+    const name = String(value || '').trim().replace(/\s+/g, ' ').slice(0, MAX_THEME_NAME_LENGTH);
+    return name || '自定义主题';
+}
+function sanitizeSlug(value) {
+    const slug = value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 36);
+    return slug || 'theme';
+}
+function isColorScheme(value) {
+    return value === 'light' || value === 'dark';
+}
+function isSafeTokenValue(value) {
+    if (typeof value !== 'string')
+        return false;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.length > MAX_TOKEN_VALUE_LENGTH)
+        return false;
+    if (/[;{}<>!]/.test(trimmed))
+        return false;
+    if (trimmed.includes('/*') || trimmed.includes('*/'))
+        return false;
+    // R10B-16：反斜杠转义可把 url 写成「\75 rl(」绕过字面匹配，token 里一律不收转义
+    if (trimmed.includes('\\'))
+        return false;
+    // 能让界面加载外部资源的函数（含带前缀的 image-set）一律拒绝
+    if (/(?:^|[^a-z-])(?:-[a-z]+-)?(?:url|image-set|image|src|cross-fade|element|paint)\s*\(/i.test(trimmed))
+        return false;
+    // 协议地址或协议相对地址（字体名等正常引号内容不会出现）
+    if (/[a-z][a-z0-9+.-]*:\/\/|["']\s*\/\//i.test(trimmed))
+        return false;
+    return true;
+}
+function sanitizeThemeTokens(value) {
+    if (!value || typeof value !== 'object')
+        return null;
+    const source = value;
+    const result = {};
+    const keys = Object.keys(TOKEN_VAR_MAP);
+    for (const key of keys) {
+        if (!isSafeTokenValue(source[key]))
+            return null;
+        result[key] = source[key].trim();
+    }
+    return result;
+}
+function makeUniqueCustomThemeId(name, customThemes) {
+    const base = `${CUSTOM_THEME_ID_PREFIX}${sanitizeSlug(name)}`;
+    let candidate = base;
+    let index = 2;
+    while (customThemes.some(t => t.id === candidate)) {
+        candidate = `${base}-${index}`;
+        index += 1;
+    }
+    return candidate;
+}
+function findBuiltinThemeByName(name) {
+    const normalizedName = sanitizeThemeName(name);
+    return ACU_V2_BUILTIN_THEMES.find(t => sanitizeThemeName(t.name) === normalizedName);
+}
+function normalizeThemeSource(source, customThemes) {
+    const isWrapped = source &&
+        typeof source === 'object' &&
+        source.kind === ACU_V2_CUSTOM_THEME_FILE_KIND;
+    if (isWrapped && source.version !== ACU_V2_CUSTOM_THEME_FILE_VERSION) {
+        throw new Error('主题文件版本不受支持。');
+    }
+    const wrapped = isWrapped
+        ? source.theme
+        : source;
+    if (!wrapped || typeof wrapped !== 'object') {
+        throw new Error('主题文件格式不正确。');
+    }
+    const theme = wrapped;
+    const name = sanitizeThemeName(theme.name);
+    const colorScheme = theme.colorScheme;
+    const tokens = sanitizeThemeTokens(theme.tokens);
+    if (!isColorScheme(colorScheme) || !tokens) {
+        throw new Error('主题文件缺少 v2 主题所需的颜色模式或 token。');
+    }
+    const id = isSafeCustomThemeId(theme.id)
+        ? theme.id
+        : makeUniqueCustomThemeId(name, customThemes);
+    return { id, name, colorScheme, tokens };
+}
+function sanitizePersistedCustomThemes(value) {
+    if (!Array.isArray(value))
+        return { customThemes: [], builtinOverridesByCustomId: {} };
+    const themes = [];
+    const builtinOverridesByCustomId = {};
+    for (const item of value) {
+        if (themes.length >= MAX_CUSTOM_THEMES)
+            break;
+        try {
+            const normalized = normalizeThemeSource(item, themes);
+            if (!isSafeCustomThemeId(item?.id))
+                continue;
+            const builtinOverride = findBuiltinThemeByName(normalized.name);
+            if (builtinOverride) {
+                builtinOverridesByCustomId[normalized.id] = builtinOverride.id;
+                continue;
+            }
+            const index = themes.findIndex(t => t.id === normalized.id);
+            if (index >= 0)
+                themes[index] = normalized;
+            else
+                themes.push(normalized);
+        }
+        catch {
+            /* 忽略损坏的持久化主题，保留其余可用项。 */
+        }
+    }
+    return { customThemes: themes, builtinOverridesByCustomId };
+}
+function readInitialThemeState() {
+    const persisted = readSection(SECTION_KEY$3);
+    const { customThemes, builtinOverridesByCustomId } = sanitizePersistedCustomThemes(persisted?.customThemes);
+    const activeId = normalizePersistedActiveThemeId(persisted?.activeId, customThemes, builtinOverridesByCustomId);
+    return { activeId, customThemes };
+}
+/** 不建 store 直接读出已保存的生效主题：启动时给面板外的宿主浮层上色用。 */
+function readPersistedActiveTheme_ACU() {
+    const { activeId, customThemes } = readInitialThemeState();
+    return findThemeById(activeId, customThemes) ?? ACU_V2_BUILTIN_THEMES[0];
+}
+function buildPersistedTheme(state) {
+    const payload = { activeId: state.activeId };
+    if (state.customThemes.length > 0) {
+        payload.customThemes = state.customThemes.map(t => ({
+            id: t.id,
+            name: t.name,
+            colorScheme: t.colorScheme,
+            tokens: { ...t.tokens },
+        }));
+    }
+    return payload;
+}
+function findThemeById(id, customThemes) {
+    return ACU_V2_BUILTIN_THEMES.find(t => t.id === id) ?? customThemes.find(t => t.id === id);
+}
+function parseThemeFileText(text) {
+    try {
+        return JSON.parse(text);
+    }
+    catch {
+        throw new Error('主题文件不是有效 JSON。');
+    }
+}
+const useThemeStore = defineStore('acu-v2-theme', {
+    state: () => readInitialThemeState(),
+    getters: {
+        themes: (state) => [
+            ...ACU_V2_BUILTIN_THEMES,
+            ...state.customThemes,
+        ],
+        activeTheme(state) {
+            const found = findThemeById(state.activeId, state.customThemes);
+            // 启动时从 localStorage 读到合法 id；不存在的 id 不会被 isValidId 放进 state，
+            // 所以这里走 fallback 仅是兜底（手动篡改 storage 之类）
+            return found ?? ACU_V2_BUILTIN_THEMES[0];
+        },
+    },
+    actions: {
+        setTheme(id) {
+            if (!themeExists(id, this.customThemes))
+                return;
+            if (this.activeId === id)
+                return;
+            this.activeId = id;
+            this.persist();
+        },
+        importCustomThemeFromJsonText(text) {
+            const source = parseThemeFileText(text);
+            const theme = normalizeThemeSource(source, this.customThemes);
+            const builtinOverride = findBuiltinThemeByName(theme.name);
+            if (builtinOverride) {
+                this.customThemes = this.customThemes.filter(t => sanitizeThemeName(t.name) !== sanitizeThemeName(theme.name));
+                this.activeId = builtinOverride.id;
+                this.persist();
+                return builtinOverride;
+            }
+            const index = this.customThemes.findIndex(t => t.id === theme.id);
+            if (index >= 0)
+                this.customThemes.splice(index, 1, theme);
+            else {
+                if (this.customThemes.length >= MAX_CUSTOM_THEMES) {
+                    throw new Error(`最多只能保存 ${MAX_CUSTOM_THEMES} 个自定义主题。`);
+                }
+                this.customThemes.push(theme);
+            }
+            this.activeId = theme.id;
+            this.persist();
+            return theme;
+        },
+        deleteCustomTheme(id) {
+            if (!isCustomThemeId(id))
+                return false;
+            const before = this.customThemes.length;
+            this.customThemes = this.customThemes.filter(t => t.id !== id);
+            if (this.customThemes.length === before)
+                return false;
+            if (this.activeId === id)
+                this.activeId = ACU_V2_DEFAULT_THEME_ID;
+            this.persist();
+            return true;
+        },
+        buildThemeFile(id) {
+            const theme = findThemeById(id, this.customThemes);
+            if (!theme)
+                throw new Error('主题不存在。');
+            const isCustom = isCustomThemeId(theme.id);
+            return {
+                kind: ACU_V2_CUSTOM_THEME_FILE_KIND,
+                version: ACU_V2_CUSTOM_THEME_FILE_VERSION,
+                theme: {
+                    ...(isCustom ? { id: theme.id } : {}),
+                    name: theme.name,
+                    colorScheme: theme.colorScheme,
+                    tokens: { ...theme.tokens },
+                },
+            };
+        },
+        persist() {
+            writeSection(SECTION_KEY$3, buildPersistedTheme(this.$state));
+        },
+    },
+});
+
+/**
+ * effective-theme — 实际生效的配色。
+ *
+ * 默认风格：用外观里所选的主题。
+ * Claude 风格：自带 Claude 配色（参考公开的 Claude 界面设计规范：四层表面阶梯、陶土强调色、
+ * 低透明度墨色边线），明暗由「颜色模式」决定（浅色 / 跟随系统 / 深色），不看所选主题。
+ *
+ * 生效配色统一经 theme-injector 写进 --acu-* 令牌：面板、宿主浮层、原生表单控件的明暗都跟着走。
+ */
+const CLAUDE_FONT_UI = 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif';
+const CLAUDE_FONT_MONO = '"SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace';
+/**
+ * 弱化文字（text3）比规范值略深：本插件说明文字多，规范的 #8a8a8a / #666666 在长段中文上对比度不足。
+ */
+const CLAUDE_STYLE_THEME_LIGHT = Object.freeze({
+    id: 'claude',
+    name: 'Claude 风格（浅色）',
+    colorScheme: 'light',
+    tokens: Object.freeze({
+        bg0: '#fcfcfb',
+        bg1: '#ffffff',
+        bg2: '#f5f5f3',
+        sidebarBg: '#f5f5f3',
+        hoverOverlay: 'rgba(20, 20, 20, 0.05)',
+        border: 'rgba(20, 20, 20, 0.10)',
+        border2: 'rgba(20, 20, 20, 0.20)',
+        text1: '#151515',
+        text2: '#525252',
+        text3: '#767676',
+        accent: '#d97757',
+        accent2: '#cc5a36',
+        onAccent: '#ffffff',
+        accentGlow: 'rgba(217, 119, 87, 0.25)',
+        success: '#2f8a57',
+        warning: '#b26b12',
+        danger: '#dc2626',
+        fontUi: CLAUDE_FONT_UI,
+        fontMono: CLAUDE_FONT_MONO,
+        radiusLg: '16px',
+        radiusMd: '10px',
+        radiusSm: '8px',
+        shadow: '0 0 0 1px rgba(20, 20, 20, 0.10), 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08)',
+    }),
+});
+const CLAUDE_STYLE_THEME_DARK = Object.freeze({
+    id: 'claude-night',
+    name: 'Claude 风格（深色）',
+    colorScheme: 'dark',
+    tokens: Object.freeze({
+        bg0: '#151515',
+        bg1: '#1a1a19',
+        bg2: '#20201e',
+        sidebarBg: '#0b0b0a',
+        hoverOverlay: 'rgba(255, 255, 255, 0.05)',
+        border: 'rgba(255, 255, 255, 0.09)',
+        border2: 'rgba(255, 255, 255, 0.18)',
+        text1: '#f5f5f5',
+        text2: '#a3a3a3',
+        text3: '#8a8a87',
+        accent: '#d97757',
+        accent2: '#e08264',
+        onAccent: '#ffffff',
+        accentGlow: 'rgba(217, 119, 87, 0.35)',
+        success: '#5fb37f',
+        warning: '#e0a54b',
+        danger: '#f87171',
+        fontUi: CLAUDE_FONT_UI,
+        fontMono: CLAUDE_FONT_MONO,
+        radiusLg: '16px',
+        radiusMd: '10px',
+        radiusSm: '8px',
+        shadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.10), 0 8px 28px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.45)',
+    }),
+});
+function resolveEffectiveTheme_ACU(activeTheme, input) {
+    if (input.uiStyle !== 'claude')
+        return activeTheme;
+    const dark = input.claudeColorMode === 'dark'
+        || (input.claudeColorMode === 'system' && input.systemPrefersDark);
+    return dark ? CLAUDE_STYLE_THEME_DARK : CLAUDE_STYLE_THEME_LIGHT;
+}
+const DARK_QUERY = '(prefers-color-scheme: dark)';
+/** 读宿主窗口的系统明暗；不支持 matchMedia 的环境当作浅色。 */
+function systemPrefersDark_ACU(win) {
+    try {
+        return typeof win.matchMedia === 'function' && win.matchMedia(DARK_QUERY).matches === true;
+    }
+    catch {
+        return false;
+    }
+}
+/** 监听系统明暗变化；返回取消监听。 */
+function watchSystemColorScheme_ACU(win, onChange) {
+    let query = null;
+    try {
+        query = typeof win.matchMedia === 'function' ? win.matchMedia(DARK_QUERY) : null;
+    }
+    catch {
+        query = null;
+    }
+    if (!query || typeof query.addEventListener !== 'function')
+        return () => { };
+    const listener = (event) => onChange(event.matches === true);
+    query.addEventListener('change', listener);
+    return () => query?.removeEventListener('change', listener);
+}
+/** 不建 store 直接读出已保存的生效配色：启动时给面板外的宿主浮层上色用。 */
+function readPersistedEffectiveTheme_ACU(win = globalThis) {
+    const appearance = readSection('appearance');
+    return resolveEffectiveTheme_ACU(readPersistedActiveTheme_ACU(), {
+        uiStyle: normalizeUiStyle(appearance?.uiStyle),
+        claudeColorMode: normalizeClaudeColorMode(appearance?.claudeColorMode),
+        systemPrefersDark: systemPrefersDark_ACU(win),
+    });
+}
+
+/**
+ * useEffectiveTheme — 实际生效的配色（默认风格 = 所选主题；Claude 风格 = Claude 自带配色）。
+ * 外壳的明暗标记与主题注入都读这一份，见 theme/effective-theme.ts。
+ */
+function useEffectiveTheme(pinia) {
+    const themeStore = useThemeStore(pinia);
+    const appearanceStore = useAppearanceStore(pinia);
+    return computed(() => resolveEffectiveTheme_ACU(themeStore.activeTheme, {
+        uiStyle: appearanceStore.uiStyle,
+        claudeColorMode: appearanceStore.claudeColorMode,
+        systemPrefersDark: appearanceStore.systemPrefersDark,
+    }));
+}
 
 let nextDialogId = 1;
 function makeDialogId() {
@@ -172601,9 +173320,9 @@ function useChatChangedListener() {
  *
  * 新 UI 自有持久化，物理隔离于 settings_ACU。
  */
-const SECTION_KEY$3 = 'devOptions';
+const SECTION_KEY$2 = 'devOptions';
 function loadFromStorage$1() {
-    const raw = readSection(SECTION_KEY$3) ?? {};
+    const raw = readSection(SECTION_KEY$2) ?? {};
     return {
         developerOptionsEnabled: raw.developerOptionsEnabled === true,
         plotAdvanced: raw.plotAdvanced === true,
@@ -172612,7 +173331,7 @@ function loadFromStorage$1() {
     };
 }
 function persist$2(state) {
-    writeSection(SECTION_KEY$3, {
+    writeSection(SECTION_KEY$2, {
         developerOptionsEnabled: state.developerOptionsEnabled,
         plotAdvanced: state.plotAdvanced,
         warnLogEnabled: state.warnLogEnabled,
@@ -172997,13 +173716,13 @@ const ACU_V2_PAGE_GROUPS = [
  * 这是新 UI 自己的展示模式，不写入旧 settings_ACU。基础模式只保留一个
  * “基础配置”入口；高手模式恢复完整工作台。
  */
-const SECTION_KEY$2 = 'uiMode';
+const SECTION_KEY$1 = 'uiMode';
 const ROUTER_SECTION_KEY = 'router';
 function normalizeMode(value) {
     return value === 'advanced' ? 'advanced' : 'basic';
 }
 function loadFromStorage() {
-    const raw = readSection(SECTION_KEY$2) ?? {};
+    const raw = readSection(SECTION_KEY$1) ?? {};
     if (raw.mode !== undefined)
         return normalizeMode(raw.mode);
     const router = readSection(ROUTER_SECTION_KEY);
@@ -173013,7 +173732,7 @@ function loadFromStorage() {
     return normalizeMode(raw.mode);
 }
 function persist$1(mode) {
-    writeSection(SECTION_KEY$2, { mode });
+    writeSection(SECTION_KEY$1, { mode });
 }
 const useUiModeStore = defineStore('acu-v2-ui-mode', {
     state: () => ({
@@ -173079,7 +173798,7 @@ function syncContentReplaceAvailability() {
  * - P0-6：activePageId 持久化到 acu_v2_ui_state.router；关闭后再开保留页面
  *   抽屉 / 滚动是页面内部状态，不在路由层处理（关闭/重开不持久化）
  */
-const SECTION_KEY$1 = 'router';
+const SECTION_KEY = 'router';
 const LEGACY_PAGE_ID_ALIASES = {
     'sql-console': 'advanced-tools',
     'log-viewer': 'advanced-tools',
@@ -173102,7 +173821,7 @@ function readInitialFeatureGates() {
     };
 }
 function readInitialActiveId(featureGates) {
-    const persisted = readSection(SECTION_KEY$1);
+    const persisted = readSection(SECTION_KEY);
     if (persisted && isKnownPage(persisted.activePageId)) {
         const activePageId = normalizePageId(persisted.activePageId) || persisted.activePageId;
         // 重载后先留出可操作入口，避免重型续写页因历史数据异常反复卡住面板。
@@ -173208,7 +173927,7 @@ const useRouterStore = defineStore('acu-v2-router', {
             this.persist();
         },
         persist() {
-            writeSection(SECTION_KEY$1, { activePageId: this.activePageId });
+            writeSection(SECTION_KEY, { activePageId: this.activePageId });
         },
     },
 });
@@ -174428,566 +175147,6 @@ function useTemplateRuntimeChangeListener() {
         unsubscribe();
     });
 }
-
-const THEME_DEFAULT_LIGHT = {
-    id: "default-light",
-    name: "浅色",
-    colorScheme: "light",
-    tokens: {
-        bg0: "#F2F1ED",
-        bg1: "#FFFFFF",
-        bg2: "#EBE9E3",
-        sidebarBg: "#EEEDE8",
-        hoverOverlay: "rgba(28, 27, 24, 0.06)",
-        border: "rgba(28, 27, 24, 0.08)",
-        border2: "rgba(28, 27, 24, 0.12)",
-        text1: "#1C1B18",
-        text2: "#4A4842",
-        text3: "#75726A",
-        accent: "#2F5FD0",
-        accent2: "#264FB0",
-        onAccent: "#FFFFFF",
-        accentGlow: "rgba(47, 95, 208, 0.20)",
-        success: "#3F7A55",
-        warning: "#8F6420",
-        danger: "#B4483F",
-        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
-        radiusLg: "12px",
-        radiusMd: "10px",
-        radiusSm: "8px",
-        shadow: "0 12px 32px rgba(28, 27, 24, 0.12)",
-    },
-};
-const THEME_DEFAULT_DARK = {
-    id: "default-dark",
-    name: "深色",
-    colorScheme: "dark",
-    tokens: {
-        bg0: "#15181C",
-        bg1: "#1E2227",
-        bg2: "#272C32",
-        sidebarBg: "#121519",
-        hoverOverlay: "rgba(201, 209, 217, 0.07)",
-        border: "rgba(205, 217, 229, 0.07)",
-        border2: "rgba(205, 217, 229, 0.12)",
-        text1: "#EEF1F4",
-        text2: "#BAC2CB",
-        text3: "#8A949F",
-        accent: "#7FD6CA",
-        accent2: "#69C7BC",
-        onAccent: "#15181C",
-        accentGlow: "rgba(127, 214, 202, 0.24)",
-        success: "#8DBA9A",
-        warning: "#C9A35E",
-        danger: "#D07A74",
-        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
-        radiusLg: "12px",
-        radiusMd: "10px",
-        radiusSm: "8px",
-        shadow: "0 18px 48px rgba(0, 0, 0, 0.45)",
-    },
-};
-const THEME_CREAMY_MINIMAL = {
-    id: "creamy-minimal",
-    name: "奶油风",
-    colorScheme: "light",
-    tokens: {
-        bg0: "#F2E8DA",
-        bg1: "#FFFBF5",
-        bg2: "#EBDFCF",
-        sidebarBg: "#F0E5D5",
-        hoverOverlay: "rgba(116, 91, 62, 0.08)",
-        border: "rgba(116, 91, 62, 0.10)",
-        border2: "rgba(116, 91, 62, 0.16)",
-        text1: "#463B2F",
-        text2: "#6B5844",
-        text3: "#8E7860",
-        accent: "#5A7A44",
-        accent2: "#4D6A3A",
-        onAccent: "#FFFBF5",
-        accentGlow: "rgba(90, 122, 68, 0.22)",
-        success: "#6E8F57",
-        warning: "#A2773F",
-        danger: "#A75A55",
-        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
-        radiusLg: "18px",
-        radiusMd: "16px",
-        radiusSm: "12px",
-        shadow: "0 8px 24px rgba(92, 70, 44, 0.10)",
-    },
-};
-const THEME_JIRAI_KEI = {
-    id: "jirai-kei",
-    name: "地雷色",
-    colorScheme: "dark",
-    tokens: {
-        bg0: "#2B2B2B",
-        bg1: "#1F1F1F",
-        bg2: "rgba(255, 196, 212, 0.08)",
-        sidebarBg: "#1F1F1F",
-        hoverOverlay: "rgba(255, 196, 212, 0.12)",
-        border: "transparent",
-        border2: "transparent",
-        text1: "#FFFFFF",
-        text2: "rgba(255, 255, 255, 0.70)",
-        text3: "rgba(255, 255, 255, 0.50)",
-        accent: "#FFC4D4",
-        accent2: "#FFD9E4",
-        onAccent: "#2B2B2B",
-        accentGlow: "rgba(255, 196, 212, 0.25)",
-        success: "#E5A0B5",
-        warning: "#FFB38B",
-        danger: "#D96C6C",
-        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
-        radiusLg: "18px",
-        radiusMd: "16px",
-        radiusSm: "12px",
-        shadow: "0 8px 24px rgba(0, 0, 0, 0.45)",
-    },
-};
-/** 暖象牙底 + 赤陶 accent，取自 Claude 的配色气质。 */
-const THEME_CLAUDE = {
-    id: "claude",
-    name: "Claude",
-    colorScheme: "light",
-    tokens: {
-        bg0: "#F0EEE6",
-        bg1: "#FAF9F5",
-        bg2: "#E8E5DA",
-        sidebarBg: "#EBE8DE",
-        hoverOverlay: "rgba(31, 30, 29, 0.06)",
-        border: "rgba(31, 30, 29, 0.09)",
-        border2: "rgba(31, 30, 29, 0.15)",
-        text1: "#1F1E1D",
-        text2: "#3D3D3A",
-        text3: "#73726C",
-        accent: "#BA5A36",
-        accent2: "#A64E2D",
-        onAccent: "#FFFFFF",
-        accentGlow: "rgba(217, 119, 87, 0.22)",
-        success: "#5C7F4E",
-        warning: "#A06A1E",
-        danger: "#B5453A",
-        fontUi: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
-        radiusLg: "14px",
-        radiusMd: "10px",
-        radiusSm: "8px",
-        shadow: "0 10px 30px rgba(31, 30, 29, 0.10)",
-    },
-};
-const THEME_CLAUDE_NIGHT = {
-    id: "claude-night",
-    name: "Claude 夜",
-    colorScheme: "dark",
-    tokens: {
-        bg0: "#1F1E1D",
-        bg1: "#2A2927",
-        bg2: "#34332F",
-        sidebarBg: "#1A1918",
-        hoverOverlay: "rgba(250, 249, 245, 0.06)",
-        border: "rgba(250, 249, 245, 0.07)",
-        border2: "rgba(250, 249, 245, 0.12)",
-        text1: "#FAF9F5",
-        text2: "#C2C0B6",
-        text3: "#97958C",
-        accent: "#D97757",
-        accent2: "#E28B6E",
-        onAccent: "#1F1E1D",
-        accentGlow: "rgba(217, 119, 87, 0.26)",
-        success: "#8FB27F",
-        warning: "#D4A35A",
-        danger: "#E07B6E",
-        fontUi: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
-        radiusLg: "14px",
-        radiusMd: "10px",
-        radiusSm: "8px",
-        shadow: "0 18px 48px rgba(0, 0, 0, 0.50)",
-    },
-};
-const THEME_MIST_BLUE = {
-    id: "mist-blue",
-    name: "雾蓝",
-    colorScheme: "light",
-    tokens: {
-        bg0: "#E9EEF3",
-        bg1: "#F8FAFC",
-        bg2: "#DFE6ED",
-        sidebarBg: "#E3E9EF",
-        hoverOverlay: "rgba(27, 36, 48, 0.06)",
-        border: "rgba(27, 36, 48, 0.08)",
-        border2: "rgba(27, 36, 48, 0.12)",
-        text1: "#1B2430",
-        text2: "#43505F",
-        text3: "#647183",
-        accent: "#3B6FB6",
-        accent2: "#315E9C",
-        onAccent: "#FFFFFF",
-        accentGlow: "rgba(59, 111, 182, 0.22)",
-        success: "#3E7D63",
-        warning: "#9A6B22",
-        danger: "#B04A4A",
-        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
-        radiusLg: "14px",
-        radiusMd: "12px",
-        radiusSm: "10px",
-        shadow: "0 12px 32px rgba(27, 36, 48, 0.12)",
-    },
-};
-const THEME_MIDNIGHT = {
-    id: "midnight",
-    name: "午夜紫",
-    colorScheme: "dark",
-    tokens: {
-        bg0: "#0F1020",
-        bg1: "#191A2E",
-        bg2: "#23243B",
-        sidebarBg: "#0C0D1A",
-        hoverOverlay: "rgba(169, 155, 255, 0.08)",
-        border: "rgba(169, 155, 255, 0.09)",
-        border2: "rgba(169, 155, 255, 0.16)",
-        text1: "#ECEBFA",
-        text2: "#B9B8D6",
-        text3: "#8786A8",
-        accent: "#A99BFF",
-        accent2: "#BDB2FF",
-        onAccent: "#14132A",
-        accentGlow: "rgba(169, 155, 255, 0.28)",
-        success: "#7FC8A9",
-        warning: "#E0B36A",
-        danger: "#F07E8C",
-        fontUi: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        fontMono: 'Consolas, Menlo, Monaco, "Courier New", monospace',
-        radiusLg: "16px",
-        radiusMd: "12px",
-        radiusSm: "10px",
-        shadow: "0 18px 48px rgba(0, 0, 0, 0.55)",
-    },
-};
-const ACU_V2_BUILTIN_THEMES = [
-    THEME_DEFAULT_LIGHT,
-    THEME_DEFAULT_DARK,
-    THEME_CREAMY_MINIMAL,
-    THEME_JIRAI_KEI,
-    THEME_CLAUDE,
-    THEME_CLAUDE_NIGHT,
-    THEME_MIST_BLUE,
-    THEME_MIDNIGHT,
-];
-const ACU_V2_DEFAULT_THEME_ID = THEME_DEFAULT_DARK.id;
-
-/**
- * theme-types — 新主题系统类型（D14）
- *
- * 与旧 src/presentation/theme/theme-types.ts 互不依赖。新主题不暴露兼容旧
- * inline-style 的兼容变量、不暴露 visualizer / toast / window-chrome 子集，
- * 也不维护 ACUThemeFile 导入导出契约。这些都按 D14 的"丢弃"决策处理。
- */
-const ACU_V2_CUSTOM_THEME_FILE_KIND = 'acu-v2-theme';
-const ACU_V2_CUSTOM_THEME_FILE_VERSION = 1;
-/** token key 到 CSS 变量名的映射，集中保存供 store 与注入器共用。 */
-const TOKEN_VAR_MAP = {
-    bg0: '--acu-bg-0',
-    bg1: '--acu-bg-1',
-    bg2: '--acu-bg-2',
-    sidebarBg: '--acu-sidebar-bg',
-    hoverOverlay: '--acu-hover-overlay',
-    border: '--acu-border',
-    border2: '--acu-border-2',
-    text1: '--acu-text-1',
-    text2: '--acu-text-2',
-    text3: '--acu-text-3',
-    accent: '--acu-accent',
-    accent2: '--acu-accent-2',
-    onAccent: '--acu-on-accent',
-    accentGlow: '--acu-accent-glow',
-    success: '--acu-success',
-    warning: '--acu-warning',
-    danger: '--acu-danger',
-    fontUi: '--acu-font-ui',
-    fontMono: '--acu-font-mono',
-    radiusLg: '--acu-radius-lg',
-    radiusMd: '--acu-radius-md',
-    radiusSm: '--acu-radius-sm',
-    shadow: '--acu-shadow',
-};
-
-/**
- * theme-store — 新 UI 主题状态（D14 / D16 / P0-4）
- *
- * 设计要点：
- * - 内置主题 id 不可变，切换主题 = 切 activeId
- * - 持久化走 acu_v2_ui_state.theme（独立于旧 settings_ACU）
- * - 切换 / 初始化时通过订阅触发 theme-injector 把 tokens 写到 host document
- *   的 <style id="acu-v2-theme">；注入逻辑放 theme-injector.ts，store 只发数据
- */
-const SECTION_KEY = 'theme';
-const CUSTOM_THEME_ID_PREFIX = 'custom:';
-const LEGACY_BUILTIN_THEME_ID_ALIASES = {
-    'strawberry-dragon': 'creamy-minimal',
-};
-const MAX_CUSTOM_THEMES = 24;
-const MAX_THEME_NAME_LENGTH = 40;
-const MAX_TOKEN_VALUE_LENGTH = 240;
-function isBuiltinThemeId(id) {
-    return typeof id === 'string' && ACU_V2_BUILTIN_THEMES.some(t => t.id === id);
-}
-function isCustomThemeId(id) {
-    return typeof id === 'string' && id.startsWith(CUSTOM_THEME_ID_PREFIX);
-}
-function isSafeCustomThemeId(id) {
-    return isCustomThemeId(id) && /^custom:[a-z0-9][a-z0-9_-]{2,48}$/i.test(id);
-}
-function themeExists(id, customThemes) {
-    return isBuiltinThemeId(id) || customThemes.some(t => t.id === id);
-}
-function normalizePersistedActiveThemeId(id, customThemes, builtinOverridesByCustomId = {}) {
-    if (themeExists(id, customThemes))
-        return id;
-    if (typeof id === 'string' && builtinOverridesByCustomId[id]) {
-        return builtinOverridesByCustomId[id];
-    }
-    if (typeof id === 'string' && LEGACY_BUILTIN_THEME_ID_ALIASES[id]) {
-        return LEGACY_BUILTIN_THEME_ID_ALIASES[id];
-    }
-    return ACU_V2_DEFAULT_THEME_ID;
-}
-function sanitizeThemeName(value) {
-    const name = String(value || '').trim().replace(/\s+/g, ' ').slice(0, MAX_THEME_NAME_LENGTH);
-    return name || '自定义主题';
-}
-function sanitizeSlug(value) {
-    const slug = value
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 36);
-    return slug || 'theme';
-}
-function isColorScheme(value) {
-    return value === 'light' || value === 'dark';
-}
-function isSafeTokenValue(value) {
-    if (typeof value !== 'string')
-        return false;
-    const trimmed = value.trim();
-    if (!trimmed || trimmed.length > MAX_TOKEN_VALUE_LENGTH)
-        return false;
-    if (/[;{}<>!]/.test(trimmed))
-        return false;
-    if (trimmed.includes('/*') || trimmed.includes('*/'))
-        return false;
-    // R10B-16：反斜杠转义可把 url 写成「\75 rl(」绕过字面匹配，token 里一律不收转义
-    if (trimmed.includes('\\'))
-        return false;
-    // 能让界面加载外部资源的函数（含带前缀的 image-set）一律拒绝
-    if (/(?:^|[^a-z-])(?:-[a-z]+-)?(?:url|image-set|image|src|cross-fade|element|paint)\s*\(/i.test(trimmed))
-        return false;
-    // 协议地址或协议相对地址（字体名等正常引号内容不会出现）
-    if (/[a-z][a-z0-9+.-]*:\/\/|["']\s*\/\//i.test(trimmed))
-        return false;
-    return true;
-}
-function sanitizeThemeTokens(value) {
-    if (!value || typeof value !== 'object')
-        return null;
-    const source = value;
-    const result = {};
-    const keys = Object.keys(TOKEN_VAR_MAP);
-    for (const key of keys) {
-        if (!isSafeTokenValue(source[key]))
-            return null;
-        result[key] = source[key].trim();
-    }
-    return result;
-}
-function makeUniqueCustomThemeId(name, customThemes) {
-    const base = `${CUSTOM_THEME_ID_PREFIX}${sanitizeSlug(name)}`;
-    let candidate = base;
-    let index = 2;
-    while (customThemes.some(t => t.id === candidate)) {
-        candidate = `${base}-${index}`;
-        index += 1;
-    }
-    return candidate;
-}
-function findBuiltinThemeByName(name) {
-    const normalizedName = sanitizeThemeName(name);
-    return ACU_V2_BUILTIN_THEMES.find(t => sanitizeThemeName(t.name) === normalizedName);
-}
-function normalizeThemeSource(source, customThemes) {
-    const isWrapped = source &&
-        typeof source === 'object' &&
-        source.kind === ACU_V2_CUSTOM_THEME_FILE_KIND;
-    if (isWrapped && source.version !== ACU_V2_CUSTOM_THEME_FILE_VERSION) {
-        throw new Error('主题文件版本不受支持。');
-    }
-    const wrapped = isWrapped
-        ? source.theme
-        : source;
-    if (!wrapped || typeof wrapped !== 'object') {
-        throw new Error('主题文件格式不正确。');
-    }
-    const theme = wrapped;
-    const name = sanitizeThemeName(theme.name);
-    const colorScheme = theme.colorScheme;
-    const tokens = sanitizeThemeTokens(theme.tokens);
-    if (!isColorScheme(colorScheme) || !tokens) {
-        throw new Error('主题文件缺少 v2 主题所需的颜色模式或 token。');
-    }
-    const id = isSafeCustomThemeId(theme.id)
-        ? theme.id
-        : makeUniqueCustomThemeId(name, customThemes);
-    return { id, name, colorScheme, tokens };
-}
-function sanitizePersistedCustomThemes(value) {
-    if (!Array.isArray(value))
-        return { customThemes: [], builtinOverridesByCustomId: {} };
-    const themes = [];
-    const builtinOverridesByCustomId = {};
-    for (const item of value) {
-        if (themes.length >= MAX_CUSTOM_THEMES)
-            break;
-        try {
-            const normalized = normalizeThemeSource(item, themes);
-            if (!isSafeCustomThemeId(item?.id))
-                continue;
-            const builtinOverride = findBuiltinThemeByName(normalized.name);
-            if (builtinOverride) {
-                builtinOverridesByCustomId[normalized.id] = builtinOverride.id;
-                continue;
-            }
-            const index = themes.findIndex(t => t.id === normalized.id);
-            if (index >= 0)
-                themes[index] = normalized;
-            else
-                themes.push(normalized);
-        }
-        catch {
-            /* 忽略损坏的持久化主题，保留其余可用项。 */
-        }
-    }
-    return { customThemes: themes, builtinOverridesByCustomId };
-}
-function readInitialThemeState() {
-    const persisted = readSection(SECTION_KEY);
-    const { customThemes, builtinOverridesByCustomId } = sanitizePersistedCustomThemes(persisted?.customThemes);
-    const activeId = normalizePersistedActiveThemeId(persisted?.activeId, customThemes, builtinOverridesByCustomId);
-    return { activeId, customThemes };
-}
-/** 不建 store 直接读出已保存的生效主题：启动时给面板外的宿主浮层上色用。 */
-function readPersistedActiveTheme_ACU() {
-    const { activeId, customThemes } = readInitialThemeState();
-    return findThemeById(activeId, customThemes) ?? ACU_V2_BUILTIN_THEMES[0];
-}
-function buildPersistedTheme(state) {
-    const payload = { activeId: state.activeId };
-    if (state.customThemes.length > 0) {
-        payload.customThemes = state.customThemes.map(t => ({
-            id: t.id,
-            name: t.name,
-            colorScheme: t.colorScheme,
-            tokens: { ...t.tokens },
-        }));
-    }
-    return payload;
-}
-function findThemeById(id, customThemes) {
-    return ACU_V2_BUILTIN_THEMES.find(t => t.id === id) ?? customThemes.find(t => t.id === id);
-}
-function parseThemeFileText(text) {
-    try {
-        return JSON.parse(text);
-    }
-    catch {
-        throw new Error('主题文件不是有效 JSON。');
-    }
-}
-const useThemeStore = defineStore('acu-v2-theme', {
-    state: () => readInitialThemeState(),
-    getters: {
-        themes: (state) => [
-            ...ACU_V2_BUILTIN_THEMES,
-            ...state.customThemes,
-        ],
-        activeTheme(state) {
-            const found = findThemeById(state.activeId, state.customThemes);
-            // 启动时从 localStorage 读到合法 id；不存在的 id 不会被 isValidId 放进 state，
-            // 所以这里走 fallback 仅是兜底（手动篡改 storage 之类）
-            return found ?? ACU_V2_BUILTIN_THEMES[0];
-        },
-    },
-    actions: {
-        setTheme(id) {
-            if (!themeExists(id, this.customThemes))
-                return;
-            if (this.activeId === id)
-                return;
-            this.activeId = id;
-            this.persist();
-        },
-        importCustomThemeFromJsonText(text) {
-            const source = parseThemeFileText(text);
-            const theme = normalizeThemeSource(source, this.customThemes);
-            const builtinOverride = findBuiltinThemeByName(theme.name);
-            if (builtinOverride) {
-                this.customThemes = this.customThemes.filter(t => sanitizeThemeName(t.name) !== sanitizeThemeName(theme.name));
-                this.activeId = builtinOverride.id;
-                this.persist();
-                return builtinOverride;
-            }
-            const index = this.customThemes.findIndex(t => t.id === theme.id);
-            if (index >= 0)
-                this.customThemes.splice(index, 1, theme);
-            else {
-                if (this.customThemes.length >= MAX_CUSTOM_THEMES) {
-                    throw new Error(`最多只能保存 ${MAX_CUSTOM_THEMES} 个自定义主题。`);
-                }
-                this.customThemes.push(theme);
-            }
-            this.activeId = theme.id;
-            this.persist();
-            return theme;
-        },
-        deleteCustomTheme(id) {
-            if (!isCustomThemeId(id))
-                return false;
-            const before = this.customThemes.length;
-            this.customThemes = this.customThemes.filter(t => t.id !== id);
-            if (this.customThemes.length === before)
-                return false;
-            if (this.activeId === id)
-                this.activeId = ACU_V2_DEFAULT_THEME_ID;
-            this.persist();
-            return true;
-        },
-        buildThemeFile(id) {
-            const theme = findThemeById(id, this.customThemes);
-            if (!theme)
-                throw new Error('主题不存在。');
-            const isCustom = isCustomThemeId(theme.id);
-            return {
-                kind: ACU_V2_CUSTOM_THEME_FILE_KIND,
-                version: ACU_V2_CUSTOM_THEME_FILE_VERSION,
-                theme: {
-                    ...(isCustom ? { id: theme.id } : {}),
-                    name: theme.name,
-                    colorScheme: theme.colorScheme,
-                    tokens: { ...theme.tokens },
-                },
-            };
-        },
-        persist() {
-            writeSection(SECTION_KEY, buildPersistedTheme(this.$state));
-        },
-    },
-});
 
 /**
  * 表级 API 预设覆盖按表名存储（settings_ACU.tableApiPresetOverridesByName）。
@@ -186715,9 +186874,9 @@ const _hoisted_21$3 = {
 };
 const _hoisted_22$3 = { class: "ub-at__log-meta" };
 const _hoisted_23$2 = { class: "ub-at__log-tag" };
-const _hoisted_24$1 = { class: "ub-at__log-msg" };
-const _hoisted_25$1 = ["data-hint-id"];
-const _hoisted_26$1 = { class: "ub-at__row" };
+const _hoisted_24$2 = { class: "ub-at__log-msg" };
+const _hoisted_25$2 = ["data-hint-id"];
+const _hoisted_26$2 = { class: "ub-at__row" };
 function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		sections: $setup.sections,
@@ -187095,7 +187254,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 										]),
 										createBaseVNode(
 											"code",
-											_hoisted_24$1,
+											_hoisted_24$2,
 											toDisplayString(entry.message),
 											1
 											/* TEXT */
@@ -187143,7 +187302,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 											}),
 											128
 											/* KEYED_FRAGMENT */
-										))])], 8, _hoisted_25$1)) : createCommentVNode("v-if", true)
+										))])], 8, _hoisted_25$2)) : createCommentVNode("v-if", true)
 									],
 									2
 									/* CLASS */
@@ -187194,7 +187353,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 					],
 					-1
 					/* CACHED */
-				)), createBaseVNode("div", _hoisted_26$1, [
+				)), createBaseVNode("div", _hoisted_26$2, [
 					createVNode($setup["UbButton"], {
 						variant: $setup.debugFlow.active.value ? "danger" : "primary",
 						icon: $setup.debugFlow.active.value ? "fa-solid fa-stop" : "fa-solid fa-bug",
@@ -199570,16 +199729,16 @@ const _hoisted_21$1 = {
 };
 const _hoisted_22$1 = { class: "ub-cm__node-head" };
 const _hoisted_23$1 = { class: "ub-cm__body" };
-const _hoisted_24 = { class: "ub-cm__list" };
-const _hoisted_25 = {
+const _hoisted_24$1 = { class: "ub-cm__list" };
+const _hoisted_25$1 = {
 	key: 1,
 	class: "ub-cm__empty"
 };
-const _hoisted_26 = {
+const _hoisted_26$1 = {
 	key: 0,
 	class: "ub-cm__history ub-cm__history--inner"
 };
-const _hoisted_27 = { class: "ub-cm__list" };
+const _hoisted_27$1 = { class: "ub-cm__list" };
 const _hoisted_28 = { class: "ub-cm__pane" };
 const _hoisted_29 = { class: "ub-cm__status-grid" };
 const _hoisted_30 = { class: "ub-cm__node-head" };
@@ -200175,7 +200334,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 											1
 											/* TEXT */
 										),
-										createBaseVNode("ol", _hoisted_24, [(openBlock(true), createElementBlock(
+										createBaseVNode("ol", _hoisted_24$1, [(openBlock(true), createElementBlock(
 											Fragment,
 											null,
 											renderList(revision.outline.nodes, (node) => {
@@ -200220,14 +200379,14 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 											128
 											/* KEYED_FRAGMENT */
 										))])
-									])) : (openBlock(), createElementBlock("p", _hoisted_25, "该阶段没有可展示的 revision。"))],
+									])) : (openBlock(), createElementBlock("p", _hoisted_25$1, "该阶段没有可展示的 revision。"))],
 									64
 									/* STABLE_FRAGMENT */
 								);
 							}),
 							128
 							/* KEYED_FRAGMENT */
-						)), $setup.olderRevisions(stage).length ? (openBlock(), createElementBlock("details", _hoisted_26, [createBaseVNode(
+						)), $setup.olderRevisions(stage).length ? (openBlock(), createElementBlock("details", _hoisted_26$1, [createBaseVNode(
 							"summary",
 							null,
 							"旧 revision（" + toDisplayString($setup.olderRevisions(stage).length) + "）",
@@ -200246,7 +200405,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 									"revision " + toDisplayString(revision.revision) + " · " + toDisplayString(revision.reason) + " · " + toDisplayString(revision.outline.title),
 									1
 									/* TEXT */
-								), createBaseVNode("ol", _hoisted_27, [(openBlock(true), createElementBlock(
+								), createBaseVNode("ol", _hoisted_27$1, [(openBlock(true), createElementBlock(
 									Fragment,
 									null,
 									renderList(revision.outline.nodes, (node) => {
@@ -211112,23 +211271,7 @@ var _sfc_main$5 = /*@__PURE__*/ defineComponent({
         const toastStore = useToastStore();
         const scaleOptions = ACU_UI_SCALE_OPTIONS.map(option => ({ value: option.value, label: option.label }));
         const styleOptions = ACU_UI_STYLE_OPTIONS.map(option => ({ value: option.value, label: option.label }));
-        const CLAUDE_THEME_IDS = ['claude', 'claude-night'];
-        /**
-         * 切到 Claude 风格时，若当前不是 Claude 配色，顺手换成同明暗的 Claude / Claude 夜，
-         * 并提示可以改回；切回默认风格不动主题。
-         */
-        function setStyle(value) {
-            if (value === appearanceStore.uiStyle)
-                return;
-            appearanceStore.setUiStyle(value);
-            if (value !== 'claude' || CLAUDE_THEME_IDS.includes(themeStore.activeId))
-                return;
-            const target = themeStore.activeTheme.colorScheme === 'dark' ? 'claude-night' : 'claude';
-            if (!themeStore.themes.some(t => t.id === target))
-                return;
-            themeStore.setTheme(target);
-            toastStore.info('已同时换成 Claude 配色，可在上方「主题」里改回。');
-        }
+        const colorModeOptions = ACU_CLAUDE_COLOR_MODE_OPTIONS.map(option => ({ value: option.value, label: option.label }));
         const modeOptions = [
             { value: 'basic', label: '基础' },
             { value: 'advanced', label: '高手' },
@@ -211168,14 +211311,14 @@ var _sfc_main$5 = /*@__PURE__*/ defineComponent({
             if (confirmed)
                 themeStore.deleteCustomTheme(id);
         }
-        const __returned__ = { emit, themeStore, appearanceStore, uiMode, router, dialogStore, toastStore, scaleOptions, styleOptions, CLAUDE_THEME_IDS, setStyle, modeOptions, setMode, importThemeFile, exportTheme, deleteTheme, get isCustomThemeId() { return isCustomThemeId; }, UbBadge, UbFileButton, UbIconButton, UbRow, UbSection, UbSegmented, UbSheet };
+        const __returned__ = { emit, themeStore, appearanceStore, uiMode, router, dialogStore, toastStore, scaleOptions, styleOptions, colorModeOptions, modeOptions, setMode, importThemeFile, exportTheme, deleteTheme, get isCustomThemeId() { return isCustomThemeId; }, UbBadge, UbFileButton, UbIconButton, UbRow, UbSection, UbSegmented, UbSheet };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-themes[data-v-602b259d] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-theme[data-v-602b259d] {\r\n  position: relative;\r\n  min-width: 0;\r\n  border: 1.5px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-bg);\r\n  overflow: hidden;\n}\n.ub-theme.is-active[data-v-602b259d] {\r\n  border-color: var(--ub-accent);\n}\n.ub-theme__pick[data-v-602b259d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  width: 100%;\r\n  padding: 0;\r\n  border: 0;\r\n  background: transparent;\r\n  color: inherit;\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-theme__swatch[data-v-602b259d] {\r\n  display: flex;\r\n  align-items: flex-end;\r\n  height: calc(var(--ub-u) * 64);\r\n  padding: 10px 10px 0;\n}\n.ub-theme__swatch-card[data-v-602b259d] {\r\n  position: relative;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 5px;\r\n  width: 100%;\r\n  height: 100%;\r\n  padding: 9px 10px;\r\n  border: 1px solid;\r\n  border-bottom: 0;\r\n  border-radius: 8px 8px 0 0;\n}\n.ub-theme__swatch-line[data-v-602b259d] {\r\n  width: 64%;\r\n  height: 5px;\r\n  border-radius: 3px;\n}\n.ub-theme__swatch-line.is-short[data-v-602b259d] {\r\n  width: 40%;\n}\n.ub-theme__swatch-dot[data-v-602b259d] {\r\n  position: absolute;\r\n  right: 10px;\r\n  top: 9px;\r\n  width: 14px;\r\n  height: 14px;\r\n  border-radius: 50%;\n}\n.ub-theme__name[data-v-602b259d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  min-width: 0;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s3);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-panel);\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\n}\n.ub-theme__name .fa-check[data-v-602b259d] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-theme__tools[data-v-602b259d] {\r\n  position: absolute;\r\n  top: 4px;\r\n  right: 4px;\r\n  display: flex;\r\n  gap: 2px;\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-toast-bg);\r\n  opacity: 0;\r\n  transition: opacity 0.14s ease;\n}\n.ub-theme:hover .ub-theme__tools[data-v-602b259d],\r\n.ub-theme:focus-within .ub-theme__tools[data-v-602b259d],\r\n.ub-theme.is-active .ub-theme__tools[data-v-602b259d] {\r\n  opacity: 1;\n}\n@media (hover: none) {\n.ub-theme__tools[data-v-602b259d] {\r\n    opacity: 1;\n}\n}\r\n", "src/presentation-v3/shell/AppearanceSheet.vue#style-0-602b259d");
-var AppearanceSheet_vue_vue_type_style_index_0_scoped_602b259d_lang = null;
+injectSfcStyle("\n.ub-themes[data-v-e3771ac4] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: var(--ub-s2);\n}\n.ub-theme[data-v-e3771ac4] {\n  position: relative;\n  min-width: 0;\n  border: 1.5px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-bg);\n  overflow: hidden;\n}\n.ub-theme.is-active[data-v-e3771ac4] {\n  border-color: var(--ub-accent);\n}\n.ub-theme__pick[data-v-e3771ac4] {\n  display: flex;\n  flex-direction: column;\n  width: 100%;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  color: inherit;\n  font: inherit;\n  text-align: left;\n  cursor: pointer;\n}\n.ub-theme__swatch[data-v-e3771ac4] {\n  display: flex;\n  align-items: flex-end;\n  height: calc(var(--ub-u) * 64);\n  padding: 10px 10px 0;\n}\n.ub-theme__swatch-card[data-v-e3771ac4] {\n  position: relative;\n  display: flex;\n  flex-direction: column;\n  gap: 5px;\n  width: 100%;\n  height: 100%;\n  padding: 9px 10px;\n  border: 1px solid;\n  border-bottom: 0;\n  border-radius: 8px 8px 0 0;\n}\n.ub-theme__swatch-line[data-v-e3771ac4] {\n  width: 64%;\n  height: 5px;\n  border-radius: 3px;\n}\n.ub-theme__swatch-line.is-short[data-v-e3771ac4] {\n  width: 40%;\n}\n.ub-theme__swatch-dot[data-v-e3771ac4] {\n  position: absolute;\n  right: 10px;\n  top: 9px;\n  width: 14px;\n  height: 14px;\n  border-radius: 50%;\n}\n.ub-theme__name[data-v-e3771ac4] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s1);\n  min-width: 0;\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s3);\n  border-top: 1px solid var(--ub-line-soft);\n  background: var(--ub-panel);\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  font-weight: 600;\n}\n.ub-theme__name .fa-check[data-v-e3771ac4] {\n  color: var(--ub-accent-ink);\n}\n.ub-theme__tools[data-v-e3771ac4] {\n  position: absolute;\n  top: 4px;\n  right: 4px;\n  display: flex;\n  gap: 2px;\n  border-radius: var(--ub-r-control);\n  background: var(--ub-toast-bg);\n  opacity: 0;\n  transition: opacity 0.14s ease;\n}\n.ub-theme:hover .ub-theme__tools[data-v-e3771ac4],\n.ub-theme:focus-within .ub-theme__tools[data-v-e3771ac4],\n.ub-theme.is-active .ub-theme__tools[data-v-e3771ac4] {\n  opacity: 1;\n}\n@media (hover: none) {\n.ub-theme__tools[data-v-e3771ac4] {\n    opacity: 1;\n}\n}\n", "src/presentation-v3/shell/AppearanceSheet.vue#style-0-e3771ac4");
+var AppearanceSheet_vue_vue_type_style_index_0_scoped_e3771ac4_lang = null;
 
 const _hoisted_1$4 = { class: "ub-themes" };
 const _hoisted_2$4 = ["aria-pressed", "onClick"];
@@ -211192,9 +211335,29 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 		title: "外观与界面",
 		subtitle: "只影响本机显示，不改动任何数据",
 		width: "460px",
-		onClose: _cache[2] || (_cache[2] = ($event) => $setup.emit("close"))
+		onClose: _cache[3] || (_cache[3] = ($event) => $setup.emit("close"))
 	}, {
-		default: withCtx(() => [createVNode($setup["UbSection"], {
+		default: withCtx(() => [$setup.appearanceStore.isClaudeStyle ? (openBlock(), createBlock($setup["UbSection"], {
+			key: 0,
+			title: "颜色",
+			description: "Claude 风格使用自带的 Claude 配色；外观主题在切回默认风格后才生效。"
+		}, {
+			default: withCtx(() => [createVNode($setup["UbRow"], {
+				label: "颜色模式",
+				hint: "跟随系统时随设备的浅色 / 深色设置自动切换。"
+			}, {
+				default: withCtx(() => [createVNode($setup["UbSegmented"], {
+					options: $setup.colorModeOptions,
+					"model-value": $setup.appearanceStore.claudeColorMode,
+					"aria-label": "颜色模式",
+					size: "sm",
+					"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.appearanceStore.setClaudeColorMode($event))
+				}, null, 8, ["options", "model-value"])]),
+				_: 1
+			})]),
+			_: 1
+		})) : (openBlock(), createBlock($setup["UbSection"], {
+			key: 1,
 			title: "主题",
 			description: "点选即切换。主题文件可导入导出。",
 			padded: ""
@@ -211278,7 +211441,7 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 								key: 1,
 								variant: "accent"
 							}, {
-								default: withCtx(() => [..._cache[3] || (_cache[3] = [createTextVNode(
+								default: withCtx(() => [..._cache[4] || (_cache[4] = [createTextVNode(
 									"自定义",
 									-1
 									/* CACHED */
@@ -211311,7 +211474,7 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 				block: "",
 				onFile: $setup.importThemeFile
 			}, {
-				default: withCtx(() => [..._cache[4] || (_cache[4] = [createTextVNode(
+				default: withCtx(() => [..._cache[5] || (_cache[5] = [createTextVNode(
 					"导入主题",
 					-1
 					/* CACHED */
@@ -211319,18 +211482,18 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 				_: 1
 			})]),
 			_: 1
-		}), createVNode($setup["UbSection"], { title: "显示" }, {
+		})), createVNode($setup["UbSection"], { title: "显示" }, {
 			default: withCtx(() => [
 				createVNode($setup["UbRow"], {
 					label: "界面风格",
-					hint: "Claude 风格换成更柔和的层次、圆角和衬线标题，侧栏可收起；颜色仍跟随上面的主题。"
+					hint: "Claude 风格按 Claude 的界面规范重排层次、字号、控件与配色，侧栏可收起；随时可切回。"
 				}, {
 					default: withCtx(() => [createVNode($setup["UbSegmented"], {
 						options: $setup.styleOptions,
 						"model-value": $setup.appearanceStore.uiStyle,
 						"aria-label": "界面风格",
 						size: "sm",
-						"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.setStyle($event))
+						"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.appearanceStore.setUiStyle($event))
 					}, null, 8, ["options", "model-value"])]),
 					_: 1
 				}),
@@ -211343,7 +211506,7 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 						"model-value": $setup.appearanceStore.uiScale,
 						"aria-label": "界面缩放",
 						size: "sm",
-						"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.appearanceStore.setUiScale($event))
+						"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.appearanceStore.setUiScale($event))
 					}, null, 8, ["options", "model-value"])]),
 					_: 1
 				}, 8, ["hint"]),
@@ -211366,7 +211529,25 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["is-open"]);
 }
-var AppearanceSheet = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$4], ["__scopeId", "data-v-602b259d"]]);
+var AppearanceSheet = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$4], ["__scopeId", "data-v-e3771ac4"]]);
+
+/**
+ * Claude 风格仪表盘顶部的衬线问候语，按本地时段取词。
+ */
+function claudeGreeting(hour) {
+    if (!Number.isFinite(hour))
+        return '你好';
+    const h = ((Math.floor(hour) % 24) + 24) % 24;
+    if (h >= 5 && h < 11)
+        return '早上好';
+    if (h >= 11 && h < 13)
+        return '中午好';
+    if (h >= 13 && h < 18)
+        return '下午好';
+    if (h >= 18 && h < 23)
+        return '晚上好';
+    return '夜深了';
+}
 
 /** iconOnly：侧栏收起时只显示图标，标题改放悬停提示。 */
 var _sfc_main$4 = /*@__PURE__*/ defineComponent({
@@ -211906,13 +212087,15 @@ var _sfc_main$1 = /*@__PURE__*/ defineComponent({
         /**
          * Claude 风格（外观 → 界面风格 → Claude）。
          *
-         * 只是一份全局样式，全部限定在 .ub-app[data-ub-style="claude"] 之下，不改任何组件结构与行为。
-         * 颜色仍取当前主题（--acu-*），这里只换表面层次、形状、排版与动效：
-         * - 表面：画布 / 侧栏 / 卡片三层微对比，边线用低透明度墨色，深色下改内侧高光；
-         * - 形状：控件 8px、卡片 12px、弹窗 16px，页内跳转胶囊全圆角；
-         * - 排版：页面标题与弹窗标题用衬线，正文 500 字重为主，导航选中用中性底色而非强调色；
-         * - 主按钮用墨色实底，次级按钮去强调色，聚焦用强调色三层光环。
-         * 参考的是公开的界面设计规范，不含任何品牌字体、图标或标识。
+         * 一份全局样式，全部限定在 .ub-app[data-ub-style="claude"] 之下，不改组件行为。
+         * 按公开的 Claude 界面设计规范对齐（品牌标识除外：不含品牌字体、图标、标志）：
+         * - 配色：自带浅 / 深两套色板（见 theme/effective-theme.ts），四层表面阶梯，陶土强调色，低透明度墨色边线；
+         * - 尺寸：控件 32 / 28px，按钮 8px、卡片 16px、子面板 10–12px、弹窗 16px、输入框 20px 圆角；
+         *   侧栏 288px，45px 标题栏，正文版心 768px；
+         * - 字阶：说明 11 / 12、正文 13 / 14、小标题 15、页面标题 20、问候语 38（衬线）；
+         * - 边界：单闭合边框原则——卡片用 1px 外环投影代替描边，卡片内的次级按钮不再描边；
+         * - 动效：60 / 120 / 200 / 300ms 时序，ease-out 与回弹曲线，聚焦用陶土三层光环；
+         * - 对话：续写页按会话流排版——用户气泡、无底色回复、圆角输入框。
          */
         const __returned__ = {};
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
@@ -211920,7 +212103,7 @@ var _sfc_main$1 = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n/* ═══ 令牌 ═══ */\n.ub-app[data-ub-style=\"claude\"] {\n  --ub-r-card: 12px;\n  --ub-r-control: 8px;\n  --ub-r-overlay: 16px;\n  --ub-control-h: calc(var(--ub-u) * 34);\n  --ub-control-h-sm: calc(var(--ub-u) * 28);\n  --ub-rail-w: calc(var(--ub-u) * 256);\n  --ub-rail-w-collapsed: calc(var(--ub-u) * 60);\n  --ub-page-max: calc(var(--ub-u) * 768);\n\n  --ub-serif: ui-serif, Georgia, Cambria, \"Times New Roman\", \"Songti SC\", \"STSong\", \"Noto Serif CJK SC\", \"Source Han Serif SC\", serif;\n  --ub-ease: cubic-bezier(0.16, 1, 0.3, 1);\n\n  --ub-ink: var(--acu-text-1);\n  --ub-hover: color-mix(in srgb, var(--acu-text-1) 5%, transparent);\n  --ub-selected: color-mix(in srgb, var(--acu-text-1) 8%, transparent);\n  --ub-sunken: color-mix(in srgb, var(--acu-text-1) 5%, transparent);\n  --ub-line: color-mix(in srgb, var(--acu-text-1) 14%, transparent);\n  --ub-line-soft: color-mix(in srgb, var(--acu-text-1) 9%, transparent);\n  --ub-line-strong: color-mix(in srgb, var(--acu-text-1) 24%, transparent);\n  --ub-accent-soft: color-mix(in srgb, var(--acu-accent) 12%, transparent);\n  --ub-accent-soft-2: color-mix(in srgb, var(--acu-accent) 20%, transparent);\n  --ub-focus-ring: 0 0 0 1px var(--ub-bg), 0 0 0 2.5px var(--ub-accent), 0 0 6px 2px color-mix(in srgb, var(--acu-accent) 25%, transparent);\n\n  letter-spacing: -0.003em;\n}\n.ub-app[data-ub-style=\"claude\"][data-ub-color-scheme=\"light\"] {\n  --ub-bg: var(--acu-bg-1);\n  --ub-nav-bg: color-mix(in srgb, var(--acu-sidebar-bg) 45%, var(--acu-bg-1));\n  --ub-panel: color-mix(in srgb, var(--acu-bg-1) 30%, #fff);\n  --ub-input-bg: color-mix(in srgb, var(--acu-bg-1) 30%, #fff);\n  --ub-hover-strong: color-mix(in srgb, var(--acu-text-1) 6%, var(--ub-panel));\n  --ub-seg-thumb: color-mix(in srgb, var(--acu-bg-1) 20%, #fff);\n  --ub-on-ink: var(--acu-bg-1);\n  --ub-scrim: rgba(20, 20, 19, 0.3);\n  --ub-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 2px 8px rgba(0, 0, 0, 0.025);\n  --ub-overlay-shadow: 0 0 0 1px var(--ub-line-soft), 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);\n  --ub-toast-bg: color-mix(in srgb, var(--ub-panel) 96%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"][data-ub-color-scheme=\"dark\"] {\n  --ub-bg: color-mix(in srgb, var(--acu-bg-0) 55%, var(--acu-bg-1));\n  --ub-nav-bg: color-mix(in srgb, var(--acu-sidebar-bg) 70%, var(--acu-bg-0));\n  --ub-panel: color-mix(in srgb, var(--acu-bg-1) 70%, var(--acu-bg-2));\n  --ub-input-bg: color-mix(in srgb, var(--acu-bg-0) 35%, var(--acu-bg-1));\n  --ub-hover-strong: color-mix(in srgb, var(--acu-text-1) 8%, var(--ub-panel));\n  --ub-seg-thumb: color-mix(in srgb, var(--acu-text-1) 10%, var(--ub-panel));\n  --ub-on-ink: var(--acu-bg-0);\n  --ub-scrim: rgba(0, 0, 0, 0.55);\n  --ub-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 2px rgba(0, 0, 0, 0.3);\n  --ub-overlay-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 8px 28px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);\n  --ub-toast-bg: color-mix(in srgb, var(--ub-panel) 96%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] ::selection {\n  background: color-mix(in srgb, var(--acu-accent) 28%, transparent);\n}\n\n/* ═══ 外壳 ═══ */\n.ub-app[data-ub-style=\"claude\"] .ub-rail {\n  padding: var(--ub-s3) var(--ub-s2) var(--ub-s2);\n  border-right-color: var(--ub-line-soft);\n  transition: flex-basis 0.22s var(--ub-ease), width 0.22s var(--ub-ease);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__head {\n  min-height: calc(var(--ub-u) * 40);\n  padding: 0 var(--ub-s1) 0 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__collapse {\n  color: var(--ub-text-3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__nav {\n  margin-top: var(--ub-s4);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand {\n  gap: var(--ub-s2);\n  padding: 0 var(--ub-s2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand__mark {\n  width: calc(var(--ub-u) * 28);\n  height: calc(var(--ub-u) * 28);\n  border-radius: 8px;\n  background: var(--ub-accent);\n  font-size: var(--ub-fs-2xs);\n  letter-spacing: 0.02em;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand__name {\n  font-family: var(--ub-serif);\n  font-size: calc(var(--ub-u) * 17);\n  font-weight: 600;\n  letter-spacing: -0.015em;\n  line-height: 1.15;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand__tag {\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot {\n  border-top: 0;\n  padding-top: var(--ub-s2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot-btn {\n  min-height: calc(var(--ub-u) * 32);\n  border-radius: var(--ub-r-control);\n  color: var(--ub-text-2);\n  font-weight: 500;\n  transition: background 0.15s var(--ub-ease), color 0.15s ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot-btn:hover {\n  background: var(--ub-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot-btn:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n\n/* 侧栏收起：只留图标，文字改悬停提示 */\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-rail {\n  flex-basis: var(--ub-rail-w-collapsed);\n  width: var(--ub-rail-w-collapsed);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-rail__head {\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-brand {\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed :is(.ub-brand__text, .ub-rail__foot-label) {\n  display: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-rail__foot-btn {\n  justify-content: center;\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--icon-only .ub-nav__item {\n  justify-content: center;\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--icon-only .ub-nav__text {\n  display: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top {\n  min-height: calc(var(--ub-u) * 60);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__title {\n  font-family: var(--ub-serif);\n  font-size: calc(var(--ub-u) * 24);\n  font-weight: 500;\n  letter-spacing: -0.012em;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__icon {\n  display: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-scroll {\n  scrollbar-width: thin;\n  scrollbar-color: var(--ub-line) transparent;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-launcher__panel {\n  background: var(--ub-bg);\n}\n@media (max-width: 760px) {\n.ub-app[data-ub-style=\"claude\"] .ub-top {\n    min-height: calc(var(--ub-u) * 52);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__title {\n    font-size: calc(var(--ub-u) * 20);\n}\n}\n\n/* ═══ 导航 ═══ */\n.ub-app[data-ub-style=\"claude\"] .ub-nav {\n  gap: var(--ub-s4);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__group-title {\n  margin: 0 var(--ub-s3) var(--ub-s1);\n  font-size: var(--ub-fs-xs);\n  font-weight: 500;\n  letter-spacing: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item {\n  min-height: calc(var(--ub-u) * 34);\n  border-radius: var(--ub-r-control);\n  color: var(--ub-text-2);\n  font-weight: 500;\n  transition: background 0.15s var(--ub-ease), color 0.15s ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item:hover:not(.is-active) {\n  background: var(--ub-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item:active {\n  transform: scale(0.99);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item.is-active {\n  background: var(--ub-selected);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__icon {\n  color: var(--ub-text-3);\n  opacity: 1;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__item.is-active .ub-nav__icon {\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__item {\n  border-color: var(--ub-line-soft);\n  border-radius: var(--ub-r-card);\n  background: var(--ub-panel);\n  box-shadow: var(--ub-card-shadow);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__item.is-active {\n  border-color: var(--ub-line-strong);\n  background: var(--ub-panel);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__icon {\n  border-radius: var(--ub-r-control);\n  background: var(--ub-sunken);\n  color: var(--ub-text-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__item.is-active .ub-nav__icon {\n  background: var(--ub-accent-soft);\n  color: var(--ub-accent-ink);\n}\n\n/* ═══ 页面骨架 ═══ */\n.ub-app[data-ub-style=\"claude\"] .ub-page__body {\n  gap: calc(var(--ub-u) * 32);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__lead {\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-md);\n  line-height: 1.7;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__chip {\n  border-color: var(--ub-line-soft);\n  background: transparent;\n  color: var(--ub-text-2);\n  font-weight: 500;\n  transition: background 0.15s var(--ub-ease), color 0.15s ease, border-color 0.15s ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__chip:hover {\n  border-color: var(--ub-line);\n  background: var(--ub-hover);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__head {\n  margin-bottom: var(--ub-s3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__title {\n  font-size: calc(var(--ub-u) * 15);\n  font-weight: 600;\n  letter-spacing: -0.008em;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__icon {\n  color: var(--ub-text-3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__card {\n  border-color: var(--ub-line-soft);\n  border-radius: var(--ub-r-card);\n  background: var(--ub-panel);\n  box-shadow: var(--ub-card-shadow);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__card.is-padded {\n  padding: calc(var(--ub-u) * 18);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__card.is-bare {\n  border: 0;\n  background: transparent;\n  box-shadow: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-row {\n  padding: calc(var(--ub-u) * 14) calc(var(--ub-u) * 18);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-row + .ub-row {\n  border-top-color: var(--ub-line-soft);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-row__label {\n  font-size: var(--ub-fs-sm);\n  font-weight: 500;\n}\n\n/* ═══ 按钮 ═══ */\n.ub-app[data-ub-style=\"claude\"] :is(.ub-btn, .ub-icon-btn) {\n  transition: background 0.15s var(--ub-ease), border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn {\n  border-color: var(--ub-line);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-panel);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn:hover:not(:disabled) {\n  border-color: var(--ub-line-strong);\n  background: var(--ub-hover-strong);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-btn, .ub-icon-btn):focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--primary {\n  border-color: transparent;\n  background: var(--ub-ink);\n  color: var(--ub-on-ink);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--primary:hover:not(:disabled) {\n  border-color: transparent;\n  background: color-mix(in srgb, var(--ub-ink) 84%, var(--ub-bg));\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--soft {\n  border-color: transparent;\n  background: var(--ub-sunken);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--soft:hover:not(:disabled) {\n  border-color: transparent;\n  background: color-mix(in srgb, var(--acu-text-1) 10%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--ghost {\n  border-color: transparent;\n  background: transparent;\n  color: var(--ub-text-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--ghost:hover:not(:disabled) {\n  border-color: transparent;\n  background: var(--ub-hover);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--danger {\n  border-color: transparent;\n  background: var(--ub-danger-soft);\n  color: var(--ub-danger);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--danger:hover:not(:disabled) {\n  border-color: transparent;\n  background: var(--ub-danger);\n  color: #fff;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn {\n  border-radius: var(--ub-r-control);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn:hover:not(:disabled) {\n  background: var(--ub-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn--danger:hover:not(:disabled) {\n  background: var(--ub-danger-soft);\n  color: var(--ub-danger);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn--solid {\n  border-color: var(--ub-line);\n  background: var(--ub-panel);\n}\n\n/* ═══ 输入类控件 ═══ */\n.ub-app[data-ub-style=\"claude\"] :is(.ub-field__input, .ub-select__native, .ub-textarea__input, .ub-dialog__input, .ub-picker__trigger) {\n  border-color: var(--ub-line);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-input-bg);\n  transition: border-color 0.15s ease, box-shadow 0.2s var(--ub-ease);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-textarea__input {\n  border-radius: 10px;\n  line-height: 1.65;\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-field__input, .ub-select__native, .ub-textarea__input, .ub-dialog__input, .ub-picker__trigger):hover:not(:disabled):not(:focus) {\n  border-color: var(--ub-line-strong);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-field__input:focus, .ub-textarea__input:focus, .ub-dialog__input:focus, .ub-select__native:focus-visible) {\n  border-color: color-mix(in srgb, var(--acu-text-1) 32%, transparent);\n  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acu-text-1) 6%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker__trigger {\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker__trigger:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n\n/* 分段：中性轨道＋浮起滑块 */\n.ub-app[data-ub-style=\"claude\"] .ub-seg {\n  border-radius: calc(var(--ub-r-control) + 3px);\n  background: var(--ub-sunken);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-seg__item {\n  border-radius: var(--ub-r-control);\n  font-weight: 500;\n  transition: background 0.18s var(--ub-ease), color 0.15s ease, box-shadow 0.18s var(--ub-ease);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-seg__item.is-active {\n  background: var(--ub-seg-thumb);\n  color: var(--ub-text);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 0.5px var(--ub-line);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-seg__item:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n\n/* 开关：更小巧，滑块阻尼回弹 */\n.ub-app[data-ub-style=\"claude\"] .ub-switch {\n  width: calc(var(--ub-u) * 38);\n  height: calc(var(--ub-u) * 22);\n  background: var(--ub-line-strong);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch.is-on {\n  background: var(--ub-accent);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch__thumb {\n  top: calc(var(--ub-u) * 2);\n  left: calc(var(--ub-u) * 2);\n  width: calc(var(--ub-u) * 18);\n  height: calc(var(--ub-u) * 18);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 0 0 0.5px rgba(0, 0, 0, 0.04);\n  transition: transform 0.24s cubic-bezier(0.34, 1.36, 0.64, 1);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch.is-on .ub-switch__thumb {\n  transform: translateX(calc(var(--ub-u) * 16));\n}\n.ub-app[data-ub-style=\"claude\"] .ub-check__box {\n  border-width: 1.5px;\n  border-color: var(--ub-line-strong);\n  border-radius: calc(var(--ub-u) * 4);\n  background: var(--ub-input-bg);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-check.is-on .ub-check__box {\n  border-color: var(--ub-accent);\n  background: var(--ub-accent);\n}\n\n/* ═══ 提示与标签 ═══ */\n.ub-app[data-ub-style=\"claude\"] .ub-callout {\n  border-radius: 10px;\n  line-height: 1.6;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-badge {\n  border-radius: 6px;\n  font-weight: 600;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc {\n  border-color: var(--ub-line-soft);\n  border-radius: 10px;\n  background: var(--ub-panel);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc--flat {\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc__head {\n  font-weight: 500;\n}\n\n/* ═══ 浮层：抽屉 / 对话框 / 选择面板 / 提示条 ═══ */\n.ub-app[data-ub-style=\"claude\"] .ub-sheet {\n  background: var(--ub-bg);\n}\n@media (min-width: 761px) {\n.ub-app[data-ub-style=\"claude\"] .ub-sheet-layer {\n    padding: calc(var(--ub-safe-top) + 8px) calc(var(--ub-safe-right) + 8px) calc(var(--ub-safe-bottom) + 8px) var(--ub-safe-left);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet {\n    border-radius: var(--ub-r-overlay);\n    overflow: hidden;\n}\n}\n@media (max-width: 760px) {\n.ub-app[data-ub-style=\"claude\"] .ub-sheet {\n    border-radius: var(--ub-r-overlay) var(--ub-r-overlay) 0 0;\n    overflow: hidden;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet-layer {\n    padding-top: calc(var(--ub-safe-top) + 12px);\n}\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet__head {\n  border-bottom-color: var(--ub-line-soft);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-sheet__title, .ub-dialog__title, .ub-picker-panel__title) {\n  font-family: var(--ub-serif);\n  font-weight: 500;\n  letter-spacing: -0.01em;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet__title {\n  font-size: calc(var(--ub-u) * 19);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet__foot {\n  border-top-color: var(--ub-line-soft);\n  background: var(--ub-bg);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog {\n  padding: calc(var(--ub-u) * 22);\n  border: 0;\n  border-radius: var(--ub-r-overlay);\n  background: var(--ub-panel);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__title {\n  font-size: calc(var(--ub-u) * 19);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__glyph {\n  background: var(--ub-sunken);\n  color: var(--ub-text-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__glyph.is-danger {\n  background: var(--ub-danger-soft);\n  color: var(--ub-danger);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__danger {\n  border-radius: 10px;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker-panel {\n  border: 0;\n  border-radius: var(--ub-r-overlay);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker-panel__item {\n  border-radius: var(--ub-r-control);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-toast {\n  border: 0;\n  border-radius: 12px;\n}\n@media (prefers-reduced-motion: reduce) {\n.ub-app[data-ub-style=\"claude\"] *,\n  .ub-app[data-ub-style=\"claude\"] *::before,\n  .ub-app[data-ub-style=\"claude\"] *::after {\n    transition-duration: 0.01ms !important;\n}\n}\n", "src/presentation-v3/shell/ClaudeStyle.vue#style-0");
+injectSfcStyle("\n/* ═══════════════ 色板（规范令牌） ═══════════════ */\n.ub-app[data-ub-style=\"claude\"][data-ub-color-scheme=\"light\"] {\n  --cds-surface-0: #f5f5f3;\n  --cds-surface-1: #fcfcfb;\n  --cds-surface-2: #ffffff;\n  --cds-surface-3: #ffffff;\n  --cds-surface-popover: #ffffff;\n  --cds-clay: #d97757;\n  --cds-clay-hover: #cc5a36;\n  --cds-clay-ink: #c4532f;\n  --cds-clay-light: #fbf3ef;\n  --cds-alpha-1: hsla(0, 0%, 8%, 0.05);\n  --cds-alpha-2: hsla(0, 0%, 8%, 0.10);\n  --cds-alpha-3: hsla(0, 0%, 8%, 0.20);\n  --cds-alpha-4: hsla(0, 0%, 8%, 0.35);\n  --cds-fill-secondary: rgba(0, 0, 0, 0.06);\n  --cds-fill-secondary-hover: rgba(0, 0, 0, 0.10);\n  --cds-text-primary: #151515;\n  --cds-text-secondary: #525252;\n  --cds-text-muted: #767676;\n  --cds-bg-tint-blue: #f0f4f8;\n  --cds-segmented-track: rgba(0, 0, 0, 0.06);\n  --cds-segmented-thumb: #ffffff;\n  --cds-success: #2f8a57;\n  --cds-warning: #b26b12;\n  --cds-danger: #dc2626;\n  --cds-danger-fill: #dc2626;\n  --cds-danger-fill-hover: #b91c1c;\n  --cds-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05), 0 2px 8px 0 rgba(0, 0, 0, 0.06);\n  --cds-shadow-md: 0 2px 4px 0 rgba(0, 0, 0, 0.05), 0 6px 16px 0 rgba(0, 0, 0, 0.08);\n  --cds-shadow-lg: 0 4px 8px 0 rgba(0, 0, 0, 0.06), 0 12px 28px -2px rgba(0, 0, 0, 0.08);\n  --cds-shadow-popover: 0 0 0 1px var(--cds-alpha-2), 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);\n  --cds-panel-shadow: 0 0 0 1px var(--cds-alpha-2), 0 1px 2px rgba(0, 0, 0, 0.04);\n  --cds-panel-shadow-hover: 0 0 0 1px var(--cds-alpha-3), 0 4px 16px -2px rgba(0, 0, 0, 0.09);\n  --cds-shadow-composer: 0 4px 20px rgba(0, 0, 0, 0.035), inset 0 0 0 1px var(--cds-alpha-2);\n  --cds-shadow-composer-hover: 0 4px 24px rgba(0, 0, 0, 0.06), inset 0 0 0 1px var(--cds-alpha-3);\n  --cds-shadow-composer-focus: 0 4px 24px rgba(0, 0, 0, 0.08), inset 0 0 0 1px var(--cds-alpha-3), 0 0 0 1px var(--cds-alpha-3);\n  --cds-focus-shadow: inset 0 0 0 1px var(--cds-surface-1), 0 0 0 1.5px var(--cds-clay), 0 0 6px 1px rgba(217, 119, 87, 0.25);\n  --cds-scrim: rgba(0, 0, 0, 0.30);\n}\n.ub-app[data-ub-style=\"claude\"][data-ub-color-scheme=\"dark\"] {\n  --cds-surface-0: #0b0b0a;\n  --cds-surface-1: #151515;\n  --cds-surface-2: #1a1a19;\n  --cds-surface-3: #20201e;\n  --cds-surface-popover: #222220;\n  --cds-clay: #d97757;\n  --cds-clay-hover: #e08264;\n  --cds-clay-ink: #e08264;\n  --cds-clay-light: rgba(217, 119, 87, 0.15);\n  --cds-alpha-1: hsla(0, 0%, 100%, 0.05);\n  --cds-alpha-2: hsla(0, 0%, 100%, 0.09);\n  --cds-alpha-3: hsla(0, 0%, 100%, 0.18);\n  --cds-alpha-4: hsla(0, 0%, 100%, 0.30);\n  --cds-fill-secondary: rgba(255, 255, 255, 0.10);\n  --cds-fill-secondary-hover: rgba(255, 255, 255, 0.15);\n  --cds-text-primary: #f5f5f5;\n  --cds-text-secondary: #a3a3a3;\n  --cds-text-muted: #8a8a87;\n  --cds-bg-tint-blue: rgba(255, 255, 255, 0.06);\n  --cds-segmented-track: rgba(255, 255, 255, 0.08);\n  --cds-segmented-thumb: #2c2c2a;\n  --cds-success: #5fb37f;\n  --cds-warning: #e0a54b;\n  --cds-danger: #f87171;\n  --cds-danger-fill: #dc2626;\n  --cds-danger-fill-hover: #ef4444;\n  --cds-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4), 0 2px 8px 0 rgba(0, 0, 0, 0.4);\n  --cds-shadow-md: 0 2px 4px 0 rgba(0, 0, 0, 0.4), 0 6px 16px 0 rgba(0, 0, 0, 0.4);\n  --cds-shadow-lg: 0 4px 8px 0 rgba(0, 0, 0, 0.5), 0 16px 36px -2px rgba(0, 0, 0, 0.4);\n  --cds-shadow-popover: inset 0 0 0 1px rgba(255, 255, 255, 0.10), 0 8px 28px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.45);\n  --cds-panel-shadow: inset 0 0 0 1px var(--cds-alpha-2), 0 1px 2px rgba(0, 0, 0, 0.4);\n  --cds-panel-shadow-hover: inset 0 0 0 1px var(--cds-alpha-3), 0 6px 20px rgba(0, 0, 0, 0.6);\n  --cds-shadow-composer: 0 4px 20px rgba(0, 0, 0, 0.4), inset 0 0 0 1px var(--cds-alpha-2);\n  --cds-shadow-composer-hover: 0 4px 24px rgba(0, 0, 0, 0.55), inset 0 0 0 1px var(--cds-alpha-3);\n  --cds-shadow-composer-focus: 0 4px 24px rgba(0, 0, 0, 0.65), inset 0 0 0 1px rgba(255, 255, 255, 0.22), 0 0 0 1px rgba(255, 255, 255, 0.22);\n  --cds-focus-shadow: inset 0 0 0 1px var(--cds-surface-1), 0 0 0 1.5px var(--cds-clay), 0 0 8px 2px rgba(217, 119, 87, 0.35);\n  --cds-scrim: rgba(0, 0, 0, 0.55);\n}\n\n/* ═══════════════ 令牌映射：外壳与组件只认 --ub-* ═══════════════ */\n.ub-app[data-ub-style=\"claude\"] {\n  --cds-dur-fast: 60ms;\n  --cds-dur-snap: 120ms;\n  --cds-dur-base: 200ms;\n  --cds-dur-sheet: 300ms;\n  --cds-ease-out: cubic-bezier(0.165, 0.84, 0.44, 1);\n  --cds-ease-snap: cubic-bezier(0.32, 0.72, 0, 1);\n  --cds-ease-overshoot: cubic-bezier(0.34, 1.3, 0.64, 1);\n  --cds-ease-hover: cubic-bezier(0.16, 1, 0.3, 1);\n  --cds-font-serif: ui-serif, Georgia, Cambria, \"Times New Roman\", \"Songti SC\", \"STSong\", \"Noto Serif CJK SC\", \"Source Han Serif SC\", serif;\n\n  /* 字阶：说明 11 / 12，正文 13 / 14，小标题 15，标题 20 */\n  --ub-fs-2xs: calc(var(--ub-u) * 11);\n  --ub-fs-xs: calc(var(--ub-u) * 12);\n  --ub-fs-sm: calc(var(--ub-u) * 13);\n  --ub-fs-md: calc(var(--ub-u) * 14);\n  --ub-fs-lg: calc(var(--ub-u) * 15);\n  --ub-fs-xl: calc(var(--ub-u) * 20);\n  --ub-fs-2xl: calc(var(--ub-u) * 20);\n\n  --ub-control-h: calc(var(--ub-u) * 32);\n  --ub-control-h-sm: calc(var(--ub-u) * 28);\n  --ub-rail-w: calc(var(--ub-u) * 288);\n  --ub-rail-w-collapsed: calc(var(--ub-u) * 60);\n  --ub-titlebar-h: calc(var(--ub-u) * 45);\n  --ub-page-max: calc(var(--ub-u) * 768);\n  --ub-r-card: 16px;\n  --ub-r-panel: 10px;\n  --ub-r-control: 8px;\n  --ub-r-overlay: 16px;\n\n  --ub-bg: var(--cds-surface-1);\n  --ub-nav-bg: var(--cds-surface-0);\n  --ub-panel: var(--cds-surface-2);\n  --ub-input-bg: var(--cds-surface-3);\n  --ub-sunken: var(--cds-alpha-1);\n  --ub-hover: var(--cds-alpha-1);\n  --ub-selected: var(--cds-alpha-2);\n  --ub-hover-strong: var(--cds-fill-secondary-hover);\n  --ub-line: var(--cds-alpha-2);\n  --ub-line-soft: var(--cds-alpha-2);\n  --ub-line-strong: var(--cds-alpha-3);\n  --ub-text: var(--cds-text-primary);\n  --ub-text-2: var(--cds-text-secondary);\n  --ub-text-3: var(--cds-text-muted);\n  --ub-accent: var(--cds-clay);\n  --ub-accent-2: var(--cds-clay-hover);\n  --ub-accent-ink: var(--cds-clay-ink);\n  --ub-on-accent: #ffffff;\n  --ub-accent-soft: var(--cds-clay-light);\n  --ub-accent-soft-2: color-mix(in srgb, var(--cds-clay) 22%, transparent);\n  --ub-ok: var(--cds-success);\n  --ub-ok-soft: color-mix(in srgb, var(--cds-success) 12%, transparent);\n  --ub-warn: var(--cds-warning);\n  --ub-warn-soft: color-mix(in srgb, var(--cds-warning) 13%, transparent);\n  --ub-danger: var(--cds-danger);\n  --ub-danger-soft: color-mix(in srgb, var(--cds-danger) 11%, transparent);\n  --ub-switch-off: var(--cds-alpha-3);\n  --ub-scrim: var(--cds-scrim);\n  --ub-toast-bg: var(--cds-surface-popover);\n  --ub-card-shadow: var(--cds-panel-shadow);\n  --ub-overlay-shadow: var(--cds-shadow-popover);\n  --ub-focus-ring: var(--cds-focus-shadow);\n\n  font-size: var(--ub-fs-md);\n  line-height: 1.5;\n  font-variant-numeric: tabular-nums;\n}\n.ub-app[data-ub-style=\"claude\"] ::selection {\n  background: color-mix(in srgb, var(--cds-clay) 26%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] :is(h1, h2, h3, h4) {\n  text-wrap: balance;\n}\n.ub-app[data-ub-style=\"claude\"] :is(p, li, dd, blockquote) {\n  text-wrap: pretty;\n}\n\n/* ═══════════════ 外壳：侧栏 ═══════════════ */\n.ub-app[data-ub-style=\"claude\"] .ub-rail {\n  padding: 0 var(--ub-s2) var(--ub-s2);\n  border-right: 1px solid var(--cds-alpha-2);\n  background: var(--ub-nav-bg);\n  transition: flex-basis var(--cds-dur-sheet) var(--cds-ease-out), width var(--cds-dur-sheet) var(--cds-ease-out);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__head {\n  flex: 0 0 auto;\n  height: var(--ub-titlebar-h);\n  margin: 0 calc(var(--ub-s2) * -1);\n  padding: 0 var(--ub-s2) 0 var(--ub-s3);\n  border-bottom: 1px solid var(--cds-alpha-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__collapse {\n  color: var(--ub-text-3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__nav {\n  margin-top: var(--ub-s3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand {\n  gap: var(--ub-s2);\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand__mark {\n  width: calc(var(--ub-u) * 22);\n  height: calc(var(--ub-u) * 22);\n  border-radius: 6px;\n  background: var(--ub-text);\n  color: var(--ub-bg);\n  font-size: calc(var(--ub-u) * 9.5);\n  font-weight: 700;\n  letter-spacing: 0.02em;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand__text {\n  flex-direction: row;\n  align-items: baseline;\n  gap: var(--ub-s2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand__name {\n  font-size: var(--ub-fs-md);\n  font-weight: 600;\n  letter-spacing: -0.01em;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-brand__tag {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot {\n  gap: 1px;\n  padding-top: var(--ub-s2);\n  border-top: 1px solid var(--cds-alpha-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot-btn {\n  gap: var(--ub-s2);\n  min-height: var(--ub-control-h);\n  padding: 0 var(--ub-s2);\n  border-radius: var(--ub-r-control);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-sm);\n  font-weight: 500;\n  transition: background-color 150ms var(--cds-ease-hover), color 150ms ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot-btn i {\n  width: calc(var(--ub-u) * 18);\n  color: var(--ub-text-3);\n  font-size: calc(var(--ub-u) * 13);\n  text-align: center;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot-btn:hover {\n  background: var(--ub-hover);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot-btn:active {\n  background: var(--ub-selected);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-rail__foot-btn:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n\n/* 侧栏收起：只留图标，页名改悬停提示 */\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-rail {\n  flex-basis: var(--ub-rail-w-collapsed);\n  width: var(--ub-rail-w-collapsed);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-rail__head {\n  justify-content: center;\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-brand {\n  display: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-rail__foot-label {\n  display: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-shell.is-rail-collapsed .ub-rail__foot-btn {\n  justify-content: center;\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--rail.ub-nav--icon-only .ub-nav__item {\n  justify-content: center;\n  padding: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--rail.ub-nav--icon-only .ub-nav__text {\n  display: none;\n}\n\n/* ═══════════════ 外壳：导航 ═══════════════ */\n.ub-app[data-ub-style=\"claude\"] .ub-nav {\n  gap: var(--ub-s4);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav__group-title {\n  margin: 0 var(--ub-s2) var(--ub-s1);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 600;\n  letter-spacing: 0.05em;\n  text-transform: uppercase;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--rail .ub-nav__items {\n  gap: 1px;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--rail .ub-nav__item {\n  gap: var(--ub-s2);\n  min-height: var(--ub-control-h);\n  padding: 0 var(--ub-s2);\n  border-radius: var(--ub-r-control);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-sm);\n  font-weight: 500;\n  transition: background-color 150ms var(--cds-ease-hover), color 150ms ease, transform 100ms ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--rail .ub-nav__item:hover:not(.is-active) {\n  background: var(--ub-hover);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--rail .ub-nav__item:active {\n  background: var(--ub-selected);\n  transform: scale(0.98);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--rail .ub-nav__item.is-active {\n  background: var(--ub-selected);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--rail .ub-nav__item:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--rail .ub-nav__icon {\n  width: calc(var(--ub-u) * 18);\n  color: var(--ub-text-3);\n  font-size: calc(var(--ub-u) * 13);\n  opacity: 1;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--rail .ub-nav__item.is-active .ub-nav__icon {\n  color: var(--ub-text);\n}\n\n/* 手机目录：平铺卡片 */\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__item {\n  gap: var(--ub-s2);\n  padding: var(--ub-s3);\n  border: 0;\n  border-radius: var(--ub-r-panel);\n  background: var(--ub-panel);\n  box-shadow: var(--cds-panel-shadow);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__item.is-active {\n  background: var(--ub-panel);\n  box-shadow: inset 0 0 0 1.5px var(--cds-clay), var(--cds-shadow-sm);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__icon {\n  width: calc(var(--ub-u) * 30);\n  height: calc(var(--ub-u) * 30);\n  border-radius: var(--ub-r-control);\n  background: var(--cds-alpha-1);\n  color: var(--ub-text-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__item.is-active .ub-nav__icon {\n  background: var(--cds-clay-light);\n  color: var(--cds-clay-ink);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-nav--tiles .ub-nav__title {\n  font-size: var(--ub-fs-sm);\n  font-weight: 600;\n  text-transform: none;\n}\n\n/* ═══════════════ 外壳：标题栏与页首 ═══════════════ */\n.ub-app[data-ub-style=\"claude\"] .ub-top {\n  min-height: var(--ub-titlebar-h);\n  height: var(--ub-titlebar-h);\n  padding: 0 var(--ub-s2) 0 var(--ub-s4);\n  border-bottom: 1px solid var(--cds-alpha-2);\n  background: var(--ub-bg);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__title {\n  gap: var(--ub-s2);\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  font-weight: 500;\n  letter-spacing: 0;\n  line-height: 1.3;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__icon {\n  display: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__crumb {\n  color: var(--ub-text-3);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__crumb::after {\n  content: \"/\";\n  margin-left: var(--ub-s2);\n  color: var(--cds-alpha-4);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top :is(.ub-icon-btn) {\n  width: var(--ub-control-h-sm);\n  height: var(--ub-control-h-sm);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-sm);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-heading {\n  width: 100%;\n  max-width: var(--ub-page-max);\n  margin: 0 auto;\n  padding: calc(var(--ub-u) * 28) var(--ub-page-pad) var(--ub-s3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-heading__title {\n  color: var(--ub-text);\n  font-size: var(--ub-fs-xl);\n  font-weight: 500;\n  letter-spacing: -0.01em;\n  line-height: 1.4;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-heading__greeting {\n  padding-top: var(--ub-s4);\n  color: var(--ub-text);\n  font-family: var(--cds-font-serif);\n  font-size: calc(var(--ub-u) * 38);\n  font-weight: 300;\n  letter-spacing: -0.02em;\n  line-height: 1.2;\n  animation: ub-cds-fade-up 450ms var(--cds-ease-out) both;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-launcher {\n  background: var(--ub-scrim);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-launcher__panel {\n  background: var(--ub-bg);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-launcher__foot {\n  border-top-color: var(--cds-alpha-2);\n}\n@media (max-width: 760px) {\n.ub-app[data-ub-style=\"claude\"] .ub-top {\n    height: calc(var(--ub-u) * 48);\n    min-height: calc(var(--ub-u) * 48);\n    padding: 0 var(--ub-s1);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__crumb {\n    display: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-top__menu {\n    color: var(--ub-text-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-heading {\n    padding-top: var(--ub-s5);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-heading__greeting {\n    font-size: calc(var(--ub-u) * 30);\n}\n}\n\n/* ═══════════════ 页面骨架 ═══════════════ */\n.ub-app[data-ub-style=\"claude\"] .ub-page {\n  gap: var(--ub-s4);\n  padding-top: 0;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__body {\n  gap: calc(var(--ub-u) * 32);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__lead {\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-md);\n  line-height: 1.6;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__jump {\n  background: linear-gradient(var(--ub-bg) 80%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__chip {\n  padding: calc(var(--ub-u) * 4) var(--ub-s3);\n  border: 1px solid var(--cds-alpha-2);\n  background: color-mix(in srgb, var(--ub-panel) 80%, transparent);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-xs);\n  font-weight: 500;\n  transition: background-color 150ms var(--cds-ease-hover), color 150ms ease, transform 100ms ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__chip:hover {\n  border-color: var(--cds-alpha-2);\n  background: var(--cds-alpha-1);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-page__chip:active {\n  transform: scale(0.95);\n}\n\n/* 分节：标题在卡片外；卡片用外环投影代替描边 */\n.ub-app[data-ub-style=\"claude\"] .ub-section__head {\n  margin: 0 var(--ub-s1) var(--ub-s3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__title {\n  gap: var(--ub-s2);\n  font-size: var(--ub-fs-lg);\n  font-weight: 600;\n  letter-spacing: -0.005em;\n  line-height: 1.33;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__icon {\n  color: var(--ub-text-3);\n  font-size: 0.85em;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__desc {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n  line-height: 1.55;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__card {\n  border: 0;\n  border-radius: var(--ub-r-card);\n  background: var(--ub-panel);\n  box-shadow: var(--cds-panel-shadow);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__card.is-padded {\n  gap: var(--ub-s3);\n  padding: var(--ub-s4);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-section__card.is-bare {\n  border: 0;\n  background: transparent;\n  box-shadow: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-row {\n  gap: var(--ub-s3) var(--ub-s4);\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-row + .ub-row {\n  border-top: 1px solid var(--cds-alpha-1);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-row__label {\n  font-size: var(--ub-fs-md);\n  font-weight: 500;\n  line-height: 1.43;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-row__hint {\n  margin-top: 2px;\n  font-size: var(--ub-fs-xs);\n  line-height: 1.55;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-row--flag {\n  background: var(--ub-warn-soft);\n  box-shadow: inset 2px 0 0 var(--ub-warn);\n}\n\n/* ═══════════════ 按钮 ═══════════════ */\n.ub-app[data-ub-style=\"claude\"] :is(.ub-btn, .ub-icon-btn) {\n  transition: background-color 150ms var(--cds-ease-hover), border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 100ms ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn {\n  gap: calc(var(--ub-u) * 6);\n  height: var(--ub-control-h);\n  padding: 0 calc(var(--ub-u) * 14);\n  border: 0;\n  border-radius: var(--ub-r-control);\n  background: var(--cds-fill-secondary);\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--sm {\n  height: var(--ub-control-h-sm);\n  padding: 0 calc(var(--ub-u) * 10);\n  font-size: var(--ub-fs-xs);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn:hover:not(:disabled) {\n  background: var(--cds-fill-secondary-hover);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-btn, .ub-icon-btn):active:not(:disabled) {\n  transform: scale(0.98);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-btn, .ub-icon-btn):focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn:disabled {\n  opacity: 0.35;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--busy:disabled {\n  opacity: 0.7;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--primary {\n  background: var(--cds-clay);\n  color: #ffffff;\n  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--primary:hover:not(:disabled) {\n  background: var(--cds-clay-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--soft {\n  background: var(--cds-clay-light);\n  color: var(--cds-clay-ink);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--soft:hover:not(:disabled) {\n  background: color-mix(in srgb, var(--cds-clay) 18%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--ghost {\n  background: transparent;\n  color: var(--ub-text-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--ghost:hover:not(:disabled) {\n  background: var(--cds-alpha-1);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--danger {\n  background: var(--cds-danger-fill);\n  color: #ffffff;\n  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-btn--danger:hover:not(:disabled) {\n  background: var(--cds-danger-fill-hover);\n  color: #ffffff;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn {\n  width: var(--ub-control-h);\n  height: var(--ub-control-h);\n  border-radius: var(--ub-r-control);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-md);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn--sm {\n  width: var(--ub-control-h-sm);\n  height: var(--ub-control-h-sm);\n  font-size: var(--ub-fs-sm);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn:hover:not(:disabled) {\n  background: var(--cds-alpha-1);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn--accent {\n  color: var(--cds-clay-ink);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn--danger:hover:not(:disabled) {\n  background: var(--ub-danger-soft);\n  color: var(--ub-danger);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn--solid {\n  border: 0;\n  background: var(--cds-fill-secondary);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-icon-btn--solid:hover:not(:disabled) {\n  background: var(--cds-fill-secondary-hover);\n}\n\n/* ═══════════════ 输入类控件 ═══════════════ */\n.ub-app[data-ub-style=\"claude\"] :is(.ub-field__input, .ub-select__native, .ub-dialog__input, .ub-picker__trigger) {\n  height: var(--ub-control-h);\n  border: 1px solid var(--cds-alpha-2);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-input-bg);\n  color: var(--ub-text);\n  font-size: var(--ub-fs-md);\n  transition: border-color 150ms ease, box-shadow 200ms var(--cds-ease-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-select--sm .ub-select__native {\n  height: var(--ub-control-h-sm);\n  font-size: var(--ub-fs-sm);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-textarea__input {\n  padding: calc(var(--ub-u) * 10) var(--ub-s3);\n  border: 1px solid var(--cds-alpha-2);\n  border-radius: 12px;\n  background: var(--ub-input-bg);\n  font-size: var(--ub-fs-md);\n  line-height: 1.6;\n  transition: border-color 150ms ease, box-shadow 200ms var(--cds-ease-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-textarea--mono .ub-textarea__input {\n  font-size: var(--ub-fs-xs);\n  line-height: 1.45;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-textarea__label {\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-xs);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-field__input, .ub-select__native, .ub-textarea__input, .ub-dialog__input, .ub-picker__trigger):hover:not(:disabled):not(:focus) {\n  border-color: var(--cds-alpha-3);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-field__input:focus, .ub-textarea__input:focus, .ub-dialog__input:focus, .ub-select__native:focus-visible, .ub-picker__trigger:focus-visible) {\n  border-color: var(--cds-alpha-3);\n  outline: none;\n  box-shadow: var(--cds-focus-shadow);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-field__input, .ub-textarea__input, .ub-dialog__input)::placeholder {\n  color: color-mix(in srgb, var(--ub-text-3) 80%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker__trigger {\n  font-weight: 500;\n}\n\n/* iOS 内核：输入框字号低于 16px 时聚焦会整页放大 */\n@media (max-width: 760px) {\n.ub-app[data-ub-style=\"claude\"] :is(.ub-field__input, .ub-select__native, .ub-textarea__input, .ub-dialog__input, .ub-cchat__input) {\n    font-size: max(16px, var(--ub-fs-md));\n}\n}\n\n/* 分段：全圆角轨道 + 浮起滑块（120ms 咬合） */\n.ub-app[data-ub-style=\"claude\"] .ub-seg {\n  gap: 0;\n  padding: 2px;\n  border-radius: 999px;\n  background: var(--cds-segmented-track);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-seg__item {\n  min-height: calc(var(--ub-control-h) - 4px);\n  padding: 0 calc(var(--ub-u) * 14);\n  border-radius: 999px;\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-sm);\n  font-weight: 400;\n  transition: background-color var(--cds-dur-snap) var(--cds-ease-snap), color var(--cds-dur-snap) ease, box-shadow var(--cds-dur-snap) var(--cds-ease-snap);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-seg--sm .ub-seg__item {\n  min-height: calc(var(--ub-control-h-sm) - 4px);\n  padding: 0 var(--ub-s3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-seg__item.is-active {\n  background: var(--cds-segmented-thumb);\n  color: var(--ub-text);\n  font-weight: 500;\n  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06), 0 1px 2px 0 rgba(0, 0, 0, 0.08);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-seg__item:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n\n/* 开关 */\n.ub-app[data-ub-style=\"claude\"] .ub-switch {\n  width: calc(var(--ub-u) * 36);\n  height: calc(var(--ub-u) * 20);\n  background: var(--cds-alpha-3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch.is-on {\n  background: var(--cds-clay);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch:focus-visible {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch__thumb {\n  top: 2px;\n  left: 2px;\n  width: calc(var(--ub-u) * 20 - 4px);\n  height: calc(var(--ub-u) * 20 - 4px);\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);\n  transition: transform var(--cds-dur-base) var(--cds-ease-overshoot);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-switch.is-on .ub-switch__thumb {\n  transform: translateX(calc(var(--ub-u) * 16));\n}\n\n/* 勾选框 */\n.ub-app[data-ub-style=\"claude\"] .ub-check {\n  font-size: var(--ub-fs-md);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-check__box {\n  width: calc(var(--ub-u) * 16);\n  height: calc(var(--ub-u) * 16);\n  margin-top: 2px;\n  border: 1.5px solid var(--cds-alpha-3);\n  border-radius: 4px;\n  background: var(--ub-input-bg);\n  font-size: calc(var(--ub-u) * 10);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-check.is-on .ub-check__box {\n  border-color: var(--cds-clay);\n  background: var(--cds-clay);\n  color: #ffffff;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-check__native:focus-visible + .ub-check__box {\n  outline: none;\n  box-shadow: var(--ub-focus-ring);\n}\n\n/* ═══════════════ 提示、标签、折叠、统计 ═══════════════ */\n.ub-app[data-ub-style=\"claude\"] .ub-callout {\n  gap: var(--ub-s2);\n  padding: calc(var(--ub-u) * 10) var(--ub-s3);\n  border-radius: var(--ub-r-panel);\n  background: var(--cds-alpha-1);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-xs);\n  line-height: 1.6;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-callout--success {\n  background: var(--ub-ok-soft);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-callout--warning {\n  background: var(--ub-warn-soft);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-callout--error {\n  background: var(--ub-danger-soft);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-badge {\n  padding: 1px calc(var(--ub-u) * 6);\n  border-radius: 5px;\n  background: var(--cds-alpha-1);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 500;\n  line-height: 1.55;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-badge--accent {\n  background: var(--cds-clay-light);\n  color: var(--cds-clay-ink);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-badge--success {\n  background: var(--ub-ok-soft);\n  color: var(--ub-ok);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-badge--warning {\n  background: var(--ub-warn-soft);\n  color: var(--ub-warn);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-badge--danger {\n  background: var(--ub-danger-soft);\n  color: var(--ub-danger);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc {\n  border: 0;\n  border-radius: 12px;\n  background: var(--ub-panel);\n  box-shadow: var(--cds-panel-shadow);\n  transition: box-shadow var(--cds-dur-base) ease;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc:hover {\n  box-shadow: 0 0 0 1px var(--cds-alpha-3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc--flat,\n.ub-app[data-ub-style=\"claude\"] .ub-disc--flat:hover {\n  border: 0;\n  border-radius: 0;\n  background: transparent;\n  box-shadow: none;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc__head {\n  padding: var(--ub-s2) calc(var(--ub-u) * 14);\n  font-size: var(--ub-fs-sm);\n  font-weight: 500;\n  transition: background-color 150ms var(--cds-ease-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc__head:hover {\n  background: var(--cds-alpha-1);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-disc__chevron {\n  color: var(--ub-text-3);\n  transition: transform var(--cds-dur-base) cubic-bezier(0.19, 1, 0.22, 1);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-stats__item {\n  box-shadow: 1px 0 0 var(--cds-alpha-1), 0 1px 0 var(--cds-alpha-1);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-stats__item dt {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-stats__item dd {\n  font-size: var(--ub-fs-md);\n  font-variant-numeric: tabular-nums;\n}\n\n/* ═══════════════ 浮层：遮罩 / 抽屉 / 对话框 / 选择面板 / 提示条 ═══════════════ */\n.ub-app[data-ub-style=\"claude\"] :is(.ub-sheet-layer, .ub-dialog-layer, .ub-picker-layer) {\n  background: var(--ub-scrim);\n}\n@media (min-width: 761px) {\n.ub-app[data-ub-style=\"claude\"] :is(.ub-dialog-layer, .ub-picker-layer) {\n    -webkit-backdrop-filter: blur(2px);\n    backdrop-filter: blur(2px);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet-layer {\n    padding: calc(var(--ub-safe-top) + 8px) calc(var(--ub-safe-right) + 8px) calc(var(--ub-safe-bottom) + 8px) var(--ub-safe-left);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet {\n    border-radius: 12px;\n    overflow: hidden;\n}\n}\n@media (max-width: 760px) {\n.ub-app[data-ub-style=\"claude\"] .ub-sheet-layer {\n    padding-top: calc(var(--ub-safe-top) + 12px);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet {\n    border-radius: var(--ub-r-overlay) var(--ub-r-overlay) 0 0;\n    overflow: hidden;\n}\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet {\n  background: var(--ub-bg);\n  box-shadow: var(--cds-shadow-lg), 0 0 0 1px var(--cds-alpha-2);\n  animation-duration: var(--cds-dur-sheet);\n  animation-timing-function: var(--cds-ease-out);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet__head {\n  min-height: var(--ub-titlebar-h);\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n  border-bottom: 1px solid var(--cds-alpha-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet__title {\n  font-size: var(--ub-fs-lg);\n  font-weight: 600;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet__subtitle {\n  font-size: var(--ub-fs-xs);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet__body {\n  gap: var(--ub-s5);\n  padding: var(--ub-s4);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-sheet__foot {\n  padding: var(--ub-s3) var(--ub-s4);\n  border-top: 1px solid var(--cds-alpha-2);\n  background: var(--ub-bg);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog {\n  gap: var(--ub-s4);\n  width: min(448px, 100%);\n  padding: var(--ub-s5);\n  border: 0;\n  border-radius: var(--ub-r-overlay);\n  background: var(--ub-panel);\n  box-shadow: var(--cds-shadow-popover);\n  animation-duration: var(--cds-dur-base);\n  animation-timing-function: var(--cds-ease-overshoot);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__head {\n  align-items: flex-start;\n  gap: calc(var(--ub-u) * 14);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__glyph {\n  border-radius: 10px;\n  background: var(--cds-clay-light);\n  color: var(--cds-clay-ink);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__glyph.is-danger {\n  background: var(--ub-danger-soft);\n  color: var(--ub-danger);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__title {\n  font-size: calc(var(--ub-u) * 16);\n  font-weight: 600;\n  line-height: 1.25;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__message {\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-sm);\n  line-height: 1.6;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__danger {\n  border-radius: var(--ub-r-panel);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-dialog__actions {\n  padding-top: var(--ub-s1);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker-panel {\n  border: 0;\n  border-radius: 12px;\n  background: var(--cds-surface-popover);\n  box-shadow: var(--cds-shadow-popover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker-panel__title {\n  font-size: var(--ub-fs-lg);\n  font-weight: 600;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker-panel__list {\n  padding: calc(var(--ub-u) * 6);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-picker-panel__item {\n  min-height: var(--ub-control-h);\n  padding: calc(var(--ub-u) * 6) calc(var(--ub-u) * 10);\n  border-radius: var(--ub-r-control);\n  font-size: var(--ub-fs-sm);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-toast {\n  border: 0;\n  border-radius: 12px;\n  background: var(--cds-surface-popover);\n  box-shadow: var(--cds-shadow-popover);\n  font-size: var(--ub-fs-sm);\n}\n\n/* ═══════════════ 仪表盘 ═══════════════ */\n.ub-app[data-ub-style=\"claude\"] .ub-health {\n  gap: var(--ub-s3);\n  padding: calc(var(--ub-u) * 14);\n  border: 0;\n  border-radius: 12px;\n  background: var(--ub-panel);\n  box-shadow: var(--cds-panel-shadow);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-health.is-error {\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ub-danger) 40%, transparent), 0 1px 2px rgba(0, 0, 0, 0.04);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-health__icon {\n  width: calc(var(--ub-u) * 32);\n  height: calc(var(--ub-u) * 32);\n  border-radius: var(--ub-r-control);\n  background: color-mix(in srgb, var(--ub-health-tone) 11%, transparent);\n  font-size: var(--ub-fs-sm);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-health__title {\n  font-size: var(--ub-fs-md);\n  font-weight: 600;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-health__action {\n  color: var(--cds-clay-ink);\n  font-weight: 500;\n}\n\n/* ═══════════════ 续写：会话流 ═══════════════ */\n.ub-app[data-ub-style=\"claude\"] .ub-cchat__status {\n  padding: calc(var(--ub-u) * 10) var(--ub-s4);\n  border-bottom: 1px solid var(--cds-alpha-1);\n  font-size: var(--ub-fs-xs);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-cchat__state {\n  padding: 1px 8px 1px 6px;\n  background: var(--cds-alpha-1);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-cchat__state.is-running {\n  background: var(--cds-clay-light);\n  color: var(--cds-clay-ink);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-cchat__state.is-running .ub-cchat__dot, .ub-feed__pulse) {\n  background: var(--cds-clay);\n  animation: ub-cds-clay-breathe 2.4s ease-in-out infinite;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed {\n  gap: calc(var(--ub-u) * 14);\n  padding: var(--ub-s5) var(--ub-s4);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__user {\n  animation: ub-cds-bubble-in 450ms var(--cds-ease-overshoot) both;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__bubble {\n  max-width: 85%;\n  padding: calc(var(--ub-u) * 10) var(--ub-s4);\n  border-radius: 18px;\n  background: var(--cds-bg-tint-blue);\n  color: var(--ub-text);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__bubble p {\n  font-size: var(--ub-fs-md);\n  line-height: 1.6;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__bubble .ub-feed__time {\n  color: var(--ub-text-3);\n  opacity: 1;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__time {\n  font-family: var(--ub-mono);\n  font-size: calc(var(--ub-u) * 10.5);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__thought {\n  margin-left: var(--ub-s1);\n  padding: var(--ub-s1) 0 var(--ub-s1) calc(var(--ub-u) * 14);\n  border-left: 2px solid color-mix(in srgb, var(--cds-clay) 40%, transparent);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n  line-height: 1.6;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__thought-label {\n  color: var(--ub-text-2);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__thought p {\n  font-family: var(--ub-mono);\n  font-size: calc(var(--ub-u) * 11.5);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__card {\n  border: 0;\n  border-radius: 12px;\n  background: var(--ub-panel);\n  box-shadow: var(--cds-panel-shadow);\n  transition: box-shadow var(--cds-dur-base) ease;\n  animation: ub-cds-fade-up 300ms var(--cds-ease-out) both;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__card:hover {\n  box-shadow: 0 0 0 1px var(--cds-alpha-3);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__card.is-failed {\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ub-danger) 45%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__card-head {\n  padding: calc(var(--ub-u) * 10) calc(var(--ub-u) * 14);\n  font-size: var(--ub-fs-xs);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__card-head:hover {\n  background: var(--cds-alpha-1);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__kind {\n  padding: 1px 6px;\n  border-radius: 4px;\n  background: var(--cds-alpha-1);\n  color: var(--ub-text-3);\n  font-family: var(--ub-mono);\n  font-size: calc(var(--ub-u) * 10.5);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__title {\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__status.is-running {\n  background: var(--cds-clay-light);\n  color: var(--cds-clay-ink);\n}\n.ub-app[data-ub-style=\"claude\"] :is(.ub-feed__preview, .ub-feed__detail) {\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-xs);\n  line-height: 1.6;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__detail {\n  border-top: 1px solid var(--cds-alpha-1);\n  padding-top: var(--ub-s2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__divider-badge {\n  background: var(--cds-alpha-1);\n  color: var(--ub-text-2);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__divider::before,\n.ub-app[data-ub-style=\"claude\"] .ub-feed__divider::after {\n  background: var(--cds-alpha-2);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__fold {\n  border: 1px solid var(--cds-alpha-2);\n  background: var(--ub-panel);\n  transition: background-color 150ms var(--cds-ease-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__fold:hover {\n  background: var(--cds-alpha-1);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-feed__running {\n  color: var(--ub-text-3);\n  font-weight: 500;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-cchat__notice {\n  border-radius: var(--ub-r-panel);\n}\n\n/* 输入框：20px 圆角、无描边、三档投影 */\n.ub-app[data-ub-style=\"claude\"] .ub-cchat__composer {\n  gap: var(--ub-s2);\n  margin: var(--ub-s2) var(--ub-s3) var(--ub-s3);\n  padding: calc(var(--ub-u) * 14);\n  border: 0;\n  border-radius: 20px;\n  background: var(--cds-surface-3);\n  box-shadow: var(--cds-shadow-composer);\n  transition: box-shadow var(--cds-dur-base) var(--cds-ease-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-cchat__composer:hover {\n  box-shadow: var(--cds-shadow-composer-hover);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-cchat__composer:focus-within {\n  border: 0;\n  box-shadow: var(--cds-shadow-composer-focus);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-cchat__input {\n  min-height: calc(2lh + 6px);\n  max-height: 24rem;\n  padding: 0 0 0 calc(var(--ub-u) * 6);\n  font-size: calc(var(--ub-u) * 15);\n  line-height: 1.55;\n  resize: none;\n  field-sizing: content;\n}\n.ub-app[data-ub-style=\"claude\"] .ub-cchat__input::placeholder {\n  color: color-mix(in srgb, var(--ub-text-3) 80%, transparent);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-cchat__hint {\n  padding-left: calc(var(--ub-u) * 6);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n}\n.ub-app[data-ub-style=\"claude\"] .ub-cchat__actions .ub-btn {\n  height: var(--ub-control-h);\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n}\n\n/* ═══════════════ 动效 ═══════════════ */\n@keyframes ub-cds-fade-up {\nfrom { opacity: 0; transform: translateY(8px);\n}\nto { opacity: 1; transform: none;\n}\n}\n@keyframes ub-cds-bubble-in {\nfrom { opacity: 0; transform: translateY(10px) scale(0.98);\n}\nto { opacity: 1; transform: none;\n}\n}\n@keyframes ub-cds-clay-breathe {\n0%, 100% { opacity: 0.4; transform: scale(0.92);\n}\n50% { opacity: 1; transform: scale(1.08);\n}\n}\n@media (prefers-reduced-motion: reduce) {\n.ub-app[data-ub-style=\"claude\"] *,\n  .ub-app[data-ub-style=\"claude\"] *::before,\n  .ub-app[data-ub-style=\"claude\"] *::after {\n    animation-duration: 0.01ms !important;\n    animation-iteration-count: 1 !important;\n    transition-duration: 0.01ms !important;\n}\n}\n", "src/presentation-v3/shell/ClaudeStyle.vue#style-0");
 var ClaudeStyle_vue_vue_type_style_index_0_lang = null;
 
 var _sfc_main = /*@__PURE__*/ defineComponent({
@@ -211938,8 +212121,8 @@ var _sfc_main = /*@__PURE__*/ defineComponent({
         const rootShell = useRootShellStore();
         const router = useRouterStore();
         const uiMode = useUiModeStore();
-        const themeStore = useThemeStore();
         const appearanceStore = useAppearanceStore();
+        const effectiveTheme = useEffectiveTheme();
         const toastStore = useToastStore();
         const visualizer = useVisualizerStore();
         const devOptions = useDevOptions();
@@ -211949,6 +212132,13 @@ var _sfc_main = /*@__PURE__*/ defineComponent({
         const activeEntry = computed(() => ubPageEntry(router.activePageId));
         /** 侧栏收起只在 Claude 风格下生效；切回默认风格时照常展开，偏好保留。 */
         const railCollapsed = computed(() => appearanceStore.isClaudeStyle && appearanceStore.railCollapsed);
+        const activeGroupTitle = computed(() => router.groups.find(group => group.id === router.activePage?.group)?.title ?? '');
+        /** 问候语按打开面板 / 切页时的本地时段取词，不做定时刷新。 */
+        const greeting = computed(() => {
+            void rootShell.openRefreshTick;
+            void router.activePageId;
+            return claudeGreeting(new Date().getHours());
+        });
         const modeToggleLabel = computed(() => (uiMode.isBasicMode ? '切换到高手模式' : '返回基础模式'));
         /** 手机端没有侧栏，外观入口放在「全部页面」面板里；打开外观时先收起面板。 */
         function openAppearanceFromLauncher() {
@@ -212015,7 +212205,7 @@ var _sfc_main = /*@__PURE__*/ defineComponent({
         watch(() => router.activePageId, resetScrollSettled);
         watch(() => rootShell.openRefreshTick, resetScrollSettled);
         watch(() => rootShell.scrollResetTick, resetScroll);
-        const __returned__ = { emit, rootShell, router, uiMode, themeStore, appearanceStore, toastStore, visualizer, devOptions, launcherOpen, appearanceOpen, scroller, activeEntry, railCollapsed, modeToggleLabel, openAppearanceFromLauncher, toggleMode, closeApp, resetScroll, resetScrollSettled, VisualizerSurface, AppearanceSheet, NavList, UbButton, UbDialogHost, UbIconButton, UbToastHost };
+        const __returned__ = { emit, rootShell, router, uiMode, appearanceStore, effectiveTheme, toastStore, visualizer, devOptions, launcherOpen, appearanceOpen, scroller, activeEntry, railCollapsed, activeGroupTitle, greeting, modeToggleLabel, openAppearanceFromLauncher, toggleMode, closeApp, resetScroll, resetScrollSettled, VisualizerSurface, AppearanceSheet, NavList, UbButton, UbDialogHost, UbIconButton, UbToastHost };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
@@ -212024,8 +212214,8 @@ var _sfc_main = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n/* ── 挂载根 ── TT 移动端 geometry firewall 会把 fullscreen-window root（本元素）强制 position:fixed\n   并形成层叠上下文；预置与 shell 同级的 z-index 保持整体层级不回退。非定位元素（桌面/原版 ST）忽略此声明。 */\n#acu-app-v2 {\n  z-index: 9000;\n  box-sizing: border-box;\n}\n#acu-app-v2 button {\n  appearance: none;\n  -webkit-appearance: none;\n  -webkit-tap-highlight-color: transparent;\n}\n#acu-app-v2 button:focus:not(:focus-visible) {\n  outline: none;\n  box-shadow: none;\n}\n\n/* ── 设计令牌：颜色取自当前主题，尺寸随\"界面缩放\"等比变化 ── */\n.ub-app {\n  --ub-u: calc(1px * var(--acu-ui-scale, 1));\n\n  --ub-fs-2xs: calc(var(--ub-u) * 11);\n  --ub-fs-xs: calc(var(--ub-u) * 12);\n  --ub-fs-sm: calc(var(--ub-u) * 13.5);\n  --ub-fs-md: calc(var(--ub-u) * 14.5);\n  --ub-fs-lg: calc(var(--ub-u) * 16.5);\n  --ub-fs-xl: calc(var(--ub-u) * 20);\n  --ub-fs-2xl: calc(var(--ub-u) * 26);\n\n  --ub-s1: calc(var(--ub-u) * 4);\n  --ub-s2: calc(var(--ub-u) * 8);\n  --ub-s3: calc(var(--ub-u) * 12);\n  --ub-s4: calc(var(--ub-u) * 16);\n  --ub-s5: calc(var(--ub-u) * 20);\n  --ub-s6: calc(var(--ub-u) * 28);\n  --ub-s8: calc(var(--ub-u) * 40);\n\n  --ub-control-h: calc(var(--ub-u) * 36);\n  --ub-control-h-sm: calc(var(--ub-u) * 28);\n  --ub-rail-w: calc(var(--ub-u) * 244);\n  --ub-page-pad: calc(var(--ub-u) * 28);\n  --ub-page-max: calc(var(--ub-u) * 800);\n  --ub-page-max-wide: calc(var(--ub-u) * 1180);\n\n  --ub-r-card: max(var(--acu-radius-lg, 0px), 14px);\n  --ub-r-control: max(var(--acu-radius-sm, 0px), 9px);\n\n  --ub-bg: var(--acu-bg-0);\n  --ub-panel: var(--acu-bg-1);\n  --ub-sunken: color-mix(in srgb, var(--acu-bg-2) 70%, var(--acu-bg-0));\n  --ub-nav-bg: var(--acu-sidebar-bg);\n  --ub-input-bg: color-mix(in srgb, var(--acu-bg-0) 55%, var(--acu-bg-1));\n  --ub-hover: var(--acu-hover-overlay);\n  --ub-hover-strong: color-mix(in srgb, var(--acu-text-1) 7%, var(--acu-bg-1));\n  --ub-line: var(--acu-border-2);\n  --ub-line-soft: var(--acu-border);\n  --ub-line-strong: color-mix(in srgb, var(--acu-text-3) 55%, transparent);\n  --ub-text: var(--acu-text-1);\n  --ub-text-2: var(--acu-text-2);\n  --ub-text-3: var(--acu-text-3);\n  --ub-accent: var(--acu-accent);\n  --ub-accent-2: var(--acu-accent-2);\n  --ub-accent-ink: color-mix(in srgb, var(--acu-accent) 82%, var(--acu-text-1));\n  --ub-on-accent: var(--acu-on-accent);\n  --ub-accent-soft: color-mix(in srgb, var(--acu-accent) 14%, transparent);\n  --ub-accent-soft-2: color-mix(in srgb, var(--acu-accent) 24%, transparent);\n  --ub-ok: var(--acu-success);\n  --ub-ok-soft: color-mix(in srgb, var(--acu-success) 15%, transparent);\n  --ub-warn: var(--acu-warning);\n  --ub-warn-soft: color-mix(in srgb, var(--acu-warning) 16%, transparent);\n  --ub-danger: var(--acu-danger);\n  --ub-danger-soft: color-mix(in srgb, var(--acu-danger) 14%, transparent);\n  --ub-switch-off: color-mix(in srgb, var(--acu-text-3) 42%, transparent);\n  --ub-scrim: rgba(6, 8, 12, 0.52);\n  --ub-toast-bg: color-mix(in srgb, var(--acu-bg-1) 94%, transparent);\n  --ub-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);\n  --ub-overlay-shadow: var(--acu-shadow);\n  --ub-font: var(--acu-font-ui);\n  --ub-mono: var(--acu-font-mono);\n\n  /* TT Layout ABI：安全区绑定宿主 --tt-inset-*，底部并入键盘高度；原版宿主回退 0 */\n  --ub-safe-top: max(env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));\n  --ub-safe-right: max(env(safe-area-inset-right, 0px), var(--tt-inset-right, 0px));\n  --ub-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px));\n  --ub-safe-left: max(env(safe-area-inset-left, 0px), var(--tt-inset-left, 0px));\n\n  color: var(--ub-text);\n  font-family: var(--ub-font);\n  font-size: var(--ub-fs-md);\n  line-height: 1.5;\n  -webkit-font-smoothing: antialiased;\n}\n.ub-app *,\n.ub-app *::before,\n.ub-app *::after {\n  box-sizing: border-box;\n}\n.ub-app button {\n  -webkit-tap-highlight-color: transparent;\n}\n.ub-app :where(h1, h2, h3, h4, p) {\n  margin: 0;\n}\n@media (max-width: 760px) {\n.ub-app {\n    --ub-page-pad: calc(var(--ub-u) * 16);\n}\n}\n@keyframes ub-fade-in {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes ub-fade-out {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes ub-pop-in {\nfrom { opacity: 0; transform: translateY(6px) scale(0.98);\n}\nto { opacity: 1; transform: none;\n}\n}\n@keyframes ub-sheet-in-right {\nfrom { transform: translateX(100%);\n}\nto { transform: none;\n}\n}\n@keyframes ub-sheet-out-right {\nfrom { transform: none;\n}\nto { transform: translateX(100%);\n}\n}\n@keyframes ub-sheet-in-up {\nfrom { transform: translateY(100%);\n}\nto { transform: none;\n}\n}\n@keyframes ub-sheet-out-down {\nfrom { transform: none;\n}\nto { transform: translateY(100%);\n}\n}\n", "src/presentation-v3/App.vue#style-0");
 var App_vue_vue_type_style_index_0_lang = null;
 
-injectSfcStyle("\n.ub-shell[data-v-32113246] {\n  position: fixed;\n  inset: 0;\n  z-index: 9000;\n  display: flex;\n  width: 100%;\n  width: 100dvw;\n  height: 100%;\n  height: var(--tt-base-viewport-height, 100dvh);\n  padding: var(--ub-safe-top) var(--ub-safe-right) var(--ub-safe-bottom) var(--ub-safe-left);\n  overflow: hidden;\n  background: var(--ub-bg);\n}\n.ub-rail[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  flex: 0 0 var(--ub-rail-w);\n  width: var(--ub-rail-w);\n  min-height: 0;\n  padding: var(--ub-s5) var(--ub-s3) var(--ub-s3);\n  border-right: 1px solid var(--ub-line-soft);\n  background: var(--ub-nav-bg);\n}\n.ub-rail__head[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ub-s2);\n  min-width: 0;\n}\n.ub-rail__nav[data-v-32113246] {\n  flex: 1 1 auto;\n  min-height: 0;\n  margin: var(--ub-s5) calc(var(--ub-s1) * -1) 0;\n  padding: 0 var(--ub-s1);\n  overflow-y: auto;\n}\n.ub-rail__foot[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  margin-top: var(--ub-s3);\n  padding-top: var(--ub-s3);\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-rail__foot-btn[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  width: 100%;\n  min-height: calc(var(--ub-u) * 34);\n  padding: 0 var(--ub-s3);\n  border: 0;\n  border-radius: var(--ub-r-control);\n  background: transparent;\n  color: var(--ub-text-3);\n  font: inherit;\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n  text-align: left;\n  cursor: pointer;\n}\n.ub-rail__foot-btn[data-v-32113246]:hover {\n  background: var(--ub-hover);\n  color: var(--ub-text);\n}\n.ub-brand[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  min-width: 0;\n  padding: 0 var(--ub-s2);\n}\n.ub-brand__mark[data-v-32113246] {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  flex: 0 0 auto;\n  width: calc(var(--ub-u) * 36);\n  height: calc(var(--ub-u) * 36);\n  border-radius: 11px;\n  background: linear-gradient(140deg, var(--ub-accent), color-mix(in srgb, var(--ub-accent) 55%, var(--ub-text)));\n  color: var(--ub-on-accent);\n  font-size: var(--ub-fs-xs);\n  font-weight: 800;\n  letter-spacing: 0.04em;\n}\n.ub-brand__text[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n}\n.ub-brand__name[data-v-32113246] {\n  color: var(--ub-text);\n  font-size: var(--ub-fs-md);\n  font-weight: 800;\n  letter-spacing: -0.01em;\n}\n.ub-brand__tag[data-v-32113246] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 600;\n}\n.ub-main[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n}\n.ub-top[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s1);\n  flex: 0 0 auto;\n  min-height: calc(var(--ub-u) * 60);\n  padding: var(--ub-s2) var(--ub-s3) var(--ub-s2) var(--ub-page-pad);\n}\n.ub-top__menu[data-v-32113246] {\n  display: none;\n}\n.ub-top__titles[data-v-32113246] {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n.ub-top__title[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  overflow: hidden;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-2xl);\n  font-weight: 800;\n  letter-spacing: -0.02em;\n  line-height: 1.2;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.ub-top__icon[data-v-32113246] {\n  color: var(--ub-accent-ink);\n  font-size: 0.72em;\n}\n.ub-scroll[data-v-32113246] {\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow-y: auto;\n  overflow-x: hidden;\n  scrollbar-gutter: stable;\n  overscroll-behavior: contain;\n}\n.ub-scroll__empty[data-v-32113246] {\n  padding: var(--ub-s6);\n  color: var(--ub-text-3);\n}\n.ub-launcher[data-v-32113246] {\n  --ub-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px));\n  position: fixed;\n  inset: 0;\n  z-index: 9200;\n  display: flex;\n  padding: var(--ub-safe-top) var(--ub-safe-right) var(--ub-safe-bottom) var(--ub-safe-left);\n  background: var(--ub-scrim);\n  animation: ub-fade-in 0.16s ease-out both;\n}\n.ub-launcher__panel[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  width: 100%;\n  height: 100%;\n  background: var(--ub-bg);\n  animation: ub-sheet-in-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;\n}\n.ub-launcher__head[data-v-32113246] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: var(--ub-s4) var(--ub-s3) var(--ub-s3) var(--ub-s3);\n}\n.ub-launcher__body[data-v-32113246] {\n  flex: 1 1 auto;\n  min-height: 0;\n  padding: var(--ub-s2) var(--ub-s4) var(--ub-s4);\n  overflow-y: auto;\n}\n.ub-launcher__foot[data-v-32113246] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\n  border-top: 1px solid var(--ub-line-soft);\n}\n@media (max-width: 760px) {\n.ub-rail[data-v-32113246] {\n    display: none;\n}\n.ub-top[data-v-32113246] {\n    min-height: calc(var(--ub-u) * 52);\n    padding: var(--ub-s1) var(--ub-s2);\n}\n.ub-top__menu[data-v-32113246] {\n    display: inline-flex;\n}\n.ub-top__title[data-v-32113246] {\n    gap: var(--ub-s2);\n    font-size: var(--ub-fs-xl);\n}\n}\n", "src/presentation-v3/App.vue#style-1-32113246");
-var App_vue_vue_type_style_index_1_scoped_32113246_lang = null;
+injectSfcStyle("\n.ub-shell[data-v-353ec94e] {\n  position: fixed;\n  inset: 0;\n  z-index: 9000;\n  display: flex;\n  width: 100%;\n  width: 100dvw;\n  height: 100%;\n  height: var(--tt-base-viewport-height, 100dvh);\n  padding: var(--ub-safe-top) var(--ub-safe-right) var(--ub-safe-bottom) var(--ub-safe-left);\n  overflow: hidden;\n  background: var(--ub-bg);\n}\n.ub-rail[data-v-353ec94e] {\n  display: flex;\n  flex-direction: column;\n  flex: 0 0 var(--ub-rail-w);\n  width: var(--ub-rail-w);\n  min-height: 0;\n  padding: var(--ub-s5) var(--ub-s3) var(--ub-s3);\n  border-right: 1px solid var(--ub-line-soft);\n  background: var(--ub-nav-bg);\n}\n.ub-rail__head[data-v-353ec94e] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ub-s2);\n  min-width: 0;\n}\n.ub-rail__nav[data-v-353ec94e] {\n  flex: 1 1 auto;\n  min-height: 0;\n  margin: var(--ub-s5) calc(var(--ub-s1) * -1) 0;\n  padding: 0 var(--ub-s1);\n  overflow-y: auto;\n}\n.ub-rail__foot[data-v-353ec94e] {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  margin-top: var(--ub-s3);\n  padding-top: var(--ub-s3);\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-rail__foot-btn[data-v-353ec94e] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  width: 100%;\n  min-height: calc(var(--ub-u) * 34);\n  padding: 0 var(--ub-s3);\n  border: 0;\n  border-radius: var(--ub-r-control);\n  background: transparent;\n  color: var(--ub-text-3);\n  font: inherit;\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n  text-align: left;\n  cursor: pointer;\n}\n.ub-rail__foot-btn[data-v-353ec94e]:hover {\n  background: var(--ub-hover);\n  color: var(--ub-text);\n}\n.ub-brand[data-v-353ec94e] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  min-width: 0;\n  padding: 0 var(--ub-s2);\n}\n.ub-brand__mark[data-v-353ec94e] {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  flex: 0 0 auto;\n  width: calc(var(--ub-u) * 36);\n  height: calc(var(--ub-u) * 36);\n  border-radius: 11px;\n  background: linear-gradient(140deg, var(--ub-accent), color-mix(in srgb, var(--ub-accent) 55%, var(--ub-text)));\n  color: var(--ub-on-accent);\n  font-size: var(--ub-fs-xs);\n  font-weight: 800;\n  letter-spacing: 0.04em;\n}\n.ub-brand__text[data-v-353ec94e] {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n}\n.ub-brand__name[data-v-353ec94e] {\n  color: var(--ub-text);\n  font-size: var(--ub-fs-md);\n  font-weight: 800;\n  letter-spacing: -0.01em;\n}\n.ub-brand__tag[data-v-353ec94e] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 600;\n}\n.ub-main[data-v-353ec94e] {\n  display: flex;\n  flex-direction: column;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n}\n.ub-top[data-v-353ec94e] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s1);\n  flex: 0 0 auto;\n  min-height: calc(var(--ub-u) * 60);\n  padding: var(--ub-s2) var(--ub-s3) var(--ub-s2) var(--ub-page-pad);\n}\n.ub-top__menu[data-v-353ec94e] {\n  display: none;\n}\n.ub-top__titles[data-v-353ec94e] {\n  flex: 1 1 auto;\n  min-width: 0;\n}\n.ub-top__title[data-v-353ec94e] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  overflow: hidden;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-2xl);\n  font-weight: 800;\n  letter-spacing: -0.02em;\n  line-height: 1.2;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.ub-top__icon[data-v-353ec94e] {\n  color: var(--ub-accent-ink);\n  font-size: 0.72em;\n}\n.ub-scroll[data-v-353ec94e] {\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow-y: auto;\n  overflow-x: hidden;\n  scrollbar-gutter: stable;\n  overscroll-behavior: contain;\n}\n.ub-scroll__empty[data-v-353ec94e] {\n  padding: var(--ub-s6);\n  color: var(--ub-text-3);\n}\n.ub-launcher[data-v-353ec94e] {\n  --ub-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px));\n  position: fixed;\n  inset: 0;\n  z-index: 9200;\n  display: flex;\n  padding: var(--ub-safe-top) var(--ub-safe-right) var(--ub-safe-bottom) var(--ub-safe-left);\n  background: var(--ub-scrim);\n  animation: ub-fade-in 0.16s ease-out both;\n}\n.ub-launcher__panel[data-v-353ec94e] {\n  display: flex;\n  flex-direction: column;\n  width: 100%;\n  height: 100%;\n  background: var(--ub-bg);\n  animation: ub-sheet-in-up 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;\n}\n.ub-launcher__head[data-v-353ec94e] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: var(--ub-s4) var(--ub-s3) var(--ub-s3) var(--ub-s3);\n}\n.ub-launcher__body[data-v-353ec94e] {\n  flex: 1 1 auto;\n  min-height: 0;\n  padding: var(--ub-s2) var(--ub-s4) var(--ub-s4);\n  overflow-y: auto;\n}\n.ub-launcher__foot[data-v-353ec94e] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\n  border-top: 1px solid var(--ub-line-soft);\n}\n@media (max-width: 760px) {\n.ub-rail[data-v-353ec94e] {\n    display: none;\n}\n.ub-top[data-v-353ec94e] {\n    min-height: calc(var(--ub-u) * 52);\n    padding: var(--ub-s1) var(--ub-s2);\n}\n.ub-top__menu[data-v-353ec94e] {\n    display: inline-flex;\n}\n.ub-top__title[data-v-353ec94e] {\n    gap: var(--ub-s2);\n    font-size: var(--ub-fs-xl);\n}\n}\n", "src/presentation-v3/App.vue#style-1-353ec94e");
+var App_vue_vue_type_style_index_1_scoped_353ec94e_lang = null;
 
 const _hoisted_1 = ["data-ub-color-scheme", "data-ub-style"];
 const _hoisted_2 = { class: "ub-rail" };
@@ -212042,30 +212232,46 @@ const _hoisted_12 = { class: "ub-top" };
 const _hoisted_13 = { class: "ub-top__titles" };
 const _hoisted_14 = { class: "ub-top__title" };
 const _hoisted_15 = {
+	key: 1,
+	class: "ub-top__crumb"
+};
+const _hoisted_16 = {
 	ref: "scroller",
 	class: "ub-scroll",
 	"data-ub-main": ""
 };
-const _hoisted_16 = {
+const _hoisted_17 = {
+	key: 0,
+	class: "ub-heading"
+};
+const _hoisted_18 = {
+	key: 0,
+	class: "ub-heading__greeting"
+};
+const _hoisted_19 = {
 	key: 1,
+	class: "ub-heading__title"
+};
+const _hoisted_20 = {
+	key: 2,
 	class: "ub-scroll__empty"
 };
-const _hoisted_17 = {
+const _hoisted_21 = {
 	class: "ub-launcher__panel",
 	role: "dialog",
 	"aria-modal": "true",
 	"aria-label": "全部页面"
 };
-const _hoisted_18 = { class: "ub-launcher__head" };
-const _hoisted_19 = { class: "ub-brand" };
-const _hoisted_20 = { class: "ub-brand__text" };
-const _hoisted_21 = { class: "ub-brand__tag" };
-const _hoisted_22 = { class: "ub-launcher__body" };
-const _hoisted_23 = { class: "ub-launcher__foot" };
+const _hoisted_22 = { class: "ub-launcher__head" };
+const _hoisted_23 = { class: "ub-brand" };
+const _hoisted_24 = { class: "ub-brand__text" };
+const _hoisted_25 = { class: "ub-brand__tag" };
+const _hoisted_26 = { class: "ub-launcher__body" };
+const _hoisted_27 = { class: "ub-launcher__foot" };
 function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", {
 		class: "ub-app",
-		"data-ub-color-scheme": $setup.themeStore.activeTheme.colorScheme,
+		"data-ub-color-scheme": $setup.effectiveTheme.colorScheme,
 		"data-ub-style": $setup.appearanceStore.uiStyle
 	}, [_cache[14] || (_cache[14] = createBaseVNode(
 		"div",
@@ -212167,21 +212373,31 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 						"aria-expanded": $setup.launcherOpen ? "true" : "false",
 						onClick: _cache[2] || (_cache[2] = ($event) => $setup.launcherOpen = true)
 					}, null, 8, ["aria-expanded"]),
-					createBaseVNode("div", _hoisted_13, [createBaseVNode("h1", _hoisted_14, [$setup.activeEntry ? (openBlock(), createElementBlock(
-						"i",
-						{
-							key: 0,
-							class: normalizeClass([$setup.activeEntry.icon, "ub-top__icon"]),
-							"aria-hidden": "true"
-						},
-						null,
-						2
-						/* CLASS */
-					)) : createCommentVNode("v-if", true), createTextVNode(
-						" " + toDisplayString($setup.router.activePage?.title || "UnbirthDB"),
-						1
-						/* TEXT */
-					)])]),
+					createBaseVNode("div", _hoisted_13, [createBaseVNode("h1", _hoisted_14, [
+						$setup.activeEntry ? (openBlock(), createElementBlock(
+							"i",
+							{
+								key: 0,
+								class: normalizeClass([$setup.activeEntry.icon, "ub-top__icon"]),
+								"aria-hidden": "true"
+							},
+							null,
+							2
+							/* CLASS */
+						)) : createCommentVNode("v-if", true),
+						$setup.appearanceStore.isClaudeStyle && $setup.activeGroupTitle ? (openBlock(), createElementBlock(
+							"span",
+							_hoisted_15,
+							toDisplayString($setup.activeGroupTitle),
+							1
+							/* TEXT */
+						)) : createCommentVNode("v-if", true),
+						createTextVNode(
+							" " + toDisplayString($setup.router.activePage?.title || "UnbirthDB"),
+							1
+							/* TEXT */
+						)
+					])]),
 					createVNode($setup["UbIconButton"], {
 						icon: "fa-solid fa-xmark",
 						title: "关闭 UnbirthDB",
@@ -212189,8 +212405,20 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 					})
 				]), createBaseVNode(
 					"main",
-					_hoisted_15,
-					[$setup.activeEntry ? (openBlock(), createBlock(resolveDynamicComponent($setup.activeEntry.component), { key: `${$setup.router.activePageId}:${$setup.rootShell.openRefreshTick}` })) : (openBlock(), createElementBlock("p", _hoisted_16, "没有可显示的页面。"))],
+					_hoisted_16,
+					[$setup.appearanceStore.isClaudeStyle && $setup.activeEntry ? (openBlock(), createElementBlock("div", _hoisted_17, [$setup.router.activePageId === "dashboard" ? (openBlock(), createElementBlock(
+						"h2",
+						_hoisted_18,
+						toDisplayString($setup.greeting),
+						1
+						/* TEXT */
+					)) : (openBlock(), createElementBlock(
+						"h2",
+						_hoisted_19,
+						toDisplayString($setup.router.activePage?.title),
+						1
+						/* TEXT */
+					))])) : createCommentVNode("v-if", true), $setup.activeEntry ? (openBlock(), createBlock(resolveDynamicComponent($setup.activeEntry.component), { key: `${$setup.router.activePageId}:${$setup.rootShell.openRefreshTick}` })) : (openBlock(), createElementBlock("p", _hoisted_20, "没有可显示的页面。"))],
 					512
 					/* NEED_PATCH */
 				)])],
@@ -212202,8 +212430,8 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 				class: "ub-launcher",
 				"data-tt-mobile-surface": "backdrop",
 				onClick: _cache[5] || (_cache[5] = withModifiers(($event) => $setup.launcherOpen = false, ["self"]))
-			}, [createBaseVNode("div", _hoisted_17, [
-				createBaseVNode("header", _hoisted_18, [createBaseVNode("div", _hoisted_19, [_cache[12] || (_cache[12] = createBaseVNode(
+			}, [createBaseVNode("div", _hoisted_21, [
+				createBaseVNode("header", _hoisted_22, [createBaseVNode("div", _hoisted_23, [_cache[12] || (_cache[12] = createBaseVNode(
 					"span",
 					{
 						class: "ub-brand__mark",
@@ -212212,7 +212440,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 					"UB",
 					-1
 					/* CACHED */
-				)), createBaseVNode("span", _hoisted_20, [_cache[11] || (_cache[11] = createBaseVNode(
+				)), createBaseVNode("span", _hoisted_24, [_cache[11] || (_cache[11] = createBaseVNode(
 					"span",
 					{ class: "ub-brand__name" },
 					"UnbirthDB",
@@ -212220,7 +212448,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 					/* CACHED */
 				)), createBaseVNode(
 					"span",
-					_hoisted_21,
+					_hoisted_25,
 					toDisplayString($setup.uiMode.isBasicMode ? "基础模式" : "高手模式"),
 					1
 					/* TEXT */
@@ -212229,11 +212457,11 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 					title: "收起",
 					onClick: _cache[3] || (_cache[3] = ($event) => $setup.launcherOpen = false)
 				})]),
-				createBaseVNode("div", _hoisted_22, [createVNode($setup["NavList"], {
+				createBaseVNode("div", _hoisted_26, [createVNode($setup["NavList"], {
 					variant: "tiles",
 					onNavigate: _cache[4] || (_cache[4] = ($event) => $setup.launcherOpen = false)
 				})]),
-				createBaseVNode("footer", _hoisted_23, [createVNode($setup["UbButton"], {
+				createBaseVNode("footer", _hoisted_27, [createVNode($setup["UbButton"], {
 					icon: "fa-solid fa-repeat",
 					variant: "soft",
 					block: "",
@@ -212270,7 +212498,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	), [[vShow, $setup.rootShell.isOpen]])], 8, _hoisted_1);
 }
-var App = /* @__PURE__ */ _export_sfc(_sfc_main, [["render", _sfc_render], ["__scopeId", "data-v-32113246"]]);
+var App = /* @__PURE__ */ _export_sfc(_sfc_main, [["render", _sfc_render], ["__scopeId", "data-v-353ec94e"]]);
 
 const THEME_STYLE_NODE_ID = 'acu-v2-theme';
 const APP_ROOT_ID = 'acu-app-v2';
@@ -212589,6 +212817,15 @@ function __resetHostRendererForTests() {
     cachedRenderer = null;
 }
 
+/**
+ * mount — 把 Vue + Pinia 应用挂载到 host document 的 #acu-app-v2 容器（D15 / D15.1 / D16）
+ *
+ * 设计要点：
+ * - 容器物理隔离于旧 popup（id=acu-app-v2，不复用 #popup）
+ * - 容器、所有 SFC <style>、未来主题节点都注入同一个 host document
+ * - 应用生命周期：首次打开惰性创建 + mount，后续打开/关闭只切换 display；
+ *   根 Vue app 与 Pinia 保留，当前页面组件在重开时由 MainArea key remount。
+ */
 const ROOT_ID = 'acu-app-v2';
 let state = null;
 let renderErrorReportCount_ACU = 0;
@@ -212652,14 +212889,18 @@ function ensureMounted() {
     const pinia = createPinia();
     root.textContent = '';
     // 主题与外观：先应用一次，避免首帧缺少 root token；订阅后续变更。
-    const themeStore = useThemeStore(pinia);
-    applyTheme(themeStore.activeTheme);
-    themeStore.$subscribe(() => applyTheme(themeStore.activeTheme));
+    // 生效配色由界面风格决定（Claude 风格自带配色并按颜色模式 / 系统明暗切换）。
     const appearanceStore = useAppearanceStore(pinia);
+    appearanceStore.setSystemPrefersDark(systemPrefersDark_ACU(hostWindow));
+    const themeScope = effectScope(true);
+    themeScope.run(() => {
+        watch(useEffectiveTheme(pinia), theme => applyTheme(theme), { immediate: true });
+        onScopeDispose(watchSystemColorScheme_ACU(hostWindow, dark => appearanceStore.setSystemPrefersDark(dark)));
+    });
     applyAppearance(appearanceStore.uiScaleOption);
     appearanceStore.$subscribe(() => applyAppearance(appearanceStore.uiScaleOption));
     const vueApp = mountRootApp(root, pinia, doc);
-    state = { vueApp, pinia, root };
+    state = { vueApp, pinia, root, themeScope };
     logDebug_ACU(`[ACU-V2] app mounted into ${source} (id=#${ROOT_ID}, width=${hostWidth}px)`);
     return state;
 }
@@ -212706,6 +212947,7 @@ function __resetAcuV2MountForTests() {
         catch {
             /* swallow */
         }
+        state.themeScope.stop();
         state.root.parentNode?.removeChild(state.root);
         state = null;
     }
@@ -213024,7 +213266,7 @@ function showAcuV2Toast_ACU(payload) {
  */
 function applySavedThemeToHostSurfaces_ACU() {
     try {
-        applyTheme(readPersistedActiveTheme_ACU());
+        applyTheme(readPersistedEffectiveTheme_ACU(getAcuHostWindow()));
     }
     catch (error) {
         logWarn_ACU('[ACU-V2] 启动时应用主题失败，宿主浮层将使用默认配色:', error);

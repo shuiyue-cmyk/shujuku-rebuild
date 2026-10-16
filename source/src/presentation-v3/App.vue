@@ -1,5 +1,5 @@
 <template>
-  <div class="ub-app" :data-ub-color-scheme="themeStore.activeTheme.colorScheme" :data-ub-style="appearanceStore.uiStyle">
+  <div class="ub-app" :data-ub-color-scheme="effectiveTheme.colorScheme" :data-ub-style="appearanceStore.uiStyle">
     <div id="ub-portal" class="ub-portal"></div>
     <div v-show="rootShell.isOpen" class="ub-shell" :class="{ 'is-rail-collapsed': railCollapsed }">
       <VisualizerSurface v-if="visualizer.isActive" @close="closeApp" />
@@ -50,6 +50,7 @@
             <div class="ub-top__titles">
               <h1 class="ub-top__title">
                 <i v-if="activeEntry" :class="[activeEntry.icon, 'ub-top__icon']" aria-hidden="true"></i>
+                <span v-if="appearanceStore.isClaudeStyle && activeGroupTitle" class="ub-top__crumb">{{ activeGroupTitle }}</span>
                 {{ router.activePage?.title || 'UnbirthDB' }}
               </h1>
             </div>
@@ -57,6 +58,10 @@
           </header>
 
           <main ref="scroller" class="ub-scroll" data-ub-main>
+            <div v-if="appearanceStore.isClaudeStyle && activeEntry" class="ub-heading">
+              <h2 v-if="router.activePageId === 'dashboard'" class="ub-heading__greeting">{{ greeting }}</h2>
+              <h2 v-else class="ub-heading__title">{{ router.activePage?.title }}</h2>
+            </div>
             <component
               :is="activeEntry.component"
               v-if="activeEntry"
@@ -115,19 +120,20 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { acuRequestAnimationFrame } from '../presentation-v2/bootstrap/host-env';
 import { useAppearanceStore } from '../presentation-v2/stores/appearance-store';
+import { useEffectiveTheme } from '../presentation-v2/composables/useEffectiveTheme';
 import { useChatChangedListener, watchChatChanged_ACU } from '../presentation-v2/composables/useChatChangedListener';
 import { useDevOptions } from '../presentation-v2/composables/useDevOptions';
 import { useTemplateRuntimeChangeListener } from '../presentation-v2/composables/useTemplateRuntimeChangeListener';
 import { canCloseUi, canLeaveCurrentPage } from '../presentation-v2/composables/useUiCloseGuard';
 import { useRootShellStore } from '../presentation-v2/stores/root-shell-store';
 import { useRouterStore } from '../presentation-v2/stores/router-store';
-import { useThemeStore } from '../presentation-v2/stores/theme-store';
 import { useToastStore } from '../presentation-v2/stores/toast-store';
 import { useUiModeStore } from '../presentation-v2/stores/ui-mode-store';
 import { useVisualizerStore } from '../presentation-v2/stores/visualizer-store';
 import VisualizerSurface from './surfaces/VisualizerSurface.vue';
 import { ubPageEntry } from './router/page-catalog';
 import AppearanceSheet from './shell/AppearanceSheet.vue';
+import { claudeGreeting } from './shell/claude-greeting';
 import NavList from './shell/NavList.vue';
 import UbButton from './ui/UbButton.vue';
 import UbDialogHost from './ui/UbDialogHost.vue';
@@ -141,8 +147,8 @@ const emit = defineEmits<{ (event: 'close'): void }>();
 const rootShell = useRootShellStore();
 const router = useRouterStore();
 const uiMode = useUiModeStore();
-const themeStore = useThemeStore();
 const appearanceStore = useAppearanceStore();
+const effectiveTheme = useEffectiveTheme();
 const toastStore = useToastStore();
 const visualizer = useVisualizerStore();
 const devOptions = useDevOptions();
@@ -154,6 +160,13 @@ const scroller = ref<HTMLElement | null>(null);
 const activeEntry = computed(() => ubPageEntry(router.activePageId));
 /** 侧栏收起只在 Claude 风格下生效；切回默认风格时照常展开，偏好保留。 */
 const railCollapsed = computed(() => appearanceStore.isClaudeStyle && appearanceStore.railCollapsed);
+const activeGroupTitle = computed(() => router.groups.find(group => group.id === router.activePage?.group)?.title ?? '');
+/** 问候语按打开面板 / 切页时的本地时段取词，不做定时刷新。 */
+const greeting = computed(() => {
+  void rootShell.openRefreshTick;
+  void router.activePageId;
+  return claudeGreeting(new Date().getHours());
+});
 const modeToggleLabel = computed(() => (uiMode.isBasicMode ? '切换到高手模式' : '返回基础模式'));
 
 /** 手机端没有侧栏，外观入口放在「全部页面」面板里；打开外观时先收起面板。 */

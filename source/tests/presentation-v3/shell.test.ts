@@ -95,54 +95,57 @@ describe('v3 外壳', () => {
     unregister();
   });
 
-  it('界面风格：外观里切到 Claude，根节点换风格、配色跟着换成同明暗的 Claude 主题；侧栏可收起', async () => {
-    const { mount } = await mountV3({ uiState: { theme: { activeId: 'default-dark' } } });
+  it('界面风格：切到 Claude 后用自带配色，明暗按颜色模式走、不改所选主题；页首出现标题与问候语；侧栏可收起', async () => {
+    const { mount, router } = await mountV3({ uiState: { theme: { activeId: 'jirai-kei' } } });
     cleanup = () => mount.__resetAcuV2MountForTests();
     const app = document.querySelector<HTMLElement>('.ub-app')!;
     expect(app.dataset.ubStyle).toBe('default');
     expect(document.querySelector('.ub-rail__collapse')).toBeNull();
+    expect(document.querySelector('.ub-heading')).toBeNull();
 
     Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-rail button'))
       .find(button => button.textContent?.includes('外观与界面'))!.click();
     await flush();
-    const claudeOption = Array.from(document.querySelectorAll<HTMLButtonElement>('[aria-label="界面风格"] button'))
-      .find(button => button.textContent?.trim() === 'Claude')!;
-    claudeOption.click();
+    const pick = (group: string, label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>(`[aria-label="${group}"] button`))
+      .find(button => button.textContent?.trim() === label)!;
+    expect(document.querySelector('[aria-label="颜色模式"]')).toBeNull();
+    pick('界面风格', 'Claude').click();
     await flush();
 
     expect(app.dataset.ubStyle).toBe('claude');
     const { useThemeStore } = await import('../../src/presentation-v2/stores/theme-store');
-    expect(useThemeStore().activeId).toBe('claude-night');
-    expect(document.body.textContent).toContain('已同时换成 Claude 配色');
+    expect(useThemeStore().activeId).toBe('jirai-kei');
+    // 主题网格让位给颜色模式；jsdom 无系统深色 → 跟随系统取浅色
+    expect(document.querySelector('[aria-label="颜色模式"]')).not.toBeNull();
+    expect(app.dataset.ubColorScheme).toBe('light');
+    const themeStyle = document.getElementById('acu-v2-theme')!.textContent!;
+    expect(themeStyle.toLowerCase()).toContain('--acu-accent: #d97757');
+    pick('颜色模式', '深色').click();
+    await flush();
+    expect(app.dataset.ubColorScheme).toBe('dark');
+    expect(document.getElementById('acu-v2-theme')!.textContent).toContain('color-scheme: dark');
+
+    expect(document.querySelector('.ub-heading__greeting')?.textContent).toMatch(/好|夜深了/);
+    router.setActivePage('api');
+    await flush();
+    expect(document.querySelector('.ub-heading__title')?.textContent).toContain('API');
+    expect(document.querySelector('.ub-top__crumb')?.textContent).toBe('配置');
 
     const collapse = document.querySelector<HTMLButtonElement>('.ub-rail__collapse')!;
-    expect(collapse).not.toBeNull();
     collapse.click();
     await flush();
     expect(document.querySelector('.ub-shell')?.classList.contains('is-rail-collapsed')).toBe(true);
     expect(document.querySelector('.ub-rail [data-page-id="dashboard"]')?.getAttribute('title')).toBeTruthy();
     expect(document.querySelector('.ub-rail .ub-nav__group-title')).toBeNull();
 
-    // 切回默认风格：侧栏照常展开，主题不动
-    Array.from(document.querySelectorAll<HTMLButtonElement>('[aria-label="界面风格"] button'))
-      .find(button => button.textContent?.trim() === '默认')!.click();
+    // 切回默认风格：所选主题重新生效，侧栏照常展开，页首标题消失
+    pick('界面风格', '默认').click();
     await flush();
     expect(app.dataset.ubStyle).toBe('default');
+    expect(app.dataset.ubColorScheme).toBe('dark');
     expect(document.querySelector('.ub-shell')?.classList.contains('is-rail-collapsed')).toBe(false);
-    expect(useThemeStore().activeId).toBe('claude-night');
-  });
-
-  it('界面风格：已在用 Claude 配色时切换风格不改主题、不弹提示', async () => {
-    const { mount } = await mountV3({ uiState: { theme: { activeId: 'claude' } } });
-    cleanup = () => mount.__resetAcuV2MountForTests();
-    Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-rail button'))
-      .find(button => button.textContent?.includes('外观与界面'))!.click();
-    await flush();
-    Array.from(document.querySelectorAll<HTMLButtonElement>('[aria-label="界面风格"] button'))
-      .find(button => button.textContent?.trim() === 'Claude')!.click();
-    await flush();
-    const { useThemeStore } = await import('../../src/presentation-v2/stores/theme-store');
-    expect(useThemeStore().activeId).toBe('claude');
-    expect(document.body.textContent).not.toContain('已同时换成 Claude 配色');
+    expect(document.querySelector('.ub-heading')).toBeNull();
+    expect(document.querySelector('.ub-top__crumb')).toBeNull();
+    expect(document.getElementById('acu-v2-theme')!.textContent!.toLowerCase()).not.toContain('--acu-accent: #d97757');
   });
 });

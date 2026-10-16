@@ -1,6 +1,18 @@
 <template>
   <UbSheet :is-open="isOpen" title="外观与界面" subtitle="只影响本机显示，不改动任何数据" width="460px" @close="emit('close')">
-    <UbSection title="主题" description="点选即切换。主题文件可导入导出。" padded>
+    <UbSection v-if="appearanceStore.isClaudeStyle" title="颜色" description="Claude 风格使用自带的 Claude 配色；外观主题在切回默认风格后才生效。">
+      <UbRow label="颜色模式" hint="跟随系统时随设备的浅色 / 深色设置自动切换。">
+        <UbSegmented
+          :options="colorModeOptions"
+          :model-value="appearanceStore.claudeColorMode"
+          aria-label="颜色模式"
+          size="sm"
+          @update:model-value="appearanceStore.setClaudeColorMode($event as AcuClaudeColorMode)"
+        />
+      </UbRow>
+    </UbSection>
+
+    <UbSection v-else title="主题" description="点选即切换。主题文件可导入导出。" padded>
       <div class="ub-themes">
         <div
           v-for="t in themeStore.themes"
@@ -39,13 +51,13 @@
     </UbSection>
 
     <UbSection title="显示">
-      <UbRow label="界面风格" hint="Claude 风格换成更柔和的层次、圆角和衬线标题，侧栏可收起；颜色仍跟随上面的主题。">
+      <UbRow label="界面风格" hint="Claude 风格按 Claude 的界面规范重排层次、字号、控件与配色，侧栏可收起；随时可切回。">
         <UbSegmented
           :options="styleOptions"
           :model-value="appearanceStore.uiStyle"
           aria-label="界面风格"
           size="sm"
-          @update:model-value="setStyle($event as AcuUiStyle)"
+          @update:model-value="appearanceStore.setUiStyle($event as AcuUiStyle)"
         />
       </UbRow>
       <UbRow label="界面缩放" :hint="`当前 ${appearanceStore.uiScaleLabel}`">
@@ -74,9 +86,11 @@
 <script setup lang="ts">
 import { downloadJsonToHost_ACU } from '../../presentation-v2/bootstrap/host-download';
 import {
+  ACU_CLAUDE_COLOR_MODE_OPTIONS,
   ACU_UI_SCALE_OPTIONS,
   ACU_UI_STYLE_OPTIONS,
   useAppearanceStore,
+  type AcuClaudeColorMode,
   type AcuUiScale,
   type AcuUiStyle,
 } from '../../presentation-v2/stores/appearance-store';
@@ -108,21 +122,7 @@ const toastStore = useToastStore();
 const scaleOptions = ACU_UI_SCALE_OPTIONS.map(option => ({ value: option.value, label: option.label }));
 const styleOptions = ACU_UI_STYLE_OPTIONS.map(option => ({ value: option.value, label: option.label }));
 
-const CLAUDE_THEME_IDS: readonly AcuV2ThemeId[] = ['claude', 'claude-night'];
-
-/**
- * 切到 Claude 风格时，若当前不是 Claude 配色，顺手换成同明暗的 Claude / Claude 夜，
- * 并提示可以改回；切回默认风格不动主题。
- */
-function setStyle(value: AcuUiStyle): void {
-  if (value === appearanceStore.uiStyle) return;
-  appearanceStore.setUiStyle(value);
-  if (value !== 'claude' || CLAUDE_THEME_IDS.includes(themeStore.activeId)) return;
-  const target: AcuV2ThemeId = themeStore.activeTheme.colorScheme === 'dark' ? 'claude-night' : 'claude';
-  if (!themeStore.themes.some(t => t.id === target)) return;
-  themeStore.setTheme(target);
-  toastStore.info('已同时换成 Claude 配色，可在上方「主题」里改回。');
-}
+const colorModeOptions = ACU_CLAUDE_COLOR_MODE_OPTIONS.map(option => ({ value: option.value, label: option.label }));
 const modeOptions = [
   { value: 'basic', label: '基础' },
   { value: 'advanced', label: '高手' },

@@ -7,7 +7,7 @@
  * - 应用生命周期：首次打开惰性创建 + mount，后续打开/关闭只切换 display；
  *   根 Vue app 与 Pinia 保留，当前页面组件在重开时由 MainArea key remount。
  */
-import type { App as VueApp } from 'vue';
+import { effectScope, onScopeDispose, watch, type App as VueApp, type EffectScope } from 'vue';
 import { createPinia, type Pinia } from 'pinia';
 import { logDebug_ACU, logError_ACU } from '../../shared/utils';
 import { TT_MOBILE_SURFACE_ACU, applyTtMobileSurface_ACU } from '../../shared/tt-mobile-surface';
@@ -15,9 +15,10 @@ import { setSfcStyleHost } from '../build/sfc-style-runtime';
 import App from '../../presentation-v3/App.vue';
 import { useAppearanceStore } from '../stores/appearance-store';
 import { useRootShellStore } from '../stores/root-shell-store';
-import { useThemeStore } from '../stores/theme-store';
 import { applyAppearance, __resetAppearanceInjectorForTests } from '../theme/appearance-injector';
 import { applyTheme } from '../theme/theme-injector';
+import { systemPrefersDark_ACU, watchSystemColorScheme_ACU } from '../theme/effective-theme';
+import { useEffectiveTheme } from '../composables/useEffectiveTheme';
 import { __resetUiCloseGuardsForTests } from '../composables/useUiCloseGuard';
 import { __resetToastStoreForTests } from '../stores/toast-store';
 import {
@@ -34,6 +35,8 @@ interface MountedState {
   vueApp: VueApp;
   pinia: Pinia;
   root: HTMLElement;
+  /** 主题跟随（界面风格 / 颜色模式 / 系统明暗）的监听，销毁时一并停掉。 */
+  themeScope: EffectScope;
 }
 
 let state: MountedState | null = null;
@@ -105,17 +108,21 @@ function ensureMounted(): MountedState {
   const pinia = createPinia();
   root.textContent = '';
   // 主题与外观：先应用一次，避免首帧缺少 root token；订阅后续变更。
-  const themeStore = useThemeStore(pinia);
-  applyTheme(themeStore.activeTheme);
-  themeStore.$subscribe(() => applyTheme(themeStore.activeTheme));
-
+  // 生效配色由界面风格决定（Claude 风格自带配色并按颜色模式 / 系统明暗切换）。
   const appearanceStore = useAppearanceStore(pinia);
+  appearanceStore.setSystemPrefersDark(systemPrefersDark_ACU(hostWindow));
+  const themeScope = effectScope(true);
+  themeScope.run(() => {
+    watch(useEffectiveTheme(pinia), theme => applyTheme(theme), { immediate: true });
+    onScopeDispose(watchSystemColorScheme_ACU(hostWindow, dark => appearanceStore.setSystemPrefersDark(dark)));
+  });
+
   applyAppearance(appearanceStore.uiScaleOption);
   appearanceStore.$subscribe(() => applyAppearance(appearanceStore.uiScaleOption));
 
   const vueApp = mountRootApp(root, pinia, doc);
 
-  state = { vueApp, pinia, root };
+  state = { vueApp, pinia, root, themeScope };
   logDebug_ACU(`[ACU-V2] app mounted into ${source} (id=#${ROOT_ID}, width=${hostWidth}px)`);
   return state;
 }
@@ -164,6 +171,7 @@ export function __resetAcuV2MountForTests(): void {
     } catch {
       /* swallow */
     }
+    state.themeScope.stop();
     state.root.parentNode?.removeChild(state.root);
     state = null;
   }

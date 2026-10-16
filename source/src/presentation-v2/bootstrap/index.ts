@@ -11,7 +11,8 @@ import { registerAcuV2MenuButton } from './menu-button';
 import { getAcuV2PiniaForBridge } from './mount';
 import { useRootShellStore } from '../stores/root-shell-store';
 import { useToastStore } from '../stores/toast-store';
-import { readPersistedActiveTheme_ACU } from '../stores/theme-store';
+import { readPersistedEffectiveTheme_ACU } from '../theme/effective-theme';
+import { getAcuHostWindow } from './host-document';
 import { applyTheme } from '../theme/theme-injector';
 import {
   installAutoCardUpdaterV2Api_ACU,
@@ -61,7 +62,7 @@ function showAcuV2Toast_ACU(payload: UiToastPayload_ACU): void {
  */
 export function applySavedThemeToHostSurfaces_ACU(): void {
   try {
-    applyTheme(readPersistedActiveTheme_ACU());
+    applyTheme(readPersistedEffectiveTheme_ACU(getAcuHostWindow()));
   } catch (error) {
     logWarn_ACU('[ACU-V2] 启动时应用主题失败，宿主浮层将使用默认配色:', error);
   }
