@@ -33,6 +33,21 @@ describe('applySavedThemeToHostSurfaces_ACU', () => {
     const css = document.getElementById('acu-v2-theme')?.textContent || '';
     expect(css).toContain('.acu-host-surface');
     expect(css).toContain('color-scheme: light;');
+    expect(document.getElementById('acu-v2-host-claude-skin')).toBeNull();
+    localStorage.clear();
+  });
+
+  it('保存的是 Claude 风格：启动时宿主浮层就用 Claude 配色与 Claude 弹窗外观', async () => {
+    localStorage.setItem('acu_v2_ui_state', JSON.stringify({
+      theme: { activeId: 'jirai-kei' },
+      appearance: { uiStyle: 'claude', claudeColorMode: 'dark' },
+    }));
+    const { applySavedThemeToHostSurfaces_ACU } = await import('../../../src/presentation-v2/bootstrap');
+    applySavedThemeToHostSurfaces_ACU();
+    const css = document.getElementById('acu-v2-theme')?.textContent || '';
+    expect(css.toLowerCase()).toContain('--acu-accent: #d97757');
+    expect(css).toContain('color-scheme: dark;');
+    expect(document.getElementById('acu-v2-host-claude-skin')?.textContent).toContain('rgba(0, 0, 0, 0.55)');
     localStorage.clear();
   });
 });

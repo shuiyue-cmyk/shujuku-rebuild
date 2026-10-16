@@ -98,6 +98,16 @@ export function resolveEffectiveTheme_ACU(activeTheme: AcuV2Theme, input: Effect
   return dark ? CLAUDE_STYLE_THEME_DARK : CLAUDE_STYLE_THEME_LIGHT;
 }
 
+/** 生效的是 Claude 风格自带配色（面板外弹窗据此套用 Claude 外观）。 */
+export function isClaudeStyleTheme_ACU(theme: AcuV2Theme): boolean {
+  return theme === CLAUDE_STYLE_THEME_LIGHT || theme === CLAUDE_STYLE_THEME_DARK;
+}
+
+/** 按生效配色同步面板外弹窗的 Claude 外观：Claude 配色写入，其余清空。 */
+export function hostSkinSchemeFor_ACU(theme: AcuV2Theme): AcuV2Theme['colorScheme'] | null {
+  return isClaudeStyleTheme_ACU(theme) ? theme.colorScheme : null;
+}
+
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 
 /** 读宿主窗口的系统明暗；不支持 matchMedia 的环境当作浅色。 */

@@ -11,7 +11,8 @@ import { registerAcuV2MenuButton } from './menu-button';
 import { getAcuV2PiniaForBridge } from './mount';
 import { useRootShellStore } from '../stores/root-shell-store';
 import { useToastStore } from '../stores/toast-store';
-import { readPersistedEffectiveTheme_ACU } from '../theme/effective-theme';
+import { hostSkinSchemeFor_ACU, readPersistedEffectiveTheme_ACU } from '../theme/effective-theme';
+import { applyHostClaudeSkin } from '../theme/host-claude-skin';
 import { getAcuHostWindow } from './host-document';
 import { applyTheme } from '../theme/theme-injector';
 import {
@@ -57,12 +58,14 @@ function showAcuV2Toast_ACU(payload: UiToastPayload_ACU): void {
 }
 
 /**
- * 启动即按已保存的主题输出 token：插件提示框等宿主浮层在面板打开前就会出现，
+ * 启动即按已保存的主题与界面风格输出 token（Claude 风格另补弹窗外观）：插件提示框等宿主浮层在面板打开前就会出现，
  * 不能等首次挂载才上色。面板挂载后由 theme store 订阅接管后续切换。
  */
 export function applySavedThemeToHostSurfaces_ACU(): void {
   try {
-    applyTheme(readPersistedEffectiveTheme_ACU(getAcuHostWindow()));
+    const theme = readPersistedEffectiveTheme_ACU(getAcuHostWindow());
+    applyTheme(theme);
+    applyHostClaudeSkin(hostSkinSchemeFor_ACU(theme));
   } catch (error) {
     logWarn_ACU('[ACU-V2] 启动时应用主题失败，宿主浮层将使用默认配色:', error);
   }

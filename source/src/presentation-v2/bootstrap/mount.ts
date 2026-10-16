@@ -17,7 +17,8 @@ import { useAppearanceStore } from '../stores/appearance-store';
 import { useRootShellStore } from '../stores/root-shell-store';
 import { applyAppearance, __resetAppearanceInjectorForTests } from '../theme/appearance-injector';
 import { applyTheme } from '../theme/theme-injector';
-import { systemPrefersDark_ACU, watchSystemColorScheme_ACU } from '../theme/effective-theme';
+import { hostSkinSchemeFor_ACU, systemPrefersDark_ACU, watchSystemColorScheme_ACU } from '../theme/effective-theme';
+import { applyHostClaudeSkin } from '../theme/host-claude-skin';
 import { useEffectiveTheme } from '../composables/useEffectiveTheme';
 import { __resetUiCloseGuardsForTests } from '../composables/useUiCloseGuard';
 import { __resetToastStoreForTests } from '../stores/toast-store';
@@ -113,7 +114,10 @@ function ensureMounted(): MountedState {
   appearanceStore.setSystemPrefersDark(systemPrefersDark_ACU(hostWindow));
   const themeScope = effectScope(true);
   themeScope.run(() => {
-    watch(useEffectiveTheme(pinia), theme => applyTheme(theme), { immediate: true });
+    watch(useEffectiveTheme(pinia), (theme) => {
+      applyTheme(theme);
+      applyHostClaudeSkin(hostSkinSchemeFor_ACU(theme));
+    }, { immediate: true });
     onScopeDispose(watchSystemColorScheme_ACU(hostWindow, dark => appearanceStore.setSystemPrefersDark(dark)));
   });
 

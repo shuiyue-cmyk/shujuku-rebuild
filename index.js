@@ -171954,6 +171954,14 @@ function resolveEffectiveTheme_ACU(activeTheme, input) {
         || (input.claudeColorMode === 'system' && input.systemPrefersDark);
     return dark ? CLAUDE_STYLE_THEME_DARK : CLAUDE_STYLE_THEME_LIGHT;
 }
+/** 生效的是 Claude 风格自带配色（面板外弹窗据此套用 Claude 外观）。 */
+function isClaudeStyleTheme_ACU(theme) {
+    return theme === CLAUDE_STYLE_THEME_LIGHT || theme === CLAUDE_STYLE_THEME_DARK;
+}
+/** 按生效配色同步面板外弹窗的 Claude 外观：Claude 配色写入，其余清空。 */
+function hostSkinSchemeFor_ACU(theme) {
+    return isClaudeStyleTheme_ACU(theme) ? theme.colorScheme : null;
+}
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 /** 读宿主窗口的系统明暗；不支持 matchMedia 的环境当作浅色。 */
 function systemPrefersDark_ACU(win) {
@@ -212723,6 +212731,278 @@ function __resetAppearanceInjectorForTests() {
     }
 }
 
+/**
+ * host-claude-skin — Claude 风格下面板外的插件弹窗外观。
+ *
+ * 面板外弹窗（插件提示条、手动填表确认框、正文替换对比 / 结果对话框与进行中遮罩）挂在酒馆页面上，
+ * 不在面板根节点之内，读不到面板的 data-ub-style。它们本就带 .acu-host-surface 并读 --acu-* 令牌，
+ * Claude 风格下令牌已是 Claude 配色；这里再补形状、字阶与动效，同一个样式节点开关：
+ * Claude 风格写入、默认风格清空，不动这些弹窗自己的样式表。
+ */
+const HOST_CLAUDE_SKIN_STYLE_ID = 'acu-v2-host-claude-skin';
+const S = `.${ACU_HOST_SURFACE_CLASS_ACU}`;
+const DIALOG = `:is(${S}.acu-hd-dialog, ${S} .acu-hd-dialog)`;
+const TOAST = `#toast-container > .acu-toast.toast${S}`;
+function buildHostClaudeSkinCss(colorScheme) {
+    const dark = colorScheme === 'dark';
+    const scrim = dark ? 'rgba(0, 0, 0, 0.55)' : 'rgba(0, 0, 0, 0.30)';
+    const ring = dark ? 'inset 0 0 0 1px rgba(255, 255, 255, 0.09)' : 'inset 0 0 0 1px rgba(20, 20, 20, 0.10)';
+    const fillSecondary = dark ? 'rgba(255, 255, 255, 0.10)' : 'rgba(0, 0, 0, 0.06)';
+    const fillSecondaryHover = dark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.10)';
+    const clayInk = dark ? '#e08264' : '#c4532f';
+    const claySoft = dark ? 'rgba(217, 119, 87, 0.15)' : '#fbf3ef';
+    const focus = `inset 0 0 0 1px var(--acu-bg-0), 0 0 0 1.5px var(--acu-accent), 0 0 6px 1px rgba(217, 119, 87, ${dark ? '0.35' : '0.25'})`;
+    return `/* UnbirthDB：Claude 风格下的面板外弹窗 */
+:is(${S}.acu-hd-layer, ${S}.acu-hd-scrim) {
+  background: ${scrim};
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+${DIALOG},
+${S} .acu-hd-busy {
+  border: 0;
+  border-radius: 16px;
+  background: var(--acu-bg-1);
+  box-shadow: var(--acu-shadow);
+  animation-duration: 200ms;
+  animation-timing-function: cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+
+${DIALOG} {
+  gap: 16px;
+  padding: 20px;
+  font-size: 14px;
+}
+
+${S}.acu-hd-dialog:not(.acu-hd-dialog--floating),
+${S} .acu-hd-dialog:not(.acu-hd-dialog--floating) {
+  width: min(448px, 100%);
+}
+
+${S} .acu-hd-head,
+${DIALOG} .acu-hd-head {
+  align-items: flex-start;
+  gap: 14px;
+}
+
+${DIALOG} .acu-hd-glyph {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: ${claySoft};
+  color: ${clayInk};
+  font-size: 14px;
+}
+
+${DIALOG} .acu-hd-glyph.is-danger {
+  background: color-mix(in srgb, var(--acu-danger) 11%, transparent);
+  color: var(--acu-danger);
+}
+
+${DIALOG} .acu-hd-title {
+  font: 600 16px/1.25 var(--acu-font-ui);
+  letter-spacing: -0.005em;
+  text-wrap: balance;
+}
+
+${DIALOG} .acu-hd-meta {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: ${claySoft};
+  color: ${clayInk};
+  font-size: 11px;
+  font-weight: 500;
+}
+
+${DIALOG} .acu-hd-message {
+  color: var(--acu-text-2);
+  font-size: 13px;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+${DIALOG} .acu-hd-item {
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--acu-bg-0);
+  box-shadow: ${ring};
+  font-size: 13px;
+}
+
+${DIALOG} .acu-hd-item__plan {
+  border-radius: 8px;
+  background: ${claySoft};
+  font-size: 12px;
+}
+
+${DIALOG} .acu-hd-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+${DIALOG} .acu-hd-tag--accent {
+  padding: 0;
+  color: ${clayInk};
+}
+
+${S} .acu-hd-actions .acu-hd-btn {
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: ${fillSecondary};
+  color: var(--acu-text-1);
+  font: 500 13px/1 var(--acu-font-ui);
+  transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1), color 150ms ease, box-shadow 150ms ease, transform 100ms ease;
+}
+
+${S} .acu-hd-actions .acu-hd-btn:hover:not(:disabled) {
+  background: ${fillSecondaryHover};
+}
+
+${S} .acu-hd-actions .acu-hd-btn:focus-visible {
+  outline: none;
+  box-shadow: ${focus};
+}
+
+${S} .acu-hd-actions .acu-hd-btn:disabled {
+  opacity: 0.35;
+}
+
+${S} .acu-hd-actions .acu-hd-btn--primary {
+  background: var(--acu-accent);
+  color: #ffffff;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
+}
+
+${S} .acu-hd-actions .acu-hd-btn--primary:hover:not(:disabled) {
+  background: var(--acu-accent-2);
+}
+
+${S} .acu-hd-actions .acu-hd-btn--soft {
+  background: ${claySoft};
+  color: ${clayInk};
+}
+
+${S} .acu-hd-actions .acu-hd-btn--soft:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--acu-accent) 18%, transparent);
+}
+
+${S} .acu-hd-actions .acu-hd-btn--ghost {
+  background: transparent;
+  color: var(--acu-text-2);
+}
+
+${S} .acu-hd-actions .acu-hd-btn--ghost:hover:not(:disabled) {
+  background: var(--acu-hover-overlay);
+  color: var(--acu-text-1);
+}
+
+${S} .acu-hd-actions .acu-hd-btn--danger {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+${S} .acu-hd-actions .acu-hd-btn--danger:hover:not(:disabled) {
+  background: ${dark ? '#ef4444' : '#b91c1c'};
+  color: #ffffff;
+}
+
+${S} .acu-hd-busy {
+  gap: 12px;
+  padding: 24px 20px 20px;
+}
+
+${S} .acu-hd-busy__text {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+${S} .acu-hd-spinner {
+  width: 28px;
+  height: 28px;
+  border-width: 2.5px;
+}
+
+@media (max-width: 600px) {
+  ${S} .acu-hd-actions .acu-hd-btn {
+    height: 40px;
+  }
+}
+
+${TOAST} {
+  border: 0 !important;
+  border-radius: 12px !important;
+  background: var(--acu-bg-1) !important;
+  box-shadow: var(--acu-shadow) !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  font-size: 13px !important;
+}
+
+${TOAST}:hover {
+  box-shadow: var(--acu-shadow) !important;
+}
+
+${TOAST} .toast-title {
+  font: 500 11px/1.45 var(--acu-font-ui) !important;
+  letter-spacing: 0 !important;
+}
+
+${TOAST} .toast-message {
+  font: 400 13px/1.55 var(--acu-font-ui) !important;
+}
+
+${TOAST} .toast-close-button {
+  border-radius: 6px !important;
+}
+
+${TOAST} :is(.acu-toast-action, .qrf-abort-btn) {
+  min-height: 26px;
+  padding: 3px 10px !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--acu-toast-tone) 12%, transparent) !important;
+  font: 500 12px/1.4 var(--acu-font-ui) !important;
+}
+
+${TOAST} :is(.acu-toast-action, .qrf-abort-btn):hover {
+  background: color-mix(in srgb, var(--acu-toast-tone) 20%, transparent) !important;
+}
+
+${TOAST} .toast-progress {
+  opacity: 0.35 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ${DIALOG},
+  ${S} .acu-hd-busy {
+    animation: none;
+  }
+}
+`;
+}
+/** colorScheme 为 null 表示不是 Claude 风格：清空样式节点，弹窗回到各自的默认外观。 */
+function applyHostClaudeSkin(colorScheme) {
+    const doc = getAcuHostDocument();
+    let style = doc.getElementById(HOST_CLAUDE_SKIN_STYLE_ID);
+    if (!style) {
+        if (colorScheme === null)
+            return;
+        style = doc.createElement('style');
+        style.id = HOST_CLAUDE_SKIN_STYLE_ID;
+        (doc.head || doc.body).appendChild(style);
+    }
+    const css = colorScheme === null ? '' : buildHostClaudeSkinCss(colorScheme);
+    if (style.textContent !== css)
+        style.textContent = css;
+}
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MATHML_NS = 'http://www.w3.org/1998/Math/MathML';
 let cachedRenderer = null;
@@ -212894,7 +213174,10 @@ function ensureMounted() {
     appearanceStore.setSystemPrefersDark(systemPrefersDark_ACU(hostWindow));
     const themeScope = effectScope(true);
     themeScope.run(() => {
-        watch(useEffectiveTheme(pinia), theme => applyTheme(theme), { immediate: true });
+        watch(useEffectiveTheme(pinia), (theme) => {
+            applyTheme(theme);
+            applyHostClaudeSkin(hostSkinSchemeFor_ACU(theme));
+        }, { immediate: true });
         onScopeDispose(watchSystemColorScheme_ACU(hostWindow, dark => appearanceStore.setSystemPrefersDark(dark)));
     });
     applyAppearance(appearanceStore.uiScaleOption);
@@ -213261,12 +213544,14 @@ function showAcuV2Toast_ACU(payload) {
     logWarn_ACU(`[ACU toast:${payload.kind}] ${payload.text}`);
 }
 /**
- * 启动即按已保存的主题输出 token：插件提示框等宿主浮层在面板打开前就会出现，
+ * 启动即按已保存的主题与界面风格输出 token（Claude 风格另补弹窗外观）：插件提示框等宿主浮层在面板打开前就会出现，
  * 不能等首次挂载才上色。面板挂载后由 theme store 订阅接管后续切换。
  */
 function applySavedThemeToHostSurfaces_ACU() {
     try {
-        applyTheme(readPersistedEffectiveTheme_ACU(getAcuHostWindow()));
+        const theme = readPersistedEffectiveTheme_ACU(getAcuHostWindow());
+        applyTheme(theme);
+        applyHostClaudeSkin(hostSkinSchemeFor_ACU(theme));
     }
     catch (error) {
         logWarn_ACU('[ACU-V2] 启动时应用主题失败，宿主浮层将使用默认配色:', error);

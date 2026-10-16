@@ -120,6 +120,8 @@ describe('v3 外壳', () => {
     expect(app.dataset.ubColorScheme).toBe('light');
     const themeStyle = document.getElementById('acu-v2-theme')!.textContent!;
     expect(themeStyle.toLowerCase()).toContain('--acu-accent: #d97757');
+    // 面板外的插件弹窗同步换成 Claude 外观
+    expect(document.getElementById('acu-v2-host-claude-skin')?.textContent).toContain('.acu-hd-dialog');
     pick('颜色模式', '深色').click();
     await flush();
     expect(app.dataset.ubColorScheme).toBe('dark');
@@ -146,6 +148,7 @@ describe('v3 外壳', () => {
     expect(document.querySelector('.ub-shell')?.classList.contains('is-rail-collapsed')).toBe(false);
     expect(document.querySelector('.ub-heading')).toBeNull();
     expect(document.querySelector('.ub-top__crumb')).toBeNull();
+    expect(document.getElementById('acu-v2-host-claude-skin')?.textContent).toBe('');
     expect(document.getElementById('acu-v2-theme')!.textContent!.toLowerCase()).not.toContain('--acu-accent: #d97757');
   });
 });
