@@ -95,7 +95,7 @@ describe('v3 外壳', () => {
     unregister();
   });
 
-  it('界面风格：切到 Claude 后用自带配色，明暗按颜色模式走、不改所选主题；页首出现标题与问候语；侧栏可收起', async () => {
+  it('界面风格：切到 Claude 后用自带配色，明暗按颜色模式走、不改所选主题；仪表盘页首出现问候语；侧栏可收起', async () => {
     const { mount, router } = await mountV3({ uiState: { theme: { activeId: 'jirai-kei' } } });
     cleanup = () => mount.__resetAcuV2MountForTests();
     const app = document.querySelector<HTMLElement>('.ub-app')!;
@@ -130,7 +130,9 @@ describe('v3 外壳', () => {
     expect(document.querySelector('.ub-heading__greeting')?.textContent).toMatch(/好|夜深了/);
     router.setActivePage('api');
     await flush();
-    expect(document.querySelector('.ub-heading__title')?.textContent).toContain('API');
+    // 页名只在标题栏出现一次，不在页首重复
+    expect(document.querySelector('.ub-heading')).toBeNull();
+    expect(document.querySelector('.ub-top__title')?.textContent).toContain('API');
     expect(document.querySelector('.ub-top__crumb')?.textContent).toBe('配置');
 
     const collapse = document.querySelector<HTMLButtonElement>('.ub-rail__collapse')!;

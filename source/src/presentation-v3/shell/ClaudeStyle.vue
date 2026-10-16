@@ -5,12 +5,14 @@
  * 一份全局样式，全部限定在 .ub-app[data-ub-style="claude"] 之下，不改组件行为。
  * 按公开的 Claude 界面设计规范对齐（品牌标识除外：不含品牌字体、图标、标志）：
  * - 配色：自带浅 / 深两套色板（见 theme/effective-theme.ts），四层表面阶梯，陶土强调色，低透明度墨色边线；
- * - 尺寸：控件 32 / 28px，按钮 8px、卡片 16px、子面板 10–12px、弹窗 16px、输入框 20px 圆角；
- *   侧栏 288px，45px 标题栏，正文版心 768px；
+ * - 尺寸（按参考规范的 2.0 版）：控件 32 / 28px，按钮 8px、卡片 12px、弹窗 16px、会话输入框 14px 圆角；
+ *   侧栏 288px（平板按屏宽收窄）、行高 28px（触屏 34px），45px 标题栏，正文版心 768px；
+ *   高分屏上分隔线用 0.5px 发丝线；
  * - 字阶：说明 11 / 12、正文 13 / 14、小标题 15、页面标题 20、问候语 38（衬线）；
  * - 边界：单闭合边框原则——卡片用 1px 外环投影代替描边，卡片内的次级按钮不再描边；
  * - 动效：60 / 120 / 200 / 300ms 时序，ease-out 与回弹曲线，聚焦用陶土三层光环；
- * - 对话：续写页按会话流排版——用户气泡、无底色回复、圆角输入框。
+ * - 对话：续写页按会话流排版——中性色用户气泡、无边框紧凑工具行、贴在会话流底部的输入框与方形发送键。
+ * 注意：主题注入器用 !important 让 Font Awesome 图标取 --acu-icon-color，图标改色要设这个变量而不是 color。
  */
 </script>
 
@@ -38,6 +40,8 @@
   --cds-bg-tint-blue: #f0f4f8;
   --cds-segmented-track: rgba(0, 0, 0, 0.06);
   --cds-segmented-thumb: #ffffff;
+  --cds-segmented-thumb-ring: rgba(0, 0, 0, 0.06);
+  --cds-bubble: #efefed;
   --cds-success: #2f8a57;
   --cds-warning: #b26b12;
   --cds-danger: #dc2626;
@@ -78,6 +82,8 @@
   --cds-bg-tint-blue: rgba(255, 255, 255, 0.06);
   --cds-segmented-track: rgba(255, 255, 255, 0.08);
   --cds-segmented-thumb: #2c2c2a;
+  --cds-segmented-thumb-ring: rgba(255, 255, 255, 0.10);
+  --cds-bubble: #262625;
   --cds-success: #5fb37f;
   --cds-warning: #e0a54b;
   --cds-danger: #f87171;
@@ -123,8 +129,11 @@
   --ub-rail-w-collapsed: calc(var(--ub-u) * 60);
   --ub-titlebar-h: calc(var(--ub-u) * 45);
   --ub-page-max: calc(var(--ub-u) * 768);
-  --ub-r-card: 16px;
+  --ub-r-card: 12px;
   --ub-r-panel: 10px;
+  --ub-r-composer: 14px;
+  --ub-hairline: 1px;
+  --ub-row-h: calc(var(--ub-u) * 28);
   --ub-r-control: 8px;
   --ub-r-overlay: 16px;
 
@@ -163,7 +172,20 @@
 
   font-size: var(--ub-fs-md);
   line-height: 1.5;
-  font-variant-numeric: tabular-nums;
+}
+
+/* 高分屏发丝线：分隔线 0.5px（卡片外环与输入框仍是 1px 结构线） */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 2dppx) {
+  .ub-app[data-ub-style="claude"] {
+    --ub-hairline: 0.5px;
+  }
+}
+
+/* 触屏：导航行保留足够的点按高度 */
+@media (pointer: coarse) {
+  .ub-app[data-ub-style="claude"] {
+    --ub-row-h: calc(var(--ub-u) * 34);
+  }
 }
 
 /* 平板与窄窗口：侧栏按屏宽收窄（288px 只适合宽屏），页边距随之收紧；
@@ -196,7 +218,7 @@
 /* ═══════════════ 外壳：侧栏 ═══════════════ */
 .ub-app[data-ub-style="claude"] .ub-rail {
   padding: 0 var(--ub-s2) var(--ub-s2);
-  border-right: 1px solid var(--cds-alpha-2);
+  border-right: var(--ub-hairline) solid var(--cds-alpha-3);
   background: var(--ub-nav-bg);
   transition: flex-basis var(--cds-dur-sheet) var(--cds-ease-out), width var(--cds-dur-sheet) var(--cds-ease-out);
 }
@@ -206,7 +228,7 @@
   height: var(--ub-titlebar-h);
   margin: 0 calc(var(--ub-s2) * -1);
   padding: 0 var(--ub-s2) 0 var(--ub-s3);
-  border-bottom: 1px solid var(--cds-alpha-2);
+  border-bottom: var(--ub-hairline) solid var(--cds-alpha-3);
 }
 
 .ub-app[data-ub-style="claude"] .ub-rail__collapse {
@@ -254,12 +276,12 @@
 .ub-app[data-ub-style="claude"] .ub-rail__foot {
   gap: 1px;
   padding-top: var(--ub-s2);
-  border-top: 1px solid var(--cds-alpha-2);
+  border-top: var(--ub-hairline) solid var(--cds-alpha-3);
 }
 
 .ub-app[data-ub-style="claude"] .ub-rail__foot-btn {
   gap: var(--ub-s2);
-  min-height: var(--ub-control-h);
+  min-height: var(--ub-row-h);
   padding: 0 var(--ub-s2);
   border-radius: var(--ub-r-control);
   color: var(--ub-text-2);
@@ -269,8 +291,8 @@
 }
 
 .ub-app[data-ub-style="claude"] .ub-rail__foot-btn i {
+  --acu-icon-color: var(--ub-text-3);
   width: calc(var(--ub-u) * 18);
-  color: var(--ub-text-3);
   font-size: calc(var(--ub-u) * 13);
   text-align: center;
 }
@@ -342,7 +364,7 @@
 
 .ub-app[data-ub-style="claude"] .ub-nav--rail .ub-nav__item {
   gap: var(--ub-s2);
-  min-height: var(--ub-control-h);
+  min-height: var(--ub-row-h);
   padding: 0 var(--ub-s2);
   border-radius: var(--ub-r-control);
   color: var(--ub-text-2);
@@ -421,7 +443,7 @@
   min-height: var(--ub-titlebar-h);
   height: var(--ub-titlebar-h);
   padding: 0 var(--ub-s2) 0 var(--ub-s4);
-  border-bottom: 1px solid var(--cds-alpha-2);
+  border-bottom: var(--ub-hairline) solid var(--cds-alpha-3);
   background: var(--ub-bg);
 }
 
@@ -461,14 +483,6 @@
   max-width: var(--ub-page-max);
   margin: 0 auto;
   padding: calc(var(--ub-u) * 28) var(--ub-page-pad) var(--ub-s3);
-}
-
-.ub-app[data-ub-style="claude"] .ub-heading__title {
-  color: var(--ub-text);
-  font-size: var(--ub-fs-xl);
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  line-height: 1.4;
 }
 
 .ub-app[data-ub-style="claude"] .ub-heading__greeting {
@@ -571,9 +585,9 @@
   line-height: 1.33;
 }
 
+/* Claude 的设置分节标题不带图标 */
 .ub-app[data-ub-style="claude"] .ub-section__icon {
-  color: var(--ub-text-3);
-  font-size: 0.85em;
+  display: none;
 }
 
 .ub-app[data-ub-style="claude"] .ub-section__desc {
@@ -606,7 +620,7 @@
 }
 
 .ub-app[data-ub-style="claude"] .ub-row + .ub-row {
-  border-top: 1px solid var(--cds-alpha-1);
+  border-top: var(--ub-hairline) solid var(--cds-alpha-2);
 }
 
 .ub-app[data-ub-style="claude"] .ub-row__label {
@@ -699,15 +713,21 @@
   color: var(--ub-text);
 }
 
+/* 危险按钮：列表与工具栏里用浅红底，悬停才实心；确认对话框里直接实心红 */
 .ub-app[data-ub-style="claude"] .ub-btn--danger {
+  background: var(--ub-danger-soft);
+  color: var(--ub-danger);
+}
+
+.ub-app[data-ub-style="claude"] .ub-btn--danger:hover:not(:disabled),
+.ub-app[data-ub-style="claude"] .ub-dialog .ub-btn--danger {
   background: var(--cds-danger-fill);
   color: #ffffff;
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
 }
 
-.ub-app[data-ub-style="claude"] .ub-btn--danger:hover:not(:disabled) {
+.ub-app[data-ub-style="claude"] .ub-dialog .ub-btn--danger:hover:not(:disabled) {
   background: var(--cds-danger-fill-hover);
-  color: #ffffff;
 }
 
 .ub-app[data-ub-style="claude"] .ub-icon-btn {
@@ -837,7 +857,7 @@
   background: var(--cds-segmented-thumb);
   color: var(--ub-text);
   font-weight: 500;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06), 0 1px 2px 0 rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 0 0 1px var(--cds-segmented-thumb-ring), 0 1px 2px 0 rgba(0, 0, 0, 0.08);
 }
 
 .ub-app[data-ub-style="claude"] .ub-seg__item:focus-visible {
@@ -884,7 +904,7 @@
   height: calc(var(--ub-u) * 16);
   margin-top: 2px;
   border: 1.5px solid var(--cds-alpha-3);
-  border-radius: 4px;
+  border-radius: 5px;
   background: var(--ub-input-bg);
   font-size: calc(var(--ub-u) * 10);
 }
@@ -985,7 +1005,7 @@
 }
 
 .ub-app[data-ub-style="claude"] .ub-disc__chevron {
-  color: var(--ub-text-3);
+  --acu-icon-color: var(--ub-text-3);
   transition: transform var(--cds-dur-base) cubic-bezier(0.19, 1, 0.22, 1);
 }
 
@@ -1046,7 +1066,7 @@
 .ub-app[data-ub-style="claude"] .ub-sheet__head {
   min-height: var(--ub-titlebar-h);
   padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);
-  border-bottom: 1px solid var(--cds-alpha-2);
+  border-bottom: var(--ub-hairline) solid var(--cds-alpha-3);
 }
 
 .ub-app[data-ub-style="claude"] .ub-sheet__title {
@@ -1065,7 +1085,7 @@
 
 .ub-app[data-ub-style="claude"] .ub-sheet__foot {
   padding: var(--ub-s3) var(--ub-s4);
-  border-top: 1px solid var(--cds-alpha-2);
+  border-top: var(--ub-hairline) solid var(--cds-alpha-3);
   background: var(--ub-bg);
 }
 
@@ -1181,9 +1201,15 @@
 }
 
 /* ═══════════════ 续写：会话流 ═══════════════ */
+/* 单闭合边框：会话流与输入框直接放在画布上，不再套一层分节卡片 */
+.ub-app[data-ub-style="claude"] .ub-section__card:has(> .ub-cchat) {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
 .ub-app[data-ub-style="claude"] .ub-cchat__status {
-  padding: calc(var(--ub-u) * 10) var(--ub-s4);
-  border-bottom: 1px solid var(--cds-alpha-1);
   font-size: var(--ub-fs-xs);
 }
 
@@ -1204,19 +1230,25 @@
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed {
-  gap: calc(var(--ub-u) * 14);
-  padding: var(--ub-s5) var(--ub-s4);
+  gap: var(--ub-s2);
+  padding: var(--ub-s4) 0;
 }
 
+.ub-app[data-ub-style="claude"] .ub-feed__empty {
+  font-size: var(--ub-fs-sm);
+}
+
+/* 用户消息：中性色气泡 */
 .ub-app[data-ub-style="claude"] .ub-feed__user {
+  margin: var(--ub-s2) 0;
   animation: ub-cds-bubble-in 450ms var(--cds-ease-overshoot) both;
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__bubble {
   max-width: 85%;
   padding: calc(var(--ub-u) * 10) var(--ub-s4);
-  border-radius: 18px;
-  background: var(--cds-bg-tint-blue);
+  border-radius: var(--ub-r-composer);
+  background: var(--cds-bubble);
   color: var(--ub-text);
 }
 
@@ -1235,10 +1267,10 @@
   font-size: calc(var(--ub-u) * 10.5);
 }
 
+/* 思考：灰色小字块，不加彩色竖线 */
 .ub-app[data-ub-style="claude"] .ub-feed__thought {
-  margin-left: var(--ub-s1);
-  padding: var(--ub-s1) 0 var(--ub-s1) calc(var(--ub-u) * 14);
-  border-left: 2px solid color-mix(in srgb, var(--cds-clay) 40%, transparent);
+  padding: var(--ub-s1) var(--ub-s2);
+  border-left: 0;
   color: var(--ub-text-3);
   font-size: var(--ub-fs-xs);
   line-height: 1.6;
@@ -1254,99 +1286,121 @@
   font-size: calc(var(--ub-u) * 11.5);
 }
 
+/* 派工 / 写作等步骤：无边框紧凑行（图标、摘要、展开箭头） */
 .ub-app[data-ub-style="claude"] .ub-feed__card {
   border: 0;
-  border-radius: 12px;
-  background: var(--ub-panel);
-  box-shadow: var(--cds-panel-shadow);
-  transition: box-shadow var(--cds-dur-base) ease;
+  border-radius: var(--ub-r-control);
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
   animation: ub-cds-fade-up 300ms var(--cds-ease-out) both;
 }
 
-.ub-app[data-ub-style="claude"] .ub-feed__card:hover {
-  box-shadow: 0 0 0 1px var(--cds-alpha-3);
-}
-
 .ub-app[data-ub-style="claude"] .ub-feed__card.is-failed {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ub-danger) 45%, transparent);
+  border: 0;
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__card-head {
-  padding: calc(var(--ub-u) * 10) calc(var(--ub-u) * 14);
-  font-size: var(--ub-fs-xs);
+  min-height: var(--ub-row-h);
+  padding: var(--ub-s1) var(--ub-s2);
+  border-radius: var(--ub-r-control);
+  font-size: var(--ub-fs-sm);
+  transition: background-color 150ms var(--cds-ease-hover);
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__card-head:hover {
   background: var(--cds-alpha-1);
 }
 
+.ub-app[data-ub-style="claude"] .ub-feed__status {
+  width: 16px;
+  height: 16px;
+  background: transparent;
+  font-size: 11px;
+}
+
+.ub-app[data-ub-style="claude"] .ub-feed__status.is-running {
+  background: transparent;
+  color: var(--cds-clay-ink);
+}
+
+.ub-app[data-ub-style="claude"] .ub-feed__status.is-failed {
+  background: transparent;
+}
+
 .ub-app[data-ub-style="claude"] .ub-feed__kind {
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--cds-alpha-1);
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--ub-text-3);
-  font-family: var(--ub-mono);
-  font-size: calc(var(--ub-u) * 10.5);
+  font-size: var(--ub-fs-xs);
   font-weight: 500;
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__title {
-  font-weight: 500;
+  color: var(--ub-text-2);
+  font-weight: 400;
 }
 
-.ub-app[data-ub-style="claude"] .ub-feed__status.is-running {
-  background: var(--cds-clay-light);
-  color: var(--cds-clay-ink);
+.ub-app[data-ub-style="claude"] .ub-feed__card.is-failed .ub-feed__title {
+  color: var(--ub-danger);
+}
+
+.ub-app[data-ub-style="claude"] .ub-feed__chevron {
+  --acu-icon-color: var(--ub-text-3);
 }
 
 .ub-app[data-ub-style="claude"] :is(.ub-feed__preview, .ub-feed__detail) {
-  color: var(--ub-text-2);
+  padding-left: calc(var(--ub-s2) + 16px + var(--ub-s2));
+  color: var(--ub-text-3);
   font-size: var(--ub-fs-xs);
   line-height: 1.6;
 }
 
-.ub-app[data-ub-style="claude"] .ub-feed__detail {
-  border-top: 1px solid var(--cds-alpha-1);
-  padding-top: var(--ub-s2);
+.ub-app[data-ub-style="claude"] .ub-feed__divider {
+  margin: var(--ub-s3) 0;
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__divider-badge {
-  background: var(--cds-alpha-1);
-  color: var(--ub-text-2);
+  background: transparent;
+  color: var(--ub-text-3);
   font-weight: 500;
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__divider::before,
 .ub-app[data-ub-style="claude"] .ub-feed__divider::after {
-  background: var(--cds-alpha-2);
+  height: var(--ub-hairline);
+  background: var(--cds-alpha-3);
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__fold {
-  border: 1px solid var(--cds-alpha-2);
-  background: var(--ub-panel);
+  border: 0;
+  background: var(--cds-alpha-1);
   transition: background-color 150ms var(--cds-ease-hover);
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__fold:hover {
-  background: var(--cds-alpha-1);
+  background: var(--cds-alpha-2);
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__running {
+  padding: 0 var(--ub-s2);
   color: var(--ub-text-3);
   font-weight: 500;
 }
 
 .ub-app[data-ub-style="claude"] .ub-cchat__notice {
+  margin: 0 0 var(--ub-s2);
   border-radius: var(--ub-r-panel);
 }
 
-/* 输入框：20px 圆角、无描边、三档投影 */
+/* 输入框：贴在会话流底部，14px 圆角，三档投影（这一块唯一的闭合边框） */
 .ub-app[data-ub-style="claude"] .ub-cchat__composer {
   gap: var(--ub-s2);
-  margin: var(--ub-s2) var(--ub-s3) var(--ub-s3);
+  margin: var(--ub-s2) 0 0;
   padding: calc(var(--ub-u) * 14);
   border: 0;
-  border-radius: 20px;
+  border-radius: var(--ub-r-composer);
   background: var(--cds-surface-3);
   box-shadow: var(--cds-shadow-composer);
   transition: box-shadow var(--cds-dur-base) var(--cds-ease-hover);
@@ -1381,9 +1435,275 @@
   font-size: var(--ub-fs-2xs);
 }
 
+/* 发送 / 停止：32px 方形图标键（发送 = 陶土色上箭头，停止 = 墨色方块），文字留给读屏 */
 .ub-app[data-ub-style="claude"] .ub-cchat__actions .ub-btn {
+  position: relative;
+  width: var(--ub-control-h);
   height: var(--ub-control-h);
+  padding: 0;
+}
+
+.ub-app[data-ub-style="claude"] .ub-cchat__actions .ub-btn .ub-btn__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.ub-app[data-ub-style="claude"] .ub-cchat__actions .ub-btn--primary .ub-btn__icon::before {
+  content: "\f062";
+}
+
+.ub-app[data-ub-style="claude"] .ub-cchat__actions .ub-btn--danger,
+.ub-app[data-ub-style="claude"] .ub-cchat__actions .ub-btn--danger:hover:not(:disabled) {
+  background: var(--ub-text);
+  color: var(--ub-bg);
+}
+
+.ub-app[data-ub-style="claude"] .ub-cchat__actions .ub-btn--danger .ub-btn__icon {
+  --acu-icon-color: var(--ub-bg);
+  font-size: 0.8em;
+}
+
+/* ═══════════════ 空状态：去掉虚线框，只留弱化文字 ═══════════════ */
+.ub-app[data-ub-style="claude"] :is(.ub-cm__empty, .ub-pte__empty, .ub-segs__empty, .ub-wbe__status, .ub-vdata__empty, .ub-vai__empty) {
+  border: 0;
+  border-radius: var(--ub-r-panel);
+  background: transparent;
+  color: var(--ub-text-3);
+  font-size: var(--ub-fs-sm);
+}
+
+/* ═══════════════ 数据库编辑器 ═══════════════ */
+.ub-app[data-ub-style="claude"] .ub-viz {
+  background: var(--ub-bg);
+  /* 编辑器标题区要放标题与副标题两行，比主界面标题栏高；左侧品牌区与之同高，底线对齐 */
+  --ub-viz-head-h: calc(var(--ub-u) * 56);
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__rail {
+  padding: 0 var(--ub-s2) var(--ub-s2);
+  border-right: var(--ub-hairline) solid var(--cds-alpha-3);
+  background: var(--ub-nav-bg);
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__brand {
+  gap: var(--ub-s2);
+  height: var(--ub-viz-head-h);
+  margin: 0 calc(var(--ub-s2) * -1) var(--ub-s3);
+  padding: 0 var(--ub-s3);
+  border-bottom: var(--ub-hairline) solid var(--cds-alpha-3);
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__mark {
+  width: calc(var(--ub-u) * 22);
+  height: calc(var(--ub-u) * 22);
+  border-radius: 6px;
+  background: var(--ub-text);
+  color: var(--ub-bg);
+  font-size: calc(var(--ub-u) * 10);
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__mark i {
+  --acu-icon-color: var(--ub-bg);
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__brand-text {
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--ub-s2);
+  min-width: 0;
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__brand-name {
+  font-size: var(--ub-fs-md);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__brand-tag {
+  overflow: hidden;
+  color: var(--ub-text-3);
+  font-size: var(--ub-fs-2xs);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__head {
+  min-height: var(--ub-viz-head-h);
+  border-bottom: var(--ub-hairline) solid var(--cds-alpha-3);
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__title {
+  font-size: calc(var(--ub-u) * 16);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__sub {
+  color: var(--ub-text-3);
   font-size: var(--ub-fs-xs);
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__footer {
+  border-top: var(--ub-hairline) solid var(--cds-alpha-3);
+  background: var(--ub-bg);
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__status {
+  font-weight: 500;
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__switcher {
+  border: 0;
+  background: var(--cds-fill-secondary);
+  font-weight: 500;
+}
+
+.ub-app[data-ub-style="claude"] .ub-viz__switcher > i:first-child {
+  --acu-icon-color: var(--ub-text-3);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vnav__label {
+  margin: 0 var(--ub-s2) var(--ub-s1);
+  font-size: var(--ub-fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ub-app[data-ub-style="claude"] .ub-vnav__item {
+  gap: var(--ub-s2);
+  min-height: calc(var(--ub-u) * 40);
+  padding: var(--ub-s1) var(--ub-s2);
+  color: var(--ub-text-2);
+  transition: background-color 150ms var(--cds-ease-hover), color 150ms ease;
+}
+
+.ub-app[data-ub-style="claude"] .ub-vnav__item:hover {
+  background: var(--cds-alpha-1);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vnav__item.is-active {
+  background: var(--cds-alpha-2);
+  color: var(--ub-text);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vnav__icon {
+  --acu-icon-color: var(--ub-text-3);
+  opacity: 1;
+}
+
+.ub-app[data-ub-style="claude"] .ub-vnav__item.is-active .ub-vnav__icon {
+  --acu-icon-color: var(--ub-text);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vnav__name {
+  font-weight: 500;
+}
+
+.ub-app[data-ub-style="claude"] .ub-vnav__item.is-active .ub-vnav__meta {
+  color: var(--ub-text-3);
+  opacity: 1;
+}
+
+.ub-app[data-ub-style="claude"] .ub-vnav__sep {
+  height: var(--ub-hairline);
+  background: var(--cds-alpha-3);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vcard {
+  border: 0;
+  border-radius: var(--ub-r-card);
+  background: var(--ub-panel);
+  box-shadow: var(--cds-panel-shadow);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vcard.is-locked {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cds-clay) 45%, transparent), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vcard__head {
+  border-bottom: var(--ub-hairline) solid var(--cds-alpha-2);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vcard__no {
+  font-weight: 600;
+}
+
+.ub-app[data-ub-style="claude"] .ub-vfield__name {
+  font-weight: 500;
+}
+
+.ub-app[data-ub-style="claude"] .ub-vfield.is-locked .ub-vfield__name {
+  color: var(--cds-clay-ink);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vfield__value {
+  background: var(--cds-alpha-1);
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.ub-app[data-ub-style="claude"] .ub-vfield__value:hover {
+  border-color: transparent;
+  background: var(--cds-alpha-2);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vfield__value:focus-visible,
+.ub-app[data-ub-style="claude"] .ub-vfield__editor {
+  border-color: var(--cds-alpha-3);
+  background: var(--ub-input-bg);
+  box-shadow: var(--cds-focus-shadow);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vdata__add {
+  border: 0;
+  border-radius: var(--ub-r-control);
+  background: var(--cds-fill-secondary);
+  color: var(--ub-text);
+  font-weight: 500;
+}
+
+.ub-app[data-ub-style="claude"] .ub-vdata__add:hover {
+  border: 0;
+  background: var(--cds-fill-secondary-hover);
+  color: var(--ub-text);
+}
+
+/* 编辑器里的 AI 助手：回复无底色，用户消息中性气泡 */
+.ub-app[data-ub-style="claude"] .ub-vai__turn {
+  padding: var(--ub-s2) 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.ub-app[data-ub-style="claude"] .ub-vai__turn--user {
+  padding: calc(var(--ub-u) * 10) var(--ub-s4);
+  border-radius: var(--ub-r-composer);
+  background: var(--cds-bubble);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vai__turn--user .ub-vai__who {
+  color: var(--ub-text-3);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vai__turn--error {
+  padding: var(--ub-s3);
+  border-radius: var(--ub-r-panel);
+  background: var(--ub-warn-soft);
+}
+
+.ub-app[data-ub-style="claude"] .ub-vai__who {
+  color: var(--ub-text-2);
+  font-weight: 500;
+}
+
+.ub-app[data-ub-style="claude"] :is(.ub-vai__diff-title, .ub-vai__risks-title, .ub-vai__cap) {
   font-weight: 600;
 }
 

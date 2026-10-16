@@ -11,7 +11,7 @@ import { registerAcuV2MenuButton } from './menu-button';
 import { getAcuV2PiniaForBridge } from './mount';
 import { useRootShellStore } from '../stores/root-shell-store';
 import { useToastStore } from '../stores/toast-store';
-import { hostSkinSchemeFor_ACU, readPersistedEffectiveTheme_ACU } from '../theme/effective-theme';
+import { hostSkinSchemeFor_ACU, readPersistedEffectiveTheme_ACU, watchSystemColorScheme_ACU } from '../theme/effective-theme';
 import { applyHostClaudeSkin } from '../theme/host-claude-skin';
 import { getAcuHostWindow } from './host-document';
 import { applyTheme } from '../theme/theme-injector';
@@ -63,12 +63,29 @@ function showAcuV2Toast_ACU(payload: UiToastPayload_ACU): void {
  */
 export function applySavedThemeToHostSurfaces_ACU(): void {
   try {
-    const theme = readPersistedEffectiveTheme_ACU(getAcuHostWindow());
-    applyTheme(theme);
-    applyHostClaudeSkin(hostSkinSchemeFor_ACU(theme));
+    applyPersistedThemeToHostSurfaces_ACU();
+    // Claude 风格选「跟随系统」时，面板没打开过也要随系统明暗切换宿主浮层；只挂一次。
+    // 面板挂载后它自己的监听同样按保存的偏好计算，两边结果一致。
+    if (!stopHostSystemSchemeWatch_ACU) {
+      stopHostSystemSchemeWatch_ACU = watchSystemColorScheme_ACU(getAcuHostWindow(), () => {
+        try {
+          applyPersistedThemeToHostSurfaces_ACU();
+        } catch (error) {
+          logWarn_ACU('[ACU-V2] 系统明暗切换后应用主题失败:', error);
+        }
+      });
+    }
   } catch (error) {
     logWarn_ACU('[ACU-V2] 启动时应用主题失败，宿主浮层将使用默认配色:', error);
   }
+}
+
+let stopHostSystemSchemeWatch_ACU: (() => void) | null = null;
+
+function applyPersistedThemeToHostSurfaces_ACU(): void {
+  const theme = readPersistedEffectiveTheme_ACU(getAcuHostWindow());
+  applyTheme(theme);
+  applyHostClaudeSkin(hostSkinSchemeFor_ACU(theme));
 }
 
 export function bootstrapAcuV2(): void {

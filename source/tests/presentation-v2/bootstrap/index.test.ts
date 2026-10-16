@@ -52,6 +52,34 @@ describe('applySavedThemeToHostSurfaces_ACU', () => {
   });
 });
 
+describe('applySavedThemeToHostSurfaces_ACU 跟随系统', () => {
+  it('Claude 风格跟随系统：面板还没打开过，系统切深色时宿主浮层也跟着切', async () => {
+    let dark = false;
+    const listeners: Array<(e: { matches: boolean }) => void> = [];
+    (window as any).matchMedia = vi.fn(() => ({
+      get matches() { return dark; },
+      addEventListener: (_: string, cb: (e: { matches: boolean }) => void) => listeners.push(cb),
+      removeEventListener() {},
+    }));
+    localStorage.setItem('acu_v2_ui_state', JSON.stringify({ appearance: { uiStyle: 'claude', claudeColorMode: 'system' } }));
+    vi.resetModules();
+    const { applySavedThemeToHostSurfaces_ACU } = await import('../../../src/presentation-v2/bootstrap');
+    applySavedThemeToHostSurfaces_ACU();
+    expect(document.getElementById('acu-v2-theme')?.textContent).toContain('color-scheme: light;');
+
+    dark = true;
+    listeners.forEach(cb => cb({ matches: true }));
+    expect(document.getElementById('acu-v2-theme')?.textContent).toContain('color-scheme: dark;');
+    expect(document.getElementById('acu-v2-host-claude-skin')?.textContent).toContain('rgba(0, 0, 0, 0.55)');
+
+    // 重复调用不重复挂监听
+    applySavedThemeToHostSurfaces_ACU();
+    expect(listeners).toHaveLength(1);
+    delete (window as any).matchMedia;
+    localStorage.clear();
+  });
+});
+
 describe('bootstrapAcuV2', () => {
   beforeEach(() => {
     vi.clearAllMocks();

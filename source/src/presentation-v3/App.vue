@@ -58,9 +58,9 @@
           </header>
 
           <main ref="scroller" class="ub-scroll" data-ub-main>
-            <div v-if="appearanceStore.isClaudeStyle && activeEntry" class="ub-heading">
-              <h2 v-if="router.activePageId === 'dashboard'" class="ub-heading__greeting">{{ greeting }}</h2>
-              <h2 v-else class="ub-heading__title">{{ router.activePage?.title }}</h2>
+            <!-- Claude 风格：页名只在标题栏出现一次；仪表盘页首换成衬线问候语 -->
+            <div v-if="appearanceStore.isClaudeStyle && router.activePageId === 'dashboard'" class="ub-heading">
+              <h2 class="ub-heading__greeting">{{ greeting }}</h2>
             </div>
             <component
               :is="activeEntry.component"

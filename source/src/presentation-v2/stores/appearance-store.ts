@@ -23,7 +23,7 @@ export const ACU_UI_SCALE_OPTIONS: readonly AcuUiScaleOption[] = [
 
 export const ACU_DEFAULT_UI_SCALE: AcuUiScale = '100';
 
-/** 界面风格：只换外壳与控件的形状、排版和层次，颜色仍取当前主题。 */
+/** 界面风格：默认 = 所选主题；Claude = 按 Claude 界面规范重排外壳与控件，并改用自带配色（见 theme/effective-theme.ts）。 */
 export type AcuUiStyle = 'default' | 'claude';
 
 export const ACU_UI_STYLE_OPTIONS: readonly { value: AcuUiStyle; label: string }[] = [
