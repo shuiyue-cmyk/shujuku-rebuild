@@ -53,6 +53,18 @@
           />
         </UbRow>
         <UbRow
+          label="发送方式"
+          hint="经酒馆转接发送：由酒馆后端代发，兼容性最好，一般选这个。数据库直接发送：数据库在浏览器里直接请求端点，不经酒馆改写，消息按原顺序和角色发出；要求服务商允许网页直接访问（跨域），否则会报连不上。直接发送时「提示词后处理」「保留多个 system 消息」不生效，客户端伪装里浏览器不允许改的请求头（如 User-Agent）也不会带上。"
+          stack
+        >
+          <UbSelect
+            :options="sendChannelOptions"
+            :model-value="draft.sendChannel"
+            aria-label="发送方式"
+            @update:model-value="draft.sendChannel = $event === 'direct' ? 'direct' : 'tavern'"
+          />
+        </UbRow>
+        <UbRow
           label="接口协议"
           hint="决定请求变形与上游端点：OpenAI→/chat/completions；OpenAI Responses→/responses；Claude Messages→/messages；Gemini Interactions→/interactions（自动补 /v1beta）。默认兼容 OpenAI。纯原生端点下「加载模型」可能失败，可手填模型名。"
           stack
@@ -124,8 +136,8 @@
         <UbRow label="需要时格式化输出" hint="需要返回 JSON 的调用（正文替换 / Skill 化 / 决策 / 改表助手 / 续写 Agent）会附加 response_format json_object。后端不支持时请勿开启，或在「排除主体参数」填 response_format。">
           <UbSwitch v-model="draft.jsonFormatOutput" aria-label="需要时格式化输出" />
         </UbRow>
-        <UbRow label="保留多个 system 消息" hint="默认开启。提示词后处理为严格/半严格时，中部 system 仍保留角色；关闭后按后处理模式改写。">
-          <UbSwitch v-model="draft.preserveMultipleSystem" aria-label="保留多个 system 消息" />
+        <UbRow label="保留多个 system 消息" hint="默认开启。提示词后处理为严格/半严格时，中部 system 仍保留角色；关闭后按后处理模式改写。仅经酒馆转接发送时生效。">
+          <UbSwitch v-model="draft.preserveMultipleSystem" :disabled="draft.sendChannel === 'direct'" aria-label="保留多个 system 消息" />
         </UbRow>
       </UbSection>
 
@@ -138,12 +150,13 @@
         </UbRow>
         <UbRow
           label="提示词后处理"
-          hint="默认严格（与旧版一致）；未选择＝原样透传，可保留中部 system 段角色。分组只决定消息改写策略，不剥离 tools 字段。"
+          hint="默认严格（与旧版一致）；未选择＝原样透传，可保留中部 system 段角色。分组只决定消息改写策略，不剥离 tools 字段。仅经酒馆转接发送时生效。"
           stack
         >
           <UbSelect
             :options="promptPostProcessingOptions"
             :model-value="draft.promptPostProcessing"
+            :disabled="draft.sendChannel === 'direct'"
             placeholder="未选择"
             aria-label="提示词后处理"
             @update:model-value="setPromptPostProcessing"
@@ -231,6 +244,11 @@ const reasoningEffortOptions: UbSelectOption[] = [
   { value: 'max', label: 'Max' },
   { value: 'ultra', label: 'Ultra' },
   { value: 'auto', label: 'Auto（自动）' },
+];
+
+const sendChannelOptions: UbSelectOption[] = [
+  { value: 'tavern', label: '经酒馆转接发送' },
+  { value: 'direct', label: '数据库直接发送' },
 ];
 
 const customApiFormatOptions: UbSelectOption[] = [
@@ -405,6 +423,7 @@ async function loadModelsForActive(): Promise<void> {
     url: draft.url,
     apiKey: draft.apiKey,
     customApiFormat: draft.customApiFormat,
+    sendChannel: draft.sendChannel,
   });
 }
 

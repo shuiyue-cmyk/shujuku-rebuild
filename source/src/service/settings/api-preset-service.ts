@@ -23,6 +23,13 @@ export type CustomApiFormat_ACU = 'openai_compat' | 'openai_responses' | 'claude
 
 const CUSTOM_API_FORMATS_ACU: readonly CustomApiFormat_ACU[] = ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions', 'gemini_generate_content'];
 
+/** 发送方式（预设级）：tavern = 经酒馆转接发送（默认）；direct = 数据库直接发送（插件直连端点，见 service/ai/direct-send.ts） */
+export type ApiSendChannel_ACU = 'tavern' | 'direct';
+
+export function normalizeApiSendChannel_ACU(value: unknown): ApiSendChannel_ACU {
+  return value === 'direct' ? 'direct' : 'tavern';
+}
+
 export function normalizeCustomApiFormat_ACU(value: unknown): CustomApiFormat_ACU {
   const raw = String(value ?? '').trim();
   return (CUSTOM_API_FORMATS_ACU as readonly string[]).includes(raw) ? (raw as CustomApiFormat_ACU) : 'openai_compat';
@@ -87,6 +94,8 @@ export interface ApiPresetApiConfig_ACU {
   promptPostProcessing: ApiPromptPostProcessingValue_ACU;
   /** 保留多个 system（预设级）：默认开启；严格/半严格后处理也不把中部 system 降级为 user */
   preserveMultipleSystem?: boolean;
+  /** 发送方式（预设级）：缺省 tavern（经酒馆转接发送）；direct = 数据库直接发送 */
+  sendChannel?: ApiSendChannel_ACU;
 }
 
 export interface ApiPreset_ACU {
@@ -151,11 +160,12 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
     customApiFormat: normalizeCustomApiFormat_ACU(source.customApiFormat),
     promptPostProcessing: normalizePromptPostProcessing_ACU(source.promptPostProcessing),
     preserveMultipleSystem: typeof source.preserveMultipleSystem === 'boolean' ? source.preserveMultipleSystem : true,
+    sendChannel: normalizeApiSendChannel_ACU(source.sendChannel),
     ...(streamingEnabled !== undefined ? { streamingEnabled } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...Object.fromEntries(
       Object.entries(source).filter(([key]) =>
-        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort', 'customApiFormat', 'promptPostProcessing', 'preserveMultipleSystem'].includes(key)
+        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort', 'customApiFormat', 'promptPostProcessing', 'preserveMultipleSystem', 'sendChannel'].includes(key)
       )
     ),
   };

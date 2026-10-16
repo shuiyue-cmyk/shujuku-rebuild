@@ -270,4 +270,12 @@ describe('useApiPresetStore', () => {
 
     expect(fetchModels).toHaveBeenCalledWith('https://alpha.test', 'ka', '', { force: true });
   });
+
+  it('模型探活：数据库直接发送的草稿把发送方式交给 service', async () => {
+    const { store, fetchModels } = await importStore(createSettings());
+
+    await store.loadModelsForConfig({ url: 'https://alpha.test', apiKey: 'ka', customApiFormat: 'claude_messages', sendChannel: 'direct' });
+
+    expect(fetchModels).toHaveBeenCalledWith('https://alpha.test', 'ka', 'claude_messages', { force: true, sendChannel: 'direct' });
+  });
 });

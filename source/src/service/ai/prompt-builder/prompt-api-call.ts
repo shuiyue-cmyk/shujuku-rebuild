@@ -464,6 +464,17 @@ export class RetryableAiResponseError_ACU extends Error {
           } else if (data?.type === 'response.completed') {
             sawDone = true;
           }
+          // - Gemini Interactions（数据库直接发送时原样到达）：model_output 步骤的起始内容与 text 增量拼正文，
+          //   思考步骤（thought / thought_summary）不进正文；interaction.completed 结束。
+          if (data?.event_type === 'step.start' && data?.step?.type === 'model_output' && Array.isArray(data.step.content)) {
+            for (const block of data.step.content) {
+              if (block?.type === 'text' && typeof block.text === 'string') result += block.text;
+            }
+          } else if (data?.event_type === 'step.delta' && data?.delta?.type === 'text' && typeof data?.delta?.text === 'string') {
+            result += data.delta.text;
+          } else if (data?.event_type === 'interaction.completed') {
+            sawDone = true;
+          }
           const geminiCandidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
           if (geminiCandidate && typeof geminiCandidate === 'object') {
             const parts = Array.isArray(geminiCandidate?.content?.parts) ? geminiCandidate.content.parts : [];

@@ -1,7 +1,9 @@
 import type { AcuV2ApiMode, AcuV2ApiPreset } from '../stores/api-preset-store';
 import {
   API_PROMPT_POST_PROCESSING_DEFAULT_ACU,
+  normalizeApiSendChannel_ACU,
   normalizePromptPostProcessing_ACU,
+  type ApiSendChannel_ACU,
 } from '../../service/settings/api-preset-service';
 
 export interface ApiPresetDraft {
@@ -35,6 +37,8 @@ export interface ApiPresetDraft {
   promptPostProcessing: string;
   /** 保留多个 system（预设级）：默认开启；严格/半严格后处理也不把中部 system 降级为 user */
   preserveMultipleSystem: boolean;
+  /** 发送方式（预设级）：tavern = 经酒馆转接发送（默认）；direct = 数据库直接发送 */
+  sendChannel: ApiSendChannel_ACU;
 }
 
 /** 连接模式（酒馆主 API / 酒馆预设已剥离，恒为自定义 API） */
@@ -60,6 +64,7 @@ export function createEmptyApiPresetDraft(): ApiPresetDraft {
     customApiFormat: 'openai_compat',
     promptPostProcessing: API_PROMPT_POST_PROCESSING_DEFAULT_ACU,
     preserveMultipleSystem: true,
+    sendChannel: 'tavern',
   };
 }
 
@@ -86,6 +91,7 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     // 与请求体共用同一归一化：缺失 → strict；显式 ''（未选择）保留；非法 → strict。
     promptPostProcessing: normalizePromptPostProcessing_ACU(preset.apiConfig.promptPostProcessing),
     preserveMultipleSystem: preset.apiConfig.preserveMultipleSystem !== false,
+    sendChannel: normalizeApiSendChannel_ACU(preset.apiConfig.sendChannel),
   };
 }
 
@@ -115,6 +121,7 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       // 白名单校验仿 customApiFormat：显式 ''（未选择）保留，非法值降级 strict，不写入预设。
       promptPostProcessing: normalizePromptPostProcessing_ACU(draft.promptPostProcessing),
       preserveMultipleSystem: draft.preserveMultipleSystem !== false,
+      sendChannel: normalizeApiSendChannel_ACU(draft.sendChannel),
     },
     nonPrefillSupport: draft.nonPrefillSupport === true,
     jsonFormatOutput: draft.jsonFormatOutput === true,

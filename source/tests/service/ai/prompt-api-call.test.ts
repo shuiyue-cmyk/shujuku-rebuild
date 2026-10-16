@@ -908,6 +908,23 @@ describe('handleApiResponse_ACU 响应解析', () => {
     expect(result).toBe('你好');
   });
 
+  it('数据库直接发送的 Gemini Interactions 流（step.start/step.delta + interaction.completed）可解析，思考摘要不进正文', async () => {
+    const result = await handleApiResponse_ACU({
+      text: async () => [
+        'data: {"event_type":"interaction.created","interaction":{}}',
+        'data: {"event_type":"step.start","index":0,"step":{"type":"thought","summary":[]}}',
+        'data: {"event_type":"step.delta","index":0,"delta":{"type":"thought_summary","content":{"type":"text","text":"想"}}}',
+        'data: {"event_type":"step.stop","index":0}',
+        'data: {"event_type":"step.start","index":1,"step":{"type":"model_output","content":[{"type":"text","text":"开"}]}}',
+        'data: {"event_type":"step.delta","index":1,"delta":{"type":"text","text":"头"}}',
+        'data: {"event_type":"step.stop","index":1}',
+        'data: {"event_type":"interaction.completed","interaction":{"usage":{"total_input_tokens":3,"total_output_tokens":2}}}',
+        '',
+      ].join('\n'),
+    }, true);
+    expect(result).toBe('开头');
+  });
+
   it('R8-07：Gemini 流（candidates.parts.text + finishReason）可解析', async () => {
     const result = await handleApiResponse_ACU({
       text: async () => [

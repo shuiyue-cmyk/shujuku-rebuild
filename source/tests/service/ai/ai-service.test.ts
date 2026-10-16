@@ -351,3 +351,54 @@ describe('fetchAvailableModels_ACU', () => {
     expect(r2.models).toEqual(['m']);
   });
 });
+
+describe('fetchAvailableModels_ACU 数据库直接发送', () => {
+  function modelsResponse(data: unknown) {
+    return { ok: true, status: 200, statusText: 'OK', json: async () => data, text: async () => JSON.stringify(data) };
+  }
+
+  it('OpenAI 兼容：直接 GET 端点 /models，带 Bearer 密钥、不带宿主请求头', async () => {
+    mockFetch.mockResolvedValueOnce(modelsResponse({ data: [{ id: 'gpt-x' }] }));
+    const result = await fetchAvailableModels_ACU('https://api.example.com/v1/', 'sk-direct', 'openai_compat', { sendChannel: 'direct' });
+    expect(result).toEqual({ success: true, models: ['gpt-x'] });
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toBe('https://api.example.com/v1/models');
+    expect(init.method).toBe('GET');
+    expect(init.credentials).toBe('omit');
+    const headers = new Headers(init.headers);
+    expect(headers.get('Authorization')).toBe('Bearer sk-direct');
+    expect(headers.get('X-Custom')).toBeNull();
+  });
+
+  it('Claude：带 x-api-key 与 anthropic-version；Gemini：补 /v1beta、去掉模型名的 models/ 前缀', async () => {
+    mockFetch.mockResolvedValueOnce(modelsResponse({ data: [{ id: 'claude-x' }] }));
+    await fetchAvailableModels_ACU('https://c.example.com/v1', 'sk-c', 'claude_messages', { sendChannel: 'direct' });
+    const claudeHeaders = new Headers(mockFetch.mock.calls[0][1].headers);
+    expect(mockFetch.mock.calls[0][0]).toBe('https://c.example.com/v1/models');
+    expect(claudeHeaders.get('x-api-key')).toBe('sk-c');
+    expect(claudeHeaders.get('anthropic-version')).toBe('2023-06-01');
+
+    mockFetch.mockResolvedValueOnce(modelsResponse({ models: [{ name: 'models/gemini-3-pro' }] }));
+    const gemini = await fetchAvailableModels_ACU('https://g.example.com', 'sk-g', 'gemini_generate_content', { sendChannel: 'direct' });
+    expect(mockFetch.mock.calls[1][0]).toBe('https://g.example.com/v1beta/models');
+    expect(new Headers(mockFetch.mock.calls[1][1].headers).get('x-goog-api-key')).toBe('sk-g');
+    expect(gemini.models).toEqual(['gemini-3-pro']);
+  });
+
+  it('连不上（跨域被拦）时返回结构化失败与改回转接的提示，不向界面抛错', async () => {
+    mockFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const result = await fetchAvailableModels_ACU('https://api.example.com/v1', 'sk', 'openai_compat', { sendChannel: 'direct' });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('经酒馆转接发送');
+  });
+
+  it('同一端点的转接与直接发送探活结果分开缓存', async () => {
+    mockFetch.mockResolvedValueOnce(modelsResponse({ data: [{ id: 'tavern-m' }] }));
+    mockFetch.mockResolvedValueOnce(modelsResponse({ data: [{ id: 'direct-m' }] }));
+    const viaTavern = await fetchAvailableModels_ACU('https://api.example.com/v1', 'sk', 'openai_compat');
+    const direct = await fetchAvailableModels_ACU('https://api.example.com/v1', 'sk', 'openai_compat', { sendChannel: 'direct' });
+    expect(viaTavern.models).toEqual(['tavern-m']);
+    expect(direct.models).toEqual(['direct-m']);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+});

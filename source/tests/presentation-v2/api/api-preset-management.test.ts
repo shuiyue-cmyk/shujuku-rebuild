@@ -215,4 +215,23 @@ describe('api preset draft helpers', () => {
     expect(off.preserveMultipleSystem).toBe(false);
     expect(apiPresetFromDraft(off).apiConfig.preserveMultipleSystem).toBe(false);
   });
+
+  it('发送方式默认经酒馆转接：缺失与非法值归一 tavern，数据库直接发送往返保留', () => {
+    expect(normalizeApiConfig_ACU({ url: 'https://e.test', model: 'e' } as any).sendChannel).toBe('tavern');
+    expect(normalizeApiConfig_ACU({ url: 'https://e.test', model: 'e', sendChannel: 'weird' } as any).sendChannel).toBe('tavern');
+    expect(normalizeApiConfig_ACU({ url: 'https://e.test', model: 'e', sendChannel: 'direct' } as any).sendChannel).toBe('direct');
+    expect(createEmptyApiPresetDraft().sendChannel).toBe('tavern');
+    const legacy = apiPresetDraftFromPreset({
+      name: 'legacy', apiMode: 'custom',
+      apiConfig: { url: 'https://old.test', apiKey: '', model: 'm', max_tokens: 1, temperature: 1 } as any,
+    });
+    expect(legacy.sendChannel).toBe('tavern');
+    expect(apiPresetFromDraft(legacy).apiConfig.sendChannel).toBe('tavern');
+    const direct = apiPresetDraftFromPreset({
+      name: 'direct', apiMode: 'custom',
+      apiConfig: { url: 'https://old.test', apiKey: '', model: 'm', max_tokens: 1, temperature: 1, sendChannel: 'direct' } as any,
+    });
+    expect(direct.sendChannel).toBe('direct');
+    expect(apiPresetFromDraft(direct).apiConfig.sendChannel).toBe('direct');
+  });
 });

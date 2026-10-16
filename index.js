@@ -36489,7 +36489,7 @@ function assignMissingRowIds_ACU$1(rows, sheetKey, startIndex, reserved, result)
     });
 }
 
-function isRecord_ACU$e(value) {
+function isRecord_ACU$f(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 function createResult_ACU() {
@@ -36505,7 +36505,7 @@ function validateCanonicalCheckpointSheet_ACU(sheet, sheetKey, checkpointKind, c
         addIssue_ACU$1(result, checkpointKind, context, 'invalid_sheet_key', { sheetKey });
         return result;
     }
-    if (!isRecord_ACU$e(sheet)) {
+    if (!isRecord_ACU$f(sheet)) {
         addIssue_ACU$1(result, checkpointKind, context, 'invalid_sheet', { sheetKey });
         return result;
     }
@@ -36544,7 +36544,7 @@ function validateCanonicalCheckpointSheet_ACU(sheet, sheetKey, checkpointKind, c
 }
 function validateCanonicalCheckpointData_ACU(data, context = {}) {
     const result = createResult_ACU();
-    if (!isRecord_ACU$e(data)) {
+    if (!isRecord_ACU$f(data)) {
         addIssue_ACU$1(result, 'data', context, 'invalid_data');
         return result;
     }
@@ -36572,7 +36572,7 @@ function isPositiveInteger_ACU(value) {
  */
 function validateMigrationProvenanceV1_ACU(provenance) {
     const issues = [];
-    if (!isRecord_ACU$e(provenance)) {
+    if (!isRecord_ACU$f(provenance)) {
         return { valid: false, issues: ['provenance_not_object'] };
     }
     if (provenance.version !== 1)
@@ -36595,7 +36595,7 @@ function validateMigrationProvenanceV1_ACU(provenance) {
         issues.push('invalid_source_ai_floors');
     }
     const lastChangedBySheet = provenance.legacyLastChangedAiFloorBySheet;
-    if (!isRecord_ACU$e(lastChangedBySheet)
+    if (!isRecord_ACU$f(lastChangedBySheet)
         || Object.keys(lastChangedBySheet).some(sheetKey => !sheetKey.startsWith('sheet_') || !isNonNegativeInteger_ACU$1(lastChangedBySheet[sheetKey]))) {
         issues.push('invalid_last_changed_floor_by_sheet');
     }
@@ -36611,7 +36611,7 @@ function validateMigrationProvenanceV1_ACU(provenance) {
 }
 function validateCanonicalCheckpoint_ACU(checkpoint, context = {}) {
     const result = createResult_ACU();
-    if (!isRecord_ACU$e(checkpoint)) {
+    if (!isRecord_ACU$f(checkpoint)) {
         addIssue_ACU$1(result, 'full', context, 'checkpoint_not_object');
         return result;
     }
@@ -36632,7 +36632,7 @@ function validateCanonicalCheckpoint_ACU(checkpoint, context = {}) {
         if (checkpoint.fallbackProvenance !== undefined) {
             const provenance = checkpoint.fallbackProvenance;
             let valid = false;
-            if (isRecord_ACU$e(provenance)) {
+            if (isRecord_ACU$f(provenance)) {
                 const rangeStart = provenance.rangeStartMessageIndex;
                 const rangeEnd = provenance.rangeEndMessageIndex;
                 const createdAt = provenance.createdAt;
@@ -43218,12 +43218,12 @@ function resolveReadQuerySql_ACU(sql, tableData, translateSql) {
     };
 }
 
-function isRecord_ACU$d(value) {
+function isRecord_ACU$e(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 function fingerprint_ACU$1(value) {
     const text = JSON.stringify(value, (_key, item) => {
-        if (!isRecord_ACU$d(item))
+        if (!isRecord_ACU$e(item))
             return item;
         return Object.keys(item).sort().reduce((out, key) => { out[key] = item[key]; return out; }, {});
     });
@@ -43259,7 +43259,7 @@ function headerMatchesColumn_ACU(headerValue, sqlName, comment) {
     return !!value && (canonicalPhysicalName_ACU(value) === canonicalPhysicalName_ACU(sqlName) || (!!comment && value === comment));
 }
 function resolveRequiredHeaderIndexes_ACU(result, sheetKey, sheet, header, omitLeadingRowId = false) {
-    const ddl = isRecord_ACU$d(sheet.sourceData) && typeof sheet.sourceData.ddl === 'string' ? sheet.sourceData.ddl : '';
+    const ddl = isRecord_ACU$e(sheet.sourceData) && typeof sheet.sourceData.ddl === 'string' ? sheet.sourceData.ddl : '';
     if (!ddl)
         return new Map();
     const ddlColumns = parseDDLColumnInfos_ACU(ddl).slice(omitLeadingRowId ? 1 : 0);
@@ -43405,11 +43405,11 @@ function headerOnlyRowIdNormalizationAction_ACU(sheet) {
  * It deliberately does not touch populated tables or malformed seed pools.
  */
 function normalizeHeaderOnlyRowIdColumns_ACU(data) {
-    if (!isRecord_ACU$d(data))
+    if (!isRecord_ACU$e(data))
         return data;
     let normalized = null;
     for (const [sheetKey, sheet] of Object.entries(data)) {
-        if (!sheetKey.startsWith('sheet_') || !isRecord_ACU$d(sheet))
+        if (!sheetKey.startsWith('sheet_') || !isRecord_ACU$e(sheet))
             continue;
         const action = headerOnlyRowIdNormalizationAction_ACU(sheet);
         if (!action)
@@ -43441,7 +43441,7 @@ function determineHeaderRepair_ACU(result, sheetKey, sheet) {
         addIssue_ACU(result, { code: 'upgrade_invalid_header', sheetKey, rowIndex: 0, message: '无数据模板缺少 row_id，可在首列插入' }, { action: 'insert_row_id_column', sheetKey, rowIndex: 0, targetHeader: 'row_id' });
         return { header: ['row_id', ...header], insertsRowId: true };
     }
-    const ddl = isRecord_ACU$d(sheet.sourceData) ? sheet.sourceData.ddl : undefined;
+    const ddl = isRecord_ACU$e(sheet.sourceData) ? sheet.sourceData.ddl : undefined;
     const ddlText = typeof ddl === 'string' ? ddl : '';
     const ddlColumns = ddlText ? parseDDLColumnInfos_ACU(ddlText) : [];
     // 只有 DDL 明确多出首列 row_id，且其余列按顺序与业务表头对应，才允许自动插入身份列。
@@ -43462,7 +43462,7 @@ function getTableDataFingerprint_ACU(data) {
 }
 function auditTableDataForUpgrade_ACU(data) {
     const result = { status: 'clean', issues: [], repairPlan: [], dataFingerprintBefore: fingerprint_ACU$1(data), sourceData: data };
-    if (!isRecord_ACU$d(data)) {
+    if (!isRecord_ACU$e(data)) {
         addIssue_ACU(result, { code: 'upgrade_invalid_data', message: '表格数据不是对象' });
         result.status = 'unrecoverable';
         return result;
@@ -43474,7 +43474,7 @@ function auditTableDataForUpgrade_ACU(data) {
         return result;
     }
     for (const [sheetKey, rawSheet] of sheets) {
-        if (!isRecord_ACU$d(rawSheet)) {
+        if (!isRecord_ACU$e(rawSheet)) {
             addIssue_ACU(result, { code: 'upgrade_invalid_data', sheetKey, message: 'sheet 不是对象' });
             continue;
         }
@@ -43507,7 +43507,7 @@ function auditTableDataForUpgrade_ACU(data) {
     return result;
 }
 
-function isRecord_ACU$c(value) {
+function isRecord_ACU$d(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 function cloneData_ACU(data) {
@@ -43575,9 +43575,9 @@ function repairTableDataFromAudit_ACU(audit, _options = {}) {
     const candidateData = cloneData_ACU(audit.sourceData);
     const idRemap = [];
     const overflowCells = [];
-    if (isRecord_ACU$c(candidateData) && audit.status !== 'unrecoverable') {
+    if (isRecord_ACU$d(candidateData) && audit.status !== 'unrecoverable') {
         Object.entries(candidateData).forEach(([sheetKey, sheet]) => {
-            if (!sheetKey.startsWith('sheet_') || !isRecord_ACU$c(sheet))
+            if (!sheetKey.startsWith('sheet_') || !isRecord_ACU$d(sheet))
                 return;
             repairSheet_ACU(sheet, sheetKey, audit, idRemap, overflowCells);
         });
@@ -84888,6 +84888,20 @@ async function parseStreamResponse_ACU(response, onUsage, onProgress) {
                 else if (data?.type === 'response.completed') {
                     sawDone = true;
                 }
+                // - Gemini Interactions（数据库直接发送时原样到达）：model_output 步骤的起始内容与 text 增量拼正文，
+                //   思考步骤（thought / thought_summary）不进正文；interaction.completed 结束。
+                if (data?.event_type === 'step.start' && data?.step?.type === 'model_output' && Array.isArray(data.step.content)) {
+                    for (const block of data.step.content) {
+                        if (block?.type === 'text' && typeof block.text === 'string')
+                            result += block.text;
+                    }
+                }
+                else if (data?.event_type === 'step.delta' && data?.delta?.type === 'text' && typeof data?.delta?.text === 'string') {
+                    result += data.delta.text;
+                }
+                else if (data?.event_type === 'interaction.completed') {
+                    sawDone = true;
+                }
                 const geminiCandidate = Array.isArray(data?.candidates) ? data.candidates[0] : null;
                 if (geminiCandidate && typeof geminiCandidate === 'object') {
                     const parts = Array.isArray(geminiCandidate?.content?.parts) ? geminiCandidate.content.parts : [];
@@ -86233,6 +86247,9 @@ function onApiPresetRevisionChanged_ACU(listener) {
 // 写操作流程：校验 → 快照 → 改内存 → saveSettings_ACU → 失败回滚。
 // ═══════════════════════════════════════════════════════════════
 const CUSTOM_API_FORMATS_ACU = ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions', 'gemini_generate_content'];
+function normalizeApiSendChannel_ACU(value) {
+    return value === 'direct' ? 'direct' : 'tavern';
+}
 function normalizeCustomApiFormat_ACU(value) {
     const raw = String(value ?? '').trim();
     return CUSTOM_API_FORMATS_ACU.includes(raw) ? raw : 'openai_compat';
@@ -86295,9 +86312,10 @@ function normalizeApiConfig_ACU(value) {
         customApiFormat: normalizeCustomApiFormat_ACU(source.customApiFormat),
         promptPostProcessing: normalizePromptPostProcessing_ACU(source.promptPostProcessing),
         preserveMultipleSystem: typeof source.preserveMultipleSystem === 'boolean' ? source.preserveMultipleSystem : true,
+        sendChannel: normalizeApiSendChannel_ACU(source.sendChannel),
         ...(streamingEnabled !== undefined ? { streamingEnabled } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...Object.fromEntries(Object.entries(source).filter(([key]) => !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort', 'customApiFormat', 'promptPostProcessing', 'preserveMultipleSystem'].includes(key))),
+        ...Object.fromEntries(Object.entries(source).filter(([key]) => !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort', 'customApiFormat', 'promptPostProcessing', 'preserveMultipleSystem', 'sendChannel'].includes(key))),
     };
 }
 function normalizePreset_ACU(value) {
@@ -86780,6 +86798,523 @@ function saveCurrentConfigAsPreset_ACU(name) {
         apiConfig: normalizeApiConfig_ACU(settings_ACU.apiConfig),
     };
     return saveApiPreset_ACU(preset);
+}
+
+// service/ai/direct-send.ts — 自定义 API 的两种发送方式
+//
+// 经酒馆转接发送（默认）：请求体按 TT 自定义连接的契约交给 /api/backends/chat-completions/generate，
+// 由酒馆后端按接口协议改写并转发。
+// 数据库直接发送：插件在浏览器里直接请求预设端点，按接口协议自己组装上游请求体，
+// 非流式回复归一成 OpenAI 形态，流式回复原样交给既有 SSE 解析（各协议的增量事件已识别）。
+// 改写口径对照 TT dev 的自定义连接（payload/custom.rs 及各协议 builder）：
+// 附加主体参数在协议转换后浅合并、排除主体参数最后删除；Gemini 关闭安全过滤。
+// 与转接的有意差别：开头连续的 system 进协议的系统提示字段（TT 自定义连接默认把 system 当 user 发），
+// 中部 system 按 user 发；不做提示词后处理，消息按原顺序发出。
+// 直接发送不带宿主请求头（CSRF 令牌只给酒馆后端），也不带 Cookie。
+const TAVERN_GENERATE_URL_ACU = '/api/backends/chat-completions/generate';
+const ANTHROPIC_VERSION_ACU = '2023-06-01';
+const GEMINI_API_VERSION_ACU = 'v1beta';
+/** 走直接发送的请求体登记表：请求体对象本身不带任何额外字段，转接时逐字不变。 */
+const directSendBodies_ACU = new WeakSet();
+function markDirectSendBody_ACU(body) {
+    directSendBodies_ACU.add(body);
+}
+function isDirectSendBody_ACU(body) {
+    return !!body && typeof body === 'object' && directSendBodies_ACU.has(body);
+}
+const DIRECT_FORMATS_ACU = ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions', 'gemini_generate_content'];
+function isRecord_ACU$c(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+function directFormat_ACU(value) {
+    return DIRECT_FORMATS_ACU.includes(value) ? value : 'openai_compat';
+}
+function textOf_ACU(content) {
+    if (typeof content === 'string')
+        return content;
+    if (Array.isArray(content)) {
+        return content.map(part => (typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : '')).join('');
+    }
+    return content === undefined || content === null ? '' : String(content);
+}
+function argumentsObject_ACU(raw) {
+    if (typeof raw !== 'string')
+        return raw ?? {};
+    if (!raw.trim())
+        return {};
+    try {
+        return JSON.parse(raw);
+    }
+    catch {
+        return {};
+    }
+}
+function stripTrailingSlash_ACU(url) {
+    return url.trim().replace(/\/+$/, '');
+}
+function appendGoogleApiPath_ACU(base, suffix) {
+    const root = stripTrailingSlash_ACU(base);
+    const path = suffix.replace(/^\/+/, '');
+    return /\/v1(?:beta)?$/.test(root) ? `${root}/${path}` : `${root}/${GEMINI_API_VERSION_ACU}/${path}`;
+}
+function geminiMajorVersion_ACU(model) {
+    const match = model.toLowerCase().match(/gemini-(\d+)/);
+    return match ? Number(match[1]) : null;
+}
+function parseIncludeBody_ACU(raw) {
+    const text = typeof raw === 'string' ? raw : '';
+    if (!text.trim())
+        return {};
+    let parsed;
+    try {
+        parsed = parse(text);
+    }
+    catch {
+        throw new Error('附加主体参数不是合法的 YAML，数据库直接发送未发出请求。');
+    }
+    if (isRecord_ACU$c(parsed))
+        return parsed;
+    if (Array.isArray(parsed))
+        return Object.assign({}, ...parsed.filter(isRecord_ACU$c));
+    throw new Error('附加主体参数必须是 YAML 对象，数据库直接发送未发出请求。');
+}
+function parseExcludeKeys_ACU(raw) {
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    if (!text)
+        return [];
+    try {
+        const parsed = parse(text);
+        if (Array.isArray(parsed))
+            return parsed.map(key => String(key).trim()).filter(Boolean);
+        if (isRecord_ACU$c(parsed))
+            return Object.keys(parsed);
+    }
+    catch { /* 按逗号分隔兜底 */ }
+    return text.split(/[,\n]/).map(key => key.replace(/^-\s*/, '').trim()).filter(Boolean);
+}
+/** 附加请求标头逐行 `Name: Value`；后写的同名标头覆盖先写的（用户行在密钥行之后）。 */
+function parseHeaderLines_ACU(raw) {
+    const text = typeof raw === 'string' ? raw : '';
+    const headers = [];
+    for (const line of text.split(/\r?\n/)) {
+        if (!line.trim())
+            continue;
+        const colon = line.indexOf(':');
+        if (colon < 1)
+            throw new Error(`附加请求标头格式无效（应为 Header: Value）：${line.trim().slice(0, 40)}`);
+        headers.push([line.slice(0, colon).trim(), line.slice(colon + 1).trim()]);
+    }
+    return headers;
+}
+/** 开头连续的 system 拆出来；其余消息里的 system 按 user 发。 */
+function splitLeadingSystem_ACU(messages) {
+    const system = [];
+    let index = 0;
+    while (index < messages.length && messages[index]?.role === 'system') {
+        const text = textOf_ACU(messages[index].content);
+        if (text.trim())
+            system.push(text);
+        index += 1;
+    }
+    return { system, rest: messages.slice(index) };
+}
+function openAiTools_ACU(tools) {
+    return Array.isArray(tools) ? tools.filter(tool => isRecord_ACU$c(tool) && isRecord_ACU$c(tool.function) && tool.function.name) : [];
+}
+function toolChoiceName_ACU(choice) {
+    return isRecord_ACU$c(choice) && isRecord_ACU$c(choice.function) && typeof choice.function.name === 'string' ? choice.function.name : null;
+}
+function buildOpenAiCompat_ACU(bridge) {
+    const body = {
+        messages: bridge.messages,
+        model: bridge.model,
+        max_tokens: bridge.max_tokens,
+        temperature: bridge.temperature,
+        top_p: bridge.top_p,
+        stream: bridge.stream === true,
+    };
+    if (bridge.stream === true)
+        body.stream_options = { include_usage: true };
+    if (bridge.reasoning_effort !== undefined)
+        body.reasoning_effort = bridge.reasoning_effort;
+    const tools = openAiTools_ACU(bridge.tools);
+    if (tools.length) {
+        body.tools = tools;
+        if (bridge.tool_choice !== undefined)
+            body.tool_choice = bridge.tool_choice;
+    }
+    return body;
+}
+function buildResponses_ACU(bridge) {
+    const input = [];
+    for (const message of bridge.messages) {
+        const text = textOf_ACU(message?.content);
+        if (message?.role === 'assistant') {
+            if (text.trim())
+                input.push({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] });
+            continue;
+        }
+        input.push({ role: message?.role === 'system' ? 'developer' : message?.role === 'developer' ? 'developer' : 'user', content: text });
+    }
+    const body = {
+        model: bridge.model,
+        input,
+        store: false,
+        stream: bridge.stream === true,
+        temperature: bridge.temperature,
+        top_p: bridge.top_p,
+        max_output_tokens: bridge.max_tokens,
+    };
+    if (bridge.reasoning_effort !== undefined)
+        body.reasoning = { effort: bridge.reasoning_effort };
+    const tools = openAiTools_ACU(bridge.tools);
+    if (tools.length) {
+        body.tools = tools.map(tool => ({ type: 'function', name: tool.function.name, description: tool.function.description, parameters: tool.function.parameters }));
+        const name = toolChoiceName_ACU(bridge.tool_choice);
+        if (name)
+            body.tool_choice = { type: 'function', name };
+        else if (bridge.tool_choice !== undefined)
+            body.tool_choice = bridge.tool_choice;
+    }
+    return body;
+}
+function mergeConsecutiveRoles_ACU(items, merge) {
+    const merged = [];
+    for (const item of items) {
+        const last = merged[merged.length - 1];
+        if (last && last.role === item.role)
+            merge(last, item);
+        else
+            merged.push(item);
+    }
+    return merged;
+}
+function buildClaude_ACU(bridge) {
+    const { system, rest } = splitLeadingSystem_ACU(bridge.messages);
+    const converted = rest.map(message => ({
+        role: message?.role === 'assistant' ? 'assistant' : 'user',
+        content: [{ type: 'text', text: textOf_ACU(message?.content) }],
+    }));
+    const messages = mergeConsecutiveRoles_ACU(converted, (into, next) => { into.content.push(...next.content); });
+    const body = {
+        model: bridge.model,
+        max_tokens: bridge.max_tokens,
+        stream: bridge.stream === true,
+        messages: messages.length ? messages : [{ role: 'user', content: [{ type: 'text', text: '' }] }],
+    };
+    // 与 TT 同口径：采样参数只在偏离默认值 1 时发送（新 Claude 模型拒收 temperature 与 top_p 同时出现）。
+    if (typeof bridge.temperature === 'number' && bridge.temperature !== 1)
+        body.temperature = bridge.temperature;
+    if (typeof bridge.top_p === 'number' && bridge.top_p !== 1)
+        body.top_p = bridge.top_p;
+    if (system.length)
+        body.system = system.map(text => ({ type: 'text', text }));
+    if (bridge.reasoning_effort !== undefined && bridge.reasoning_effort !== false)
+        body.output_config = { effort: bridge.reasoning_effort };
+    const tools = openAiTools_ACU(bridge.tools);
+    if (tools.length) {
+        body.tools = tools.map(tool => ({ name: tool.function.name, description: tool.function.description, input_schema: tool.function.parameters ?? { type: 'object' } }));
+        const name = toolChoiceName_ACU(bridge.tool_choice);
+        if (name)
+            body.tool_choice = { type: 'tool', name };
+        else if (bridge.tool_choice === 'none')
+            body.tool_choice = { type: 'none' };
+        else if (bridge.tool_choice === 'required')
+            body.tool_choice = { type: 'any' };
+        else if (bridge.tool_choice !== undefined)
+            body.tool_choice = { type: 'auto' };
+    }
+    return body;
+}
+function buildGeminiInteractions_ACU(bridge) {
+    const systemParts = [];
+    const input = [];
+    for (const message of bridge.messages) {
+        const text = textOf_ACU(message?.content);
+        if (message?.role === 'system' || message?.role === 'developer') {
+            if (text.trim())
+                systemParts.push(text.trim());
+        }
+        else if (message?.role === 'assistant') {
+            if (text.trim())
+                input.push({ type: 'model_output', content: [{ type: 'text', text }] });
+        }
+        else {
+            input.push({ type: 'user_input', content: [{ type: 'text', text }] });
+        }
+    }
+    const generationConfig = {};
+    if (typeof bridge.max_tokens === 'number' && bridge.max_tokens > 0)
+        generationConfig.max_output_tokens = bridge.max_tokens;
+    if (typeof bridge.reasoning_effort === 'string')
+        generationConfig.thinking_level = bridge.reasoning_effort;
+    const body = { model: bridge.model, input, stream: bridge.stream === true, store: false };
+    if (systemParts.length)
+        body.system_instruction = systemParts.join('\n\n');
+    const tools = openAiTools_ACU(bridge.tools);
+    if (tools.length) {
+        body.tools = tools.map(tool => ({ type: 'function', name: tool.function.name, description: tool.function.description, parameters: tool.function.parameters }));
+        if (bridge.tool_choice === 'none' || bridge.tool_choice === 'auto')
+            generationConfig.tool_choice = bridge.tool_choice;
+        else if (bridge.tool_choice === 'required')
+            generationConfig.tool_choice = 'any';
+    }
+    if (Object.keys(generationConfig).length)
+        body.generation_config = generationConfig;
+    return body;
+}
+const GEMINI_SAFETY_SETTINGS_ACU = ['HARM_CATEGORY_HARASSMENT', 'HARM_CATEGORY_HATE_SPEECH', 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'HARM_CATEGORY_DANGEROUS_CONTENT', 'HARM_CATEGORY_CIVIC_INTEGRITY']
+    .map(category => ({ category, threshold: 'OFF' }));
+function buildGeminiGenerateContent_ACU(bridge) {
+    const { system, rest } = splitLeadingSystem_ACU(bridge.messages);
+    const converted = rest.map(message => ({
+        role: message?.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: textOf_ACU(message?.content) }],
+    }));
+    const contents = mergeConsecutiveRoles_ACU(converted, (into, next) => { into.parts.push(...next.parts); });
+    const generationConfig = {};
+    if (bridge.max_tokens !== undefined && bridge.max_tokens !== null)
+        generationConfig.maxOutputTokens = bridge.max_tokens;
+    if (bridge.temperature !== undefined && bridge.temperature !== null)
+        generationConfig.temperature = bridge.temperature;
+    if (bridge.top_p !== undefined && bridge.top_p !== null)
+        generationConfig.topP = bridge.top_p;
+    // Gemini 3 起用 thinkingLevel；2.x 只认 thinkingBudget，不猜预算，交给模型默认。
+    const major = geminiMajorVersion_ACU(String(bridge.model || ''));
+    if (typeof bridge.reasoning_effort === 'string' && (major === null || major >= 3)) {
+        generationConfig.thinkingConfig = { thinkingLevel: bridge.reasoning_effort, includeThoughts: false };
+    }
+    const body = {
+        contents: contents.length ? contents : [{ role: 'user', parts: [{ text: '' }] }],
+        generationConfig,
+        safetySettings: GEMINI_SAFETY_SETTINGS_ACU.map(item => ({ ...item })),
+    };
+    if (system.length)
+        body.systemInstruction = { parts: [{ text: system.join('\n\n') }] };
+    const tools = openAiTools_ACU(bridge.tools);
+    if (tools.length) {
+        body.tools = [{ function_declarations: tools.map(tool => ({ name: tool.function.name, description: tool.function.description, parameters: tool.function.parameters })) }];
+        const mode = bridge.tool_choice === 'none' ? 'NONE' : bridge.tool_choice === 'required' || toolChoiceName_ACU(bridge.tool_choice) ? 'ANY' : bridge.tool_choice === 'auto' ? 'AUTO' : null;
+        if (mode) {
+            const name = toolChoiceName_ACU(bridge.tool_choice);
+            body.toolConfig = { functionCallingConfig: { mode, ...(name ? { allowedFunctionNames: [name] } : {}) } };
+        }
+    }
+    return body;
+}
+/** 由 TT 契约请求体（buildCustomApiRequestBody_ACU 的产物）组装直接发送的上游请求。 */
+function buildDirectProviderRequest_ACU(bridge) {
+    const base = String(bridge.reverse_proxy || '').trim();
+    if (!base)
+        throw new Error('数据库直接发送需要填写端点地址。');
+    const format = directFormat_ACU(bridge.custom_api_format);
+    const stream = bridge.stream === true;
+    const messages = Array.isArray(bridge.messages) ? bridge.messages : [];
+    const normalized = { ...bridge, messages };
+    let body;
+    let url;
+    switch (format) {
+        case 'openai_responses':
+            body = buildResponses_ACU(normalized);
+            url = `${stripTrailingSlash_ACU(base)}/responses`;
+            break;
+        case 'claude_messages':
+            body = buildClaude_ACU(normalized);
+            url = `${stripTrailingSlash_ACU(base)}/messages`;
+            break;
+        case 'gemini_interactions':
+            body = buildGeminiInteractions_ACU(normalized);
+            url = appendGoogleApiPath_ACU(base, 'interactions');
+            break;
+        case 'gemini_generate_content': {
+            body = buildGeminiGenerateContent_ACU(normalized);
+            const rawModel = String(bridge.model || '').trim();
+            const modelPath = rawModel.startsWith('models/') ? rawModel : `models/${rawModel}`;
+            url = appendGoogleApiPath_ACU(base, `${modelPath}:${stream ? 'streamGenerateContent?alt=sse' : 'generateContent'}`);
+            break;
+        }
+        default:
+            body = buildOpenAiCompat_ACU(normalized);
+            url = `${stripTrailingSlash_ACU(base)}/chat/completions`;
+    }
+    for (const [key, value] of Object.entries(parseIncludeBody_ACU(bridge.custom_include_body)))
+        body[key] = value;
+    for (const key of parseExcludeKeys_ACU(bridge.custom_exclude_body))
+        delete body[key];
+    for (const key of Object.keys(body))
+        if (body[key] === undefined)
+            delete body[key];
+    const apiKey = String(bridge.proxy_password || '');
+    const headers = [['Content-Type', 'application/json']];
+    if (format === 'claude_messages') {
+        headers.push(['anthropic-version', ANTHROPIC_VERSION_ACU], ['anthropic-dangerous-direct-browser-access', 'true']);
+        if (apiKey)
+            headers.push(['x-api-key', apiKey]);
+    }
+    else if ((format === 'gemini_interactions' || format === 'gemini_generate_content') && apiKey) {
+        headers.push(['x-goog-api-key', apiKey]);
+    }
+    headers.push(...parseHeaderLines_ACU(bridge.custom_include_headers));
+    // 同名标头（不分大小写）后写的覆盖先写的，不叠加成逗号拼接的多值。
+    const deduped = new Map();
+    for (const header of headers) {
+        deduped.delete(header[0].toLowerCase());
+        deduped.set(header[0].toLowerCase(), header);
+    }
+    return { url, headers: [...deduped.values()], body, format, stream };
+}
+/** 「加载模型」的直接发送请求：与生成请求同一鉴权口径（Claude x-api-key、Gemini x-goog-api-key 并带 Bearer，同 TT）。 */
+function buildDirectModelListRequest_ACU(apiUrl, apiKey, format, extraHeaders = '') {
+    const kind = directFormat_ACU(format);
+    const url = kind === 'gemini_interactions' || kind === 'gemini_generate_content'
+        ? appendGoogleApiPath_ACU(apiUrl, 'models')
+        : `${stripTrailingSlash_ACU(apiUrl)}/models`;
+    const headers = [['Accept', 'application/json']];
+    if (kind === 'claude_messages') {
+        headers.push(['anthropic-version', ANTHROPIC_VERSION_ACU], ['anthropic-dangerous-direct-browser-access', 'true']);
+        if (apiKey)
+            headers.push(['x-api-key', apiKey]);
+    }
+    else if ((kind === 'gemini_interactions' || kind === 'gemini_generate_content') && apiKey) {
+        headers.push(['x-goog-api-key', apiKey]);
+    }
+    headers.push(...parseHeaderLines_ACU(extraHeaders));
+    return { url, headers };
+}
+/** 直接发送连不上时给用户的统一说明（生成与加载模型共用）。 */
+function directUnreachableHint_ACU(url, reason) {
+    let host = url;
+    try {
+        host = new URL(url).host;
+    }
+    catch { /* 保留原地址 */ }
+    return `数据库直接发送连不上 ${host}：${reason || '网络错误'}。多半是该服务商不允许网页直接访问（跨域），可在 API 预设里改回「经酒馆转接发送」。`;
+}
+function usageOf_ACU(raw) {
+    if (!isRecord_ACU$c(raw))
+        return undefined;
+    const prompt = raw.prompt_tokens ?? raw.input_tokens ?? raw.promptTokenCount ?? raw.total_input_tokens;
+    const completion = raw.completion_tokens ?? raw.output_tokens ?? raw.candidatesTokenCount ?? raw.total_output_tokens;
+    return { ...raw, ...(prompt !== undefined ? { prompt_tokens: prompt } : {}), ...(completion !== undefined ? { completion_tokens: completion } : {}) };
+}
+function toolCall_ACU(id, name, args) {
+    return { id: typeof id === 'string' ? id : undefined, type: 'function', function: { name: String(name || ''), arguments: typeof args === 'string' ? args : JSON.stringify(args ?? {}) } };
+}
+/** 各协议的非流式回复归一到 OpenAI Chat Completion 形态（正文、原生工具调用、用量）。 */
+function normalizeDirectProviderReply_ACU(data, format) {
+    if (format === 'openai_compat' || !isRecord_ACU$c(data) || Array.isArray(data.choices))
+        return data;
+    let content = '';
+    const toolCalls = [];
+    let usage;
+    if (format === 'claude_messages') {
+        for (const block of Array.isArray(data.content) ? data.content : []) {
+            if (block?.type === 'text' && typeof block.text === 'string')
+                content += block.text;
+            else if (block?.type === 'tool_use')
+                toolCalls.push(toolCall_ACU(block.id, block.name, block.input));
+        }
+        usage = usageOf_ACU(data.usage);
+    }
+    else if (format === 'openai_responses') {
+        for (const item of Array.isArray(data.output) ? data.output : []) {
+            if (item?.type === 'message') {
+                for (const part of Array.isArray(item.content) ? item.content : []) {
+                    if (part?.type === 'output_text' && typeof part.text === 'string')
+                        content += part.text;
+                }
+            }
+            else if (item?.type === 'function_call') {
+                toolCalls.push(toolCall_ACU(item.call_id ?? item.id, item.name, item.arguments));
+            }
+        }
+        if (!content && typeof data.output_text === 'string')
+            content = data.output_text;
+        usage = usageOf_ACU(data.usage);
+    }
+    else if (format === 'gemini_interactions') {
+        const steps = Array.isArray(data.steps) ? data.steps : Array.isArray(data.outputs) ? data.outputs : [];
+        for (const step of steps) {
+            if (step?.type === 'model_output')
+                content += textOf_ACU(step.content);
+            else if (step?.type === 'text' && typeof step.text === 'string')
+                content += step.text;
+            else if (step?.type === 'function_call')
+                toolCalls.push(toolCall_ACU(step.id ?? step.call_id, step.name, step.arguments));
+        }
+        usage = usageOf_ACU(data.usage);
+    }
+    else {
+        const candidate = Array.isArray(data.candidates) ? data.candidates[0] : null;
+        for (const part of Array.isArray(candidate?.content?.parts) ? candidate.content.parts : []) {
+            if (typeof part?.text === 'string' && part.thought !== true)
+                content += part.text;
+            else if (isRecord_ACU$c(part?.functionCall))
+                toolCalls.push(toolCall_ACU(part.functionCall.id, part.functionCall.name, part.functionCall.args));
+        }
+        usage = usageOf_ACU(data.usageMetadata);
+    }
+    const message = { role: 'assistant', content };
+    if (toolCalls.length)
+        message.tool_calls = toolCalls;
+    return { choices: [{ index: 0, message, finish_reason: toolCalls.length ? 'tool_calls' : 'stop' }], ...(usage ? { usage } : {}) };
+}
+/** 直接发送的连接层失败（多为服务商不允许网页跨域访问）：保留 TypeError 以沿用网络错误的重试判定。 */
+function directNetworkError_ACU(error, url) {
+    if (!(error instanceof TypeError))
+        return error;
+    return new TypeError(directUnreachableHint_ACU(url, error.message));
+}
+/**
+ * 自定义 API 统一发送口：按请求体登记的发送方式走酒馆转接或直接发送。
+ * 直接发送的非流式成功回复归一成 OpenAI 形态 JSON；流式与失败回复原样返回（失败体由调用方脱敏展示）。
+ */
+async function sendChatCompletionBody_ACU(body, signal) {
+    if (!isDirectSendBody_ACU(body)) {
+        return fetch(TAVERN_GENERATE_URL_ACU, {
+            method: 'POST',
+            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
+            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: signal || undefined,
+        });
+    }
+    const request = buildDirectProviderRequest_ACU(body);
+    let headers;
+    try {
+        headers = new Headers(request.headers);
+    }
+    catch (error) {
+        throw new Error(`附加请求标头无效，数据库直接发送未发出请求：${String(error?.message || error)}`);
+    }
+    let response;
+    try {
+        response = await fetch(request.url, {
+            method: 'POST',
+            redirect: 'error',
+            credentials: 'omit',
+            headers,
+            body: JSON.stringify(request.body),
+            signal: signal || undefined,
+        });
+    }
+    catch (error) {
+        throw directNetworkError_ACU(error, request.url);
+    }
+    if (!response.ok || request.stream)
+        return response;
+    const raw = await response.text();
+    let data;
+    try {
+        data = JSON.parse(raw);
+    }
+    catch {
+        return new Response(raw, { status: response.status, headers: { 'Content-Type': 'text/plain' } });
+    }
+    return new Response(JSON.stringify(normalizeDirectProviderReply_ACU(data, request.format)), {
+        status: response.status,
+        headers: { 'Content-Type': 'application/json' },
+    });
 }
 
 // service/ai/api-call.ts — AI 调用编排（剧情推进用）
@@ -87326,7 +87861,11 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
             ? { tool_choice: opts.toolChoice }
             : {}),
     };
-    logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${'reasoning_effort' in body ? String(body.reasoning_effort) : '(auto 省略)'}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
+    // 发送方式（预设级）：数据库直接发送时登记请求体，发送口据此直连端点；转接时请求体逐字不变。
+    const sendChannel_ACU = normalizeApiSendChannel_ACU(effectiveApiConfig.sendChannel);
+    if (sendChannel_ACU === 'direct')
+        markDirectSendBody_ACU(body);
+    logDebug_ACU(`[API] 构建请求体: channel=${sendChannel_ACU}, model=${model}, reasoning_effort=${'reasoning_effort' in body ? String(body.reasoning_effort) : '(auto 省略)'}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
     if (isDebugLogEnabled()) {
         try {
             const toStore = JSON.parse(JSON.stringify(body));
@@ -87358,7 +87897,8 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
     return body;
 }
 /**
- * 自定义 API 统一出口：调用宿主 /api/backends/chat-completions/generate。
+ * 自定义 API 统一出口：经酒馆转接时调用宿主 /api/backends/chat-completions/generate，
+ * 数据库直接发送时直连预设端点（见 direct-send.ts）。
  * stream 参数由 streamingEnabled 开关决定（见 buildCustomApiRequestBody_ACU）；
  * 响应解析按请求实际携带的 stream 值分流（预设级开关可能与全局不同）。
  * 返回 AI 响应文本（原始，未 trim），失败抛错。
@@ -87370,13 +87910,7 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
 async function postChatCompletion_ACU(body, signal) {
     let res;
     try {
-        res = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
-            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: signal || undefined,
-        });
+        res = await sendChatCompletionBody_ACU(body, signal);
     }
     catch (e) {
         // 网络层失败（Failed to fetch / NetworkError）：调用方（剧情推进任务循环等）会决定是否重试，
@@ -87420,13 +87954,7 @@ function parseNonStreamChatTurn_ACU(data) {
 async function postChatCompletionTurn_ACU(body, signal, onUsage) {
     let res;
     try {
-        res = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            redirect: 'error',
-            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: signal || undefined,
-        });
+        res = await sendChatCompletionBody_ACU(body, signal);
     }
     catch (e) {
         logWarn_ACU(`[postChatCompletionTurn] 网络请求失败: ${String(e?.message || e?.name || 'unknown')}`, { aborted: e?.name === 'AbortError' || String(e?.message || '').toLowerCase().includes('aborted') });
@@ -87643,13 +88171,7 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
     try {
         let response;
         try {
-            response = await fetch('/api/backends/chat-completions/generate', {
-                method: 'POST',
-                redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
-                headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-                signal: timeoutController.signal,
-            });
+            response = await sendChatCompletionBody_ACU(body, timeoutController.signal);
         }
         catch (error) {
             if (signal?.aborted) {
@@ -170794,9 +171316,9 @@ const MODEL_LIST_FAIL_TTL_MS_ACU = 30 * 1000;
 const MODEL_LIST_CACHE_CAP_ACU = 50;
 const modelListCache_ACU = new Map();
 const modelListInflight_ACU = new Map();
-function modelListCacheKey_ACU(apiUrl, apiKey, customApiFormat) {
+function modelListCacheKey_ACU(apiUrl, apiKey, customApiFormat, sendChannel) {
     const url = String(apiUrl || '').trim().replace(/\/+$/, '').toLowerCase();
-    return `${url}\n${normalizeStatusCustomApiFormat_ACU(customApiFormat)}\n${hashUserInput_ACU(String(apiKey || ''))}`;
+    return `${url}\n${normalizeStatusCustomApiFormat_ACU(customApiFormat)}\n${hashUserInput_ACU(String(apiKey || ''))}${sendChannel === 'direct' ? '\ndirect' : ''}`;
 }
 function cloneModelsResult_ACU(result) {
     return { ...result, models: result.models ? [...result.models] : undefined };
@@ -170805,7 +171327,8 @@ async function fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat, options
     if (!apiUrl) {
         return { success: false, error: '请输入API基础URL。' };
     }
-    const key = modelListCacheKey_ACU(apiUrl, apiKey, customApiFormat);
+    const sendChannel = options?.sendChannel === 'direct' ? 'direct' : 'tavern';
+    const key = modelListCacheKey_ACU(apiUrl, apiKey, customApiFormat, sendChannel);
     const now = Date.now();
     const hit = options?.force ? undefined : modelListCache_ACU.get(key);
     if (hit && now - hit.at < (hit.result.success ? MODEL_LIST_TTL_MS_ACU : MODEL_LIST_FAIL_TTL_MS_ACU)) {
@@ -170815,7 +171338,7 @@ async function fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat, options
     const inflight = options?.force ? undefined : modelListInflight_ACU.get(key);
     if (inflight)
         return inflight.then(cloneModelsResult_ACU);
-    const pending = fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat).then((result) => {
+    const pending = fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat, sendChannel).then((result) => {
         modelListCache_ACU.set(key, { at: Date.now(), result });
         if (modelListCache_ACU.size > MODEL_LIST_CACHE_CAP_ACU) {
             const oldest = modelListCache_ACU.keys().next();
@@ -170847,7 +171370,7 @@ function probeTimeoutResult_ACU() {
         error: `API 端点状态检查超时：${MODEL_PROBE_TIMEOUT_MS_ACU / 1000} 秒内无响应，请检查端点地址与网络后重试。（若 TauriTavern 弹出了「允许连接到自定义端点？」授权窗，等待授权同样计入这段时间——请先在弹窗中点击「信任并连接」再重试）`,
     };
 }
-async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat) {
+async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat, sendChannel = 'tavern') {
     if (!apiUrl) {
         return { success: false, error: '请输入API基础URL。' };
     }
@@ -170883,17 +171406,35 @@ async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat)
     const controller = new AbortController();
     const probeTimer = setTimeout(() => controller.abort(), MODEL_PROBE_TIMEOUT_MS_ACU);
     let response;
+    let direct = null;
     try {
-        response = await fetch(statusUrl, {
-            method: 'POST',
-            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
-            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: controller.signal,
-        });
+        // 数据库直接发送：直接 GET 端点的模型列表（不经酒馆、不带宿主请求头与 Cookie）。
+        // 附加请求标头格式不对时同样落进下方 catch，按结构化失败返回。
+        direct = sendChannel === 'direct'
+            ? buildDirectModelListRequest_ACU(apiUrl, sanitizedKey, customApiFormat, body.custom_include_headers)
+            : null;
+        response = direct
+            ? await fetch(direct.url, {
+                method: 'GET',
+                redirect: 'error',
+                credentials: 'omit',
+                headers: new Headers(direct.headers),
+                signal: controller.signal,
+            })
+            : await fetch(statusUrl, {
+                method: 'POST',
+                redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
+                headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: controller.signal,
+            });
     }
     catch (e) {
         clearTimeout(probeTimer);
+        if (sendChannel === 'direct' && !isProbeAbort_ACU(e)) {
+            // 直接发送的连接层失败（多为跨域被拦）：返回结构化失败，界面落到错误态而不是停在加载中。
+            return { success: false, error: direct ? directUnreachableHint_ACU(direct.url, String(e?.message || '')) : String(e?.message || e) };
+        }
         // 仅折叠探活中断为结构化失败（返回 FetchModelsResult，调用方 UI 才能正确落到错误态）；
         // 其余网络层异常保持原有抛出行为不变。
         if (e?.name === 'AbortError' || /abort/i.test(String(e?.message || ''))) {
@@ -170950,8 +171491,9 @@ async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat)
         else if (Array.isArray(data)) {
             modelsList = data;
         }
+        // Gemini 原生列表只给 name（形如 models/gemini-3-pro），直接发送时去掉前缀当模型名。
         const modelNames = modelsList
-            .map((model) => typeof model === 'string' ? model : model.id)
+            .map((model) => typeof model === 'string' ? model : (model?.id ?? (typeof model?.name === 'string' ? model.name.replace(/^models\//, '') : undefined)))
             .filter(Boolean);
         if (modelNames.length === 0) {
             return { success: false, error: '未能解析模型数据或列表为空。' };
@@ -171055,8 +171597,9 @@ const useApiPresetStore = defineStore('acu-v2-api-presets', {
             this.modelLoadStatus = 'loading';
             this.modelLoadError = '';
             const result = await fetchAvailableModels_ACU(String(apiConfig.url || ''), String(apiConfig.apiKey || ''), String(apiConfig.customApiFormat || ''), 
-            // 「拉取模型列表」是用户的显式刷新动作：跳过探活缓存读，避免 5 分钟 TTL 吞掉新配置
-            { force: true });
+            // 「拉取模型列表」是用户的显式刷新动作：跳过探活缓存读，避免 5 分钟 TTL 吞掉新配置。
+            // 数据库直接发送的预设同样直接向端点要模型列表。
+            { force: true, ...(apiConfig.sendChannel === 'direct' ? { sendChannel: 'direct' } : {}) });
             if (!result.success) {
                 this.modelOptions = [];
                 this.modelLoadStatus = 'error';
@@ -190319,6 +190862,7 @@ function createEmptyApiPresetDraft() {
         customApiFormat: 'openai_compat',
         promptPostProcessing: API_PROMPT_POST_PROCESSING_DEFAULT_ACU,
         preserveMultipleSystem: true,
+        sendChannel: 'tavern',
     };
 }
 function apiPresetDraftFromPreset(preset) {
@@ -190344,6 +190888,7 @@ function apiPresetDraftFromPreset(preset) {
         // 与请求体共用同一归一化：缺失 → strict；显式 ''（未选择）保留；非法 → strict。
         promptPostProcessing: normalizePromptPostProcessing_ACU(preset.apiConfig.promptPostProcessing),
         preserveMultipleSystem: preset.apiConfig.preserveMultipleSystem !== false,
+        sendChannel: normalizeApiSendChannel_ACU(preset.apiConfig.sendChannel),
     };
 }
 function apiPresetFromDraft(draft) {
@@ -190372,6 +190917,7 @@ function apiPresetFromDraft(draft) {
             // 白名单校验仿 customApiFormat：显式 ''（未选择）保留，非法值降级 strict，不写入预设。
             promptPostProcessing: normalizePromptPostProcessing_ACU(draft.promptPostProcessing),
             preserveMultipleSystem: draft.preserveMultipleSystem !== false,
+            sendChannel: normalizeApiSendChannel_ACU(draft.sendChannel),
         },
         nonPrefillSupport: draft.nonPrefillSupport === true,
         jsonFormatOutput: draft.jsonFormatOutput === true,
@@ -190597,6 +191143,10 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
             { value: 'ultra', label: 'Ultra' },
             { value: 'auto', label: 'Auto（自动）' },
         ];
+        const sendChannelOptions = [
+            { value: 'tavern', label: '经酒馆转接发送' },
+            { value: 'direct', label: '数据库直接发送' },
+        ];
         const customApiFormatOptions = [
             { value: 'openai_compat', label: '兼容 OpenAI' },
             { value: 'openai_responses', label: '兼容 OpenAI Responses' },
@@ -190759,6 +191309,7 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
                 url: draft.url,
                 apiKey: draft.apiKey,
                 customApiFormat: draft.customApiFormat,
+                sendChannel: draft.sendChannel,
             });
         }
         onMounted(() => {
@@ -190776,14 +191327,14 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
             });
         });
         watch(() => store.activePresetName, () => syncActiveDraft(), { flush: 'sync' });
-        const __returned__ = { reasoningEffortOptions, customApiFormatOptions, promptPostProcessingOptions, clientPresetOptions, store, dialogStore, toast, formMode, draft, draftOriginalName, draftSnapshot, draftError, draftDirty, presetItems, modelSelectOptions, matchedClientPresetId, savedEndpoints, savedEndpointOptions, matchedSavedEndpointId, applySavedEndpoint, setPromptPostProcessing, applyClientPreset, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, validateDraft, saveActiveDraft, loadModelsForActive, UbButton, UbCallout, UbIconButton, UbInput, UbPresetPicker, UbRow, UbSection, UbSelect, UbSwitch, UbTextarea };
+        const __returned__ = { reasoningEffortOptions, sendChannelOptions, customApiFormatOptions, promptPostProcessingOptions, clientPresetOptions, store, dialogStore, toast, formMode, draft, draftOriginalName, draftSnapshot, draftError, draftDirty, presetItems, modelSelectOptions, matchedClientPresetId, savedEndpoints, savedEndpointOptions, matchedSavedEndpointId, applySavedEndpoint, setPromptPostProcessing, applyClientPreset, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, validateDraft, saveActiveDraft, loadModelsForActive, UbButton, UbCallout, UbIconButton, UbInput, UbPresetPicker, UbRow, UbSection, UbSelect, UbSwitch, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-api[data-v-d0c50651],\r\n.ub-api__form[data-v-d0c50651] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-d0c50651] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-d0c50651] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-d0c50651] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-d0c50651] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-d0c50651] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__danger-hint[data-v-d0c50651] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-d0c50651] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-d0c50651]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-d0c50651] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-d0c50651] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-d0c50651] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-d0c50651] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-d0c50651] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-d0c50651");
-var ApiPresetEditor_vue_vue_type_style_index_0_scoped_d0c50651_lang = null;
+injectSfcStyle("\n.ub-api[data-v-e2a1f714],\r\n.ub-api__form[data-v-e2a1f714] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-e2a1f714] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-e2a1f714] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-e2a1f714] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-e2a1f714] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-e2a1f714] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__danger-hint[data-v-e2a1f714] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-e2a1f714] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-e2a1f714]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-e2a1f714] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-e2a1f714] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-e2a1f714] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-e2a1f714] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-e2a1f714] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-e2a1f714");
+var ApiPresetEditor_vue_vue_type_style_index_0_scoped_e2a1f714_lang = null;
 
 const _hoisted_1$r = { class: "ub-api" };
 const _hoisted_2$p = { class: "ub-api__picker" };
@@ -190838,14 +191389,14 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 				onClick: _cache[1] || (_cache[1] = ($event) => $setup.store.activePreset && $setup.deletePreset($setup.store.activePreset.name))
 			}, null, 8, ["disabled"])
 		]), $setup.formMode === "empty" ? (openBlock(), createElementBlock("div", _hoisted_3$n, [createVNode($setup["UbCallout"], { kind: "warning" }, {
-			default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+			default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 				"暂无可用 API 预设，请新建并设为当前或全局默认。",
 				-1
 				/* CACHED */
 			)])]),
 			_: 1
 		})])) : $setup.formMode === "create" ? (openBlock(), createElementBlock("div", _hoisted_4$k, [createVNode($setup["UbCallout"], { kind: "info" }, {
-			default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
+			default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
 				"正在新建预设：填好下面的连接信息后保存，会自动切换为当前聊天使用。",
 				-1
 				/* CACHED */
@@ -190895,6 +191446,19 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					})) : createCommentVNode("v-if", true),
 					createVNode($setup["UbRow"], {
+						label: "发送方式",
+						hint: "经酒馆转接发送：由酒馆后端代发，兼容性最好，一般选这个。数据库直接发送：数据库在浏览器里直接请求端点，不经酒馆改写，消息按原顺序和角色发出；要求服务商允许网页直接访问（跨域），否则会报连不上。直接发送时「提示词后处理」「保留多个 system 消息」不生效，客户端伪装里浏览器不允许改的请求头（如 User-Agent）也不会带上。",
+						stack: ""
+					}, {
+						default: withCtx(() => [createVNode($setup["UbSelect"], {
+							options: $setup.sendChannelOptions,
+							"model-value": $setup.draft.sendChannel,
+							"aria-label": "发送方式",
+							"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.draft.sendChannel = $event === "direct" ? "direct" : "tavern")
+						}, null, 8, ["model-value"])]),
+						_: 1
+					}),
+					createVNode($setup["UbRow"], {
 						label: "接口协议",
 						hint: "决定请求变形与上游端点：OpenAI→/chat/completions；OpenAI Responses→/responses；Claude Messages→/messages；Gemini Interactions→/interactions（自动补 /v1beta）。默认兼容 OpenAI。纯原生端点下「加载模型」可能失败，可手填模型名。",
 						stack: ""
@@ -190903,7 +191467,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 							options: $setup.customApiFormatOptions,
 							"model-value": $setup.draft.customApiFormat,
 							"aria-label": "接口协议",
-							"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.draft.customApiFormat = $event)
+							"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.draft.customApiFormat = $event)
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -190913,7 +191477,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbInput"], {
 							modelValue: $setup.draft.url,
-							"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.draft.url = $event),
+							"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.draft.url = $event),
 							placeholder: "https://example.com/v1",
 							"aria-label": "端点"
 						}, null, 8, ["modelValue"])]),
@@ -190925,7 +191489,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbInput"], {
 							modelValue: $setup.draft.apiKey,
-							"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.draft.apiKey = $event),
+							"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.draft.apiKey = $event),
 							type: "password",
 							autocomplete: "off",
 							"aria-label": "API 密钥"
@@ -190939,14 +191503,14 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 						default: withCtx(() => [
 							createBaseVNode("div", _hoisted_5$h, [createVNode($setup["UbInput"], {
 								modelValue: $setup.draft.model,
-								"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.draft.model = $event),
+								"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.draft.model = $event),
 								"aria-label": "模型名"
 							}, null, 8, ["modelValue"]), createVNode($setup["UbButton"], {
 								busy: $setup.store.modelLoadStatus === "loading",
 								icon: "fa-solid fa-cloud-arrow-down",
 								onClick: $setup.loadModelsForActive
 							}, {
-								default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
+								default: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
 									"加载模型",
 									-1
 									/* CACHED */
@@ -190959,7 +191523,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 								"model-value": $setup.draft.model,
 								placeholder: "从已加载的模型中选择",
 								"aria-label": "模型列表",
-								"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.draft.model = $event)
+								"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.draft.model = $event)
 							}, null, 8, ["options", "model-value"])) : createCommentVNode("v-if", true),
 							$setup.store.modelLoadStatus === "error" ? (openBlock(), createElementBlock(
 								"p",
@@ -190983,7 +191547,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					createVNode($setup["UbRow"], { label: "最大回复长度" }, {
 						default: withCtx(() => [createVNode($setup["UbInput"], {
 							modelValue: $setup.draft.max_tokens,
-							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.draft.max_tokens = $event),
+							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.draft.max_tokens = $event),
 							type: "number",
 							min: 1,
 							step: 1,
@@ -190994,7 +191558,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					createVNode($setup["UbRow"], { label: "温度" }, {
 						default: withCtx(() => [createVNode($setup["UbInput"], {
 							modelValue: $setup.draft.temperature,
-							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.draft.temperature = $event),
+							"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.draft.temperature = $event),
 							type: "number",
 							min: 0,
 							max: 2,
@@ -191011,7 +191575,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 							options: $setup.reasoningEffortOptions,
 							"model-value": $setup.draft.reasoningEffort || "",
 							"aria-label": "思考强度",
-							"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.draft.reasoningEffort = $event)
+							"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.draft.reasoningEffort = $event)
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})
@@ -191032,7 +191596,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 						default: withCtx(() => [createVNode($setup["UbSwitch"], {
 							"model-value": $setup.draft.streamingEnabled === true,
 							"aria-label": "流式输出",
-							"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.draft.streamingEnabled = $event)
+							"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.draft.streamingEnabled = $event)
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -191042,7 +191606,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbSwitch"], {
 							modelValue: $setup.draft.nonPrefillSupport,
-							"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.draft.nonPrefillSupport = $event),
+							"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.draft.nonPrefillSupport = $event),
 							"aria-label": "非预填充支持"
 						}, null, 8, ["modelValue"])]),
 						_: 1
@@ -191053,7 +191617,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbSwitch"], {
 							modelValue: $setup.draft.publicServiceMode,
-							"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.draft.publicServiceMode = $event),
+							"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.draft.publicServiceMode = $event),
 							"aria-label": "公益站兼容"
 						}, null, 8, ["modelValue"])]),
 						_: 1
@@ -191064,20 +191628,21 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbSwitch"], {
 							modelValue: $setup.draft.jsonFormatOutput,
-							"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.draft.jsonFormatOutput = $event),
+							"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.draft.jsonFormatOutput = $event),
 							"aria-label": "需要时格式化输出"
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					}),
 					createVNode($setup["UbRow"], {
 						label: "保留多个 system 消息",
-						hint: "默认开启。提示词后处理为严格/半严格时，中部 system 仍保留角色；关闭后按后处理模式改写。"
+						hint: "默认开启。提示词后处理为严格/半严格时，中部 system 仍保留角色；关闭后按后处理模式改写。仅经酒馆转接发送时生效。"
 					}, {
 						default: withCtx(() => [createVNode($setup["UbSwitch"], {
 							modelValue: $setup.draft.preserveMultipleSystem,
-							"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.draft.preserveMultipleSystem = $event),
+							"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.draft.preserveMultipleSystem = $event),
+							disabled: $setup.draft.sendChannel === "direct",
 							"aria-label": "保留多个 system 消息"
-						}, null, 8, ["modelValue"])]),
+						}, null, 8, ["modelValue", "disabled"])]),
 						_: 1
 					})
 				]),
@@ -191097,7 +191662,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbTextarea"], {
 							modelValue: $setup.draft.bodyParams,
-							"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.draft.bodyParams = $event),
+							"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.draft.bodyParams = $event),
 							rows: 3,
 							mono: "",
 							"aria-label": "附加主体参数",
@@ -191112,7 +191677,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbTextarea"], {
 							modelValue: $setup.draft.excludeBodyParams,
-							"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.draft.excludeBodyParams = $event),
+							"onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => $setup.draft.excludeBodyParams = $event),
 							rows: 2,
 							mono: "",
 							"aria-label": "排除主体参数",
@@ -191122,23 +191687,24 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}),
 					createVNode($setup["UbRow"], {
 						label: "提示词后处理",
-						hint: "默认严格（与旧版一致）；未选择＝原样透传，可保留中部 system 段角色。分组只决定消息改写策略，不剥离 tools 字段。",
+						hint: "默认严格（与旧版一致）；未选择＝原样透传，可保留中部 system 段角色。分组只决定消息改写策略，不剥离 tools 字段。仅经酒馆转接发送时生效。",
 						stack: ""
 					}, {
 						default: withCtx(() => [createVNode($setup["UbSelect"], {
 							options: $setup.promptPostProcessingOptions,
 							"model-value": $setup.draft.promptPostProcessing,
+							disabled: $setup.draft.sendChannel === "direct",
 							placeholder: "未选择",
 							"aria-label": "提示词后处理",
 							"onUpdate:modelValue": $setup.setPromptPostProcessing
-						}, null, 8, ["model-value"])]),
+						}, null, 8, ["model-value", "disabled"])]),
 						_: 1
 					}),
 					createVNode($setup["UbRow"], {
 						label: "客户端伪装",
 						stack: ""
 					}, {
-						hint: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
+						hint: withCtx(() => [..._cache[25] || (_cache[25] = [createTextVNode(
 							" 选择客户端身份后，其特征请求头会合并进下方附加请求标头（受管身份键统一替换，其余行保留），用于部分屏蔽第三方客户端的供应商。 ",
 							-1
 							/* CACHED */
@@ -191155,7 +191721,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.draft.publicServiceMode,
 							placeholder: $setup.draft.publicServiceMode ? "已开启公益站兼容，不可使用客户端伪装" : "请选择",
 							"aria-label": "客户端伪装",
-							"onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => $setup.applyClientPreset($event))
+							"onUpdate:modelValue": _cache[20] || (_cache[20] = ($event) => $setup.applyClientPreset($event))
 						}, null, 8, [
 							"model-value",
 							"disabled",
@@ -191170,7 +191736,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["UbTextarea"], {
 							modelValue: $setup.draft.requestHeaders,
-							"onUpdate:modelValue": _cache[20] || (_cache[20] = ($event) => $setup.draft.requestHeaders = $event),
+							"onUpdate:modelValue": _cache[21] || (_cache[21] = ($event) => $setup.draft.requestHeaders = $event),
 							rows: 2,
 							mono: "",
 							"aria-label": "附加请求标头",
@@ -191219,7 +191785,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.draftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[25] || (_cache[25] = [createTextVNode(
+						default: withCtx(() => [..._cache[26] || (_cache[26] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -191248,7 +191814,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION */
 	)) : createCommentVNode("v-if", true)]);
 }
-var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-d0c50651"]]);
+var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$v], ["__scopeId", "data-v-e2a1f714"]]);
 
 var _sfc_main$u = /*@__PURE__*/ defineComponent({
     __name: 'ApiPage',

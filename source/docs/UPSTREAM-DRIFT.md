@@ -234,3 +234,19 @@ npm run drift                                  # 等价 node scripts/upstream-dr
 - 网页检索保留 TT 只能直连萌娘与维基、任意网页抓取不可用的说明；百科资料库 UPDATE 仍须给齐 page_ref、name、brief。
 - 主 Agent 补回「策划冲突由 instruction-composer 自查、红线由 finalReviewer 终审」一句（上游删了，我方工作流仍是这样分工）。
 - 顺带修正：V38 主 Agent 正文里直接写了年代学占位符，主 Agent 渲染不填它，实际发出去是空串；新版改为说明读取地址。
+
+## 2026-10-16 API 发送方式（对应上游「通过酒馆渠道发送」开关，`733dbea7` 起）
+
+用户要求给出选项，命名「经酒馆转接发送」（默认）与「数据库直接发送」，预设级字段 `sendChannel: 'tavern' | 'direct'`。
+不搬上游实现（上游 `custom-api-transport.ts` / `custom-api-protocol.ts` 只覆盖四种协议、流式整段缓冲后再改写），按我方结构重写：
+
+- 转接路径逐字不变：请求体仍按 TT 自定义连接契约发往生成端点；直接发送只在构建请求体时登记（WeakSet），不往请求体加字段。
+- 直接发送按 TT dev 自定义连接的改写口径组装五种协议的上游请求（含我方独有的 Gemini generateContent）：
+  附加主体参数在协议转换后浅合并、排除主体参数最后删除；Claude 采样参数只在偏离 1 时发送、思考强度进 `output_config.effort`；
+  Responses 进 `reasoning.effort`；Gemini 关闭安全过滤，3 代起用 `thinkingLevel`。
+- 有意与 TT 不同：开头连续的 system 进协议的系统提示字段（TT 自定义连接默认把 system 当 user），中部 system 按 user；
+  不做提示词后处理（界面上该项与「保留多个 system」在直接发送时置灰）。
+- 非流式回复归一成 OpenAI 形态；流式回复原样交给既有 SSE 解析，补认 Gemini Interactions 的 step/interaction 事件。
+- 直接发送不带宿主请求头（CSRF 令牌）与 Cookie；连不上时报「多半是跨域被拦，可改回经酒馆转接发送」，仍按网络错误重试。
+- 「加载模型」随预设的发送方式直接 GET 端点模型列表；与转接的探活结果分开缓存。
+- 上游 `pristineFetch`（绕开本插件自己的生成拦截器）不跟：我方没有该拦截器。

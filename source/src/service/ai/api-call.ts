@@ -5,11 +5,11 @@ import { parse as parseYaml_ACU } from 'yaml';
 import { handleApiResponse_ACU, extractAiUsageMetadata_ACU, type AiUsageMetadata_ACU } from './prompt-builder';
 export type { AiUsageMetadata_ACU };
 import { settings_ACU } from '../runtime/state-manager';
-import { getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
 import { assertSafeHttpEndpoint_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
-import { resolveApiConfigByPreset_ACU, normalizePromptPostProcessing_ACU } from '../settings/api-preset-service';
+import { resolveApiConfigByPreset_ACU, normalizePromptPostProcessing_ACU, normalizeApiSendChannel_ACU } from '../settings/api-preset-service';
 import { acquirePresetRateLimitSlot_ACU } from './preset-rate-limiter';
 import { isDebugLogEnabled } from '../../shared/log-buffer';
+import { markDirectSendBody_ACU, sendChatCompletionBody_ACU } from './direct-send';
 
 /**
  * OpenCode Go 会话头（x-opencode-session）：Go 官方要求所有请求携带该头做提示缓存优化，
@@ -576,7 +576,11 @@ export function buildCustomApiRequestBody_ACU(
       : {}),
   };
 
-  logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${'reasoning_effort' in body ? String(body.reasoning_effort) : '(auto 省略)'}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
+  // 发送方式（预设级）：数据库直接发送时登记请求体，发送口据此直连端点；转接时请求体逐字不变。
+  const sendChannel_ACU = normalizeApiSendChannel_ACU(effectiveApiConfig.sendChannel);
+  if (sendChannel_ACU === 'direct') markDirectSendBody_ACU(body);
+
+  logDebug_ACU(`[API] 构建请求体: channel=${sendChannel_ACU}, model=${model}, reasoning_effort=${'reasoning_effort' in body ? String(body.reasoning_effort) : '(auto 省略)'}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
   if (isDebugLogEnabled()) {
     try {
       const toStore: any = JSON.parse(JSON.stringify(body));
@@ -601,7 +605,8 @@ export function buildCustomApiRequestBody_ACU(
 }
 
 /**
- * 自定义 API 统一出口：调用宿主 /api/backends/chat-completions/generate。
+ * 自定义 API 统一出口：经酒馆转接时调用宿主 /api/backends/chat-completions/generate，
+ * 数据库直接发送时直连预设端点（见 direct-send.ts）。
  * stream 参数由 streamingEnabled 开关决定（见 buildCustomApiRequestBody_ACU）；
  * 响应解析按请求实际携带的 stream 值分流（预设级开关可能与全局不同）。
  * 返回 AI 响应文本（原始，未 trim），失败抛错。
@@ -613,13 +618,7 @@ export function buildCustomApiRequestBody_ACU(
 export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal | null): Promise<string | null> {
     let res: Response;
     try {
-        res = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
-            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: signal || undefined,
-        });
+        res = await sendChatCompletionBody_ACU(body, signal);
     } catch (e: any) {
         // 网络层失败（Failed to fetch / NetworkError）：调用方（剧情推进任务循环等）会决定是否重试，
         // 这里显式记录便于从日志区分「网络失败」与「后端返回错误状态」。
@@ -668,13 +667,7 @@ export function parseNonStreamChatTurn_ACU(data: unknown): ChatCompletionTurn_AC
 export async function postChatCompletionTurn_ACU(body: unknown, signal?: AbortSignal | null, onUsage?: (usage: AiUsageMetadata_ACU) => void): Promise<ChatCompletionTurn_ACU | null> {
     let res: Response;
     try {
-        res = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            redirect: 'error',
-            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: signal || undefined,
-        });
+        res = await sendChatCompletionBody_ACU(body, signal);
     } catch (e: any) {
         logWarn_ACU(`[postChatCompletionTurn] 网络请求失败: ${String(e?.message || e?.name || 'unknown')}`, { aborted: e?.name === 'AbortError' || String(e?.message || '').toLowerCase().includes('aborted') });
         throw e;
@@ -930,13 +923,7 @@ export async function callAIWithResolvedPreset_ACU(
     try {
       let response: Response;
       try {
-        response = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
-            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: timeoutController.signal,
-        });
+        response = await sendChatCompletionBody_ACU(body, timeoutController.signal);
       } catch (error: any) {
         if (signal?.aborted) {
             const cancelled = new Error('请求已取消');

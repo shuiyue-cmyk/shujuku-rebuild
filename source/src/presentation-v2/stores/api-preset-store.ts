@@ -142,8 +142,9 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
         String(apiConfig.url || ''),
         String(apiConfig.apiKey || ''),
         String(apiConfig.customApiFormat || ''),
-        // 「拉取模型列表」是用户的显式刷新动作：跳过探活缓存读，避免 5 分钟 TTL 吞掉新配置
-        { force: true },
+        // 「拉取模型列表」是用户的显式刷新动作：跳过探活缓存读，避免 5 分钟 TTL 吞掉新配置。
+        // 数据库直接发送的预设同样直接向端点要模型列表。
+        { force: true, ...(apiConfig.sendChannel === 'direct' ? { sendChannel: 'direct' as const } : {}) },
       );
       if (!result.success) {
         this.modelOptions = [];

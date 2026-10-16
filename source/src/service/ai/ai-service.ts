@@ -13,6 +13,8 @@ export {
 
 import { getHostRequestHeaders_ACU as _getHeaders } from '../../data/gateways/ai-gateway';
 import { withOpencodeSessionHeader_ACU } from './api-call';
+import { buildDirectModelListRequest_ACU, directUnreachableHint_ACU } from './direct-send';
+import type { ApiSendChannel_ACU } from '../settings/api-preset-service';
 import { hashUserInput_ACU, logDebug_ACU } from '../../shared/utils';
 import { maskSensitiveText_ACU } from '../../shared/log-buffer';
 
@@ -59,20 +61,21 @@ interface ModelListCacheEntry_ACU { at: number; result: FetchModelsResult; }
 const modelListCache_ACU = new Map<string, ModelListCacheEntry_ACU>();
 const modelListInflight_ACU = new Map<string, Promise<FetchModelsResult>>();
 
-function modelListCacheKey_ACU(apiUrl: string, apiKey: string, customApiFormat?: string): string {
+function modelListCacheKey_ACU(apiUrl: string, apiKey: string, customApiFormat?: string, sendChannel?: ApiSendChannel_ACU): string {
     const url = String(apiUrl || '').trim().replace(/\/+$/, '').toLowerCase();
-    return `${url}\n${normalizeStatusCustomApiFormat_ACU(customApiFormat)}\n${hashUserInput_ACU(String(apiKey || ''))}`;
+    return `${url}\n${normalizeStatusCustomApiFormat_ACU(customApiFormat)}\n${hashUserInput_ACU(String(apiKey || ''))}${sendChannel === 'direct' ? '\ndirect' : ''}`;
 }
 
 function cloneModelsResult_ACU(result: FetchModelsResult): FetchModelsResult {
     return { ...result, models: result.models ? [...result.models] : undefined };
 }
 
-export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string, customApiFormat?: string, options?: { force?: boolean }): Promise<FetchModelsResult> {
+export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string, customApiFormat?: string, options?: { force?: boolean; sendChannel?: ApiSendChannel_ACU }): Promise<FetchModelsResult> {
     if (!apiUrl) {
         return { success: false, error: '请输入API基础URL。' };
     }
-    const key = modelListCacheKey_ACU(apiUrl, apiKey, customApiFormat);
+    const sendChannel: ApiSendChannel_ACU = options?.sendChannel === 'direct' ? 'direct' : 'tavern';
+    const key = modelListCacheKey_ACU(apiUrl, apiKey, customApiFormat, sendChannel);
     const now = Date.now();
     const hit = options?.force ? undefined : modelListCache_ACU.get(key);
     if (hit && now - hit.at < (hit.result.success ? MODEL_LIST_TTL_MS_ACU : MODEL_LIST_FAIL_TTL_MS_ACU)) {
@@ -81,7 +84,7 @@ export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string, c
     // force 的语义是「重新探一次」：在飞请求可能正卡在慢响应上，复用它会让刷新永久挂着。
     const inflight = options?.force ? undefined : modelListInflight_ACU.get(key);
     if (inflight) return inflight.then(cloneModelsResult_ACU);
-    const pending = fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat).then(
+    const pending = fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat, sendChannel).then(
         (result) => {
             modelListCache_ACU.set(key, { at: Date.now(), result });
             if (modelListCache_ACU.size > MODEL_LIST_CACHE_CAP_ACU) {
@@ -119,7 +122,7 @@ function probeTimeoutResult_ACU(): FetchModelsResult {
     };
 }
 
-async function fetchAvailableModelsUncached_ACU(apiUrl: string, apiKey: string, customApiFormat?: string): Promise<FetchModelsResult> {
+async function fetchAvailableModelsUncached_ACU(apiUrl: string, apiKey: string, customApiFormat?: string, sendChannel: ApiSendChannel_ACU = 'tavern'): Promise<FetchModelsResult> {
     if (!apiUrl) {
         return { success: false, error: '请输入API基础URL。' };
     }
@@ -156,16 +159,34 @@ async function fetchAvailableModelsUncached_ACU(apiUrl: string, apiKey: string, 
     const controller = new AbortController();
     const probeTimer = setTimeout(() => controller.abort(), MODEL_PROBE_TIMEOUT_MS_ACU);
     let response: Response;
+    let direct: { url: string; headers: Array<[string, string]> } | null = null;
     try {
-        response = await fetch(statusUrl, {
-            method: 'POST',
-            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
-            headers: { ..._getHeaders(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: controller.signal,
-        });
+        // 数据库直接发送：直接 GET 端点的模型列表（不经酒馆、不带宿主请求头与 Cookie）。
+        // 附加请求标头格式不对时同样落进下方 catch，按结构化失败返回。
+        direct = sendChannel === 'direct'
+            ? buildDirectModelListRequest_ACU(apiUrl, sanitizedKey, customApiFormat, body.custom_include_headers)
+            : null;
+        response = direct
+            ? await fetch(direct.url, {
+                method: 'GET',
+                redirect: 'error',
+                credentials: 'omit',
+                headers: new Headers(direct.headers),
+                signal: controller.signal,
+            })
+            : await fetch(statusUrl, {
+                method: 'POST',
+                redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
+                headers: { ..._getHeaders(), 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                signal: controller.signal,
+            });
     } catch (e: any) {
         clearTimeout(probeTimer);
+        if (sendChannel === 'direct' && !isProbeAbort_ACU(e)) {
+            // 直接发送的连接层失败（多为跨域被拦）：返回结构化失败，界面落到错误态而不是停在加载中。
+            return { success: false, error: direct ? directUnreachableHint_ACU(direct.url, String(e?.message || '')) : String(e?.message || e) };
+        }
         // 仅折叠探活中断为结构化失败（返回 FetchModelsResult，调用方 UI 才能正确落到错误态）；
         // 其余网络层异常保持原有抛出行为不变。
         if (e?.name === 'AbortError' || /abort/i.test(String(e?.message || ''))) {
@@ -223,8 +244,9 @@ async function fetchAvailableModelsUncached_ACU(apiUrl: string, apiKey: string, 
             modelsList = data;
         }
 
+        // Gemini 原生列表只给 name（形如 models/gemini-3-pro），直接发送时去掉前缀当模型名。
         const modelNames = modelsList
-            .map((model: any) => typeof model === 'string' ? model : model.id)
+            .map((model: any) => typeof model === 'string' ? model : (model?.id ?? (typeof model?.name === 'string' ? model.name.replace(/^models\//, '') : undefined)))
             .filter(Boolean);
 
         if (modelNames.length === 0) {
