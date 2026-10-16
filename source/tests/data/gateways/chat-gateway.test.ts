@@ -204,6 +204,43 @@ describe('listAllHostChatNames_ACU', () => {
     expect([...(names as Set<string>)]).toEqual(['role-chat']);
   });
 
+  it('某个角色缺少头像标识时返回 null：查不到它的聊天，不能当成它没有聊天（上游 #39 修法）', async () => {
+    for (const badCharacter of [{ avatar: '' }, {}, null, { avatar: 42 }]) {
+      stubHost({
+        characters: [{ avatar: 'aria.png' }, badCharacter],
+        contextGroups: [],
+        chatsByAvatar: { 'aria.png': ['role-chat.jsonl'] },
+      });
+      expect(await listAllHostChatNames_ACU()).toBeNull();
+    }
+  });
+
+  it('聊天名清洗后为空时返回 null，不静默丢掉这条聊天', async () => {
+    stubHost({
+      characters: [{ avatar: 'aria.png' }],
+      contextGroups: [],
+      chatsByAvatar: { 'aria.png': ['role-chat.jsonl', 'folder/.jsonl'] },
+    });
+    expect(await listAllHostChatNames_ACU()).toBeNull();
+  });
+
+  it('群组里的聊天标识不是字符串或数字时返回 null；历史数字标识照常收录', async () => {
+    for (const badChatId of [null, { id: 'x' }, true, '']) {
+      stubHost({
+        characters: [{ avatar: 'aria.png' }],
+        contextGroups: [{ chats: ['group-live.jsonl', badChatId] }],
+        chatsByAvatar: { 'aria.png': ['role-chat.jsonl'] },
+      });
+      expect(await listAllHostChatNames_ACU()).toBeNull();
+    }
+    stubHost({
+      characters: [{ avatar: 'aria.png' }],
+      contextGroups: [{ chats: [1700000000000] }],
+      chatsByAvatar: { 'aria.png': ['role-chat.jsonl'] },
+    });
+    expect([...((await listAllHostChatNames_ACU()) as Set<string>)].sort()).toEqual(['1700000000000', 'role-chat']);
+  });
+
   it('角色聊天列表请求失败时返回 null', async () => {
     stubHost({
       characters: [{ avatar: 'aria.png' }],

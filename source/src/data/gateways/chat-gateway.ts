@@ -177,13 +177,18 @@ export async function listAllHostChatNames_ACU(): Promise<Set<string> | null> {
         return null;
     }
     const names = new Set<string>();
-    const headers = getHostRequestHeaders_ACU();
+    // 拷贝一份再补 Content-Type，不改宿主请求头对象本身
+    const headers = { ...getHostRequestHeaders_ACU() };
     if (!headers['Content-Type'] && !headers['content-type']) {
         headers['Content-Type'] = 'application/json';
     }
     for (const character of characters) {
-        const avatar = String(character?.avatar || '').trim();
-        if (!avatar) continue;
+        // 缺头像标识就查不到这个角色的聊天，按枚举残缺处理，不能当成它没有聊天（上游 #39 修法）
+        const avatar = typeof character?.avatar === 'string' ? character.avatar.trim() : '';
+        if (!avatar) {
+            logWarn_ACU('[ChatGateway] 角色条目缺少头像标识，无法证明枚举完整');
+            return null;
+        }
         try {
             const response = await fetch('/api/characters/chats', {
                 method: 'POST',
@@ -213,7 +218,11 @@ export async function listAllHostChatNames_ACU(): Promise<Set<string> | null> {
                     return null;
                 }
                 const normalized = cleanChatName_ACU(fileName);
-                if (normalized) names.add(normalized);
+                if (!normalized) {
+                    logWarn_ACU(`[ChatGateway] 角色聊天名无法归一化，无法证明枚举完整：${avatar}`);
+                    return null;
+                }
+                names.add(normalized);
             }
         } catch (error: any) {
             logWarn_ACU(`[ChatGateway] 枚举角色聊天异常：${avatar}: ${error?.message || error}`);
@@ -238,8 +247,15 @@ export async function listAllHostChatNames_ACU(): Promise<Set<string> | null> {
                 return null;
             }
             for (const chatId of group.chats) {
-                const normalized = cleanChatName_ACU(String(chatId || ''));
-                if (normalized) names.add(normalized);
+                // 兼容宿主历史数字标识；对象、布尔、空值、空串都认不出是哪条聊天，按枚举残缺处理
+                const raw = typeof chatId === 'string' ? chatId.trim()
+                    : (typeof chatId === 'number' && Number.isFinite(chatId) ? String(chatId) : '');
+                const normalized = raw ? cleanChatName_ACU(raw) : '';
+                if (!normalized) {
+                    logWarn_ACU('[ChatGateway] 群组聊天标识无效，无法证明枚举完整');
+                    return null;
+                }
+                names.add(normalized);
             }
         }
     } catch (error: any) {
