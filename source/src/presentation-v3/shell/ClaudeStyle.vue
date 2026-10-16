@@ -133,6 +133,9 @@
   --ub-r-panel: 10px;
   --ub-r-composer: 14px;
   --ub-hairline: 1px;
+  /* 分隔线颜色随屏幕密度：1 倍屏 1px 用淡色，高分屏 0.5px 用深一档，看起来同样轻 */
+  --ub-divider: var(--cds-alpha-2);
+  --ub-divider-soft: var(--cds-alpha-1);
   --ub-row-h: calc(var(--ub-u) * 28);
   --ub-r-control: 8px;
   --ub-r-overlay: 16px;
@@ -178,6 +181,8 @@
 @media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 2dppx) {
   .ub-app[data-ub-style="claude"] {
     --ub-hairline: 0.5px;
+    --ub-divider: var(--cds-alpha-3);
+    --ub-divider-soft: var(--cds-alpha-2);
   }
 }
 
@@ -218,7 +223,7 @@
 /* ═══════════════ 外壳：侧栏 ═══════════════ */
 .ub-app[data-ub-style="claude"] .ub-rail {
   padding: 0 var(--ub-s2) var(--ub-s2);
-  border-right: var(--ub-hairline) solid var(--cds-alpha-3);
+  border-right: var(--ub-hairline) solid var(--ub-divider);
   background: var(--ub-nav-bg);
   transition: flex-basis var(--cds-dur-sheet) var(--cds-ease-out), width var(--cds-dur-sheet) var(--cds-ease-out);
 }
@@ -228,7 +233,7 @@
   height: var(--ub-titlebar-h);
   margin: 0 calc(var(--ub-s2) * -1);
   padding: 0 var(--ub-s2) 0 var(--ub-s3);
-  border-bottom: var(--ub-hairline) solid var(--cds-alpha-3);
+  border-bottom: var(--ub-hairline) solid var(--ub-divider);
 }
 
 .ub-app[data-ub-style="claude"] .ub-rail__collapse {
@@ -276,7 +281,7 @@
 .ub-app[data-ub-style="claude"] .ub-rail__foot {
   gap: 1px;
   padding-top: var(--ub-s2);
-  border-top: var(--ub-hairline) solid var(--cds-alpha-3);
+  border-top: var(--ub-hairline) solid var(--ub-divider);
 }
 
 .ub-app[data-ub-style="claude"] .ub-rail__foot-btn {
@@ -443,7 +448,7 @@
   min-height: var(--ub-titlebar-h);
   height: var(--ub-titlebar-h);
   padding: 0 var(--ub-s2) 0 var(--ub-s4);
-  border-bottom: var(--ub-hairline) solid var(--cds-alpha-3);
+  border-bottom: var(--ub-hairline) solid var(--ub-divider);
   background: var(--ub-bg);
 }
 
@@ -535,6 +540,11 @@
 /* ═══════════════ 页面骨架 ═══════════════ */
 .ub-app[data-ub-style="claude"] .ub-page {
   gap: var(--ub-s4);
+  padding-top: var(--ub-s5);
+}
+
+/* 仪表盘问候语已经留出页首空间，紧随其后的页面不再加上边距 */
+.ub-app[data-ub-style="claude"] .ub-heading + .ub-page {
   padding-top: 0;
 }
 
@@ -620,7 +630,7 @@
 }
 
 .ub-app[data-ub-style="claude"] .ub-row + .ub-row {
-  border-top: var(--ub-hairline) solid var(--cds-alpha-2);
+  border-top: var(--ub-hairline) solid var(--ub-divider-soft);
 }
 
 .ub-app[data-ub-style="claude"] .ub-row__label {
@@ -1066,7 +1076,7 @@
 .ub-app[data-ub-style="claude"] .ub-sheet__head {
   min-height: var(--ub-titlebar-h);
   padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);
-  border-bottom: var(--ub-hairline) solid var(--cds-alpha-3);
+  border-bottom: var(--ub-hairline) solid var(--ub-divider);
 }
 
 .ub-app[data-ub-style="claude"] .ub-sheet__title {
@@ -1085,7 +1095,7 @@
 
 .ub-app[data-ub-style="claude"] .ub-sheet__foot {
   padding: var(--ub-s3) var(--ub-s4);
-  border-top: var(--ub-hairline) solid var(--cds-alpha-3);
+  border-top: var(--ub-hairline) solid var(--ub-divider);
   background: var(--ub-bg);
 }
 
@@ -1313,10 +1323,10 @@
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__status {
-  width: 16px;
-  height: 16px;
+  width: calc(var(--ub-u) * 16);
+  height: calc(var(--ub-u) * 16);
   background: transparent;
-  font-size: 11px;
+  font-size: calc(var(--ub-u) * 11);
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__status.is-running {
@@ -1351,7 +1361,7 @@
 }
 
 .ub-app[data-ub-style="claude"] :is(.ub-feed__preview, .ub-feed__detail) {
-  padding-left: calc(var(--ub-s2) + 16px + var(--ub-s2));
+  padding-left: calc(var(--ub-s2) + var(--ub-u) * 16 + var(--ub-s2));
   color: var(--ub-text-3);
   font-size: var(--ub-fs-xs);
   line-height: 1.6;
@@ -1370,7 +1380,7 @@
 .ub-app[data-ub-style="claude"] .ub-feed__divider::before,
 .ub-app[data-ub-style="claude"] .ub-feed__divider::after {
   height: var(--ub-hairline);
-  background: var(--cds-alpha-3);
+  background: var(--ub-divider);
 }
 
 .ub-app[data-ub-style="claude"] .ub-feed__fold {
@@ -1457,9 +1467,13 @@
   content: "\f062";
 }
 
-.ub-app[data-ub-style="claude"] .ub-cchat__actions .ub-btn--danger,
-.ub-app[data-ub-style="claude"] .ub-cchat__actions .ub-btn--danger:hover:not(:disabled) {
+.ub-app[data-ub-style="claude"] .ub-cchat__actions .ub-btn--danger {
   background: var(--ub-text);
+  color: var(--ub-bg);
+}
+
+.ub-app[data-ub-style="claude"] .ub-cchat__actions .ub-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ub-text) 82%, var(--ub-bg));
   color: var(--ub-bg);
 }
 
@@ -1469,7 +1483,7 @@
 }
 
 /* ═══════════════ 空状态：去掉虚线框，只留弱化文字 ═══════════════ */
-.ub-app[data-ub-style="claude"] :is(.ub-cm__empty, .ub-pte__empty, .ub-segs__empty, .ub-wbe__status, .ub-vdata__empty, .ub-vai__empty) {
+.ub-app[data-ub-style="claude"] :is(.ub-cm__empty, .ub-pte__empty, .ub-segs__empty, .ub-wbe__status:not(.is-error), .ub-vdata__empty, .ub-vai__empty) {
   border: 0;
   border-radius: var(--ub-r-panel);
   background: transparent;
@@ -1486,7 +1500,7 @@
 
 .ub-app[data-ub-style="claude"] .ub-viz__rail {
   padding: 0 var(--ub-s2) var(--ub-s2);
-  border-right: var(--ub-hairline) solid var(--cds-alpha-3);
+  border-right: var(--ub-hairline) solid var(--ub-divider);
   background: var(--ub-nav-bg);
 }
 
@@ -1495,7 +1509,7 @@
   height: var(--ub-viz-head-h);
   margin: 0 calc(var(--ub-s2) * -1) var(--ub-s3);
   padding: 0 var(--ub-s3);
-  border-bottom: var(--ub-hairline) solid var(--cds-alpha-3);
+  border-bottom: var(--ub-hairline) solid var(--ub-divider);
 }
 
 .ub-app[data-ub-style="claude"] .ub-viz__mark {
@@ -1535,7 +1549,7 @@
 
 .ub-app[data-ub-style="claude"] .ub-viz__head {
   min-height: var(--ub-viz-head-h);
-  border-bottom: var(--ub-hairline) solid var(--cds-alpha-3);
+  border-bottom: var(--ub-hairline) solid var(--ub-divider);
 }
 
 .ub-app[data-ub-style="claude"] .ub-viz__title {
@@ -1550,7 +1564,7 @@
 }
 
 .ub-app[data-ub-style="claude"] .ub-viz__footer {
-  border-top: var(--ub-hairline) solid var(--cds-alpha-3);
+  border-top: var(--ub-hairline) solid var(--ub-divider);
   background: var(--ub-bg);
 }
 
@@ -1613,7 +1627,7 @@
 
 .ub-app[data-ub-style="claude"] .ub-vnav__sep {
   height: var(--ub-hairline);
-  background: var(--cds-alpha-3);
+  background: var(--ub-divider);
 }
 
 .ub-app[data-ub-style="claude"] .ub-vcard {
@@ -1628,7 +1642,7 @@
 }
 
 .ub-app[data-ub-style="claude"] .ub-vcard__head {
-  border-bottom: var(--ub-hairline) solid var(--cds-alpha-2);
+  border-bottom: var(--ub-hairline) solid var(--ub-divider-soft);
 }
 
 .ub-app[data-ub-style="claude"] .ub-vcard__no {
