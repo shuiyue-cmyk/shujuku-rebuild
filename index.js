@@ -93597,7 +93597,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261016-13"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261016-15"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -93616,7 +93616,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261016-13";
+        const stamp = "20261016-15";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -155197,7 +155197,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261016-13";
+        const stamp = "20261016-15";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -171248,6 +171248,7 @@ function readInitialAppearanceState() {
         uiStyle: normalizeUiStyle(persisted?.uiStyle),
         railCollapsed: persisted?.railCollapsed === true,
         claudeColorMode: normalizeClaudeColorMode(persisted?.claudeColorMode),
+        claudeStyleSuggested: persisted?.claudeStyleSuggested === true,
         systemPrefersDark: false,
     };
 }
@@ -171257,6 +171258,7 @@ function buildPersistedAppearance(state) {
         uiStyle: state.uiStyle,
         railCollapsed: state.railCollapsed,
         claudeColorMode: state.claudeColorMode,
+        claudeStyleSuggested: state.claudeStyleSuggested,
     };
 }
 const useAppearanceStore = defineStore('acu-v2-appearance', {
@@ -171298,6 +171300,12 @@ const useAppearanceStore = defineStore('acu-v2-appearance', {
             if (this.claudeColorMode === value)
                 return;
             this.claudeColorMode = value;
+            this.persist();
+        },
+        markClaudeStyleSuggested() {
+            if (this.claudeStyleSuggested)
+                return;
+            this.claudeStyleSuggested = true;
             this.persist();
         },
         setSystemPrefersDark(value) {
@@ -211284,6 +211292,27 @@ var _sfc_main$6 = /*@__PURE__*/ defineComponent({
             { value: 'basic', label: '基础' },
             { value: 'advanced', label: '高手' },
         ];
+        /** 默认风格下选了 Claude 配色主题：提示还有完整的 Claude 界面风格，只问一次（不论是否切换）。 */
+        async function pickTheme(id) {
+            themeStore.setTheme(id);
+            if (id !== 'claude' && id !== 'claude-night')
+                return;
+            if (appearanceStore.isClaudeStyle || appearanceStore.claudeStyleSuggested)
+                return;
+            // 弹窗前就记下：关掉面板或刷新也不会再问
+            appearanceStore.markClaudeStyleSuggested();
+            const confirmed = await dialogStore.confirm({
+                title: '试试 Claude 整体风格？',
+                message: '除了 Claude 配色，数据库还有完整的 Claude 界面风格：按 Claude 的界面规范重排层次、字号和控件，侧栏可以收起。要现在切换吗？之后可在「外观与界面 → 界面风格」随时切回默认。',
+                confirmLabel: '切换到 Claude 风格',
+                cancelLabel: '保持当前',
+            });
+            if (!confirmed)
+                return;
+            // 明暗跟所选主题一致：Claude → 浅色，Claude 夜 → 深色
+            appearanceStore.setClaudeColorMode(id === 'claude-night' ? 'dark' : 'light');
+            appearanceStore.setUiStyle('claude');
+        }
         function setMode(value) {
             uiMode.setMode(value);
             router.ensureActiveVisible();
@@ -211319,14 +211348,14 @@ var _sfc_main$6 = /*@__PURE__*/ defineComponent({
             if (confirmed)
                 themeStore.deleteCustomTheme(id);
         }
-        const __returned__ = { emit, themeStore, appearanceStore, uiMode, router, dialogStore, toastStore, scaleOptions, styleOptions, colorModeOptions, modeOptions, setMode, importThemeFile, exportTheme, deleteTheme, get isCustomThemeId() { return isCustomThemeId; }, UbBadge, UbFileButton, UbIconButton, UbRow, UbSection, UbSegmented, UbSheet };
+        const __returned__ = { emit, themeStore, appearanceStore, uiMode, router, dialogStore, toastStore, scaleOptions, styleOptions, colorModeOptions, modeOptions, pickTheme, setMode, importThemeFile, exportTheme, deleteTheme, get isCustomThemeId() { return isCustomThemeId; }, UbBadge, UbFileButton, UbIconButton, UbRow, UbSection, UbSegmented, UbSheet };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-themes[data-v-e3771ac4] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: var(--ub-s2);\n}\n.ub-theme[data-v-e3771ac4] {\n  position: relative;\n  min-width: 0;\n  border: 1.5px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-bg);\n  overflow: hidden;\n}\n.ub-theme.is-active[data-v-e3771ac4] {\n  border-color: var(--ub-accent);\n}\n.ub-theme__pick[data-v-e3771ac4] {\n  display: flex;\n  flex-direction: column;\n  width: 100%;\n  padding: 0;\n  border: 0;\n  background: transparent;\n  color: inherit;\n  font: inherit;\n  text-align: left;\n  cursor: pointer;\n}\n.ub-theme__swatch[data-v-e3771ac4] {\n  display: flex;\n  align-items: flex-end;\n  height: calc(var(--ub-u) * 64);\n  padding: 10px 10px 0;\n}\n.ub-theme__swatch-card[data-v-e3771ac4] {\n  position: relative;\n  display: flex;\n  flex-direction: column;\n  gap: 5px;\n  width: 100%;\n  height: 100%;\n  padding: 9px 10px;\n  border: 1px solid;\n  border-bottom: 0;\n  border-radius: 8px 8px 0 0;\n}\n.ub-theme__swatch-line[data-v-e3771ac4] {\n  width: 64%;\n  height: 5px;\n  border-radius: 3px;\n}\n.ub-theme__swatch-line.is-short[data-v-e3771ac4] {\n  width: 40%;\n}\n.ub-theme__swatch-dot[data-v-e3771ac4] {\n  position: absolute;\n  right: 10px;\n  top: 9px;\n  width: 14px;\n  height: 14px;\n  border-radius: 50%;\n}\n.ub-theme__name[data-v-e3771ac4] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s1);\n  min-width: 0;\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s3);\n  border-top: 1px solid var(--ub-line-soft);\n  background: var(--ub-panel);\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  font-weight: 600;\n}\n.ub-theme__name .fa-check[data-v-e3771ac4] {\n  color: var(--ub-accent-ink);\n}\n.ub-theme__tools[data-v-e3771ac4] {\n  position: absolute;\n  top: 4px;\n  right: 4px;\n  display: flex;\n  gap: 2px;\n  border-radius: var(--ub-r-control);\n  background: var(--ub-toast-bg);\n  opacity: 0;\n  transition: opacity 0.14s ease;\n}\n.ub-theme:hover .ub-theme__tools[data-v-e3771ac4],\n.ub-theme:focus-within .ub-theme__tools[data-v-e3771ac4],\n.ub-theme.is-active .ub-theme__tools[data-v-e3771ac4] {\n  opacity: 1;\n}\n@media (hover: none) {\n.ub-theme__tools[data-v-e3771ac4] {\n    opacity: 1;\n}\n}\n", "src/presentation-v3/shell/AppearanceSheet.vue#style-0-e3771ac4");
-var AppearanceSheet_vue_vue_type_style_index_0_scoped_e3771ac4_lang = null;
+injectSfcStyle("\n.ub-themes[data-v-3aa85146] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-theme[data-v-3aa85146] {\r\n  position: relative;\r\n  min-width: 0;\r\n  border: 1.5px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-bg);\r\n  overflow: hidden;\n}\n.ub-theme.is-active[data-v-3aa85146] {\r\n  border-color: var(--ub-accent);\n}\n.ub-theme__pick[data-v-3aa85146] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  width: 100%;\r\n  padding: 0;\r\n  border: 0;\r\n  background: transparent;\r\n  color: inherit;\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-theme__swatch[data-v-3aa85146] {\r\n  display: flex;\r\n  align-items: flex-end;\r\n  height: calc(var(--ub-u) * 64);\r\n  padding: 10px 10px 0;\n}\n.ub-theme__swatch-card[data-v-3aa85146] {\r\n  position: relative;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 5px;\r\n  width: 100%;\r\n  height: 100%;\r\n  padding: 9px 10px;\r\n  border: 1px solid;\r\n  border-bottom: 0;\r\n  border-radius: 8px 8px 0 0;\n}\n.ub-theme__swatch-line[data-v-3aa85146] {\r\n  width: 64%;\r\n  height: 5px;\r\n  border-radius: 3px;\n}\n.ub-theme__swatch-line.is-short[data-v-3aa85146] {\r\n  width: 40%;\n}\n.ub-theme__swatch-dot[data-v-3aa85146] {\r\n  position: absolute;\r\n  right: 10px;\r\n  top: 9px;\r\n  width: 14px;\r\n  height: 14px;\r\n  border-radius: 50%;\n}\n.ub-theme__name[data-v-3aa85146] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  min-width: 0;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s3);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-panel);\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\n}\n.ub-theme__name .fa-check[data-v-3aa85146] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-theme__tools[data-v-3aa85146] {\r\n  position: absolute;\r\n  top: 4px;\r\n  right: 4px;\r\n  display: flex;\r\n  gap: 2px;\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-toast-bg);\r\n  opacity: 0;\r\n  transition: opacity 0.14s ease;\n}\n.ub-theme:hover .ub-theme__tools[data-v-3aa85146],\r\n.ub-theme:focus-within .ub-theme__tools[data-v-3aa85146],\r\n.ub-theme.is-active .ub-theme__tools[data-v-3aa85146] {\r\n  opacity: 1;\n}\n@media (hover: none) {\n.ub-theme__tools[data-v-3aa85146] {\r\n    opacity: 1;\n}\n}\r\n", "src/presentation-v3/shell/AppearanceSheet.vue#style-0-3aa85146");
+var AppearanceSheet_vue_vue_type_style_index_0_scoped_3aa85146_lang = null;
 
 const _hoisted_1$5 = { class: "ub-themes" };
 const _hoisted_2$4 = ["aria-pressed", "onClick"];
@@ -211384,7 +211413,7 @@ function _sfc_render$5(_ctx, _cache, $props, $setup, $data, $options) {
 							type: "button",
 							class: "ub-theme__pick",
 							"aria-pressed": t.id === $setup.themeStore.activeId ? "true" : "false",
-							onClick: ($event) => $setup.themeStore.setTheme(t.id)
+							onClick: ($event) => $setup.pickTheme(t.id)
 						}, [createBaseVNode(
 							"span",
 							{
@@ -211537,7 +211566,7 @@ function _sfc_render$5(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["is-open"]);
 }
-var AppearanceSheet = /* @__PURE__ */ _export_sfc(_sfc_main$6, [["render", _sfc_render$5], ["__scopeId", "data-v-e3771ac4"]]);
+var AppearanceSheet = /* @__PURE__ */ _export_sfc(_sfc_main$6, [["render", _sfc_render$5], ["__scopeId", "data-v-3aa85146"]]);
 
 /**
  * Claude 风格仪表盘顶部的衬线问候语，按本地时段取词。

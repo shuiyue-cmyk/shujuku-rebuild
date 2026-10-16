@@ -51,6 +51,7 @@ interface PersistedAppearance {
   uiStyle?: unknown;
   railCollapsed?: unknown;
   claudeColorMode?: unknown;
+  claudeStyleSuggested?: unknown;
 }
 
 interface AppearanceState {
@@ -58,6 +59,8 @@ interface AppearanceState {
   uiStyle: AcuUiStyle;
   railCollapsed: boolean;
   claudeColorMode: AcuClaudeColorMode;
+  /** 默认风格下选 Claude 主题时是否已提示过「有 Claude 整体风格」（只提示一次，不论是否切换） */
+  claudeStyleSuggested: boolean;
   /** 宿主窗口当前的系统明暗（不持久化，由挂载时的监听写入）。 */
   systemPrefersDark: boolean;
 }
@@ -95,6 +98,7 @@ function readInitialAppearanceState(): AppearanceState {
     uiStyle: normalizeUiStyle(persisted?.uiStyle),
     railCollapsed: persisted?.railCollapsed === true,
     claudeColorMode: normalizeClaudeColorMode(persisted?.claudeColorMode),
+    claudeStyleSuggested: persisted?.claudeStyleSuggested === true,
     systemPrefersDark: false,
   };
 }
@@ -105,6 +109,7 @@ function buildPersistedAppearance(state: AppearanceState): PersistedAppearance {
     uiStyle: state.uiStyle,
     railCollapsed: state.railCollapsed,
     claudeColorMode: state.claudeColorMode,
+    claudeStyleSuggested: state.claudeStyleSuggested,
   };
 }
 
@@ -141,6 +146,11 @@ export const useAppearanceStore = defineStore('acu-v2-appearance', {
       if (normalizeClaudeColorMode(value) !== value) return;
       if (this.claudeColorMode === value) return;
       this.claudeColorMode = value;
+      this.persist();
+    },
+    markClaudeStyleSuggested(): void {
+      if (this.claudeStyleSuggested) return;
+      this.claudeStyleSuggested = true;
       this.persist();
     },
     setSystemPrefersDark(value: boolean): void {

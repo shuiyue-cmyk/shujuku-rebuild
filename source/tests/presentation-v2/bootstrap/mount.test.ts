@@ -154,7 +154,7 @@ describe('mount — 当前文档场景', () => {
     expect(style!.textContent).toContain('--acu-ui-scale: 1.25;');
     expect(style!.textContent).toContain('--acu-font-size-body: 15px;');
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({
-      appearance: { uiScale: '125', uiStyle: 'default', railCollapsed: false, claudeColorMode: 'system' },
+      appearance: { uiScale: '125', uiStyle: 'default', railCollapsed: false, claudeColorMode: 'system', claudeStyleSuggested: false },
     });
 
     mount.__resetAcuV2MountForTests();

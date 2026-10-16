@@ -61,7 +61,7 @@ describe('appearance-store', () => {
     expect(store.uiScale).toBe('110');
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({
       theme: { activeId: 'default-light' },
-      appearance: { uiScale: '110', uiStyle: 'default', railCollapsed: false, claudeColorMode: 'system' },
+      appearance: { uiScale: '110', uiStyle: 'default', railCollapsed: false, claudeColorMode: 'system', claudeStyleSuggested: false },
     });
   });
 
@@ -98,7 +98,7 @@ describe('appearance-store', () => {
     store.setUiStyle('claude');
     expect(store.isClaudeStyle).toBe(true);
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).appearance).toEqual({
-      uiScale: '100', uiStyle: 'claude', railCollapsed: false, claudeColorMode: 'system',
+      uiScale: '100', uiStyle: 'claude', railCollapsed: false, claudeColorMode: 'system', claudeStyleSuggested: false,
     });
   });
 
@@ -116,6 +116,25 @@ describe('appearance-store', () => {
     store = m.appearanceStore.useAppearanceStore();
     expect(store.uiStyle).toBe('default');
     expect(store.railCollapsed).toBe(false);
+  });
+
+  it('「已提示过 Claude 整体风格」持久化，刷新后仍记得；只认 true', async () => {
+    let m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    let store = m.appearanceStore.useAppearanceStore();
+    expect(store.claudeStyleSuggested).toBe(false);
+    store.markClaudeStyleSuggested();
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).appearance.claudeStyleSuggested).toBe(true);
+
+    m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    store = m.appearanceStore.useAppearanceStore();
+    expect(store.claudeStyleSuggested).toBe(true);
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ appearance: { claudeStyleSuggested: 'yes' } }));
+    m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    expect(m.appearanceStore.useAppearanceStore().claudeStyleSuggested).toBe(false);
   });
 
   it('toggleRailCollapsed 翻转并持久化', async () => {

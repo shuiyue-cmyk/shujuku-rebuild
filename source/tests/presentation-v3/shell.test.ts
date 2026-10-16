@@ -95,6 +95,58 @@ describe('v3 外壳', () => {
     unregister();
   });
 
+  it('默认风格下选 Claude 主题：提示有 Claude 整体风格，只问一次；同意则切到 Claude 风格并按主题定明暗', async () => {
+    const { mount } = await mountV3({ uiState: { theme: { activeId: 'jirai-kei' } } });
+    cleanup = () => mount.__resetAcuV2MountForTests();
+    const app = document.querySelector<HTMLElement>('.ub-app')!;
+    const { useDialogStore } = await import('../../src/presentation-v2/stores/dialog-store');
+    const { useAppearanceStore } = await import('../../src/presentation-v2/stores/appearance-store');
+    const dialog = useDialogStore();
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-rail button'))
+      .find(button => button.textContent?.includes('外观与界面'))!.click();
+    await flush();
+    const pickTheme = (name: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-theme__pick'))
+      .find(button => button.textContent?.trim() === name)!.click();
+
+    pickTheme('Claude 夜');
+    await flush();
+    expect(dialog.active?.kind).toBe('confirm');
+    expect(dialog.active?.message).toContain('Claude 界面风格');
+    dialog.cancelActive();
+    await flush();
+    expect(app.dataset.ubStyle).toBe('default');
+    expect(useAppearanceStore().claudeStyleSuggested).toBe(true);
+
+    // 已经问过：再选 Claude 主题不再弹
+    pickTheme('Claude');
+    await flush();
+    expect(dialog.active).toBeNull();
+
+    // 同意分支：重置「问过」后选 Claude 夜并确认 → 切 Claude 风格、深色
+    useAppearanceStore().$patch({ claudeStyleSuggested: false });
+    pickTheme('Claude 夜');
+    await flush();
+    dialog.submitActive();
+    await flush();
+    expect(app.dataset.ubStyle).toBe('claude');
+    expect(useAppearanceStore().claudeColorMode).toBe('dark');
+    expect(app.dataset.ubColorScheme).toBe('dark');
+  });
+
+  it('默认风格下选非 Claude 主题不提示', async () => {
+    const { mount } = await mountV3({ uiState: { theme: { activeId: 'claude' } } });
+    cleanup = () => mount.__resetAcuV2MountForTests();
+    const { useDialogStore } = await import('../../src/presentation-v2/stores/dialog-store');
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-rail button'))
+      .find(button => button.textContent?.includes('外观与界面'))!.click();
+    await flush();
+    const other = Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-theme__pick'))
+      .find(button => !/Claude/.test(button.textContent || ''))!;
+    other.click();
+    await flush();
+    expect(useDialogStore().active).toBeNull();
+  });
+
   it('界面风格：切到 Claude 后用自带配色，明暗按颜色模式走、不改所选主题；仪表盘页首出现问候语；侧栏可收起', async () => {
     const { mount, router } = await mountV3({ uiState: { theme: { activeId: 'jirai-kei' } } });
     cleanup = () => mount.__resetAcuV2MountForTests();
