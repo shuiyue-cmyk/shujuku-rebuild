@@ -1,5 +1,6 @@
 import { CONTINUATION_AGENT_API_PRESET_ROLES_ACU, ContinuationValidationError_ACU, createContinuationError_ACU, type ContinuationAgentApiPresets_ACU, type ContinuationPromptSegment_ACU, type ContinuationSettings_ACU, type ContinuationStageSize_ACU, type ContinuationTurnRange_ACU, type ContinuationWebResearchSettings_ACU } from './model';
 import { buildDefaultContinuationAgentPrompts_ACU } from './agent/agent-defaults';
+import { buildV39DefaultContinuationOutlinePrompt_ACU } from './agent/agent-default-prompts-v39';
 import { USER_PREFILL_CONTENT_ACU } from '../../shared/user-prefill.js';
 import {
   AGENT_HISTORY_TOKEN_BUDGET_DEFAULT_ACU,
@@ -200,6 +201,11 @@ export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V36_ACU = 'spv4.4-continu
 export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V37_ACU = 'spv4.5-continuation-outline-user-prefill-v37';
 /** V38（TT 移植上游 e35f758d）：主会话进度校准 adjust_progress，谱系迁移只动冻结 V36 默认全文逐字相同的段。 */
 export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU = 'spv5.0-continuation-progress-adjustment-v38';
+/**
+ * V39（跟进上游 V47–V52 问答版默认提示词）：主 Agent、总纲、结算、两个策划、终审、检索、写作指令与阶段大纲
+ * 换成新版默认；只升级整组与 V38 冻结默认逐段相同（角色、正文、启用状态）的提示词，用户改过的整组保留。
+ */
+export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V39_ACU = 'spv5.1-continuation-upstream-qa-prompts-v39';
 
 /**
  * 连续高压轮上限的默认值。8 轮约等于 8000 字全程没有喘息——这才是病态；
@@ -244,9 +250,18 @@ function clonePromptSegments_ACU(segments: readonly ContinuationPromptSegment_AC
   return segments.map(segment => ({ ...segment }));
 }
 
-export function buildDefaultContinuationOutlinePrompt_ACU(): ContinuationPromptSegment_ACU[] {
+/**
+ * V38 版本标记下的阶段大纲默认提示词（冻结）。V38→V39 迁移据此判断「没动过」，
+ * 旧版本迁移链里的「当前默认」也固定指向它。
+ */
+export function buildV38DefaultContinuationOutlinePrompt_ACU(): ContinuationPromptSegment_ACU[] {
   // 预填充恒在最后一组启用段之后；planner 注入 $STORY_ARC/大纲时会先摘下再放回（移植上游 255dfd62）。
   return [...clonePromptSegments_ACU(DEFAULT_OUTLINE_PROMPT_ACU), { role: 'user', content: USER_PREFILL_CONTENT_ACU, enabled: true, deletable: true }];
+}
+
+/** 当前阶段大纲默认提示词：V39 问答版（跟进上游）。 */
+export function buildDefaultContinuationOutlinePrompt_ACU(): ContinuationPromptSegment_ACU[] {
+  return buildV39DefaultContinuationOutlinePrompt_ACU();
 }
 
 export function buildDefaultContinuationWorkflowSettings_ACU(): ContinuationSettings_ACU['workflow'] {
@@ -297,7 +312,7 @@ export function buildDefaultContinuationSettings_ACU(): ContinuationSettings_ACU
     agentApiPresets: buildDefaultContinuationAgentApiPresets_ACU(),
     outlinePrompt: buildDefaultContinuationOutlinePrompt_ACU(),
     agentPrompts: buildDefaultContinuationAgentPrompts_ACU(),
-    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU,
+    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V39_ACU,
   };
 }
 

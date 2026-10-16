@@ -14,6 +14,9 @@ export interface AgentFinalReviewEvidence_ACU {
   supplementalMaterials: string;
   worldbookEvidence: string;
   worldbookSeeds: string[];
+  /** 伏笔账本与信息差时间线全文：终审快照的固定栏目，也计入固定证据门。 */
+  hooksLedger: string;
+  infoGap: string;
   fixedReadKeys: string[];
 }
 
@@ -58,6 +61,8 @@ export function buildAgentFinalReviewEvidence_ACU(input: AgentFinalReviewEvidenc
   const tail = renderAgentStoryTail_ACU(context);
   const constraints = resolveAgentReadToken_ACU('$ACTIVE_CONSTRAINTS', context).text;
   const chronology = resolveAgentReadToken_ACU('$CHRONOLOGY', context).text;
+  const hooksLedger = resolveAgentReadToken_ACU('$HOOKS_LEDGER', context).text;
+  const infoGap = resolveAgentReadToken_ACU('$INFO_GAP', context).text;
   const seedSource = [context.originInstruction, input.currentUserInput, input.candidateInstruction, outline, tail].join('\n');
   const worldbookSeeds = extractAgentFinalReviewWorldbookSeeds_ACU(seedSource);
   const worldbookEntries = selectFinalReviewWorldbookEntries_ACU(context, worldbookSeeds);
@@ -75,8 +80,10 @@ export function buildAgentFinalReviewEvidence_ACU(input: AgentFinalReviewEvidenc
     supplementalMaterials,
     worldbookEvidence,
     worldbookSeeds,
+    hooksLedger,
+    infoGap,
     fixedReadKeys: unique_ACU([
-      '$USER_INTENT', '$USER_REQUIREMENTS', '$OUTLINE_WINDOW', '$STORY_ARC', '$STORY_TAIL', '$ACTIVE_CONSTRAINTS', '$CHRONOLOGY',
+      '$USER_INTENT', '$USER_REQUIREMENTS', '$OUTLINE_WINDOW', '$STORY_ARC', '$STORY_TAIL', '$HOOKS_LEDGER', '$INFO_GAP', '$ACTIVE_CONSTRAINTS', '$CHRONOLOGY',
       ...worldbookEntries.map(entry => `$WORLDBOOK:${entry.bookName}:${entry.uid}`),
     ]),
     gateItems: [
@@ -87,6 +94,8 @@ export function buildAgentFinalReviewEvidence_ACU(input: AgentFinalReviewEvidenc
       { label: '完整当前阶段大纲', text: outline },
       { label: '故事总纲', text: storyArc },
       { label: '最近正文', text: tail },
+      { label: '伏笔账本', text: hooksLedger },
+      { label: '信息差时间线', text: infoGap },
       { label: '长期约束、故事年代学账本、策划摘要、检索种子与世界书目录', text: supplementalMaterials },
       { label: '命中世界书条目全文', text: worldbookEvidence },
     ],

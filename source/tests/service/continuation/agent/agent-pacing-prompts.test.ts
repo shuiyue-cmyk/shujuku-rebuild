@@ -14,7 +14,7 @@ import {
 import { renderAgentTurnGuidance_ACU, renderAgentTurnPacingGuidance_ACU } from '../../../../src/service/continuation/agent/agent-placeholder-resolver';
 import {
   buildDefaultContinuationSettings_ACU,
-  CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU,
+  CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V39_ACU,
   V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU,
 } from '../../../../src/service/continuation/defaults';
 
@@ -26,7 +26,7 @@ describe('continuation P0 pacing prompt contracts', () => {
   it('assembles the V24 outline contract under the current default version', () => {
     const settings = buildDefaultContinuationSettings_ACU();
 
-    expect(settings.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU);
+    expect(settings.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V39_ACU);
     expect(settings.outlinePrompt.some(segment => segment.content === V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU)).toBe(true);
     expect(V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU).toContain('setup 与 cooldown 允许主线保持不动');
     expect(V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU).toContain('隔夜、数日后还是更久');
@@ -73,8 +73,10 @@ describe('continuation P0 pacing prompt contracts', () => {
 
     const settings = buildDefaultContinuationSettings_ACU();
     const composer = promptText_ACU(settings.agentPrompts.instructionComposer);
-    expect(composer).toContain('明确区分 objectiveFact、readerKnown 与逐角色 characterKnowledge');
-    expect(composer).toContain('禁止把读者知识直接赋给角色');
+    // V39 写作指令编排：信息边界写在「人物认知、节奏与时间」一问里。
+    expect(composer).toContain('我分清客观事实、读者已知和每个角色已知');
+    expect(composer).toContain('亲历、目击、听闻、阅读、转述或可验证推断');
+    expect(composer).toContain('读者看见的幕后信息不直接交给角色');
 
     // T6 受限 SQL 白名单不弱化：维护者仍走 sql 写集，终审仍为 JSON 契约。
     expect(maintainer).toContain('不输出 delta');

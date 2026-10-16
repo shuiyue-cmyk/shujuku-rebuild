@@ -18,6 +18,7 @@
 import type { ContinuationAgentPrompts_ACU, ContinuationPromptSegment_ACU } from '../model';
 import { cloneAgentPromptSegments_ACU } from './agent-model';
 import { USER_PREFILL_CONTENT_ACU } from '../../../shared/user-prefill.js';
+import { withV39AgentPrompts_ACU } from './agent-default-prompts-v39';
 
 /** 主 Agent 提示词里标记会话记录插入位置的段。装配器遇到该段时插入会话消息而不发送本段。 */
 export const AGENT_HISTORY_ANCHOR_TOKEN_ACU = '$HISTORY_ANCHOR';
@@ -656,7 +657,7 @@ function v19DefaultMainAgentNonRootSystemContents_ACU(): string[] {
   // V18 存量若已是新默认（测试按当前默认构造 V18 信封），同样视为未改写默认段，保证 system→user 迁移不残留。
   let dispatched: string[] = [];
   try {
-    dispatched = buildDefaultContinuationAgentPrompts_ACU().main
+    dispatched = buildV37ContinuationAgentPrompts_ACU().main
       .filter(segment => segment.role === 'user' && headings.some(heading => segment.content.startsWith(heading)))
       .map(segment => segment.content);
   } catch {
@@ -1188,9 +1189,18 @@ export const CONTINUATION_V36_DEFAULT_LINEAGE_ACU = Object.fromEntries(
   }),
 ) as Record<keyof ContinuationAgentPrompts_ACU, Array<{ index: number; role: string; hash: string; length: number }>>;
 
-/** 当前默认组：V37（主会话进度校准 adjust_progress，TT 移植上游 e35f758d）。 */
-export function buildDefaultContinuationAgentPrompts_ACU(): ContinuationAgentPrompts_ACU {
+/**
+ * V38 版本标记下的默认组（冻结）：即 buildV37ContinuationAgentPrompts_ACU 的装配结果。
+ * V38→V39 迁移按整组逐段比对它判断「没动过的默认提示词」；旧版本迁移链里的「当前默认」也固定指向它，
+ * 不能随当前默认组漂移，否则老信封会按新版段位错位替换。
+ */
+export function buildV38ContinuationAgentPrompts_ACU(): ContinuationAgentPrompts_ACU {
   return buildV37ContinuationAgentPrompts_ACU();
+}
+
+/** 当前默认组：V39（八个角色跟进上游问答版提示词，reviewer 与 requirementsMaintainer 沿用 V38）。 */
+export function buildDefaultContinuationAgentPrompts_ACU(): ContinuationAgentPrompts_ACU {
+  return withV39AgentPrompts_ACU(buildV38ContinuationAgentPrompts_ACU());
 }
 
 /**

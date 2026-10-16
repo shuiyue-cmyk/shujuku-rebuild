@@ -593,6 +593,36 @@ describe('尾部预填充识别（user-prefill 形态，移植上游 ce867f86）
   });
 });
 
+describe('多轮对话的尾部预填充只出现一次（移植上游 history 卡片位置）', () => {
+  it('第二次调用时本轮记录落在尾部预填充之前，预填充不重复', async () => {
+    const input = input_ACU();
+    input.settings.internalAiRetryLimit = 2;
+    const calls: Array<Array<{ role: string; content: string }>> = [];
+    const runtime = new AgentSubagentRuntime_ACU({
+      resolveApiPreset: (() => preset_ACU) as any,
+      callInternalAi: async messages => {
+        calls.push(messages);
+        return calls.length === 1 ? '我先解释一下计划。' : finalReply_ACU;
+      },
+    });
+    await runtime.run(input);
+    const second = calls[1];
+    expect(second.filter(message => message.content === USER_PREFILL_CONTENT_ACU)).toHaveLength(1);
+    expect(second[second.length - 1]).toEqual({ role: 'user', content: USER_PREFILL_CONTENT_ACU });
+    const echoIndex = second.findIndex(message => message.content === '我先解释一下计划。');
+    expect(echoIndex).toBeGreaterThan(-1);
+    expect(echoIndex).toBeLessThan(second.length - 1);
+  });
+
+  it('普通收尾时本轮记录直接追加；尾部是预填充时记录插在它之前', async () => {
+    const { appendBeforeTrailingPrefill_ACU } = await import('../../../../src/service/continuation/agent/agent-subagent-runtime');
+    const out = appendBeforeTrailingPrefill_ACU([{ role: 'system', content: '骨架' }], [{ role: 'assistant', content: '输出' }]);
+    expect(out.map(item => item.content)).toEqual(['骨架', '输出']);
+    const withPrefill = appendBeforeTrailingPrefill_ACU([{ role: 'system', content: '骨架' }, { role: 'user', content: USER_PREFILL_CONTENT_ACU }], [{ role: 'assistant', content: '输出' }, { role: 'user', content: '回执' }]);
+    expect(withPrefill.map(item => item.content)).toEqual(['骨架', '输出', '回执', USER_PREFILL_CONTENT_ACU]);
+  });
+});
+
 describe('状态块走 system 通道（移植上游 e1876435）', () => {
   it('读取预算注记以 system 发出，不占用 user 对话轮', async () => {
     const calls: Array<Array<{ role: string; content: string }>> = [];

@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { renderAgentSubagentCatalog_ACU } from '../../../../src/service/continuation/agent/agent-catalog';
 import {
   buildDefaultContinuationAgentPrompts_ACU,
-  findAgentPromptSlot_ACU,
 } from '../../../../src/service/continuation/agent/agent-defaults';
 import { buildEmptyAgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-module-store';
 import type { AgentModuleDelta_ACU, AgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-model';
@@ -106,18 +105,19 @@ describe('统一资料维护派遣策略 TT 子集（判别测试）', () => {
   it('默认组：主规则不再派 reviewer、composer 自查、终审兜底（承接大转折/冲突判定）', () => {
     const prompts = buildDefaultContinuationAgentPrompts_ACU();
     const mainText = prompts.main.map(s => s.content).join('\n');
+    // V39 问答版：派遣策略写在「与固定工作流和子代理怎样分工」一问里。
     expect(mainText).toContain('不再单独派 continuity-reviewer');
-    expect(mainText).toContain('第二轮起保底派 beat-planner');
+    expect(mainText).toContain('beat-planner 只在首轮且没有伏笔义务时跳过');
     expect(mainText).toContain('instruction-composer 自查');
     expect(mainText).toContain('finalReviewer 终审');
 
-    const composerTask = findAgentPromptSlot_ACU(prompts.instructionComposer, 'task')!.content;
-    expect(composerTask).toContain('冲突');
-    expect(composerTask).toContain('保守');
+    const composerText = prompts.instructionComposer.map(s => s.content).join('\n');
+    expect(composerText).toContain('冲突时取保守一方');
+    expect(composerText).toContain('绝不把两份互相矛盾的建议拼进同一份指令');
 
-    const finalTask = findAgentPromptSlot_ACU(prompts.finalReviewer, 'task')!.content;
-    expect(finalTask).toContain('hooks');
-    expect(finalTask).toContain('continuity-reviewer');
+    const finalText = prompts.finalReviewer.map(s => s.content).join('\n');
+    expect(finalText).toContain('伏笔操作要对得上伏笔账本');
+    expect(finalText).toContain('策划之间互相矛盾的内容不能同时出现在指导里');
   });
 
   it('伏笔义务判定保持（payoff/reveal 仍触发），turnNumber 接管大转折判定', () => {

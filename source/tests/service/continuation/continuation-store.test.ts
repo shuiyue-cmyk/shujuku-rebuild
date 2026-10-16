@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  buildDefaultContinuationOutlinePrompt_ACU,
   buildDefaultContinuationSettings_ACU,
+  buildV38DefaultContinuationOutlinePrompt_ACU,
   V23_DEFAULT_OUTLINE_ACK_SEGMENT_ACU,
   V23_DEFAULT_OUTLINE_METHOD_ACK_SEGMENT_ACU,
   V23_DEFAULT_OUTLINE_PACING_SEGMENT_ACU,
@@ -13,6 +15,8 @@ import {
 import {
   buildV33ContinuationAgentPrompts_ACU,
   buildV34ContinuationAgentPrompts_ACU,
+  buildV38ContinuationAgentPrompts_ACU,
+  buildDefaultContinuationAgentPrompts_ACU,
   CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU,
   V23_MAIN_AGENT_PACING_RULE_ACU,
   V24_MAIN_AGENT_PACING_RULE_ACU,
@@ -29,7 +33,6 @@ import {
   V19_DEFAULT_MAIN_AGENT_LAYOUT_ANSWER_ACU,
   V19_DEFAULT_MAIN_AGENT_RUNTIME_SEGMENT_ACU,
   currentDefaultMainAgentHistoryGuide_ACU,
-  currentDefaultMainAgentLayoutAnswer_ACU,
 } from '../../../src/service/continuation/agent/agent-defaults';
 import { ContinuationValidationError_ACU, type ContinuationEnvelope_ACU } from '../../../src/service/continuation/model';
 import {
@@ -42,6 +45,23 @@ import { _set_SillyTavern_API_ACU } from '../../../src/shared/host-api';
 
 function buildEnvelope_ACU(): ContinuationEnvelope_ACU {
   return { schemaVersion: 1, settings: buildDefaultContinuationSettings_ACU(), activeTask: null };
+}
+
+/** 旧版本迁移用例的底稿：V38 冻结默认（V39 之前的信封就是这套段位）。 */
+function buildV38Envelope_ACU(): any {
+  const envelope = buildEnvelope_ACU() as any;
+  envelope.settings.agentPrompts = buildV38ContinuationAgentPrompts_ACU();
+  envelope.settings.outlinePrompt = buildV38DefaultContinuationOutlinePrompt_ACU();
+  return envelope;
+}
+
+/** 旧链跑到 V38 后的期望再按 V39 规则推一步：整组仍是 V38 冻结默认的换成当前默认，改过的整组保留。 */
+function upgradeUntouchedToV39_ACU<T extends Record<string, unknown>>(prompts: T): T {
+  const v38 = buildV38ContinuationAgentPrompts_ACU() as unknown as Record<string, unknown>;
+  const current = buildDefaultContinuationAgentPrompts_ACU() as unknown as Record<string, unknown>;
+  const next: Record<string, unknown> = { ...prompts };
+  for (const role of Object.keys(current)) if (JSON.stringify(prompts[role]) === JSON.stringify(v38[role])) next[role] = current[role];
+  return next as T;
 }
 
 function buildRunningEnvelope_ACU(): ContinuationEnvelope_ACU {
@@ -365,7 +385,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
   });
 
   it('V17 仅定向更新已知会话快照规则，并保留其余提示词与段字段', () => {
-    const v17 = buildEnvelope_ACU() as any;
+    const v17 = buildV38Envelope_ACU() as any;
     v17.settings.agentPrompts = buildV33ContinuationAgentPrompts_ACU();
     v17.settings.promptForceDefaultVersion = 'spv2.5-continuation-story-layers-v17';
     const historyIndex = v17.settings.agentPrompts.main.findIndex((segment: any) =>
@@ -384,7 +404,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
       enabled: false,
       deletable: true,
     });
-    const expectedPrompts = buildDefaultContinuationSettings_ACU().agentPrompts;
+    const expectedPrompts = buildV38ContinuationAgentPrompts_ACU();
     expectedPrompts.main[historyIndex] = {
       ...v17.settings.agentPrompts.main[historyIndex],
       content: currentDefaultMainAgentHistoryGuide_ACU(),
@@ -400,13 +420,13 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
-    expect(loaded.settings.agentPrompts).toEqual(expectedPrompts);
-    expect(loaded.settings.outlinePrompt).toEqual(expectedOutlinePrompt);
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
+    expect(loaded.settings.agentPrompts).toEqual(upgradeUntouchedToV39_ACU(expectedPrompts));
+    expect(loaded.settings.outlinePrompt).toEqual(buildDefaultContinuationOutlinePrompt_ACU());
   });
 
   it('V17 自定义提示词未包含已知旧句时逐字保留，只推进契约版本', () => {
-    const customized = buildEnvelope_ACU() as any;
+    const customized = buildV38Envelope_ACU() as any;
     customized.settings.agentPrompts = buildV33ContinuationAgentPrompts_ACU();
     customized.settings.promptForceDefaultVersion = 'spv2.5-continuation-story-layers-v17';
     const historyIndex = customized.settings.agentPrompts.main.findIndex((segment: any) =>
@@ -420,20 +440,20 @@ describe('FirstFloorContinuationStore_ACU', () => {
       deletable: true,
       pinned: false,
     };
-    const expectedPrompts = buildDefaultContinuationSettings_ACU().agentPrompts;
+    const expectedPrompts = buildV38ContinuationAgentPrompts_ACU();
     expectedPrompts.main[historyIndex] = { ...customized.settings.agentPrompts.main[historyIndex] };
     const expectedOutlinePrompt = JSON.parse(JSON.stringify(customized.settings.outlinePrompt));
     _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: customized }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
-    expect(loaded.settings.agentPrompts).toEqual(expectedPrompts);
-    expect(loaded.settings.outlinePrompt).toEqual(expectedOutlinePrompt);
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
+    expect(loaded.settings.agentPrompts).toEqual(upgradeUntouchedToV39_ACU(expectedPrompts));
+    expect(loaded.settings.outlinePrompt).toEqual(buildDefaultContinuationOutlinePrompt_ACU());
   });
 
   it('V18 默认主 Agent 的非根 system 段迁移为 user，并删除未改写的运行时骨架段', () => {
-    const v18 = buildEnvelope_ACU() as any;
+    const v18 = buildV38Envelope_ACU() as any;
     v18.settings.promptForceDefaultVersion = 'spv2.6-continuation-append-only-history-v18';
     const historyIndex = v18.settings.agentPrompts.main.findIndex((segment: any) =>
       String(segment.content).startsWith('【以下是你自己的会话记录】'),
@@ -469,16 +489,16 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(loaded.settings.agentPrompts.main.some(segment => segment.content === V19_DEFAULT_MAIN_AGENT_RUNTIME_SEGMENT_ACU)).toBe(false);
     expect(loaded.settings.agentPrompts.main.filter(segment => segment.role === 'system')).toHaveLength(1);
     expect(loaded.settings.agentPrompts.main[0].role).toBe('system');
-    expect(loaded.settings.agentPrompts.main.find(segment => String(segment.content).startsWith('【以下是你自己的会话记录】'))?.content).toBe(currentDefaultMainAgentHistoryGuide_ACU());
-    expect(loaded.settings.agentPrompts.main.find(segment => String(segment.content).startsWith('我收到的上下文分三层：'))?.content).toBe(currentDefaultMainAgentLayoutAnswer_ACU());
+    // 旧链把主组逐字迁到 V38 冻结默认后，V39 整组升级为当前默认；逐段相等即证明旧链落点正确。
+    expect(loaded.settings.agentPrompts.main).toEqual(buildDefaultContinuationAgentPrompts_ACU().main);
   });
 
   it('V18 用户自定义的 system 段不会被缓存兼容迁移改写', () => {
-    const v18 = buildEnvelope_ACU() as any;
+    const v18 = buildV38Envelope_ACU() as any;
     v18.settings.promptForceDefaultVersion = 'spv2.6-continuation-append-only-history-v18';
     const anchorIndex = v18.settings.agentPrompts.main.findIndex((segment: any) =>
       String(segment.content) === '$HISTORY_ANCHOR',
@@ -497,7 +517,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
       String(segment.content).startsWith('【本回合运行时数据】'),
     );
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(loaded.settings.agentPrompts.main[runtimeIndex]).toMatchObject({
       role: 'system',
       content: '【本回合运行时数据】\n这是用户定制的运行时提示词。',
@@ -505,7 +525,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
   });
 
   it('V19 未改写的运行时骨架段删除，排布问答与历史导语定向更新到 V20', () => {
-    const v19 = buildEnvelope_ACU() as any;
+    const v19 = buildV38Envelope_ACU() as any;
     v19.settings.promptForceDefaultVersion = 'spv2.7-continuation-single-system-prefix-v19';
     const historyIndex = v19.settings.agentPrompts.main.findIndex((segment: any) =>
       String(segment.content).startsWith('【以下是你自己的会话记录】'),
@@ -528,18 +548,19 @@ describe('FirstFloorContinuationStore_ACU', () => {
     _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: v19 }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(loaded.settings.agentPrompts.main.some(segment => segment.content === V19_DEFAULT_MAIN_AGENT_RUNTIME_SEGMENT_ACU)).toBe(false);
-    expect(loaded.settings.agentPrompts.main.find(segment => String(segment.content).startsWith('【以下是你自己的会话记录】'))?.content).toBe(currentDefaultMainAgentHistoryGuide_ACU());
-    expect(loaded.settings.agentPrompts.main.find(segment => String(segment.content).startsWith('我收到的上下文分三层：'))?.content).toBe(currentDefaultMainAgentLayoutAnswer_ACU());
+    // 旧链把主组逐字迁到 V38 冻结默认后，V39 整组升级为当前默认；逐段相等即证明旧链落点正确。
+    expect(loaded.settings.agentPrompts.main).toEqual(buildDefaultContinuationAgentPrompts_ACU().main);
   });
 
   it('V20 只更新未改写的总纲默认段，保留用户定制段与其他角色提示词', () => {
-    const v20 = buildEnvelope_ACU() as any;
+    const v20 = buildV38Envelope_ACU() as any;
     v20.settings.agentPrompts = buildV33ContinuationAgentPrompts_ACU();
     v20.settings.promptForceDefaultVersion = 'spv2.8-continuation-runtime-snapshot-v20';
     const expectedMain = buildDefaultContinuationSettings_ACU().agentPrompts.main;
-    const expectedArc = buildDefaultContinuationSettings_ACU().agentPrompts.arcArchitect;
+    // 总纲组带用户定制段，不参与 V39 整组升级，停在 V38 冻结默认形态。
+    const expectedArc = buildV38ContinuationAgentPrompts_ACU().arcArchitect;
     const customSegment = { role: 'user', content: '用户定制的总纲补充规则', enabled: true, deletable: true };
     expectedArc.push(customSegment);
     // 真实 V20 形态：还没有 V25 卷级容量段，任务段紧跟在契约段之后（下标 7）。
@@ -556,7 +577,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(loaded.settings.agentPrompts.main).toEqual(expectedMain);
     expect(loaded.settings.agentPrompts.arcArchitect).toEqual(expectedArc);
     expect(loaded.settings.agentPrompts.arcArchitect[2].content).toContain('总纲解决六件事');
@@ -564,7 +585,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
   });
 
   it('migrates V21 default arc volume wording while preserving custom segments', () => {
-    const v21 = buildEnvelope_ACU() as any;
+    const v21 = buildV38Envelope_ACU() as any;
     v21.settings.promptForceDefaultVersion = 'spv2.9-continuation-longform-story-arc-v21';
     v21.settings.agentPrompts.arcArchitect[6].content = v21.settings.agentPrompts.arcArchitect[6].content
       .replace('开局立总纲或全量重构时，卷数必须严格遵守本次请求末尾注入的【总纲卷数计划】：短线 7–8 卷、中线 10–14 卷、长线 20 卷，或自定义的精确卷数。资料不足时可以把远期卷标为待定方向，但不得缩减卷数；第一卷 status 设 active，其余 planned。', '开局立长篇总纲时，默认给出一条 story 条目和 6-10 条 volume 条目；只有用户明确要求短篇或素材容量明显不足时才可少于 6 卷，并在 summary 说明依据。禁止为了省事把完整长篇压成 3-5 个笼统部分。第一卷 status 设 active，其余 planned。');
@@ -574,13 +595,13 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(loaded.settings.agentPrompts.arcArchitect[6].content).toContain('短线 7–8 卷');
     expect(loaded.settings.agentPrompts.arcArchitect).toContainEqual(custom);
   });
 
   it('migrates V22 volume lifecycle defaults while preserving custom prompt segments', () => {
-    const v22 = buildEnvelope_ACU() as any;
+    const v22 = buildV38Envelope_ACU() as any;
     v22.settings.promptForceDefaultVersion = 'spv3.0-continuation-story-arc-volume-plan-v22';
     v22.settings.agentPrompts.arcArchitect[6].content = v22.settings.agentPrompts.arcArchitect[6].content
       .replace(',"completionStageNumber":"done 时为已完成阶段编号，否则 null","completionState":"done 时达到的卷末状态，否则空字符串","continuationRationale":"续卷时由前卷后果推出的依据，否则空字符串"', '')
@@ -595,16 +616,16 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(loaded.settings.agentPrompts.arcArchitect[6].content).toContain('completionStageNumber');
     expect(loaded.settings.agentPrompts.arcArchitect[6].content).toContain('continuationRationale');
-    expect(loaded.settings.agentPrompts.main.some((segment: any) => String(segment.content).includes('总纲与阶段大纲由程序固定工作流维护'))).toBe(true);
-    expect(loaded.settings.agentPrompts.main.some((segment: any) => String(segment.content).includes('先派 arc-architect'))).toBe(false);
+    // 未改写的整组被旧链逐字迁到 V38 冻结默认，再由 V39 整组升级为当前默认。
+    expect(loaded.settings.agentPrompts.main).toEqual(buildDefaultContinuationAgentPrompts_ACU().main);
     expect(loaded.settings.agentPrompts.arcArchitect).toContainEqual(custom);
   });
 
   it('migrates V23 default pacing prompts to V24 and preserves custom segments', () => {
-    const v23 = buildEnvelope_ACU() as any;
+    const v23 = buildV38Envelope_ACU() as any;
     v23.settings.agentPrompts = buildV33ContinuationAgentPrompts_ACU();
     v23.settings.promptForceDefaultVersion = 'spv3.1-continuation-volume-lifecycle-v23';
     v23.settings.outlinePrompt = v23.settings.outlinePrompt.filter(
@@ -621,18 +642,17 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(loaded.settings.outlinePrompt.some(segment => segment.content === V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU)).toBe(true);
     expect(loaded.settings.agentPrompts.main.some(segment => segment.content.includes(V24_MAIN_AGENT_PACING_RULE_ACU))).toBe(true);
     expect(loaded.settings.agentPrompts.main.some(segment => segment.content.includes(V23_MAIN_AGENT_PACING_RULE_ACU))).toBe(false);
-    expect(loaded.settings.agentPrompts.arcArchitect.filter(
-      segment => segment.content.startsWith('【卷级容量、时间与长期经营契约】') && segment.content.includes('UPDATE 只写要改的字段'),
-    )).toHaveLength(1);
+    // 未改写的整组被旧链逐字迁到 V38 冻结默认，再由 V39 整组升级为当前默认。
+    expect(loaded.settings.agentPrompts.arcArchitect).toEqual(buildDefaultContinuationAgentPrompts_ACU().arcArchitect);
     expect(loaded.settings.agentPrompts.main).toContainEqual(custom);
   });
 
   it('把真实 V23 形态的大纲协议段（旧 turn 标签、无 stage_role）精确升级为当前协议，并注入账本占位符', () => {
-    const v23 = buildEnvelope_ACU() as any;
+    const v23 = buildV38Envelope_ACU() as any;
     v23.settings.promptForceDefaultVersion = 'spv3.1-continuation-volume-lifecycle-v23';
     // 真实 V23 用户的大纲提示词：旧 system / 确认 / 方法论确认三段 + V23 节奏段 + V26 形态的上下文段，没有长篇契约段。
     v23.settings.outlinePrompt = [
@@ -650,46 +670,44 @@ describe('FirstFloorContinuationStore_ACU', () => {
     const contents = loaded.settings.outlinePrompt.map(segment => segment.content);
     const defaults = buildDefaultContinuationSettings_ACU().outlinePrompt.map(segment => segment.content);
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     // 三段协议段被换成当前默认；旧协议文本一个不剩。
     expect(contents).toEqual(defaults);
     expect(contents.some(content => content.includes('每个 <turn> 都必须带 pacing 属性'))).toBe(false);
-    expect(contents[0]).toContain('<stage_role>');
-    expect(contents[0]).toContain('function="daily_bond"');
-    // 上下文段升级为累计用户要求版本。V37 起大纲组以 user 预填充收尾，账本占位符断言移到倒数第二段。
-    expect(contents).toContain(V31_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU);
+    // 旧链升级到 V38 冻结默认后整组换成 V39 问答版：协议含 stage_role 与四维 turn 属性，资料段带账本占位符，user 预填充收尾。
+    expect(contents.some(content => content.includes('<stage_role>') && content.includes('function="daily_bond"'))).toBe(true);
     const contextSegment = contents[contents.length - 2];
-    expect(contextSegment).toBe(V31_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU);
     expect(contextSegment).toContain('$HOOKS_LEDGER');
     expect(contextSegment).toContain('$CHRONOLOGY');
     expect(contents[contents.length - 1]).toContain('"role": "assistant"');
   });
 
   it('V26 用户的默认上下文段升级为 V31 累计要求版，改写过的段保留原文', () => {
-    const v26 = buildEnvelope_ACU() as any;
+    const v26 = buildV38Envelope_ACU() as any;
     v26.settings.promptForceDefaultVersion = 'spv3.4-continuation-chronology-v26';
     v26.settings.outlinePrompt = v26.settings.outlinePrompt.map((segment: any) => segment.content === V31_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU
       ? { ...segment, content: V26_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU }
       : segment);
     _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: v26 }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
-    expect(loaded.settings.outlinePrompt.some(segment => segment.content === V31_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU)).toBe(true);
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
+    // 未改写的整组被旧链逐字迁到 V38 冻结默认，再由 V39 整组升级为当前默认。
+    expect(loaded.settings.outlinePrompt).toEqual(buildDefaultContinuationOutlinePrompt_ACU());
 
-    const customized = buildEnvelope_ACU() as any;
+    const customized = buildV38Envelope_ACU() as any;
     customized.settings.promptForceDefaultVersion = 'spv3.4-continuation-chronology-v26';
     customized.settings.outlinePrompt = customized.settings.outlinePrompt.map((segment: any) => segment.content === V31_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU
       ? { ...segment, content: `${V26_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU}\n用户自定义补充` }
       : segment);
     _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: customized }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
     const kept = new FirstFloorContinuationStore_ACU().read()!;
-    expect(kept.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(kept.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(kept.settings.outlinePrompt.some(segment => segment.content.endsWith('用户自定义补充'))).toBe(true);
     expect(kept.settings.outlinePrompt.some(segment => segment.content === V31_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU)).toBe(false);
   });
 
   it('migrates an exact V24 default arc contract to V25 exactly once', () => {
-    const v24 = buildEnvelope_ACU() as any;
+    const v24 = buildV38Envelope_ACU() as any;
     v24.settings.agentPrompts = buildV33ContinuationAgentPrompts_ACU();
     v24.settings.promptForceDefaultVersion = 'spv3.2-continuation-pacing-contract-v24';
     v24.settings.agentPrompts.arcArchitect = v24.settings.agentPrompts.arcArchitect.filter(
@@ -699,14 +717,13 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
-    expect(loaded.settings.agentPrompts.arcArchitect.filter(
-      segment => segment.content.startsWith('【卷级容量、时间与长期经营契约】') && segment.content.includes('UPDATE 只写要改的字段'),
-    )).toHaveLength(1);
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
+    // 未改写的整组被旧链逐字迁到 V38 冻结默认，再由 V39 整组升级为当前默认。
+    expect(loaded.settings.agentPrompts.arcArchitect).toEqual(buildDefaultContinuationAgentPrompts_ACU().arcArchitect);
   });
 
   it('advances a customized V24 arc prompt without injecting the default V25 contract', () => {
-    const customized = buildEnvelope_ACU() as any;
+    const customized = buildV38Envelope_ACU() as any;
     customized.settings.promptForceDefaultVersion = 'spv3.2-continuation-pacing-contract-v24';
     customized.settings.agentPrompts.arcArchitect = [{
       role: 'user', content: '用户自定义总纲容量规则', enabled: true, deletable: true,
@@ -715,7 +732,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(loaded.settings.agentPrompts.arcArchitect).toEqual(customized.settings.agentPrompts.arcArchitect);
     expect(loaded.settings.agentPrompts.arcArchitect.some(
       (segment: any) => segment.content === V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU,
@@ -723,7 +740,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
   });
 
   it('migrates an exact V25 default prompt set to V26 by inserting each chronology segment exactly once', () => {
-    const v25 = buildEnvelope_ACU() as any;
+    const v25 = buildV38Envelope_ACU() as any;
     v25.settings.agentPrompts = buildV33ContinuationAgentPrompts_ACU();
     v25.settings.promptForceDefaultVersion = 'spv3.3-continuation-volume-capacity-v25';
     const chronologyContents = [V26_MAIN_AGENT_CHRONOLOGY_RULE_ACU, V26_MAINTAINER_CHRONOLOGY_CONTRACT_ACU, V26_FINAL_REVIEWER_CHRONOLOGY_RULES_ACU];
@@ -736,16 +753,14 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
-    expect(loaded.settings.agentPrompts.main.filter(segment => segment.content === V26_MAIN_AGENT_CHRONOLOGY_RULE_ACU)).toHaveLength(1);
-    expect(loaded.settings.agentPrompts.maintainer.filter(segment => segment.content.includes('【故事时间结算契约】') && segment.content.includes('UPDATE chronology'))).toHaveLength(1);
-    expect(loaded.settings.agentPrompts.finalReviewer.filter(segment => segment.content === V26_FINAL_REVIEWER_CHRONOLOGY_RULES_ACU)).toHaveLength(1);
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
+    // 年代学段插入位置稍有偏差，整组就到不了 V38 冻结默认，也就不会升级为当前默认。
     // 迁移结果与当前默认组完全一致：插入位置也必须正确，而不只是“存在”。
     expect(loaded.settings.agentPrompts).toEqual(buildDefaultContinuationSettings_ACU().agentPrompts);
   });
 
   it('advances customized V25 prompts without injecting default chronology segments when anchors were rewritten', () => {
-    const customized = buildEnvelope_ACU() as any;
+    const customized = buildV38Envelope_ACU() as any;
     customized.settings.agentPrompts = buildV33ContinuationAgentPrompts_ACU();
     customized.settings.promptForceDefaultVersion = 'spv3.3-continuation-volume-capacity-v25';
     customized.settings.agentPrompts.maintainer = [{ role: 'user', content: '用户自定义维护提示词', enabled: true, deletable: true }];
@@ -755,7 +770,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
       .map((segment: any) => String(segment.content).startsWith('【子代理使用规则】')
         ? { ...segment, content: '【子代理使用规则】用户自己改写过的规则。' }
         : segment);
-    const expectedPrompts = buildDefaultContinuationSettings_ACU().agentPrompts;
+    const expectedPrompts = buildV38ContinuationAgentPrompts_ACU();
     expectedPrompts.maintainer = customized.settings.agentPrompts.maintainer;
     expectedPrompts.finalReviewer = customized.settings.agentPrompts.finalReviewer;
     expectedPrompts.main = expectedPrompts.main
@@ -766,13 +781,13 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
-    expect(loaded.settings.agentPrompts).toEqual(expectedPrompts);
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
+    expect(loaded.settings.agentPrompts).toEqual(upgradeUntouchedToV39_ACU(expectedPrompts));
     expect(loaded.settings.agentPrompts.main.some(segment => segment.content === V26_MAIN_AGENT_CHRONOLOGY_RULE_ACU)).toBe(false);
   });
 
   it('advances a customized V23 pacing configuration without overwriting its text', () => {
-    const customized = buildEnvelope_ACU() as any;
+    const customized = buildV38Envelope_ACU() as any;
     customized.settings.promptForceDefaultVersion = 'spv3.1-continuation-volume-lifecycle-v23';
     customized.settings.outlinePrompt = customized.settings.outlinePrompt
       .filter((segment: any) => segment.content !== V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU)
@@ -790,7 +805,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(loaded.settings.outlinePrompt.some(segment => segment.content === customOutline)).toBe(true);
     expect(loaded.settings.outlinePrompt.some(segment => segment.content === V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU)).toBe(false);
     expect(loaded.settings.agentPrompts.main.some(segment => segment.content === '用户自定义主 Agent 节奏规则')).toBe(true);
@@ -798,7 +813,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
 
   it('V34 未改写的排布问答按谱系整段迁移到 V35：运行时快照不再罗列表格目录', () => {
-    const v34 = buildEnvelope_ACU() as any;
+    const v34 = buildV38Envelope_ACU() as any;
     v34.settings.agentPrompts = buildV34ContinuationAgentPrompts_ACU();
     v34.settings.promptForceDefaultVersion = 'spv4.2-continuation-sql-prompts-v34';
     // 判别：迁移前的 V34 默认排布问答仍描述「表格目录」，迁移后必须与当前默认组逐段一致。
@@ -810,17 +825,13 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
-    const layout = String(loaded.settings.agentPrompts.main.find((segment: any) =>
-      String(segment.content).startsWith('我收到的上下文分三层：'),
-    ).content);
-    expect(layout).not.toContain('表格目录');
-    expect(layout).toContain('资料模块目录、世界书目录');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
+    // 未改写的整组被旧链逐字迁到 V38 冻结默认，再由 V39 整组升级为当前默认。
     expect(loaded.settings.agentPrompts).toEqual(buildDefaultContinuationSettings_ACU().agentPrompts);
   });
 
   it('V34 用户改写过的排布问答不被 V35 谱系覆盖，只推进版本', () => {
-    const customized = buildEnvelope_ACU() as any;
+    const customized = buildV38Envelope_ACU() as any;
     customized.settings.agentPrompts = buildV34ContinuationAgentPrompts_ACU();
     customized.settings.promptForceDefaultVersion = 'spv4.2-continuation-sql-prompts-v34';
     const layoutIndex = customized.settings.agentPrompts.main.findIndex((segment: any) =>
@@ -831,40 +842,33 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(loaded.settings.agentPrompts.main[layoutIndex].content.endsWith('用户自定义：我习惯先看表格目录。')).toBe(true);
     expect(loaded.settings.agentPrompts.main[layoutIndex].content).toContain('资料模块目录、表格目录、世界书目录');
   });
 
   it('V33 信封走完 T13 dispatch 补齐链后再经 V34→V35 谱系，终态与当前默认组逐段一致', () => {
-    const v33 = buildEnvelope_ACU() as any;
+    const v33 = buildV38Envelope_ACU() as any;
     v33.settings.agentPrompts = buildV33ContinuationAgentPrompts_ACU();
     v33.settings.promptForceDefaultVersion = 'spv4.1-continuation-information-boundary-v33';
     _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: v33 }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
-    const mainText = loaded.settings.agentPrompts.main.map(segment => segment.content).join('\n');
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
-    // dispatch 补齐链语义保持：统一派遣策略段照旧落位，且只落一次。
-    expect(mainText).toContain('不再单独派 continuity-reviewer');
-    expect(mainText).toContain('第二轮起保底派 beat-planner');
-    expect(mainText).toContain(CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU);
-    expect(loaded.settings.agentPrompts.main.filter(segment => segment.content.includes(CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU))).toHaveLength(1);
-    // 排布问答随 V34→V35 收窄；终态逐段等于当前默认组。
-    expect(mainText).not.toContain('资料模块目录、表格目录、世界书目录');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
+    // dispatch 补齐链（派遣策略段只落一次）与 V34→V35 谱系必须逐字落到 V38 冻结默认，整组才会被 V39 升级为当前默认。
     expect(loaded.settings.agentPrompts).toEqual(buildDefaultContinuationSettings_ACU().agentPrompts);
   });
 
   it('V16 及更早提示词版本仍整体强刷，存量信封因此拿到总纲子代理提示词组', () => {
-    const stale = buildEnvelope_ACU() as any;
+    const stale = buildV38Envelope_ACU() as any;
     stale.settings.promptForceDefaultVersion = 'spv2.2-continuation-v13';
     stale.settings.agentPrompts = { ...stale.settings.agentPrompts, main: [{ role: 'user', content: '用户改过的旧提示词', enabled: true, deletable: true }] };
     delete stale.settings.agentPrompts.arcArchitect;
     _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: stale }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.0-continuation-progress-adjustment-v38');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv5.1-continuation-upstream-qa-prompts-v39');
     expect(loaded.settings.agentPrompts.arcArchitect[0].content).toContain('故事总纲子代理');
     expect(loaded.settings.outlinePrompt.some(segment => segment.content.includes('<stage_tempo>'))).toBe(true);
     expect(loaded.settings.agentPrompts.main[0].content).not.toBe('用户改过的旧提示词');

@@ -346,6 +346,20 @@ export function insertBeforeTrailingPrefill_ACU(
 }
 
 /**
+ * 把本次派工的对话记录接到骨架之后：骨架以 user 预填充收尾时，记录插在预填充之前，
+ * 预填充始终只出现一次、且是最后一条（对应上游 history 卡片在预填充前的位置）。
+ * assistant 旧形态尾段不在此处理，沿用原有追加行为，由 ensureTrailingUserPrefill_ACU 补尾。
+ */
+export function appendBeforeTrailingPrefill_ACU(
+  messages: ReadonlyArray<{ role: string; content: string }>,
+  appended: ReadonlyArray<{ role: string; content: string }>,
+): Array<{ role: string; content: string }> {
+  const last = messages[messages.length - 1];
+  if (appended.length && last && last.role === 'user' && last.content === USER_PREFILL_CONTENT_ACU) return [...messages.slice(0, -1), ...appended, last];
+  return [...messages, ...appended];
+}
+
+/**
  * 子代理读取预算状态文本。子代理提示词一次渲染即固定，预算这类随工具轮变化的实时状态
  * 由运行时在首轮注入、并在每次工具批次后追加刷新；本侧门禁是单批次独立判定，额度不跨批累计。
  */
@@ -780,8 +794,8 @@ export class AgentSubagentRuntime_ACU {
       }
       // 传输错误（502/网络抖动）按设置延时重试；协议/契约拒绝仍走小循环内的对话级立即重试。
       const outgoingMessages = ensureTrailingUserPrefill_ACU(pendingResearchEvidence
-        ? insertBeforeTrailingPrefill_ACU([...baseMessagesWithFieldHint, ...transcript], { role: 'system', content: pendingResearchEvidence })
-        : [...baseMessagesWithFieldHint, ...transcript]);
+        ? insertBeforeTrailingPrefill_ACU(appendBeforeTrailingPrefill_ACU(baseMessagesWithFieldHint, transcript), { role: 'system', content: pendingResearchEvidence })
+        : appendBeforeTrailingPrefill_ACU(baseMessagesWithFieldHint, transcript));
       await assertOutgoingWithinBudget_ACU(outgoingMessages);
       const raw = await callContinuationInternalAiWithRetry_ACU(
         () => this.dependencies.callInternalAi(
@@ -1113,6 +1127,8 @@ export class AgentSubagentRuntime_ACU {
       $STORY_ARC: () => resolveAgentReadToken_ACU('$STORY_ARC', input.resolveContext).text,
       $CHRONOLOGY: () => resolveAgentReadToken_ACU('$CHRONOLOGY', input.resolveContext).text,
       $STORY_TAIL: () => renderAgentStoryTail_ACU(input.resolveContext),
+      $HOOKS_LEDGER: () => evidence.hooksLedger,
+      $INFO_GAP: () => evidence.infoGap,
       $WORLDBOOK_HITS: () => evidence.worldbookEvidence,
       $AGENT_READ_MATERIALS: () => evidence.supplementalMaterials,
       $AGENT_TASK: () => input.candidateInstruction,
@@ -1178,7 +1194,7 @@ export class AgentSubagentRuntime_ACU {
       if (!input.isCurrent(identity)) {
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '终审请求已失效', false));
       }
-      const outgoingMessages = ensureTrailingUserPrefill_ACU([...baseMessages, ...transcript]);
+      const outgoingMessages = ensureTrailingUserPrefill_ACU(appendBeforeTrailingPrefill_ACU(baseMessages, transcript));
       await assertFinalOutgoingWithinBudget_ACU(outgoingMessages);
       const raw = await callContinuationInternalAiWithRetry_ACU(
         () => this.dependencies.callInternalAi(outgoingMessages, preset, identity, input.signal, callOptions),

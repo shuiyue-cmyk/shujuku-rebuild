@@ -18,7 +18,14 @@ describe('续写维护代理最终组装的 SQL 写集提示', () => {
     expect(text).toContain('INSERT INTO');
     expect(text).toContain('UPDATE');
     expect(text).toContain('DELETE');
-    expect(text).not.toMatch(/"delta"\s*:|delta\.chronology|"action"\s*:\s*"(?:upsert|retire|patch)|expectedRevisions/);
+    // 只禁止 delta 写集；无变化时解析器要求显式给出的空 delta 允许出现。
+    expect(text).not.toMatch(/"delta"\s*:\s*\{\s*"|delta\.chronology|"action"\s*:\s*"(?:upsert|retire|patch)|expectedRevisions/);
+  });
+
+  it.each(['arcArchitect', 'maintainer'] as const)('%s 教的无变化交付是显式空 delta（解析器拒收只有 summary 的输出）', async role => {
+    const text = await sentPrompt(role);
+    expect(text).toContain('"delta":{}');
+    expect(text).toContain('不能只交 summary');
   });
 
   it('年代学段仍要求真实正文证据、模糊时间精度和显式删除理由', async () => {
@@ -53,7 +60,7 @@ describe('续写维护代理最终组装的 SQL 写集提示', () => {
     const migrated = validateContinuationSettings_ACU(settings);
     expect(migrated.agentPrompts.maintainer).toContainEqual(custom);
     expect(migrated.agentPrompts.webResearcher).toContainEqual(extra);
-    for (const role of writers) expect(await sentPrompt(role, migrated)).not.toMatch(/"delta"\s*:|delta\.chronology|expectedRevisions/);
+    for (const role of writers) expect(await sentPrompt(role, migrated)).not.toMatch(/"delta"\s*:\s*\{\s*"|delta\.chronology|expectedRevisions/);
     const restored = restoreContinuationPromptDefault_ACU(migrated, 'agent_maintainer');
     expect(await sentPrompt('maintainer', restored)).toContain('UPDATE chronology');
   });

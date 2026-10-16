@@ -11,12 +11,13 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { validateContinuationSettings_ACU } from '../../../src/service/continuation/continuation-store';
-import { buildDefaultContinuationSettings_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V30_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU } from '../../../src/service/continuation/defaults';
+import { buildDefaultContinuationSettings_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V30_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V39_ACU } from '../../../src/service/continuation/defaults';
 import {
   AGENT_PROMPT_DEFAULT_LINEAGE_ACU,
   buildV33ContinuationAgentPrompts_ACU,
   buildV35ContinuationAgentPrompts_ACU,
   buildDefaultContinuationAgentPrompts_ACU,
+  buildV38ContinuationAgentPrompts_ACU,
   findAgentPromptSlot_ACU,
   hashAgentPromptContent_ACU,
   V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU,
@@ -55,14 +56,16 @@ function historicalSettings_ACU(label: string): any {
   const agentPrompts: Record<string, ContinuationPromptSegment_ACU[]> = {};
   for (const [role, refs] of Object.entries(entry.agentPrompts)) agentPrompts[role] = materialize_ACU(refs);
   // finalReviewer 在 V23 才出现；更早的信封由校验层补默认，这里预先补齐以便逐段比对。
-  if (!agentPrompts.finalReviewer) agentPrompts.finalReviewer = buildDefaultContinuationAgentPrompts_ACU().finalReviewer;
-  if (!agentPrompts.requirementsMaintainer) agentPrompts.requirementsMaintainer = buildDefaultContinuationAgentPrompts_ACU().requirementsMaintainer;
+  // 与存储层缺键补齐同口径：V39 之前的信封补 V38 冻结默认，再由迁移链统一升级。
+  if (!agentPrompts.finalReviewer) agentPrompts.finalReviewer = buildV38ContinuationAgentPrompts_ACU().finalReviewer;
+  if (!agentPrompts.requirementsMaintainer) agentPrompts.requirementsMaintainer = buildV38ContinuationAgentPrompts_ACU().requirementsMaintainer;
   settings.agentPrompts = agentPrompts;
   return settings;
 }
 
 const REQUIRED_PLACEHOLDERS_ACU: Record<string, string[]> = {
-  main: ['$HISTORY_ANCHOR', '$STORY_OVERVIEW', '$STORY_TAIL', '$STORY_CATALOG', '$CHRONOLOGY'],
+  // V39 起主 Agent 按需 read 年代学账本，不再在正文里写占位符本体（主 Agent 渲染不填它，旧版写了也只会被替换成空串）。
+  main: ['$HISTORY_ANCHOR', '$STORY_OVERVIEW', '$STORY_TAIL', '$STORY_CATALOG'],
   arcArchitect: ['$AGENT_TASK', '$AGENT_READ_MATERIALS', '$STORY_OVERVIEW', '$STORY_TAIL', '$STORY_ARC', '$USER_REQUIREMENTS', '$OUTLINE_WINDOW', '$AGENT_WRITE_SCOPE'],
   maintainer: ['$AGENT_TASK', '$AGENT_READ_MATERIALS', '$HISTORY_UNSETTLED', '$HOOKS_LEDGER', '$INFO_GAP', '$CHRONOLOGY', '$USER_REQUIREMENTS'],
   mainlinePlanner: ['$AGENT_TASK', '$AGENT_READ_MATERIALS', '$OUTLINE_WINDOW', '$STORY_OVERVIEW', '$STORY_TAIL', '$STORY_ARC', '$USER_REQUIREMENTS'],
@@ -84,7 +87,7 @@ describe('默认提示词谱系迁移', () => {
   it.each(labels)('%s 的默认组迁移后与当前默认组逐段一致', label => {
     const loaded = validateContinuationSettings_ACU(historicalSettings_ACU(label));
     const defaults = buildDefaultContinuationSettings_ACU();
-    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU);
+    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V39_ACU);
     expect(loaded.outlinePrompt).toEqual(defaults.outlinePrompt);
     for (const role of Object.keys(defaults.agentPrompts) as (keyof typeof defaults.agentPrompts)[]) {
       expect(loaded.agentPrompts[role], `agentPrompts.${role}`).toEqual(defaults.agentPrompts[role]);
@@ -144,7 +147,7 @@ describe('默认提示词谱系迁移', () => {
 
     const loaded = validateContinuationSettings_ACU(settings);
 
-    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU);
+    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V39_ACU);
     expect(loaded.agentPrompts.arcArchitect).toEqual(defaults.arcArchitect);
   });
 
@@ -163,6 +166,7 @@ describe('默认提示词谱系迁移', () => {
     const settings = buildDefaultContinuationSettings_ACU() as any;
     settings.promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V30_ACU;
     const defaults = buildDefaultContinuationAgentPrompts_ACU();
+    const v38 = buildV38ContinuationAgentPrompts_ACU();
     // 谱系回代必须以冻结的 V35 编排系统段为底：V36 起当前默认 system 段尾部多了
     // 「同回复并发」追加协议，不再是 737 字的历史基准（T5 教训：历史文本用冻结构建实测）。
     const v35Sys = buildV35ContinuationAgentPrompts_ACU().instructionComposer.find(segment => segment.role === 'system')!.content;
@@ -171,18 +175,19 @@ describe('默认提示词谱系迁移', () => {
     const v30System = v35Sys.split('用户累计要求与活跃约束').join('用户初始要求与活跃约束');
     expect(v30System.length).toBe(737);
     expect(hashAgentPromptContent_ACU(v30System)).toBe('64dc636c');
-    settings.agentPrompts.instructionComposer = defaults.instructionComposer.map(segment =>
+    settings.agentPrompts.instructionComposer = v38.instructionComposer.map(segment =>
       segment.role === 'system' ? { ...segment, content: v30System } : segment,
     );
 
     const loaded = validateContinuationSettings_ACU(settings);
 
-    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V38_ACU);
+    expect(loaded.promptForceDefaultVersion).toBe(CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V39_ACU);
     expect(loaded.agentPrompts.instructionComposer).toEqual(defaults.instructionComposer);
   });
 
-  it('谱系表条目都指向当前默认组里存在的槽位，且不与当前默认正文重合', () => {
-    const defaults = buildDefaultContinuationAgentPrompts_ACU();
+  // 谱系表服务 V38 之前的逐段迁移，槽位对应 V38 冻结默认组（V39 按整组替换，不走谱系）。
+  it('谱系表条目都指向 V38 冻结默认组里存在的槽位，且不与其正文重合', () => {
+    const defaults = buildV38ContinuationAgentPrompts_ACU();
     for (const [role, entries] of Object.entries(AGENT_PROMPT_DEFAULT_LINEAGE_ACU) as [keyof typeof defaults, typeof AGENT_PROMPT_DEFAULT_LINEAGE_ACU.main][]) {
       const currentHashes = new Set(defaults[role].map(segment => `${hashAgentPromptContent_ACU(segment.content)}:${segment.content.length}`));
       for (const entry of entries) {

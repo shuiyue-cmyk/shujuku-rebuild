@@ -67,6 +67,27 @@ describe('终审世界书证据准备', () => {
     expect(evidence.gateItems.some(item => item.text.includes('入城后的第七天'))).toBe(true);
   });
 
+  it('终审固定证据包含伏笔账本与信息差时间线，供新版终审提示词的快照引用（移植上游）', () => {
+    const context = context_ACU();
+    context.moduleSnapshot = {
+      ...context.moduleSnapshot,
+      revisions: { ...context.moduleSnapshot.revisions, hooks: 1, infoGap: 1 },
+      hooks: [{ id: 'H001', summary: '晶屑上刻着守门人的家纹', status: 'planted', importance: 'mid', plantedIndex: 0, updatedIndex: 0, plannedPayoff: '', retired: false, retiredReason: '' }],
+      infoGap: [{ id: 'E001', topic: '晶屑来源', objectiveFact: '晶屑出自禁区深处', readerKnown: '读者只知晶屑危险', characterKnowledge: [{ name: '守门人', knows: '亲历：见过晶屑被带出' }], revealStatus: 'unrevealed', revealIndex: null, retired: false, retiredReason: '' }],
+    };
+    const evidence = buildAgentFinalReviewEvidence_ACU({
+      resolveContext: context,
+      currentUserInput: '',
+      candidateInstruction: '主角观察晶屑。',
+    });
+
+    expect(evidence.hooksLedger).toContain('晶屑上刻着守门人的家纹');
+    expect(evidence.infoGap).toContain('晶屑出自禁区深处');
+    expect(evidence.fixedReadKeys).toEqual(expect.arrayContaining(['$HOOKS_LEDGER', '$INFO_GAP']));
+    expect(evidence.gateItems.some(item => item.text.includes('晶屑上刻着守门人的家纹'))).toBe(true);
+    expect(evidence.gateItems.some(item => item.text.includes('晶屑出自禁区深处'))).toBe(true);
+  });
+
   it('空账本时终审证据如实说明没有已结算的时间事实', () => {
     const evidence = buildAgentFinalReviewEvidence_ACU({
       resolveContext: context_ACU(),
