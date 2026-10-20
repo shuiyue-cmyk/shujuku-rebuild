@@ -23,8 +23,8 @@ const __dirname = dirname(__filename);
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8')).version;
 const ACU_BUILD_VERSION = process.env.ACU_BUILD_VERSION || PACKAGE_VERSION;
-// 构建时间戳（每次 build 唯一）：注入全局水印，用于截图辨别设备实际运行的构建
-const ACU_BUILD_STAMP = new Date().toISOString().replace(/[-:]/g, '').slice(0, 11).replace('T', '-');
+// 构建时间戳（UTC，精确到分钟；只到小时时同一小时内的两次发布无法区分）：注入全局水印，用于截图辨别设备实际运行的构建
+const ACU_BUILD_STAMP = new Date().toISOString().replace(/[-:]/g, '').slice(0, 13).replace('T', '-');
 
 const nodeBuiltinsShim = {
   name: 'node-builtins-shim',
