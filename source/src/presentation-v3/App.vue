@@ -357,6 +357,18 @@ watch(() => rootShell.scrollResetTick, resetScroll);
   }
 }
 
+/* 切页：页面按页名重建，新页面进场即轻微上浮淡入（只在进场时生效，结束后不留 transform） */
+.ub-scroll > .ub-page {
+  animation: ub-page-in 240ms cubic-bezier(0.165, 0.84, 0.44, 1) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ub-scroll > .ub-page {
+    animation: none;
+  }
+}
+
+@keyframes ub-page-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes ub-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes ub-fade-out { from { opacity: 1; } to { opacity: 0; } }
 @keyframes ub-pop-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
