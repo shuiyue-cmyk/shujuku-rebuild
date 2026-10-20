@@ -93648,7 +93648,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261020-1339"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261020-1400"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -93667,7 +93667,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261020-1339";
+        const stamp = "20261020-1400";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -155280,7 +155280,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261020-1339";
+        const stamp = "20261020-1400";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -177589,7 +177589,7 @@ const _hoisted_6$s = {
 	class: "ub-sheet__subtitle"
 };
 const _hoisted_7$r = { class: "ub-sheet__body" };
-const _hoisted_8$n = {
+const _hoisted_8$m = {
 	key: 0,
 	class: "ub-sheet__foot"
 };
@@ -177639,7 +177639,7 @@ function _sfc_render$W(_ctx, _cache, $props, $setup, $data, $options) {
 			})
 		]),
 		createBaseVNode("div", _hoisted_7$r, [renderSlot(_ctx.$slots, "default", {}, undefined, true)]),
-		_ctx.$slots.footer ? (openBlock(), createElementBlock("footer", _hoisted_8$n, [renderSlot(_ctx.$slots, "footer", {}, undefined, true)])) : createCommentVNode("v-if", true)
+		_ctx.$slots.footer ? (openBlock(), createElementBlock("footer", _hoisted_8$m, [renderSlot(_ctx.$slots, "footer", {}, undefined, true)])) : createCommentVNode("v-if", true)
 	], 12, _hoisted_2$K)], 42, _hoisted_1$R)) : createCommentVNode("v-if", true)]);
 }
 var UbSheet = /* @__PURE__ */ _export_sfc(_sfc_main$X, [["render", _sfc_render$W], ["__scopeId", "data-v-34c6aa88"]]);
@@ -181986,7 +181986,7 @@ const _hoisted_6$r = {
 	class: "ub-segs__slot"
 };
 const _hoisted_7$q = ["title"];
-const _hoisted_8$m = {
+const _hoisted_8$l = {
 	key: 0,
 	class: "ub-segs__empty"
 };
@@ -182133,7 +182133,7 @@ function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
 			/* KEYED_FRAGMENT */
 		)), !$props.segments.length ? (openBlock(), createElementBlock(
 			"li",
-			_hoisted_8$m,
+			_hoisted_8$l,
 			toDisplayString($props.emptyText),
 			1
 			/* TEXT */
@@ -182514,7 +182514,7 @@ const _hoisted_6$q = {
 	class: "ub-vai__empty"
 };
 const _hoisted_7$p = { class: "ub-vai__turn-head" };
-const _hoisted_8$l = { class: "ub-vai__who" };
+const _hoisted_8$k = { class: "ub-vai__who" };
 const _hoisted_9$f = { class: "ub-vai__text" };
 const _hoisted_10$e = { class: "ub-vai__list" };
 const _hoisted_11$d = {
@@ -182626,7 +182626,7 @@ function _sfc_render$N(_ctx, _cache, $props, $setup, $data, $options) {
 							},
 							[
 								createBaseVNode("header", _hoisted_7$p, [
-									createBaseVNode("span", _hoisted_8$l, [createBaseVNode(
+									createBaseVNode("span", _hoisted_8$k, [createBaseVNode(
 										"i",
 										{
 											class: normalizeClass($setup.turnIcon(turn.type)),
@@ -184218,7 +184218,7 @@ const _hoisted_7$m = {
 	key: 1,
 	class: "ub-vdata__cards"
 };
-const _hoisted_8$k = { class: "ub-vcard__head" };
+const _hoisted_8$j = { class: "ub-vcard__head" };
 const _hoisted_9$e = { class: "ub-vcard__no" };
 const _hoisted_10$d = { class: "ub-vcard__fields" };
 const _hoisted_11$c = ["data-ub-viz-line"];
@@ -184320,7 +184320,7 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 							class: normalizeClass(["ub-vcard", { "is-locked": row.locked }]),
 							"data-ub-viz-card": ""
 						},
-						[createBaseVNode("header", _hoisted_8$k, [
+						[createBaseVNode("header", _hoisted_8$j, [
 							createBaseVNode(
 								"span",
 								_hoisted_9$e,
@@ -184534,7 +184534,7 @@ const _hoisted_4$t = ["onClick"];
 const _hoisted_5$p = { class: "ub-vmanage__title" };
 const _hoisted_6$m = { class: "ub-vmanage__meta" };
 const _hoisted_7$l = { class: "ub-vmanage__ops" };
-const _hoisted_8$j = {
+const _hoisted_8$i = {
 	key: 1,
 	class: "ub-vmanage__empty"
 };
@@ -184617,7 +184617,7 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 			}),
 			128
 			/* KEYED_FRAGMENT */
-		))])) : (openBlock(), createElementBlock("p", _hoisted_8$j, "数据库里还没有表格，点右上角「新增表格」开始。"))]),
+		))])) : (openBlock(), createElementBlock("p", _hoisted_8$i, "数据库里还没有表格，点右上角「新增表格」开始。"))]),
 		_: 1
 	}), createVNode($setup["UbSection"], {
 		title: "全局注入位置",
@@ -184699,7 +184699,7 @@ const _hoisted_4$s = [
 const _hoisted_5$o = { class: "ub-vnav__text" };
 const _hoisted_6$l = { class: "ub-vnav__name" };
 const _hoisted_7$k = { class: "ub-vnav__meta" };
-const _hoisted_8$i = {
+const _hoisted_8$h = {
 	key: 0,
 	class: "ub-vnav__empty"
 };
@@ -184750,7 +184750,7 @@ function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 			128
 			/* KEYED_FRAGMENT */
 		))]),
-		$props.sheetItems.length === 0 ? (openBlock(), createElementBlock("p", _hoisted_8$i, "还没有表格，去「数据库管理」新增一张。")) : createCommentVNode("v-if", true),
+		$props.sheetItems.length === 0 ? (openBlock(), createElementBlock("p", _hoisted_8$h, "还没有表格，去「数据库管理」新增一张。")) : createCommentVNode("v-if", true),
 		_cache[3] || (_cache[3] = createBaseVNode(
 			"div",
 			{
@@ -185002,7 +185002,7 @@ const _hoisted_4$r = { class: "ub-viz__brand-text" };
 const _hoisted_5$n = { class: "ub-viz__brand-tag" };
 const _hoisted_6$k = { class: "ub-viz__rail-nav" };
 const _hoisted_7$j = { class: "ub-viz__main" };
-const _hoisted_8$h = {
+const _hoisted_8$g = {
 	class: "ub-viz__head",
 	"data-ub-viz-head": ""
 };
@@ -185074,7 +185074,7 @@ function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 			"sheet-mode"
 		])])]),
 		createBaseVNode("div", _hoisted_7$j, [
-			createBaseVNode("header", _hoisted_8$h, [
+			createBaseVNode("header", _hoisted_8$g, [
 				createBaseVNode("button", {
 					type: "button",
 					class: "ub-viz__switcher",
@@ -186946,7 +186946,7 @@ const _hoisted_6$j = {
 	class: "ub-at__error"
 };
 const _hoisted_7$i = { class: "ub-at__table-wrap" };
-const _hoisted_8$g = { class: "ub-at__table" };
+const _hoisted_8$f = { class: "ub-at__table" };
 const _hoisted_9$c = { key: 0 };
 const _hoisted_10$b = ["colspan"];
 const _hoisted_11$a = { class: "ub-at__meta" };
@@ -187107,7 +187107,7 @@ function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
 					)) : (openBlock(), createElementBlock(
 						Fragment,
 						{ key: 3 },
-						[createBaseVNode("div", _hoisted_7$i, [createBaseVNode("table", _hoisted_8$g, [createBaseVNode("thead", null, [createBaseVNode("tr", null, [(openBlock(true), createElementBlock(
+						[createBaseVNode("div", _hoisted_7$i, [createBaseVNode("table", _hoisted_8$f, [createBaseVNode("thead", null, [createBaseVNode("tr", null, [(openBlock(true), createElementBlock(
 							Fragment,
 							null,
 							renderList($setup.sqlFlow.result.value.columns, (column) => {
@@ -189890,7 +189890,7 @@ const _hoisted_7$h = {
 	key: 3,
 	class: "ub-wbe__groups"
 };
-const _hoisted_8$f = { class: "ub-wbe__entry-main" };
+const _hoisted_8$e = { class: "ub-wbe__entry-main" };
 const _hoisted_9$b = ["title"];
 const _hoisted_10$a = { class: "ub-wbe__tags" };
 const _hoisted_11$9 = {
@@ -190018,7 +190018,7 @@ function _sfc_render$A(_ctx, _cache, $props, $setup, $data, $options) {
 								class: normalizeClass(["ub-wbe__entry", { "is-disabled": entry.disabled }])
 							},
 							[
-								createBaseVNode("div", _hoisted_8$f, [$props.showEntryToggle ? (openBlock(), createBlock($setup["UbCheck"], {
+								createBaseVNode("div", _hoisted_8$e, [$props.showEntryToggle ? (openBlock(), createBlock($setup["UbCheck"], {
 									key: 0,
 									"model-value": entry.checked,
 									label: entry.label,
@@ -190541,7 +190541,7 @@ const _hoisted_7$g = {
 	key: 1,
 	class: "ub-agent-fav__list"
 };
-const _hoisted_8$e = [
+const _hoisted_8$d = [
 	"aria-checked",
 	"aria-label",
 	"disabled",
@@ -190801,7 +190801,7 @@ function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
 									toDisplayString(name),
 									1
 									/* TEXT */
-								)], 10, _hoisted_8$e),
+								)], 10, _hoisted_8$d),
 								createVNode($setup["UbBadge"], { variant: $setup.favoriteBadge(name).variant }, {
 									default: withCtx(() => [createTextVNode(
 										toDisplayString($setup.favoriteBadge(name).label),
@@ -191394,7 +191394,7 @@ const _hoisted_7$f = {
 	class: "ub-picker-panel__list",
 	role: "listbox"
 };
-const _hoisted_8$d = ["aria-selected", "onClick"];
+const _hoisted_8$c = ["aria-selected", "onClick"];
 const _hoisted_9$9 = {
 	class: "ub-picker-panel__check",
 	"aria-hidden": "true"
@@ -191514,7 +191514,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 							2
 							/* CLASS */
 						)], 10, _hoisted_14$4)) : createCommentVNode("v-if", true)
-					], 10, _hoisted_8$d);
+					], 10, _hoisted_8$c);
 				}),
 				128
 				/* KEYED_FRAGMENT */
@@ -191763,8 +191763,8 @@ var _sfc_main$x = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-api[data-v-b21a9225],\r\n.ub-api__form[data-v-b21a9225] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-b21a9225] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-b21a9225] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-b21a9225] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-b21a9225] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-b21a9225] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__test[data-v-b21a9225] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__test-result[data-v-b21a9225] {\r\n  margin: 0;\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-api__test-result.is-ok[data-v-b21a9225] {\r\n  color: var(--ub-ok);\n}\n.ub-api__test-result.is-error[data-v-b21a9225] {\r\n  color: var(--ub-danger);\n}\n.ub-api__test-note[data-v-b21a9225] {\r\n  display: block;\r\n  color: var(--ub-text-2);\n}\n.ub-api__danger-hint[data-v-b21a9225] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-b21a9225] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-b21a9225]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-b21a9225] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-b21a9225] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-b21a9225] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-b21a9225] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-b21a9225] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-b21a9225");
-var ApiPresetEditor_vue_vue_type_style_index_0_scoped_b21a9225_lang = null;
+injectSfcStyle("\n.ub-api[data-v-5d1d6955],\r\n.ub-api__form[data-v-5d1d6955] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-5d1d6955] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-5d1d6955] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-5d1d6955] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-5d1d6955] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-5d1d6955] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__test-result[data-v-5d1d6955] {\r\n  display: block;\r\n  margin-top: var(--ub-s2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 500;\r\n  overflow-wrap: anywhere;\n}\n.ub-api__test-result.is-ok[data-v-5d1d6955] {\r\n  color: var(--ub-ok);\n}\n.ub-api__test-result.is-error[data-v-5d1d6955] {\r\n  color: var(--ub-danger);\n}\n.ub-api__test-note[data-v-5d1d6955] {\r\n  display: block;\r\n  color: var(--ub-text-2);\n}\n.ub-api__danger-hint[data-v-5d1d6955] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-5d1d6955] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-5d1d6955]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-5d1d6955] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-5d1d6955] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-5d1d6955] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-5d1d6955] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-5d1d6955] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-5d1d6955");
+var ApiPresetEditor_vue_vue_type_style_index_0_scoped_5d1d6955_lang = null;
 
 const _hoisted_1$s = { class: "ub-api" };
 const _hoisted_2$p = { class: "ub-api__picker" };
@@ -191781,8 +191781,7 @@ const _hoisted_6$f = {
 	key: 1,
 	class: "ub-api__error"
 };
-const _hoisted_7$e = { class: "ub-api__test" };
-const _hoisted_8$c = {
+const _hoisted_7$e = {
 	key: 1,
 	class: "ub-api__test-note"
 };
@@ -191970,24 +191969,14 @@ function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 						]),
 						_: 1
 					}),
-					createVNode($setup["UbRow"], {
-						label: "测试连接",
-						hint: "用上面填写的内容（不用先保存）发一条很短的测试消息，看能不能收到模型回复。会按所选的发送方式、接口协议和请求改写发出，消耗少量额度。",
-						stack: ""
-					}, {
-						default: withCtx(() => [createBaseVNode("div", _hoisted_7$e, [createVNode($setup["UbButton"], {
-							busy: $setup.connectionTesting,
-							icon: "fa-solid fa-plug-circle-check",
-							onClick: $setup.testConnectionForActive
-						}, {
-							default: withCtx(() => [..._cache[25] || (_cache[25] = [createTextVNode(
-								"测试连接",
-								-1
-								/* CACHED */
-							)])]),
-							_: 1
-						}, 8, ["busy"]), $setup.connectionResult ? (openBlock(), createElementBlock(
-							"p",
+					createCommentVNode(" 按钮放右侧、上下居中（与其它行的控件同位）；结果跟在左侧说明下面，不挤占按钮 "),
+					createVNode($setup["UbRow"], { label: "测试连接" }, {
+						hint: withCtx(() => [_cache[26] || (_cache[26] = createTextVNode(
+							" 用上面填写的内容（不用先保存）发一条很短的测试消息，看能不能收到模型回复。会按所选的发送方式、接口协议和请求改写发出，消耗少量额度。 ",
+							-1
+							/* CACHED */
+						)), $setup.connectionResult ? (openBlock(), createElementBlock(
+							"span",
 							{
 								key: 0,
 								class: normalizeClass(["ub-api__test-result", $setup.connectionResult.ok ? "is-ok" : "is-error"]),
@@ -192015,7 +192004,7 @@ function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 									)) : createCommentVNode("v-if", true),
 									$setup.connectionResult.note ? (openBlock(), createElementBlock(
 										"span",
-										_hoisted_8$c,
+										_hoisted_7$e,
 										toDisplayString($setup.connectionResult.note),
 										1
 										/* TEXT */
@@ -192027,7 +192016,7 @@ function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 								Fragment,
 								{ key: 1 },
 								[
-									_cache[26] || (_cache[26] = createTextVNode(
+									_cache[25] || (_cache[25] = createTextVNode(
 										"连接失败",
 										-1
 										/* CACHED */
@@ -192054,7 +192043,19 @@ function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 							))],
 							2
 							/* CLASS */
-						)) : createCommentVNode("v-if", true)])]),
+						)) : createCommentVNode("v-if", true)]),
+						default: withCtx(() => [createVNode($setup["UbButton"], {
+							busy: $setup.connectionTesting,
+							icon: "fa-solid fa-plug-circle-check",
+							onClick: $setup.testConnectionForActive
+						}, {
+							default: withCtx(() => [..._cache[27] || (_cache[27] = [createTextVNode(
+								"测试连接",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}, 8, ["busy"])]),
 						_: 1
 					})
 				]),
@@ -192226,7 +192227,7 @@ function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 						label: "客户端伪装",
 						stack: ""
 					}, {
-						hint: withCtx(() => [..._cache[27] || (_cache[27] = [createTextVNode(
+						hint: withCtx(() => [..._cache[28] || (_cache[28] = [createTextVNode(
 							" 选择客户端身份后，其特征请求头会合并进下方附加请求标头（受管身份键统一替换，其余行保留），用于部分屏蔽第三方客户端的供应商。 ",
 							-1
 							/* CACHED */
@@ -192307,7 +192308,7 @@ function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.draftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[28] || (_cache[28] = [createTextVNode(
+						default: withCtx(() => [..._cache[29] || (_cache[29] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -192336,7 +192337,7 @@ function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION */
 	)) : createCommentVNode("v-if", true)]);
 }
-var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$w], ["__scopeId", "data-v-b21a9225"]]);
+var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$w], ["__scopeId", "data-v-5d1d6955"]]);
 
 var _sfc_main$w = /*@__PURE__*/ defineComponent({
     __name: 'ApiPage',
@@ -196115,12 +196116,12 @@ const formFillCopy = {
         },
         manual: {
             title: "手动填表",
-            description: "可按指定上下文重填所选表，也可按已提交前沿追平尚未填写的后缀楼层。填表 API 使用「自动更新设置」中的配置。",
+            description: "可以按指定范围重填所选表，也可以把每张表上次填完之后还没填的内容补上。填表 API 使用「自动更新设置」中的配置。",
             runLabel: "执行手动填表",
-            catchUpLabel: "一键追平所选表未填楼层",
-            catchUpBusyLabel: "追平中...",
-            catchUpBoundary: "追平只补每张表已提交连续前沿之后的后缀缺口，不扫描历史前沿之前的内部空洞。",
-            syncPending: "追平数据已保存，但世界书同步待重试。",
+            catchUpLabel: "一键追平还没填的内容",
+            catchUpBusyLabel: "正在补齐…",
+            catchUpBoundary: "只会补每张表上次填完之后的新内容，已经填好的部分不会重填。",
+            syncPending: "补填的数据已保存，但世界书还没同步好。",
             syncRetryLabel: "仅同步重试",
         },
     },
@@ -207399,17 +207400,17 @@ const RESOLVE_TIMEOUT = Symbol('injection-target-resolve-timeout');
 function describeCommittedBuckets(result, completed) {
     const committedBuckets = result.committedBucketCount || 0;
     const dataBuckets = result.committedDataBucketCount || 0;
-    const progressOnlySuffix = committedBuckets > dataBuckets ? `（另有 ${committedBuckets - dataBuckets} 个仅落进度的 bucket）` : '';
+    const progressOnlySuffix = committedBuckets > dataBuckets ? `（另有 ${committedBuckets - dataBuckets} 段只记了进度）` : '';
     if (dataBuckets === 0 && committedBuckets > 0) {
         return completed
-            ? `未写入数据（只落了进度，${committedBuckets} 个已提交 bucket）`
-            : `未写入数据（只落了进度）`;
+            ? `没有写入新内容（只记了 ${committedBuckets} 段进度）`
+            : `没有写入新内容（只记了进度）`;
     }
     if (dataBuckets === 0)
-        return completed ? '未写入表格数据' : '未写入任何数据';
+        return completed ? '没有写入表格内容' : '没有写入任何内容';
     return completed
-        ? `共写入 ${dataBuckets} 个数据 bucket${progressOnlySuffix}`
-        : `已保留 ${dataBuckets} 个已写入数据的 bucket${progressOnlySuffix}`;
+        ? `共写入 ${dataBuckets} 段${progressOnlySuffix}`
+        : `已经写好的 ${dataBuckets} 段保留了${progressOnlySuffix}`;
 }
 /**
  * 确认弹窗用的世界书注入目标描述：大规模历史回填会一次生成上百条 TavernDB 条目，
@@ -207545,8 +207546,8 @@ function resolveManualRefillRangeSummary_ACU(manualDepth) {
 }
 function formatAiFloorRange_ACU(startAiFloor, endAiFloor) {
     return startAiFloor === endAiFloor
-        ? `AI 第 ${startAiFloor} 层`
-        : `AI 第 ${startAiFloor}~${endAiFloor} 层`;
+        ? `第 ${startAiFloor} 条 AI 回复`
+        : `第 ${startAiFloor}~${endAiFloor} 条 AI 回复`;
 }
 function progressLabel(event) {
     const prefix = event.currentBatch && event.totalBatches
@@ -207644,7 +207645,7 @@ function useManualUpdate() {
         if (!catchUpAbortController || catchUpAbortController.signal.aborted)
             return;
         catchUpAbortController.abort();
-        const text = '手动追平已终止，正在等待当前安全边界收敛...';
+        const text = '追平已停止，正在保存已经写好的内容…';
         if (progressToastId) {
             toast.update(progressToastId, 'warning', text, { durationMs: 0, muteable: false, dismissible: false });
         }
@@ -207690,26 +207691,26 @@ function useManualUpdate() {
     function formatCheckpointReasonLabel(reason) {
         switch (reason) {
             case 'init':
-                return '初始基线';
+                return '初始';
             case 'migration':
-                return '迁移基线';
+                return '迁移';
             case 'compaction':
-                return '保留边界基线';
+                return '自动整理';
             case 'manual':
-                return '历史手动基线';
+                return '手动';
             case 'periodic':
-                return '历史周期基线';
+                return '定期';
             default:
-                return reason ? `旧基线:${reason}` : '旧基线';
+                return '旧记录';
         }
     }
     const checkpointFloorsLabel = computed(() => {
         const checkpoints = checkpointFloors.value;
         return checkpoints.length > 0
             ? checkpoints
-                .map(item => `AI 第 ${item.aiFloor} 层（${formatCheckpointReasonLabel(item.reason)}）`)
+                .map(item => `第 ${item.aiFloor} 条 AI 回复（${formatCheckpointReasonLabel(item.reason)}）`)
                 .join('、')
-            : '当前隔离标签暂无 full checkpoint';
+            : '还没有记录过进度';
     });
     const manualRefillRange = computed(() => {
         void refreshTick.value;
@@ -207724,7 +207725,7 @@ function useManualUpdate() {
         const range = manualRefillRange.value;
         return range
             ? formatAiFloorRange_ACU(range.startAiFloor, range.endAiFloor)
-            : '暂无可重填 AI 楼层';
+            : '暂无可重填的 AI 回复';
     });
     const checkpointRiskMessage = computed(() => {
         const checkpoints = checkpointFloors.value;
@@ -207735,8 +207736,8 @@ function useManualUpdate() {
         const coveredCheckpoints = checkpoints.filter(item => checkpointIndexSet.has(item.messageIndex));
         if (coveredCheckpoints.length !== checkpoints.length)
             return '';
-        const coveredFloors = coveredCheckpoints.map(item => `AI 第 ${item.aiFloor} 层`).join('、');
-        return `危险：当前聊天的所有 full checkpoint 都在本次重填范围内（${coveredFloors}）。系统首次执行时只会做边界检查；如果确认缺少重填起点前可回放 checkpoint，会在下一步要求你单独确认是否替换本次范围内选中表的基底。`;
+        const coveredFloors = coveredCheckpoints.map(item => `第 ${item.aiFloor} 条 AI 回复`).join('、');
+        return `危险：本次重填会覆盖当前聊天里所有存档进度（${coveredFloors}）。系统会先做安全检查；如果确认缺少重填起点之前的存档，会再单独询问你是否替换这些表的数据基础。`;
     });
     const vectorIndexWarning = computed(() => {
         void refreshTick.value;
@@ -207810,7 +207811,7 @@ function useManualUpdate() {
             }
             const confirmed = await dialogStore.confirm({
                 title: '执行手动填表',
-                message: `即将执行手动填表。\n\n当前 full checkpoint：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n选中表：${selectedSheetSummary.value}\n世界书注入目标：${injectionTargetLabel}（填表结果会写入该世界书的 TavernDB 条目）\n\n高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n\n范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或中途终止时：本次只要提交过任何批次（含只落了进度、未写入数据的批次）就不会回滚——已清理的旧数据不会恢复，运行时会按聊天记录中的已提交结果重新对齐；只有本次一个批次都没提交时，才会自动回滚清理并恢复被删除的旧数据。`,
+                message: `即将执行手动填表。\n\n完整存档位置：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n选中表：${selectedSheetSummary.value}\n世界书注入目标：${injectionTargetLabel}（填表结果会写入该世界书的 TavernDB 条目）\n\n高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n\n范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或中途终止时：本次只要提交过任何批次（含只落了进度、未写入数据的批次）就不会回滚——已清理的旧数据不会恢复，运行时会按聊天记录中的已提交结果重新对齐；只有本次一个批次都没提交时，才会自动回滚清理并恢复被删除的旧数据。`,
                 dangerMessage: checkpointRiskMessage.value || undefined,
                 confirmLabel: '确认并继续',
                 cancelLabel: '取消',
@@ -207913,7 +207914,7 @@ function useManualUpdate() {
         }
     }
     function showCatchUpSyncPending(detail) {
-        const text = `追平数据已保存，但世界书同步待重试。${detail ? ` ${detail}` : ''}`;
+        const text = `补填的数据已保存，但世界书还没同步好。${detail ? ` ${detail}` : ''}`;
         const options = {
             durationMs: 0,
             muteable: false,
@@ -207933,7 +207934,7 @@ function useManualUpdate() {
             return;
         // 空选择优先于 runtime 状态判断：保持原有提示，避免误报“运行时未就绪”。
         if (!selectedManualTableKeys.value.length) {
-            toast.warning('未选择需要追平的表格。');
+            toast.warning('请先选择要补填的表格。');
             return;
         }
         // 执行边界校验（确认前）：追平同样绝不允许把模板表当作执行目标。
@@ -207944,14 +207945,14 @@ function useManualUpdate() {
         const runtimeKeys = new Set(snapshotRuntimeKeys);
         const validTargetKeys = requestedTargetKeys.filter((key) => runtimeKeys.has(key));
         if (!snapshotRuntimeKeys.length || validTargetKeys.length !== requestedTargetKeys.length) {
-            toast.warning('当前表格运行时未就绪，无法执行手动追平。');
+            toast.warning('表格还没准备好，暂时不能补填；等聊天里的表格加载完再试。');
             return;
         }
         catchUpBusy.value = true;
         try {
             const planningResult = await prepareManualCatchUpPlan_ACU(requestedTargetKeys);
             if (!planningResult.success || !planningResult.plan) {
-                finishToast('error', planningResult.error || '无法生成手动追平计划。');
+                finishToast('error', planningResult.error || '没法生成补填计划，请稍后再试。');
                 return;
             }
             const plan = planningResult.plan;
@@ -207960,15 +207961,16 @@ function useManualUpdate() {
                 return;
             }
             if (!plan.waves.length) {
-                finishToast('info', '所选表已追平，无需调用 AI 或写入数据。');
+                finishToast('info', '所选表都已经是最新的，不用再补了。');
                 return;
             }
-            const totalBuckets = plan.waves.reduce((count, wave) => count + wave.groups.reduce((waveCount, group) => waveCount + Math.ceil(wave.messageIndices.length / group.batchSize), 0), 0);
-            const waveSummary = plan.waves.map((wave, index) => `Wave ${index + 1}：${formatAiFloorRange_ACU(wave.startAiFloor, wave.endAiFloor)}；${wave.sheetKeys.map(key => sheetNames.value[key] || key).join('、')}`).join('\n');
+            const waveSummary = plan.waves.map((wave, index) => `第 ${index + 1} 批：${formatAiFloorRange_ACU(wave.startAiFloor, wave.endAiFloor)}；${wave.sheetKeys.map(key => sheetNames.value[key] || key).join('、')}`).join('\n');
+            const skipFloors = normalizeNonNegativeInteger(settings_ACU.skipUpdateFloors, 0);
+            const skipLine = skipFloors > 0 ? `跳过最新 ${skipFloors} 条 AI 回复（最新的先不补）。\n` : '';
             const confirmed = await dialogStore.confirm({
-                title: '追平所选表未填楼层',
-                message: `锁定目标：AI 第 ${plan.targetAiFloor} 层\n预计 ${plan.waves.length} 个 wave、${totalBuckets} 个 bucket。\n跳过最新楼层：${normalizeNonNegativeInteger(settings_ACU.skipUpdateFloors, 0)} 层。\n\n${waveSummary}\n\n本功能只补每张表已提交连续前沿之后的后缀缺口，不扫描或修复历史前沿之前的内部空洞。执行时会重新读取已提交事实并重新规划，避免重复处理确认期间已完成的 bucket。\n\n执行前会基于当前已提交事实重新预检存储锚点：若目标楼层早于正式 checkpoint，将自动建立临时锚点并在原边界原子汇合（已提交成果不会丢失，也不会留下第二正式根）；若预检无法证明安全，将在调用 AI 前阻止。`,
-                confirmLabel: '确认追平',
+                title: '一键追平还没填的内容',
+                message: `会补齐所选表还没填的内容。\n目标：补到第 ${plan.targetAiFloor} 条 AI 回复\n会分 ${plan.waves.length} 批处理。\n${skipLine}\n${waveSummary}\n\n只会补每张表上次填完之后的新内容，不会回头修改已经填好的部分。\n开始前会再核对一次表格状态；如果发现表格有变化、可能影响已填内容，会在开始前停下，不会改动任何数据。`,
+                confirmLabel: '开始追平',
                 cancelLabel: '取消',
             });
             if (!confirmed)
@@ -207978,15 +207980,15 @@ function useManualUpdate() {
             // 必须重新规划并要求用户重新确认，避免“确认的计划”与“执行的目标”不一致。
             if (!runtimeTargetsStillMatch(snapshotRuntimeKeys, requestedTargetKeys, snapshotContext)) {
                 const message = currentManualExecutionContext_ACU().key !== snapshotContext.key
-                    ? '聊天已切换，已取消本次追平，请重新确认目标。'
-                    : '表格运行时在确认期间发生变化，已取消本次追平，请重新确认目标。';
+                    ? '聊天已切换，这次追平已取消，请重新确认要补的表。'
+                    : '确认期间表格有变化，这次追平已取消，请重新确认要补的表。';
                 finishToast('warning', message);
                 return;
             }
             progressToastId = null;
             abortRequested = false;
             catchUpAbortController = new AbortController();
-            notifyProgress('手动追平开始。', requestCatchUpAbort);
+            notifyProgress('开始补齐还没填的内容…', requestCatchUpAbort);
             const result = await orchestrateManualCatchUp_ACU(requestedTargetKeys, refreshMergedDataAndNotify_ACU, {
                 abortController: catchUpAbortController,
                 onProgress: event => notifyProgress(progressLabel(event), requestCatchUpAbort),
@@ -207998,33 +208000,38 @@ function useManualUpdate() {
                     isolationKey: snapshotContext.isolationKey,
                 },
             });
+            // 提示里只说通俗结论，具体原因留在运行日志
+            if (result.error)
+                logWarn_ACU(`[手动追平] ${result.outcome || '未完成'}：${result.error}`);
             if (result.outcome === 'sync_pending') {
                 showCatchUpSyncPending();
             }
             else if (result.outcome === 'no_work') {
-                finishToast('info', '所选表已追平，无需调用 AI 或写入数据。');
+                finishToast('info', '所选表都已经是最新的，不用再补了。');
             }
             else if (result.outcome === 'progress_metadata_failed') {
-                finishToast('warning', `手动追平数据已提交，但完成状态记录失败：${result.error || '下次追平会重新记录状态。'}`);
+                finishToast('warning', '内容已经写入表格，但进度记录没保存成功。这不影响已填的内容，下次补填时会先把进度补记上，不会重填这次写好的部分。');
             }
             else if (result.outcome === 'integrity_failed') {
-                finishToast('error', `手动追平持久化完整性校验失败，已回载聊天中的已保存数据：${result.error || '请执行 V2 恢复诊断。'}`);
+                finishToast('error', '写入后发现数据不一致，已经恢复成聊天里上次保存的内容。可以到「数据管理」里做一次数据恢复检查。详细信息可在运行日志里查看。');
             }
             else if (result.outcome === 'blocked') {
-                finishToast('error', result.error || '手动追平已在调用 AI 前阻止：V2 存储锚点无法安全修复。');
+                finishToast('error', '为了不覆盖已有内容，这次追平在开始前停下了。可以先到「数据管理」里的数据恢复检查看一下。');
             }
             else if (result.outcome === 'stopped' || catchUpAbortController.signal.aborted) {
-                finishToast('warning', `手动追平已终止；${describeCommittedBuckets(result, false)}。`);
+                finishToast('warning', `追平已停止；${describeCommittedBuckets(result, false)}。`);
             }
             else if (result.success) {
-                finishToast('success', `手动追平完成，${describeCommittedBuckets(result, true)}。`);
+                finishToast('success', `追平完成，${describeCommittedBuckets(result, true)}。`);
             }
             else {
-                finishToast('error', result.error || '手动追平失败。');
+                // 保留编排层的具体原因（如「数据库更新正在进行中」），没有时再给通俗兜底
+                finishToast('error', result.error || '追平没有完成，请稍后再试。');
             }
         }
         catch (error) {
-            finishToast('error', error?.message || '手动追平执行异常。');
+            logWarn_ACU('[手动追平] 执行异常:', error);
+            finishToast('error', '追平过程中出错了，请稍后再试。');
         }
         finally {
             catchUpAbortController = null;
@@ -208237,8 +208244,8 @@ var _sfc_main$c = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-ff-facts[data-v-fea2a562] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));\r\n  gap: 1px;\r\n  border-bottom: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-line-soft);\n}\n.ub-ff-fact[data-v-fea2a562] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  min-width: 0;\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  background: var(--ub-panel);\n}\n.ub-ff-fact span[data-v-fea2a562] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\n}\n.ub-ff-fact strong[data-v-fea2a562] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\r\n  font-variant-numeric: tabular-nums;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-ff-notes[data-v-fea2a562] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4) 0;\n}\n.ub-ff-table[data-v-fea2a562] {\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s3);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-ff-table__row[data-v-fea2a562] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1.8fr) repeat(4, minmax(0, 1fr));\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2);\r\n  border-radius: var(--ub-r-control);\r\n  color: var(--ub-text-2);\r\n  font-variant-numeric: tabular-nums;\n}\n.ub-ff-table__row--head[data-v-fea2a562] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\n}\n.ub-ff-table__row[data-v-fea2a562]:not(.ub-ff-table__row--head):hover {\r\n  background: var(--ub-hover);\n}\n.ub-ff-table__row.is-ready[data-v-fea2a562] {\r\n  background: var(--ub-ok-soft);\n}\n.ub-ff-table__row.is-off[data-v-fea2a562] {\r\n  opacity: 0.6;\n}\n.ub-ff-table__name[data-v-fea2a562] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-ff-table__empty[data-v-fea2a562] {\r\n  padding: var(--ub-s4);\r\n  color: var(--ub-text-3);\r\n  text-align: center;\n}\n.ub-ff-run[data-v-fea2a562] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-ff-run__buttons[data-v-fea2a562] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\r\n  margin-top: var(--ub-s1);\n}\n@media (max-width: 600px) {\n.ub-ff-facts[data-v-fea2a562] {\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n}\n.ub-ff-fact--wide[data-v-fea2a562] {\r\n    grid-column: 1 / -1;\n}\n.ub-ff-table__row--head[data-v-fea2a562] {\r\n    display: none;\n}\n.ub-ff-table__row[data-v-fea2a562] {\r\n    grid-template-columns: repeat(4, minmax(0, 1fr));\r\n    row-gap: var(--ub-s1);\r\n    padding: var(--ub-s3) var(--ub-s2);\n}\n.ub-ff-table__row + .ub-ff-table__row[data-v-fea2a562] {\r\n    border-top: 1px solid var(--ub-line-soft);\r\n    border-radius: 0;\n}\n.ub-ff-table__name[data-v-fea2a562] {\r\n    grid-column: 1 / -1;\n}\n.ub-ff-table__row [data-label][data-v-fea2a562]::before {\r\n    content: attr(data-label);\r\n    display: block;\r\n    color: var(--ub-text-3);\r\n    font-size: var(--ub-fs-2xs);\r\n    font-weight: 700;\n}\n.ub-ff-run__buttons[data-v-fea2a562] > * {\r\n    flex: 1 1 100%;\n}\n}\r\n", "src/presentation-v3/pages/FormFillPage.vue#style-0-fea2a562");
-var FormFillPage_vue_vue_type_style_index_0_scoped_fea2a562_lang = null;
+injectSfcStyle("\n.ub-ff-facts[data-v-a2298782] {\n  display: grid;\n  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));\n  gap: 1px;\n  border-bottom: 1px solid var(--ub-line-soft);\n  background: var(--ub-line-soft);\n}\n.ub-ff-fact[data-v-a2298782] {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-width: 0;\n  padding: var(--ub-s3) var(--ub-s4);\n  background: var(--ub-panel);\n}\n.ub-ff-fact span[data-v-a2298782] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 700;\n}\n.ub-ff-fact strong[data-v-a2298782] {\n  overflow: hidden;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-md);\n  font-variant-numeric: tabular-nums;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.ub-ff-notes[data-v-a2298782] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4) 0;\n}\n.ub-ff-table[data-v-a2298782] {\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s3);\n  font-size: var(--ub-fs-sm);\n}\n.ub-ff-table__row[data-v-a2298782] {\n  display: grid;\n  grid-template-columns: minmax(0, 1.8fr) repeat(4, minmax(0, 1fr));\n  align-items: center;\n  gap: var(--ub-s2);\n  padding: var(--ub-s2);\n  border-radius: var(--ub-r-control);\n  color: var(--ub-text-2);\n  font-variant-numeric: tabular-nums;\n}\n.ub-ff-table__row--head[data-v-a2298782] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 700;\n}\n.ub-ff-table__row[data-v-a2298782]:not(.ub-ff-table__row--head):hover {\n  background: var(--ub-hover);\n}\n.ub-ff-table__row.is-ready[data-v-a2298782] {\n  background: var(--ub-ok-soft);\n}\n.ub-ff-table__row.is-off[data-v-a2298782] {\n  opacity: 0.6;\n}\n.ub-ff-table__name[data-v-a2298782] {\n  overflow: hidden;\n  color: var(--ub-text);\n  font-weight: 600;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.ub-ff-table__empty[data-v-a2298782] {\n  padding: var(--ub-s4);\n  color: var(--ub-text-3);\n  text-align: center;\n}\n.ub-ff-run[data-v-a2298782] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-ff-run__buttons[data-v-a2298782] {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: var(--ub-s2);\n  margin-top: var(--ub-s1);\n}\n@media (max-width: 600px) {\n.ub-ff-facts[data-v-a2298782] {\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n}\n.ub-ff-fact--wide[data-v-a2298782] {\n    grid-column: 1 / -1;\n}\n.ub-ff-table__row--head[data-v-a2298782] {\n    display: none;\n}\n.ub-ff-table__row[data-v-a2298782] {\n    grid-template-columns: repeat(4, minmax(0, 1fr));\n    row-gap: var(--ub-s1);\n    padding: var(--ub-s3) var(--ub-s2);\n}\n.ub-ff-table__row + .ub-ff-table__row[data-v-a2298782] {\n    border-top: 1px solid var(--ub-line-soft);\n    border-radius: 0;\n}\n.ub-ff-table__name[data-v-a2298782] {\n    grid-column: 1 / -1;\n}\n.ub-ff-table__row [data-label][data-v-a2298782]::before {\n    content: attr(data-label);\n    display: block;\n    color: var(--ub-text-3);\n    font-size: var(--ub-fs-2xs);\n    font-weight: 700;\n}\n.ub-ff-run__buttons[data-v-a2298782] > * {\n    flex: 1 1 100%;\n}\n}\n", "src/presentation-v3/pages/FormFillPage.vue#style-0-a2298782");
+var FormFillPage_vue_vue_type_style_index_0_scoped_a2298782_lang = null;
 
 const _hoisted_1$a = {
 	class: "ub-ff-facts",
@@ -208308,14 +208315,14 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 						)), createBaseVNode(
 							"strong",
 							null,
-							toDisplayString($setup.dashboard.aiMessageCount.value) + " 层",
+							toDisplayString($setup.dashboard.aiMessageCount.value) + " 条",
 							1
 							/* TEXT */
 						)]),
 						createBaseVNode("div", _hoisted_5$4, [_cache[6] || (_cache[6] = createBaseVNode(
 							"span",
 							null,
-							"full checkpoint",
+							"完整存档位置",
 							-1
 							/* CACHED */
 						)), createBaseVNode(
@@ -208447,29 +208454,29 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 			}, {
 				default: withCtx(() => [
 					createVNode($setup["UbRow"], {
-						label: "手动处理最近 N 层",
-						hint: "从可用 AI 回复中取最近 N 层执行手动填表。"
+						label: "手动处理最近 N 条 AI 回复",
+						hint: "从可用的 AI 回复中取最近 N 条执行手动填表。"
 					}, {
 						default: withCtx(() => [createVNode($setup["UbInput"], {
 							type: "number",
 							min: 0,
 							step: 1,
 							"model-value": $setup.manualUpdate.manualContextDepth.value,
-							"aria-label": "手动处理最近 N 层",
+							"aria-label": "手动处理最近 N 条 AI 回复",
 							onChange: _cache[0] || (_cache[0] = ($event) => $setup.manualUpdate.setManualContextDepth($event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
 					createVNode($setup["UbRow"], {
-						label: "每 N 层合并为一次填表",
-						hint: "把多少层 AI 回复压缩成一次填表请求。"
+						label: "每 N 条 AI 回复合并为一次填表",
+						hint: "每次把多少条 AI 回复合并成一次填表。"
 					}, {
 						default: withCtx(() => [createVNode($setup["UbInput"], {
 							type: "number",
 							min: 1,
 							step: 1,
 							"model-value": $setup.manualUpdate.manualBatchSize.value,
-							"aria-label": "每 N 层合并为一次填表",
+							"aria-label": "每 N 条 AI 回复合并为一次填表",
 							onChange: _cache[1] || (_cache[1] = ($event) => $setup.manualUpdate.setManualBatchSize($event))
 						}, null, 8, ["model-value"])]),
 						_: 1
@@ -208479,7 +208486,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 						stack: ""
 					}, {
 						hint: withCtx(() => [createTextVNode(
-							" full checkpoint：" + toDisplayString($setup.manualUpdate.checkpointFloorsLabel.value) + "；预计处理范围：" + toDisplayString($setup.manualUpdate.manualRefillRangeLabel.value) + "。选中表：" + toDisplayString($setup.manualUpdate.selectedSheetSummary.value) + "。 ",
+							" 完整存档位置：" + toDisplayString($setup.manualUpdate.checkpointFloorsLabel.value) + "；预计处理范围：" + toDisplayString($setup.manualUpdate.manualRefillRangeLabel.value) + "。选中表：" + toDisplayString($setup.manualUpdate.selectedSheetSummary.value) + "。 ",
 							1
 							/* TEXT */
 						)]),
@@ -208582,7 +208589,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$b], ["__scopeId", "data-v-fea2a562"]]);
+var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$b], ["__scopeId", "data-v-a2298782"]]);
 
 /**
  * usePlotWorldbookConfig — 剧情推进世界书配置（D23.1）

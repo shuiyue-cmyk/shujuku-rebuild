@@ -30,6 +30,7 @@ import { topLevelWindow_ACU } from '../../shared/env';
 import { useDialogStore } from '../stores/dialog-store';
 import { useToastStore } from '../stores/toast-store';
 import { isAiFloor_ACU } from '../../shared/ai-floor';
+import { logWarn_ACU } from '../../shared/utils';
 
 type MessageKind = 'info' | 'success' | 'warning' | 'error';
 
@@ -49,16 +50,16 @@ function describeCommittedBuckets(
 ): string {
   const committedBuckets = result.committedBucketCount || 0;
   const dataBuckets = result.committedDataBucketCount || 0;
-  const progressOnlySuffix = committedBuckets > dataBuckets ? `（另有 ${committedBuckets - dataBuckets} 个仅落进度的 bucket）` : '';
+  const progressOnlySuffix = committedBuckets > dataBuckets ? `（另有 ${committedBuckets - dataBuckets} 段只记了进度）` : '';
   if (dataBuckets === 0 && committedBuckets > 0) {
     return completed
-      ? `未写入数据（只落了进度，${committedBuckets} 个已提交 bucket）`
-      : `未写入数据（只落了进度）`;
+      ? `没有写入新内容（只记了 ${committedBuckets} 段进度）`
+      : `没有写入新内容（只记了进度）`;
   }
-  if (dataBuckets === 0) return completed ? '未写入表格数据' : '未写入任何数据';
+  if (dataBuckets === 0) return completed ? '没有写入表格内容' : '没有写入任何内容';
   return completed
-    ? `共写入 ${dataBuckets} 个数据 bucket${progressOnlySuffix}`
-    : `已保留 ${dataBuckets} 个已写入数据的 bucket${progressOnlySuffix}`;
+    ? `共写入 ${dataBuckets} 段${progressOnlySuffix}`
+    : `已经写好的 ${dataBuckets} 段保留了${progressOnlySuffix}`;
 }
 
 /**
@@ -229,8 +230,8 @@ function resolveManualRefillRangeSummary_ACU(manualDepth: number): ManualRefillR
 
 function formatAiFloorRange_ACU(startAiFloor: number, endAiFloor: number): string {
   return startAiFloor === endAiFloor
-    ? `AI 第 ${startAiFloor} 层`
-    : `AI 第 ${startAiFloor}~${endAiFloor} 层`;
+    ? `第 ${startAiFloor} 条 AI 回复`
+    : `第 ${startAiFloor}~${endAiFloor} 条 AI 回复`;
 }
 
 function progressLabel(event: CardUpdateProgressEvent): string {
@@ -333,7 +334,7 @@ export function useManualUpdate(): ManualUpdateState {
   function requestCatchUpAbort(): void {
     if (!catchUpAbortController || catchUpAbortController.signal.aborted) return;
     catchUpAbortController.abort();
-    const text = '手动追平已终止，正在等待当前安全边界收敛...';
+    const text = '追平已停止，正在保存已经写好的内容…';
     if (progressToastId) {
       toast.update(progressToastId, 'warning', text, { durationMs: 0, muteable: false, dismissible: false });
     } else {
@@ -382,17 +383,17 @@ export function useManualUpdate(): ManualUpdateState {
   function formatCheckpointReasonLabel(reason?: string): string {
     switch (reason) {
       case 'init':
-        return '初始基线';
+        return '初始';
       case 'migration':
-        return '迁移基线';
+        return '迁移';
       case 'compaction':
-        return '保留边界基线';
+        return '自动整理';
       case 'manual':
-        return '历史手动基线';
+        return '手动';
       case 'periodic':
-        return '历史周期基线';
+        return '定期';
       default:
-        return reason ? `旧基线:${reason}` : '旧基线';
+        return '旧记录';
     }
   }
 
@@ -400,9 +401,9 @@ export function useManualUpdate(): ManualUpdateState {
     const checkpoints = checkpointFloors.value;
     return checkpoints.length > 0
       ? checkpoints
-        .map(item => `AI 第 ${item.aiFloor} 层（${formatCheckpointReasonLabel(item.reason)}）`)
+        .map(item => `第 ${item.aiFloor} 条 AI 回复（${formatCheckpointReasonLabel(item.reason)}）`)
         .join('、')
-      : '当前隔离标签暂无 full checkpoint';
+      : '还没有记录过进度';
   });
 
   const manualRefillRange = computed<ManualRefillRangeSummary | null>(() => {
@@ -418,7 +419,7 @@ export function useManualUpdate(): ManualUpdateState {
     const range = manualRefillRange.value;
     return range
       ? formatAiFloorRange_ACU(range.startAiFloor, range.endAiFloor)
-      : '暂无可重填 AI 楼层';
+      : '暂无可重填的 AI 回复';
   });
 
   const checkpointRiskMessage = computed<string>(() => {
@@ -428,8 +429,8 @@ export function useManualUpdate(): ManualUpdateState {
     const checkpointIndexSet = new Set(range.indices);
     const coveredCheckpoints = checkpoints.filter(item => checkpointIndexSet.has(item.messageIndex));
     if (coveredCheckpoints.length !== checkpoints.length) return '';
-    const coveredFloors = coveredCheckpoints.map(item => `AI 第 ${item.aiFloor} 层`).join('、');
-    return `危险：当前聊天的所有 full checkpoint 都在本次重填范围内（${coveredFloors}）。系统首次执行时只会做边界检查；如果确认缺少重填起点前可回放 checkpoint，会在下一步要求你单独确认是否替换本次范围内选中表的基底。`;
+    const coveredFloors = coveredCheckpoints.map(item => `第 ${item.aiFloor} 条 AI 回复`).join('、');
+    return `危险：本次重填会覆盖当前聊天里所有存档进度（${coveredFloors}）。系统会先做安全检查；如果确认缺少重填起点之前的存档，会再单独询问你是否替换这些表的数据基础。`;
   });
 
   const vectorIndexWarning = computed<boolean>(() => {
@@ -510,7 +511,7 @@ export function useManualUpdate(): ManualUpdateState {
       }
       const confirmed = await dialogStore.confirm({
         title: '执行手动填表',
-        message: `即将执行手动填表。\n\n当前 full checkpoint：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n选中表：${selectedSheetSummary.value}\n世界书注入目标：${injectionTargetLabel}（填表结果会写入该世界书的 TavernDB 条目）\n\n高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n\n范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或中途终止时：本次只要提交过任何批次（含只落了进度、未写入数据的批次）就不会回滚——已清理的旧数据不会恢复，运行时会按聊天记录中的已提交结果重新对齐；只有本次一个批次都没提交时，才会自动回滚清理并恢复被删除的旧数据。`,
+        message: `即将执行手动填表。\n\n完整存档位置：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n选中表：${selectedSheetSummary.value}\n世界书注入目标：${injectionTargetLabel}（填表结果会写入该世界书的 TavernDB 条目）\n\n高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n\n范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或中途终止时：本次只要提交过任何批次（含只落了进度、未写入数据的批次）就不会回滚——已清理的旧数据不会恢复，运行时会按聊天记录中的已提交结果重新对齐；只有本次一个批次都没提交时，才会自动回滚清理并恢复被删除的旧数据。`,
         dangerMessage: checkpointRiskMessage.value || undefined,
         confirmLabel: '确认并继续',
         cancelLabel: '取消',
@@ -613,7 +614,7 @@ export function useManualUpdate(): ManualUpdateState {
   }
 
   function showCatchUpSyncPending(detail?: string): void {
-    const text = `追平数据已保存，但世界书同步待重试。${detail ? ` ${detail}` : ''}`;
+    const text = `补填的数据已保存，但世界书还没同步好。${detail ? ` ${detail}` : ''}`;
     const options = {
       durationMs: 0,
       muteable: false,
@@ -632,7 +633,7 @@ export function useManualUpdate(): ManualUpdateState {
     if (manualUpdateBusy.value || catchUpBusy.value) return;
     // 空选择优先于 runtime 状态判断：保持原有提示，避免误报“运行时未就绪”。
     if (!selectedManualTableKeys.value.length) {
-      toast.warning('未选择需要追平的表格。');
+      toast.warning('请先选择要补填的表格。');
       return;
     }
     // 执行边界校验（确认前）：追平同样绝不允许把模板表当作执行目标。
@@ -643,7 +644,7 @@ export function useManualUpdate(): ManualUpdateState {
     const runtimeKeys = new Set(snapshotRuntimeKeys);
     const validTargetKeys = requestedTargetKeys.filter((key) => runtimeKeys.has(key));
     if (!snapshotRuntimeKeys.length || validTargetKeys.length !== requestedTargetKeys.length) {
-      toast.warning('当前表格运行时未就绪，无法执行手动追平。');
+      toast.warning('表格还没准备好，暂时不能补填；等聊天里的表格加载完再试。');
       return;
     }
 
@@ -651,7 +652,7 @@ export function useManualUpdate(): ManualUpdateState {
     try {
       const planningResult = await prepareManualCatchUpPlan_ACU(requestedTargetKeys);
       if (!planningResult.success || !planningResult.plan) {
-        finishToast('error', planningResult.error || '无法生成手动追平计划。');
+        finishToast('error', planningResult.error || '没法生成补填计划，请稍后再试。');
         return;
       }
       const plan = planningResult.plan;
@@ -660,20 +661,18 @@ export function useManualUpdate(): ManualUpdateState {
         return;
       }
       if (!plan.waves.length) {
-        finishToast('info', '所选表已追平，无需调用 AI 或写入数据。');
+        finishToast('info', '所选表都已经是最新的，不用再补了。');
         return;
       }
-      const totalBuckets = plan.waves.reduce((count, wave) => count + wave.groups.reduce(
-        (waveCount, group) => waveCount + Math.ceil(wave.messageIndices.length / group.batchSize),
-        0,
-      ), 0);
       const waveSummary = plan.waves.map((wave, index) =>
-        `Wave ${index + 1}：${formatAiFloorRange_ACU(wave.startAiFloor, wave.endAiFloor)}；${wave.sheetKeys.map(key => sheetNames.value[key] || key).join('、')}`
+        `第 ${index + 1} 批：${formatAiFloorRange_ACU(wave.startAiFloor, wave.endAiFloor)}；${wave.sheetKeys.map(key => sheetNames.value[key] || key).join('、')}`
       ).join('\n');
+      const skipFloors = normalizeNonNegativeInteger(settings_ACU.skipUpdateFloors, 0);
+      const skipLine = skipFloors > 0 ? `跳过最新 ${skipFloors} 条 AI 回复（最新的先不补）。\n` : '';
       const confirmed = await dialogStore.confirm({
-        title: '追平所选表未填楼层',
-        message: `锁定目标：AI 第 ${plan.targetAiFloor} 层\n预计 ${plan.waves.length} 个 wave、${totalBuckets} 个 bucket。\n跳过最新楼层：${normalizeNonNegativeInteger(settings_ACU.skipUpdateFloors, 0)} 层。\n\n${waveSummary}\n\n本功能只补每张表已提交连续前沿之后的后缀缺口，不扫描或修复历史前沿之前的内部空洞。执行时会重新读取已提交事实并重新规划，避免重复处理确认期间已完成的 bucket。\n\n执行前会基于当前已提交事实重新预检存储锚点：若目标楼层早于正式 checkpoint，将自动建立临时锚点并在原边界原子汇合（已提交成果不会丢失，也不会留下第二正式根）；若预检无法证明安全，将在调用 AI 前阻止。`,
-        confirmLabel: '确认追平',
+        title: '一键追平还没填的内容',
+        message: `会补齐所选表还没填的内容。\n目标：补到第 ${plan.targetAiFloor} 条 AI 回复\n会分 ${plan.waves.length} 批处理。\n${skipLine}\n${waveSummary}\n\n只会补每张表上次填完之后的新内容，不会回头修改已经填好的部分。\n开始前会再核对一次表格状态；如果发现表格有变化、可能影响已填内容，会在开始前停下，不会改动任何数据。`,
+        confirmLabel: '开始追平',
         cancelLabel: '取消',
       });
       if (!confirmed) return;
@@ -683,15 +682,15 @@ export function useManualUpdate(): ManualUpdateState {
       // 必须重新规划并要求用户重新确认，避免“确认的计划”与“执行的目标”不一致。
       if (!runtimeTargetsStillMatch(snapshotRuntimeKeys, requestedTargetKeys, snapshotContext)) {
         const message = currentManualExecutionContext_ACU().key !== snapshotContext.key
-          ? '聊天已切换，已取消本次追平，请重新确认目标。'
-          : '表格运行时在确认期间发生变化，已取消本次追平，请重新确认目标。';
+          ? '聊天已切换，这次追平已取消，请重新确认要补的表。'
+          : '确认期间表格有变化，这次追平已取消，请重新确认要补的表。';
         finishToast('warning', message);
         return;
       }
       progressToastId = null;
       abortRequested = false;
       catchUpAbortController = new AbortController();
-      notifyProgress('手动追平开始。', requestCatchUpAbort);
+      notifyProgress('开始补齐还没填的内容…', requestCatchUpAbort);
       const result = await orchestrateManualCatchUp_ACU(
         requestedTargetKeys,
         refreshMergedDataAndNotify_ACU,
@@ -707,25 +706,29 @@ export function useManualUpdate(): ManualUpdateState {
             },
         },
       );
+      // 提示里只说通俗结论，具体原因留在运行日志
+      if (result.error) logWarn_ACU(`[手动追平] ${result.outcome || '未完成'}：${result.error}`);
       if (result.outcome === 'sync_pending') {
         showCatchUpSyncPending();
       } else if (result.outcome === 'no_work') {
-        finishToast('info', '所选表已追平，无需调用 AI 或写入数据。');
+        finishToast('info', '所选表都已经是最新的，不用再补了。');
       } else if (result.outcome === 'progress_metadata_failed') {
-        finishToast('warning', `手动追平数据已提交，但完成状态记录失败：${result.error || '下次追平会重新记录状态。'}`);
+        finishToast('warning', '内容已经写入表格，但进度记录没保存成功。这不影响已填的内容，下次补填时会先把进度补记上，不会重填这次写好的部分。');
       } else if (result.outcome === 'integrity_failed') {
-        finishToast('error', `手动追平持久化完整性校验失败，已回载聊天中的已保存数据：${result.error || '请执行 V2 恢复诊断。'}`);
+        finishToast('error', '写入后发现数据不一致，已经恢复成聊天里上次保存的内容。可以到「数据管理」里做一次数据恢复检查。详细信息可在运行日志里查看。');
       } else if (result.outcome === 'blocked') {
-        finishToast('error', result.error || '手动追平已在调用 AI 前阻止：V2 存储锚点无法安全修复。');
+        finishToast('error', '为了不覆盖已有内容，这次追平在开始前停下了。可以先到「数据管理」里的数据恢复检查看一下。');
       } else if (result.outcome === 'stopped' || catchUpAbortController.signal.aborted) {
-        finishToast('warning', `手动追平已终止；${describeCommittedBuckets(result, false)}。`);
+        finishToast('warning', `追平已停止；${describeCommittedBuckets(result, false)}。`);
       } else if (result.success) {
-        finishToast('success', `手动追平完成，${describeCommittedBuckets(result, true)}。`);
+        finishToast('success', `追平完成，${describeCommittedBuckets(result, true)}。`);
       } else {
-        finishToast('error', result.error || '手动追平失败。');
+        // 保留编排层的具体原因（如「数据库更新正在进行中」），没有时再给通俗兜底
+        finishToast('error', result.error || '追平没有完成，请稍后再试。');
       }
     } catch (error: any) {
-      finishToast('error', error?.message || '手动追平执行异常。');
+      logWarn_ACU('[手动追平] 执行异常:', error);
+      finishToast('error', '追平过程中出错了，请稍后再试。');
     } finally {
       catchUpAbortController = null;
       catchUpBusy.value = false;

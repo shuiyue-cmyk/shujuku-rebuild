@@ -13,10 +13,10 @@
         </div>
         <div class="ub-ff-fact">
           <span>AI 回复累计</span>
-          <strong>{{ dashboard.aiMessageCount.value }} 层</strong>
+          <strong>{{ dashboard.aiMessageCount.value }} 条</strong>
         </div>
         <div class="ub-ff-fact">
-          <span>full checkpoint</span>
+          <span>完整存档位置</span>
           <strong>{{ manualUpdate.checkpointFloorsLabel.value }}</strong>
         </div>
       </div>
@@ -60,29 +60,29 @@
       :description="formFillCopy.panels.manual.description"
       icon="fa-solid fa-hand-pointer"
     >
-      <UbRow label="手动处理最近 N 层" hint="从可用 AI 回复中取最近 N 层执行手动填表。">
+      <UbRow label="手动处理最近 N 条 AI 回复" hint="从可用的 AI 回复中取最近 N 条执行手动填表。">
         <UbInput
           type="number"
           :min="0"
           :step="1"
           :model-value="manualUpdate.manualContextDepth.value"
-          aria-label="手动处理最近 N 层"
+          aria-label="手动处理最近 N 条 AI 回复"
           @change="manualUpdate.setManualContextDepth($event)"
         />
       </UbRow>
-      <UbRow label="每 N 层合并为一次填表" hint="把多少层 AI 回复压缩成一次填表请求。">
+      <UbRow label="每 N 条 AI 回复合并为一次填表" hint="每次把多少条 AI 回复合并成一次填表。">
         <UbInput
           type="number"
           :min="1"
           :step="1"
           :model-value="manualUpdate.manualBatchSize.value"
-          aria-label="每 N 层合并为一次填表"
+          aria-label="每 N 条 AI 回复合并为一次填表"
           @change="manualUpdate.setManualBatchSize($event)"
         />
       </UbRow>
       <UbRow label="要处理的表" stack>
         <template #hint>
-          full checkpoint：{{ manualUpdate.checkpointFloorsLabel.value }}；预计处理范围：{{ manualUpdate.manualRefillRangeLabel.value }}。选中表：{{ manualUpdate.selectedSheetSummary.value }}。
+          完整存档位置：{{ manualUpdate.checkpointFloorsLabel.value }}；预计处理范围：{{ manualUpdate.manualRefillRangeLabel.value }}。选中表：{{ manualUpdate.selectedSheetSummary.value }}。
         </template>
         <TablePicker
           :sheet-keys="manualUpdate.sheetKeys.value"

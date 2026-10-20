@@ -97,21 +97,19 @@
           />
           <p v-if="store.modelLoadStatus === 'error'" class="ub-api__error">{{ store.modelLoadError }}</p>
         </UbRow>
-        <UbRow
-          label="测试连接"
-          hint="用上面填写的内容（不用先保存）发一条很短的测试消息，看能不能收到模型回复。会按所选的发送方式、接口协议和请求改写发出，消耗少量额度。"
-          stack
-        >
-          <div class="ub-api__test">
-            <UbButton :busy="connectionTesting" icon="fa-solid fa-plug-circle-check" @click="testConnectionForActive">测试连接</UbButton>
-            <p v-if="connectionResult" class="ub-api__test-result" :class="connectionResult.ok ? 'is-ok' : 'is-error'" role="status">
+        <!-- 按钮放右侧、上下居中（与其它行的控件同位）；结果跟在左侧说明下面，不挤占按钮 -->
+        <UbRow label="测试连接">
+          <template #hint>
+            用上面填写的内容（不用先保存）发一条很短的测试消息，看能不能收到模型回复。会按所选的发送方式、接口协议和请求改写发出，消耗少量额度。
+            <span v-if="connectionResult" class="ub-api__test-result" :class="connectionResult.ok ? 'is-ok' : 'is-error'" role="status">
               <template v-if="connectionResult.ok">
                 连接成功（{{ formatElapsed(connectionResult.elapsedMs) }}）<template v-if="connectionResult.reply">：{{ truncateReply(connectionResult.reply) }}</template>
                 <span v-if="connectionResult.note" class="ub-api__test-note">{{ connectionResult.note }}</span>
               </template>
               <template v-else>连接失败<template v-if="connectionResult.elapsedMs">（{{ formatElapsed(connectionResult.elapsedMs) }}）</template>：{{ connectionResult.error }}</template>
-            </p>
-          </div>
+            </span>
+          </template>
+          <UbButton :busy="connectionTesting" icon="fa-solid fa-plug-circle-check" @click="testConnectionForActive">测试连接</UbButton>
         </UbRow>
       </UbSection>
 
@@ -522,17 +520,11 @@ watch(() => store.activePresetName, () => syncActiveDraft(), { flush: 'sync' });
   font-size: var(--ub-fs-xs);
 }
 
-.ub-api__test {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--ub-s2);
-  width: 100%;
-}
-
 .ub-api__test-result {
-  margin: 0;
+  display: block;
+  margin-top: var(--ub-s2);
   font-size: var(--ub-fs-xs);
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 
