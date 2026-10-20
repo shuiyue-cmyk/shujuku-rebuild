@@ -52,6 +52,7 @@ import {
 } from '../../table/storage-mode';
 import { createUntrustedTemplateGuard_ACU } from '../../../shared/untrusted-template-guard';
 import { withTableFillRetryHistory_ACU } from './table-fill-retry';
+import { runWithAbortSignal_ACU } from '../../../shared/abort-signal';
 
 /**
  * The request reached a provider successfully, but its body contained no
@@ -85,177 +86,185 @@ export class RetryableAiResponseError_ACU extends Error {
     const skipProfileSwitch = !!options?.skipProfileSwitch;
     const forceDirectApi = !!options?.forceDirectApi;
 
-    const effectiveTableApiPreset = options?.tableApiPreset !== undefined
-        ? String(options.tableApiPreset)
-        : (settings_ACU.tableApiPreset || '');
-    const apiPresetConfig = getApiConfigByPreset_ACU(effectiveTableApiPreset);
-    const effectiveApiMode = apiPresetConfig.apiMode;
-    const effectiveApiConfig = apiPresetConfig.apiConfig;
-    const effectiveTavernProfile = apiPresetConfig.tavernProfile;
-
-    const messages: Array<{ role: string; content: string }> = [];
-    const sqliteMode = isSqliteMode();
-    const charCardPromptSetting = settings_ACU.charCardPrompt;
-
-    let promptSegments = [];
-    if (Array.isArray(charCardPromptSetting)) {
-        promptSegments = charCardPromptSetting;
-    } else if (typeof charCardPromptSetting === 'string') {
-        promptSegments = [{ role: 'USER', content: charCardPromptSetting }];
-    }
-
-    // 填表原生工具调用（可选项，默认关闭）：开关开时主段整体切换为工具版
-    // （要求调用 table_sql、正文不再写 SQL），只改本次请求的内存副本，不写回设置。
-    // 流式请求不挂工具（delta 不组装 tool_calls），静默走正文路径。
-    const fillRequestWantsStream = effectiveApiConfig.streamingEnabled !== undefined
-        ? effectiveApiConfig.streamingEnabled === true
-        : settings_ACU.streamingEnabled === true;
-    const fillNativeToolsOn = shouldUseTableFillNativeTools_ACU({
-        enabled: settings_ACU.tableFillNativeToolsEnabled === true,
-        streaming: fillRequestWantsStream,
-    });
-    if (fillNativeToolsOn) {
-        promptSegments = promptSegments.map((segment: any) => (
-            (segment?.mainSlot === 'A' || segment?.isMain) && typeof segment?.content === 'string'
-                ? { ...segment, content: buildTableSqlToolPrompt_ACU(segment.content) }
-                : segment
-        ));
-    }
-
-    let userInfoContent_Table = '';
     try {
-      userInfoContent_Table = getPersonaDescription_ACU();
-      logDebug_ACU(`[填表] $U (persona_description) 获取结果: ${userInfoContent_Table ? '成功' : '为空'}`);
-    } catch (e) {
-      logWarn_ACU('[填表] 获取用户设定描述时出错:', e);
-      userInfoContent_Table = '';
-    }
+        // 已取消的调用不再启动模板或网络
+        abortSignal.throwIfAborted();
 
-    let charInfoContent_Table = '';
-    try {
-      charInfoContent_Table = getCharDescription_ACU();
-      logDebug_ACU(`[填表] $C (char_description) 获取结果: ${charInfoContent_Table ? '成功，长度=' + charInfoContent_Table.length : '为空'}`);
-    } catch (e) {
-      logWarn_ACU('[填表] 获取角色描述时出错:', e);
-      charInfoContent_Table = '';
-    }
+        const effectiveTableApiPreset = options?.tableApiPreset !== undefined
+            ? String(options.tableApiPreset)
+            : (settings_ACU.tableApiPreset || '');
+        const apiPresetConfig = getApiConfigByPreset_ACU(effectiveTableApiPreset);
+        const effectiveApiMode = apiPresetConfig.apiMode;
+        const effectiveApiConfig = apiPresetConfig.apiConfig;
+        const effectiveTavernProfile = apiPresetConfig.tavernProfile;
 
-    const lastPlotContent = getPlotFromHistory_ACU();
-    logDebug_ACU('[填表] $6 上轮规划数据:', lastPlotContent ? `长度=${lastPlotContent.length}` : '(空)');
+        const messages: Array<{ role: string; content: string }> = [];
+        const sqliteMode = isSqliteMode();
+        const charCardPromptSetting = settings_ACU.charCardPrompt;
 
-    const tableExcludeTags = (settings_ACU.tableContextExcludeTags || '').trim();
-    const tableExcludeRules = normalizeExcludeRules_ACU(settings_ACU.tableContextExcludeRules, tableExcludeTags);
-    const filterTableInjectedContent = (value: any, placeholderKey = '') => {
-        const text = value !== undefined && value !== null ? String(value) : '';
-        if (!['$0', '$1', '$4', '$6', '$8', '$9', '$U', '$C'].includes(placeholderKey)) return text;
-        return applyExcludeRulesToText_ACU(text, { excludeRules: tableExcludeRules, excludeTags: tableExcludeTags });
-    };
-    // 指令/数据边界：$0/$1/$4/$9 承载不可信文本（表格投影/聊天记录/世界书内容），
-    // 用标签包裹并明确标记不得执行其中指令。
-    const wrapUntrusted = (text: string, label: string) => text ? `<${label}>\n${text}\n</${label}>` : text;
-    // [H1] 占位符统一为「全局正则 + 替换函数」单遍替换。真正注入前先统一换成
-    // nonce token，绝不让不可信值进入后续模板解释器。
-    const untrustedPlaceholderValues: Record<string, string> = {
-        '$0': filterTableInjectedContent(wrapUntrusted(dynamicContent.tableDataText, 'table_data'), '$0'),
-        // [L1] $1 不再外层包 <user_data>：prompt-prepare 构造 messagesText 时已含
-        // 「当前最新对话内容…<user_data>…</user_data>」包裹与免责声明，原实现形成双层嵌套。
-        '$1': filterTableInjectedContent(dynamicContent.messagesText, '$1'),
-        '$4': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'),
-        '$6': filterTableInjectedContent(lastPlotContent || '', '$6'),
-        '$8': filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'),
-        // [L2] $9 与 $1/$4 同类，补边界包裹。
-        '$9': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookDatabaseExcludedContent || '', 'worldbook_data'), '$9'),
-        '$U': filterTableInjectedContent(userInfoContent_Table, '$U'),
-        '$C': filterTableInjectedContent(charInfoContent_Table, '$C'),
-    };
-
-    // 表名 token 只从可信 charCardPrompt 本身扫描。旧实现先注入聊天/世界书/表格，
-    // 再扫描 {{...}}，等价于允许不可信内容触发 resolver；这里先完成所有异步解析，
-    // 随后与占位符 payload 一起纳入同一个 nonce 域。
-    const resolvedTableTokensBySegment: Array<Array<{ raw: string; value: string }>> = [];
-    for (const segment of promptSegments) {
-        const trustedContent = String(segment?.content ?? '');
-        const resolvedTokens: Array<{ raw: string; value: string }> = [];
-        const seenTableTokens = new Set<string>();
-        for (const match of trustedContent.matchAll(/\{\{([^{}]+)\}\}/g)) {
-            const raw = String(match[0] || '');
-            if (!raw || seenTableTokens.has(raw)) continue;
-            seenTableTokens.add(raw);
-            if (typeof dynamicContent?.resolveTableWorldbookContent !== 'function') continue;
-            const tableName = String(match[1] || '');
-            try {
-                const resolvedContent = await dynamicContent.resolveTableWorldbookContent(tableName);
-                if (typeof resolvedContent === 'string') resolvedTokens.push({ raw, value: resolvedContent });
-            } catch (error) {
-                logWarn_ACU(`[填表] 无法解析表名占位符 "${tableName}"，保留原 token。`, error);
-            }
+        let promptSegments = [];
+        if (Array.isArray(charCardPromptSetting)) {
+            promptSegments = charCardPromptSetting;
+        } else if (typeof charCardPromptSetting === 'string') {
+            promptSegments = [{ role: 'USER', content: charCardPromptSetting }];
         }
-        resolvedTableTokensBySegment.push(resolvedTokens);
-    }
 
-    const untrustedGuard = createUntrustedTemplateGuard_ACU([
-        ...promptSegments.map(segment => segment?.content ?? ''),
-        ...Object.values(untrustedPlaceholderValues),
-        ...resolvedTableTokensBySegment.flat().map(token => token.value),
-    ], 'TABLE_FILL_UNTRUSTED');
-
-    try {
-        for (let segmentIndex = 0; segmentIndex < promptSegments.length; segmentIndex += 1) {
-            const segment = promptSegments[segmentIndex];
-            let finalContent = String(segment?.content ?? '');
-            // 右边界（R8-13）：可信提示词里的「$100」「$Cx」不是占位符；后跟中文/标点照常替换。
-            finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)(?![0-9A-Za-z_])/g, (match: string) => (
-                untrustedGuard.protect(untrustedPlaceholderValues[match])
+        // 填表原生工具调用（可选项，默认关闭）：开关开时主段整体切换为工具版
+        // （要求调用 table_sql、正文不再写 SQL），只改本次请求的内存副本，不写回设置。
+        // 流式请求不挂工具（delta 不组装 tool_calls），静默走正文路径。
+        const fillRequestWantsStream = effectiveApiConfig.streamingEnabled !== undefined
+            ? effectiveApiConfig.streamingEnabled === true
+            : settings_ACU.streamingEnabled === true;
+        const fillNativeToolsOn = shouldUseTableFillNativeTools_ACU({
+            enabled: settings_ACU.tableFillNativeToolsEnabled === true,
+            streaming: fillRequestWantsStream,
+        });
+        if (fillNativeToolsOn) {
+            promptSegments = promptSegments.map((segment: any) => (
+                (segment?.mainSlot === 'A' || segment?.isMain) && typeof segment?.content === 'string'
+                    ? { ...segment, content: buildTableSqlToolPrompt_ACU(segment.content) }
+                    : segment
             ));
-            for (const token of resolvedTableTokensBySegment[segmentIndex] || []) {
-                finalContent = finalContent.split(token.raw).join(untrustedGuard.protect(token.value));
-            }
-
-            if (typeof (globalThis as any).EjsTemplate?.evalTemplate === 'function') {
-              try {
-                finalContent = await (globalThis as any).EjsTemplate.evalTemplate(finalContent);
-                logDebug_ACU('[填表] 已通过 st-prompt-template 处理提示词');
-              } catch (e) {
-                logWarn_ACU('[填表] st-prompt-template 处理失败，使用原始内容:', e);
-              }
-            }
-
-            finalContent = parseRandomTags_ACU(finalContent);
-            finalContent = replaceRandomVariables_ACU(finalContent);
-
-            // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下，在 <if> 之前执行）
-            finalContent = replaceDbSqlVariables(finalContent);
-
-            if (settings_ACU.promptTemplateSettings?.enabled !== false) {
-              // 填表条件必须与本次 $1 实际读取的 AI 上下文一致，不能越过批次边界读取聊天最新层。
-              const conditionalSeedContent = typeof dynamicContent?.conditionalSeedContent === 'string'
-                ? dynamicContent.conditionalSeedContent
-                : getLatestAIMessageContent_ACU();
-              const templateContext = {
-                seedContent: conditionalSeedContent,
-                allTablesJson: currentJsonTableData_ACU,
-                plotContent: lastPlotContent || ''
-              };
-              finalContent = parseIfBlocksInContent_ACU(finalContent, templateContext, 0);
-            }
-
-            messages.push({ role: normalizeRoleForApi_ACU(segment.role), content: finalContent });
         }
-    } finally {
-        // 全部模板处理完成后才把不可信 payload 一次性放回出站文本。
-        for (const message of messages) message.content = untrustedGuard.restore(message.content);
-    }
 
-    // 纠错历史在模板处理之后拼接：上次回复里的 $1、{{表名}} 不会被当成占位符。
-    const requestMessages = withTableFillRetryHistory_ACU(messages, options?.tableFillRetryHistory, { tools: fillNativeToolsOn });
-    const reportTableFillResponse = (raw: string) => {
-        try { options?.onTableFillResponse?.(raw); } catch { /* 回报回调异常不影响主流程 */ }
-    };
+        let userInfoContent_Table = '';
+        try {
+          userInfoContent_Table = getPersonaDescription_ACU();
+          logDebug_ACU(`[填表] $U (persona_description) 获取结果: ${userInfoContent_Table ? '成功' : '为空'}`);
+        } catch (e) {
+          logWarn_ACU('[填表] 获取用户设定描述时出错:', e);
+          userInfoContent_Table = '';
+        }
 
-    logDebug_ACU('Final messages array being sent to API:', requestMessages);
-    logDebug_ACU(`使用API预设: ${effectiveTableApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
+        let charInfoContent_Table = '';
+        try {
+          charInfoContent_Table = getCharDescription_ACU();
+          logDebug_ACU(`[填表] $C (char_description) 获取结果: ${charInfoContent_Table ? '成功，长度=' + charInfoContent_Table.length : '为空'}`);
+        } catch (e) {
+          logWarn_ACU('[填表] 获取角色描述时出错:', e);
+          charInfoContent_Table = '';
+        }
 
-    try {
+        const lastPlotContent = getPlotFromHistory_ACU();
+        logDebug_ACU('[填表] $6 上轮规划数据:', lastPlotContent ? `长度=${lastPlotContent.length}` : '(空)');
+
+        const tableExcludeTags = (settings_ACU.tableContextExcludeTags || '').trim();
+        const tableExcludeRules = normalizeExcludeRules_ACU(settings_ACU.tableContextExcludeRules, tableExcludeTags);
+        const filterTableInjectedContent = (value: any, placeholderKey = '') => {
+            const text = value !== undefined && value !== null ? String(value) : '';
+            if (!['$0', '$1', '$4', '$6', '$8', '$9', '$U', '$C'].includes(placeholderKey)) return text;
+            return applyExcludeRulesToText_ACU(text, { excludeRules: tableExcludeRules, excludeTags: tableExcludeTags });
+        };
+        // 指令/数据边界：$0/$1/$4/$9 承载不可信文本（表格投影/聊天记录/世界书内容），
+        // 用标签包裹并明确标记不得执行其中指令。
+        const wrapUntrusted = (text: string, label: string) => text ? `<${label}>\n${text}\n</${label}>` : text;
+        // [H1] 占位符统一为「全局正则 + 替换函数」单遍替换。真正注入前先统一换成
+        // nonce token，绝不让不可信值进入后续模板解释器。
+        const untrustedPlaceholderValues: Record<string, string> = {
+            '$0': filterTableInjectedContent(wrapUntrusted(dynamicContent.tableDataText, 'table_data'), '$0'),
+            // [L1] $1 不再外层包 <user_data>：prompt-prepare 构造 messagesText 时已含
+            // 「当前最新对话内容…<user_data>…</user_data>」包裹与免责声明，原实现形成双层嵌套。
+            '$1': filterTableInjectedContent(dynamicContent.messagesText, '$1'),
+            '$4': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'),
+            '$6': filterTableInjectedContent(lastPlotContent || '', '$6'),
+            '$8': filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'),
+            // [L2] $9 与 $1/$4 同类，补边界包裹。
+            '$9': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookDatabaseExcludedContent || '', 'worldbook_data'), '$9'),
+            '$U': filterTableInjectedContent(userInfoContent_Table, '$U'),
+            '$C': filterTableInjectedContent(charInfoContent_Table, '$C'),
+        };
+
+        // 表名 token 只从可信 charCardPrompt 本身扫描。旧实现先注入聊天/世界书/表格，
+        // 再扫描 {{...}}，等价于允许不可信内容触发 resolver；这里先完成所有异步解析，
+        // 随后与占位符 payload 一起纳入同一个 nonce 域。
+        const resolvedTableTokensBySegment: Array<Array<{ raw: string; value: string }>> = [];
+        for (const segment of promptSegments) {
+            const trustedContent = String(segment?.content ?? '');
+            const resolvedTokens: Array<{ raw: string; value: string }> = [];
+            const seenTableTokens = new Set<string>();
+            for (const match of trustedContent.matchAll(/\{\{([^{}]+)\}\}/g)) {
+                const raw = String(match[0] || '');
+                if (!raw || seenTableTokens.has(raw)) continue;
+                seenTableTokens.add(raw);
+                if (typeof dynamicContent?.resolveTableWorldbookContent !== 'function') continue;
+                const tableName = String(match[1] || '');
+                try {
+                    const resolvedContent = await dynamicContent.resolveTableWorldbookContent(tableName);
+                    if (typeof resolvedContent === 'string') resolvedTokens.push({ raw, value: resolvedContent });
+                } catch (error) {
+                    logWarn_ACU(`[填表] 无法解析表名占位符 "${tableName}"，保留原 token。`, error);
+                }
+            }
+            resolvedTableTokensBySegment.push(resolvedTokens);
+        }
+
+        const untrustedGuard = createUntrustedTemplateGuard_ACU([
+            ...promptSegments.map(segment => segment?.content ?? ''),
+            ...Object.values(untrustedPlaceholderValues),
+            ...resolvedTableTokensBySegment.flat().map(token => token.value),
+        ], 'TABLE_FILL_UNTRUSTED');
+
+        try {
+            for (let segmentIndex = 0; segmentIndex < promptSegments.length; segmentIndex += 1) {
+                const segment = promptSegments[segmentIndex];
+                let finalContent = String(segment?.content ?? '');
+                // 右边界（R8-13）：可信提示词里的「$100」「$Cx」不是占位符；后跟中文/标点照常替换。
+                finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)(?![0-9A-Za-z_])/g, (match: string) => (
+                    untrustedGuard.protect(untrustedPlaceholderValues[match])
+                ));
+                for (const token of resolvedTableTokensBySegment[segmentIndex] || []) {
+                    finalContent = finalContent.split(token.raw).join(untrustedGuard.protect(token.value));
+                }
+
+                if (typeof (globalThis as any).EjsTemplate?.evalTemplate === 'function') {
+                  try {
+                    // 模板插件未必支持取消：停止时只结束本轮等待，迟到的结果不再继续组装或发请求
+                    finalContent = await runWithAbortSignal_ACU(abortSignal, () =>
+                      (globalThis as any).EjsTemplate.evalTemplate(finalContent));
+                    logDebug_ACU('[填表] 已通过 st-prompt-template 处理提示词');
+                  } catch (e) {
+                    abortSignal.throwIfAborted();
+                    if ((e as { name?: string })?.name === 'AbortError') throw e;
+                    logWarn_ACU('[填表] st-prompt-template 处理失败，使用原始内容:', e);
+                  }
+                }
+
+                abortSignal.throwIfAborted();
+                finalContent = parseRandomTags_ACU(finalContent);
+                finalContent = replaceRandomVariables_ACU(finalContent);
+
+                // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下，在 <if> 之前执行）
+                finalContent = replaceDbSqlVariables(finalContent);
+
+                if (settings_ACU.promptTemplateSettings?.enabled !== false) {
+                  // 填表条件必须与本次 $1 实际读取的 AI 上下文一致，不能越过批次边界读取聊天最新层。
+                  const conditionalSeedContent = typeof dynamicContent?.conditionalSeedContent === 'string'
+                    ? dynamicContent.conditionalSeedContent
+                    : getLatestAIMessageContent_ACU();
+                  const templateContext = {
+                    seedContent: conditionalSeedContent,
+                    allTablesJson: currentJsonTableData_ACU,
+                    plotContent: lastPlotContent || ''
+                  };
+                  finalContent = parseIfBlocksInContent_ACU(finalContent, templateContext, 0);
+                }
+
+                messages.push({ role: normalizeRoleForApi_ACU(segment.role), content: finalContent });
+            }
+        } finally {
+            // 全部模板处理完成后才把不可信 payload 一次性放回出站文本。
+            for (const message of messages) message.content = untrustedGuard.restore(message.content);
+        }
+
+        // 纠错历史在模板处理之后拼接：上次回复里的 $1、{{表名}} 不会被当成占位符。
+        const requestMessages = withTableFillRetryHistory_ACU(messages, options?.tableFillRetryHistory, { tools: fillNativeToolsOn });
+        const reportTableFillResponse = (raw: string) => {
+            try { options?.onTableFillResponse?.(raw); } catch { /* 回报回调异常不影响主流程 */ }
+        };
+
+        logDebug_ACU('Final messages array being sent to API:', requestMessages);
+        logDebug_ACU(`使用API预设: ${effectiveTableApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
+
         if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
             throw new Error('自定义API的URL或模型未配置。');
         }

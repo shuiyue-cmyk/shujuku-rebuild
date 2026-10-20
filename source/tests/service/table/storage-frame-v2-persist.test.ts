@@ -4276,6 +4276,7 @@ describe('persistTableMutationLogBatchV2_ACU', () => {
     }));
     expect(mocks.loadReplayDetailed).toHaveBeenCalledWith(expect.any(Array), '', {
       updateRuntimeState: false,
+      yieldBudgetMs: 8,
       compatibilityMode: 'disabled',
     });
     expect(mocks.saveChatStrict).toHaveBeenCalledOnce();
@@ -5475,3 +5476,48 @@ describe('demoteTemplateOnlyRootToScopeOnly_ACU 契约（四行真值表）', ()
   });
 });
 
+
+// 上游 3cd3824b：保存前的校验回放是异步的，期间切换了聊天，旧结果不得写进新聊天
+describe('保存回放期间切换聊天', () => {
+  beforeEach(() => {
+    mocks.chat.length = 0;
+    mocks.saveChat.mockReset().mockResolvedValue(undefined);
+    mocks.saveChatStrict.mockReset().mockResolvedValue(undefined);
+    mocks.loadReplayState.mockReset();
+    mocks.loadReplayDetailed.mockReset();
+    mocks.settings.dataIsolationEnabled = false;
+    mocks.settings.dataIsolationCode = '';
+  });
+
+  it.each(['single', 'batch'])('%s 保存回放期间切换聊天不写入旧帧', async mode => {
+    const { persistTableMutationLogV2_ACU } = await import('../../../src/service/table/storage-frame-v2-persist');
+    const previousIdentity = mocks.chatIdentity;
+    const message = seedFrame({ logEntries: [], manualRefillProgress: undefined });
+    const before = JSON.stringify(message.TavernDB_ACU_IsolatedData);
+    const data = { mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: sheetB } as any;
+    const operations = [{ kind: 'sheet_replace', sheetKey: 'sheet_a', sheet: sheetA, reason: 'system' }] as any;
+    mocks.loadReplayDetailed.mockImplementation(async () => {
+      mocks.chatIdentity = 'other-chat-during-replay';
+      return { baseKind: 'full_checkpoint', data };
+    });
+    try {
+      const pending = mode === 'single' ? persistTableMutationLogV2_ACU({
+        targetMessageIndex: 0, source: 'group_fill', afterData: data, operations,
+        candidateChangedSheetKeys: ['sheet_a'], transactionContext: makeTransaction(),
+      }) : persistTableMutationLogBatchV2_ACU({
+        source: 'group_fill', afterData: data,
+        targets: [{ targetMessageIndex: 0, operations, changedSheetKeys: ['sheet_a'] }],
+        transactionContext: makeTransaction(),
+      } as any);
+      await expect(pending).rejects.toThrow('目标聊天已切换');
+      expect(JSON.stringify(message.TavernDB_ACU_IsolatedData)).toBe(before);
+      expect(mocks.saveChat).not.toHaveBeenCalled();
+      expect(mocks.saveChatStrict).not.toHaveBeenCalled();
+      // 保存链的只读校验回放按预算让出主线程
+      expect(mocks.loadReplayDetailed).toHaveBeenCalled();
+      for (const call of mocks.loadReplayDetailed.mock.calls) {
+        expect(call[2]).toMatchObject({ updateRuntimeState: false, yieldBudgetMs: 8 });
+      }
+    } finally { mocks.chatIdentity = previousIdentity; }
+  });
+});

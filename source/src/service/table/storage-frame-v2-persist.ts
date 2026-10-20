@@ -30,6 +30,10 @@ import { isDataBearingMessage_ACU } from '../../shared/ai-floor';
 import { downgradeOtherFullCheckpoints_ACU } from './v2-full-checkpoint-downgrade';
 import { cloneChatWithTableFields_ACU } from './chat-table-field-swap';
 
+// 保存时的只读校验回放按时间预算让出主线程（大表保存不卡界面）；仍持有提交锁，
+// 只在完整 frame/entry 边界让步、不跳过严格校验，同轮 replayEvidence 照常复用。
+const PERSIST_REPLAY_YIELD_BUDGET_MS_ACU = 8;
+
 export interface TableCheckpointGenerationConfig_ACU {
   maxEntriesAfterCheckpoint: number;
   maxOperationKbAfterCheckpoint: number;
@@ -644,6 +648,7 @@ async function validateTemporaryBaselineUpgradeCandidate_ACU(
       replay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
         ...options,
         updateRuntimeState: false,
+        yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
         compatibilityMode: 'disabled',
       });
     } catch (error) {
@@ -688,6 +693,7 @@ async function validateAppendedOperationsReplayCandidate_ACU(
     replay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
       maxMessageIndex: targetMessageIndex,
       updateRuntimeState: false,
+      yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
       compatibilityMode: 'disabled',
     });
   } catch (error) {
@@ -734,6 +740,7 @@ async function validateProvisionalConvergenceCandidate_ACU(
       const replay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
         ...options,
         updateRuntimeState: false,
+        yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
         compatibilityMode: 'disabled',
       });
       if (!replay || replay.baseKind !== 'full_checkpoint') {
@@ -2220,6 +2227,7 @@ async function persistTableMutationLogV2Core_ACU(
     return { saved: false, error: 'no AI message found' };
   }
 
+  const preparationChatIdentity = getActiveChatStorageIdentity_ACU(chat);
   options.transactionContext?.assertFresh?.('persistTableMutationLogV2:before_persist');
   if (!chat[target.index] || chat[target.index] !== target.message || target.message.is_user) {
     return { saved: false, error: 'target AI message changed before persist; abort stale table write.' };
@@ -2294,6 +2302,7 @@ async function persistTableMutationLogV2Core_ACU(
     const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
       maxMessageIndex: target.index,
       updateRuntimeState: false,
+      yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
       ...(options.performanceRunId ? { performanceRunId: options.performanceRunId } : {}),
       ...(options.performanceParentSpanId
         ? { performanceParentSpanId: options.performanceParentSpanId }
@@ -2335,6 +2344,7 @@ async function persistTableMutationLogV2Core_ACU(
       replay = await loadTableStateFromFramesV2Detailed_ACU(preWriteChat, isolationKey, {
         maxMessageIndex: target.index,
         updateRuntimeState: false,
+        yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
         ...(boundaryReplayEvidence ? { replayEvidence: boundaryReplayEvidence } : {}),
         ...(options.performanceRunId ? { performanceRunId: options.performanceRunId } : {}),
         ...(options.performanceParentSpanId
@@ -2566,6 +2576,7 @@ async function persistTableMutationLogV2Core_ACU(
         replayBeforeAppend = await loadTableStateFromFramesV2Detailed_ACU(preWriteChat, isolationKey, {
           maxMessageIndex: target.index,
           updateRuntimeState: false,
+          yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
           ...(boundaryReplayEvidence ? { replayEvidence: boundaryReplayEvidence } : {}),
           ...(options.performanceRunId ? { performanceRunId: options.performanceRunId } : {}),
           ...(options.performanceParentSpanId
@@ -2751,6 +2762,14 @@ async function persistTableMutationLogV2Core_ACU(
     );
     if (mirrorViolation) return { saved: false, error: mirrorViolation };
   }
+  // 上面的校验回放是异步的：第一笔聊天帧变更前复核聊天与目标楼层，期间切换了聊天就拒绝旧结果
+  if (getChatArray_ACU() !== chat || getActiveChatStorageIdentity_ACU(chat) !== preparationChatIdentity) {
+    throw new Error('目标聊天已切换，已拒绝旧的表格保存。');
+  }
+  if (chat[target.index] !== target.message || target.message.is_user) {
+    throw new Error('保存目标楼层已变化，已拒绝旧的表格保存。');
+  }
+  options.transactionContext?.assertFresh?.('persistTableMutationLogV2:after_replay');
   const previousMessageState = [...replacementIsolatedDataByMessageIndex.keys()].map(messageIndex => {
     const message = chat[messageIndex];
     return {
@@ -2917,6 +2936,7 @@ async function persistTableMutationLogBatchV2Core_ACU(
   if (!Array.isArray(chat) || chat.length === 0) return { saved: false, error: 'chat history is empty' };
   if (!Array.isArray(options.targets) || options.targets.length === 0) return { saved: false, error: 'V2 batch write requires at least one target.' };
 
+  const preparationChatIdentity = getActiveChatStorageIdentity_ACU(chat);
   const isolationKey = options.isolationKey ?? getCurrentIsolationKey_ACU();
   const latestCheckpoint = findLatestFullCheckpoint_ACU(chat, isolationKey);
   const latestReplayRootIndex = findLatestReplayRootMessageIndex_ACU(chat, isolationKey);
@@ -2940,6 +2960,7 @@ async function persistTableMutationLogBatchV2Core_ACU(
     const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
       maxMessageIndex: convergenceTargetIndex,
       updateRuntimeState: false,
+      yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
     });
     // F2/写严（同单写路径）：宽容回放结果不是严格可写历史，直接拒绝 batch 写入。
     if (replay?.baseKind === 'compat_tolerant_replay') {
@@ -3089,6 +3110,15 @@ async function persistTableMutationLogBatchV2Core_ACU(
     );
     if (mirrorViolation) return { saved: false, error: mirrorViolation };
   }
+
+  // 上面的校验回放是异步的：落盘前复核聊天与各目标楼层，期间切换了聊天就拒绝旧结果
+  if (getChatArray_ACU() !== chat || getActiveChatStorageIdentity_ACU(chat) !== preparationChatIdentity) {
+    throw new Error('目标聊天已切换，已拒绝旧的批量表格保存。');
+  }
+  for (const index of targetByIndex.keys()) {
+    if (!chat[index] || chat[index].is_user) throw new Error('批量保存目标已变化，已拒绝旧结果。');
+  }
+  options.transactionContext?.assertFresh?.('persistTableMutationLogBatchV2:after_replay');
 
   // convergence 会把锚点写入根帧（latestCheckpoint.index）；若根帧不是 batch target，
   // 必须把根帧一并纳入原子落盘集合，否则锚点只在内存候选里、落盘即丢失。

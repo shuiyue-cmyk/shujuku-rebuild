@@ -37,7 +37,9 @@ export type AutoFillSkipReason_ACU =
   /** 排队期间开始了新一轮正文生成、删了楼或切换了回复版本 → 旧任务的目标楼层已失效，丢弃 */
   | 'generation_changed'
   /** 防抖到期时正文还在生成 → 不对没写完的回复填表 / 替换 */
-  | 'generation_in_progress';
+  | 'generation_in_progress'
+  /** 用户停止了本轮正文生成 → 不对半截回复填表 / 替换（下一轮正文生成恢复） */
+  | 'generation_stopped';
 
 export interface AutoFillSkipContext_ACU {
   eventType?: string;

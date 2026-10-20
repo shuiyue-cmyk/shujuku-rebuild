@@ -219,6 +219,49 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
     });
   });
 
+  // 上游 3cd3824b：模板插件未必支持取消，停止填表只停本轮等待，迟到结果不得继续组装或发请求
+  it.each(['resolve', 'reject'])('取消挂起的 EJS 等待，迟到 %s 不再发请求', async outcome => {
+    const controller = new AbortController();
+    let release!: (value: string) => void;
+    let fail!: (error: Error) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const pending = new Promise<string>((resolve, reject) => { release = resolve; fail = reject; });
+    (globalThis as any).EjsTemplate = { evalTemplate: vi.fn(() => { entered(); return pending; }) };
+    const request = callCustomOpenAI_ACU({}, controller);
+    const rejected = expect(request).rejects.toMatchObject({ name: 'AbortError' });
+    await started;
+    controller.abort();
+    await rejected;
+    expect(mockUntrackAbortController).toHaveBeenCalledWith(controller);
+    if (outcome === 'resolve') release('迟到模板');
+    else fail(new Error('迟到失败'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('已取消的调用不启动模板或网络', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const evaluate = vi.fn();
+    (globalThis as any).EjsTemplate = { evalTemplate: evaluate };
+    await expect(callCustomOpenAI_ACU({}, controller)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['Error', 'AbortError'])('模板 %s：普通失败仍回退原文，取消类失败原样抛出', async name => {
+    const error = Object.assign(new Error('模板失败'), { name });
+    (globalThis as any).EjsTemplate = { evalTemplate: vi.fn().mockRejectedValue(error) };
+    if (name === 'AbortError') {
+      await expect(callCustomOpenAI_ACU({})).rejects.toBe(error);
+      expect(mockFetch).not.toHaveBeenCalled();
+    } else {
+      await expect(callCustomOpenAI_ACU({})).resolves.toBe('AI回复');
+    }
+  });
+
   it('占位符 $0/$1/$4/$6/$8/$9/$U/$C 被正确替换', async () => {
     mockSettings.charCardPrompt = [
       { role: 'USER', content: '表格:$0 消息:$1 世界书:$4 剧情:$6 额外:$8 内部已排除世界书:$9/$9 用户:$U 角色:$C' },

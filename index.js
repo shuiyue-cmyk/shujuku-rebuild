@@ -59566,6 +59566,9 @@ function applyCandidateTableFieldsToLiveChat_ACU(chat, candidateChat) {
     return rollback;
 }
 
+// 保存时的只读校验回放按时间预算让出主线程（大表保存不卡界面）；仍持有提交锁，
+// 只在完整 frame/entry 边界让步、不跳过严格校验，同轮 replayEvidence 照常复用。
+const PERSIST_REPLAY_YIELD_BUDGET_MS_ACU = 8;
 function assertTemplateCommitChatContext_ACU(expectedChat, options) {
     if (options.signal?.aborted)
         throw new Error('模板提交已取消。');
@@ -59894,6 +59897,7 @@ async function validateTemporaryBaselineUpgradeCandidate_ACU(candidateChat, isol
             replay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
                 ...options,
                 updateRuntimeState: false,
+                yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
                 compatibilityMode: 'disabled',
             });
         }
@@ -59933,6 +59937,7 @@ async function validateAppendedOperationsReplayCandidate_ACU(candidateChat, isol
         replay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
             maxMessageIndex: targetMessageIndex,
             updateRuntimeState: false,
+            yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
             compatibilityMode: 'disabled',
         });
     }
@@ -59976,6 +59981,7 @@ async function validateProvisionalConvergenceCandidate_ACU(candidateChat, isolat
             const replay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
                 ...options,
                 updateRuntimeState: false,
+                yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
                 compatibilityMode: 'disabled',
             });
             if (!replay || replay.baseKind !== 'full_checkpoint') {
@@ -61292,6 +61298,7 @@ async function persistTableMutationLogV2Core_ACU(options) {
     if (!target) {
         return { saved: false, error: 'no AI message found' };
     }
+    const preparationChatIdentity = getActiveChatStorageIdentity_ACU(chat);
     options.transactionContext?.assertFresh?.('persistTableMutationLogV2:before_persist');
     if (!chat[target.index] || chat[target.index] !== target.message || target.message.is_user) {
         return { saved: false, error: 'target AI message changed before persist; abort stale table write.' };
@@ -61365,6 +61372,7 @@ async function persistTableMutationLogV2Core_ACU(options) {
         const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
             maxMessageIndex: target.index,
             updateRuntimeState: false,
+            yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
             ...(options.performanceRunId ? { performanceRunId: options.performanceRunId } : {}),
             ...(options.performanceParentSpanId
                 ? { performanceParentSpanId: options.performanceParentSpanId }
@@ -61400,6 +61408,7 @@ async function persistTableMutationLogV2Core_ACU(options) {
             replay = await loadTableStateFromFramesV2Detailed_ACU(preWriteChat, isolationKey, {
                 maxMessageIndex: target.index,
                 updateRuntimeState: false,
+                yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
                 ...(boundaryReplayEvidence ? { replayEvidence: boundaryReplayEvidence } : {}),
                 ...(options.performanceRunId ? { performanceRunId: options.performanceRunId } : {}),
                 ...(options.performanceParentSpanId
@@ -61607,6 +61616,7 @@ async function persistTableMutationLogV2Core_ACU(options) {
                 replayBeforeAppend = await loadTableStateFromFramesV2Detailed_ACU(preWriteChat, isolationKey, {
                     maxMessageIndex: target.index,
                     updateRuntimeState: false,
+                    yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
                     ...(boundaryReplayEvidence ? { replayEvidence: boundaryReplayEvidence } : {}),
                     ...(options.performanceRunId ? { performanceRunId: options.performanceRunId } : {}),
                     ...(options.performanceParentSpanId
@@ -61776,6 +61786,14 @@ async function persistTableMutationLogV2Core_ACU(options) {
         if (mirrorViolation)
             return { saved: false, error: mirrorViolation };
     }
+    // 上面的校验回放是异步的：第一笔聊天帧变更前复核聊天与目标楼层，期间切换了聊天就拒绝旧结果
+    if (getChatArray_ACU() !== chat || getActiveChatStorageIdentity_ACU(chat) !== preparationChatIdentity) {
+        throw new Error('目标聊天已切换，已拒绝旧的表格保存。');
+    }
+    if (chat[target.index] !== target.message || target.message.is_user) {
+        throw new Error('保存目标楼层已变化，已拒绝旧的表格保存。');
+    }
+    options.transactionContext?.assertFresh?.('persistTableMutationLogV2:after_replay');
     const previousMessageState = [...replacementIsolatedDataByMessageIndex.keys()].map(messageIndex => {
         const message = chat[messageIndex];
         return {
@@ -61932,6 +61950,7 @@ async function persistTableMutationLogBatchV2Core_ACU(options) {
         return { saved: false, error: 'chat history is empty' };
     if (!Array.isArray(options.targets) || options.targets.length === 0)
         return { saved: false, error: 'V2 batch write requires at least one target.' };
+    const preparationChatIdentity = getActiveChatStorageIdentity_ACU(chat);
     const isolationKey = options.isolationKey ?? getCurrentIsolationKey_ACU();
     const latestCheckpoint = findLatestFullCheckpoint_ACU(chat, isolationKey);
     const latestReplayRootIndex = findLatestReplayRootMessageIndex_ACU(chat, isolationKey);
@@ -61955,6 +61974,7 @@ async function persistTableMutationLogBatchV2Core_ACU(options) {
         const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
             maxMessageIndex: convergenceTargetIndex,
             updateRuntimeState: false,
+            yieldBudgetMs: PERSIST_REPLAY_YIELD_BUDGET_MS_ACU,
         });
         // F2/写严（同单写路径）：宽容回放结果不是严格可写历史，直接拒绝 batch 写入。
         if (replay?.baseKind === 'compat_tolerant_replay') {
@@ -62080,6 +62100,15 @@ async function persistTableMutationLogBatchV2Core_ACU(options) {
         if (mirrorViolation)
             return { saved: false, error: mirrorViolation };
     }
+    // 上面的校验回放是异步的：落盘前复核聊天与各目标楼层，期间切换了聊天就拒绝旧结果
+    if (getChatArray_ACU() !== chat || getActiveChatStorageIdentity_ACU(chat) !== preparationChatIdentity) {
+        throw new Error('目标聊天已切换，已拒绝旧的批量表格保存。');
+    }
+    for (const index of targetByIndex.keys()) {
+        if (!chat[index] || chat[index].is_user)
+            throw new Error('批量保存目标已变化，已拒绝旧结果。');
+    }
+    options.transactionContext?.assertFresh?.('persistTableMutationLogBatchV2:after_replay');
     // convergence 会把锚点写入根帧（latestCheckpoint.index）；若根帧不是 batch target，
     // 必须把根帧一并纳入原子落盘集合，否则锚点只在内存候选里、落盘即丢失。
     const persistIndices = provisionalConvergenceReplay && !targetByIndex.has(latestCheckpoint.index)
@@ -84502,6 +84531,21 @@ function withTableFillRetryHistory_ACU(messages, history, mode) {
         : [...messages, ...extra];
 }
 
+/** 等待可协作取消的任务；迟到 Promise 仍被观察，副作用由任务内信号/身份检查阻断。 */
+async function runWithAbortSignal_ACU(signal, run) {
+    signal?.throwIfAborted();
+    if (!signal)
+        return run();
+    return new Promise((resolve, reject) => {
+        const abort = () => reject(signal.reason ?? new DOMException('本轮已停止。', 'AbortError'));
+        signal.addEventListener('abort', abort, { once: true });
+        Promise.resolve().then(() => {
+            signal.throwIfAborted();
+            return run();
+        }).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+    });
+}
+
 /**
  * service/ai/prompt-builder/prompt-api-call.ts
  * AI API 调用 — prompt 组装 + API 调用 + 流式/非流式响应处理
@@ -84539,169 +84583,176 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
     const abortSignal = localAbortController.signal;
     const skipProfileSwitch = !!options?.skipProfileSwitch;
     const forceDirectApi = !!options?.forceDirectApi;
-    const effectiveTableApiPreset = options?.tableApiPreset !== undefined
-        ? String(options.tableApiPreset)
-        : (settings_ACU.tableApiPreset || '');
-    const apiPresetConfig = getApiConfigByPreset_ACU(effectiveTableApiPreset);
-    const effectiveApiMode = apiPresetConfig.apiMode;
-    const effectiveApiConfig = apiPresetConfig.apiConfig;
-    const effectiveTavernProfile = apiPresetConfig.tavernProfile;
-    const messages = [];
-    const sqliteMode = isSqliteMode();
-    const charCardPromptSetting = settings_ACU.charCardPrompt;
-    let promptSegments = [];
-    if (Array.isArray(charCardPromptSetting)) {
-        promptSegments = charCardPromptSetting;
-    }
-    else if (typeof charCardPromptSetting === 'string') {
-        promptSegments = [{ role: 'USER', content: charCardPromptSetting }];
-    }
-    // 填表原生工具调用（可选项，默认关闭）：开关开时主段整体切换为工具版
-    // （要求调用 table_sql、正文不再写 SQL），只改本次请求的内存副本，不写回设置。
-    // 流式请求不挂工具（delta 不组装 tool_calls），静默走正文路径。
-    const fillRequestWantsStream = effectiveApiConfig.streamingEnabled !== undefined
-        ? effectiveApiConfig.streamingEnabled === true
-        : settings_ACU.streamingEnabled === true;
-    const fillNativeToolsOn = shouldUseTableFillNativeTools_ACU({
-        enabled: settings_ACU.tableFillNativeToolsEnabled === true,
-        streaming: fillRequestWantsStream,
-    });
-    if (fillNativeToolsOn) {
-        promptSegments = promptSegments.map((segment) => ((segment?.mainSlot === 'A' || segment?.isMain) && typeof segment?.content === 'string'
-            ? { ...segment, content: buildTableSqlToolPrompt_ACU(segment.content) }
-            : segment));
-    }
-    let userInfoContent_Table = '';
     try {
-        userInfoContent_Table = getPersonaDescription_ACU();
-        logDebug_ACU(`[填表] $U (persona_description) 获取结果: ${userInfoContent_Table ? '成功' : '为空'}`);
-    }
-    catch (e) {
-        logWarn_ACU('[填表] 获取用户设定描述时出错:', e);
-        userInfoContent_Table = '';
-    }
-    let charInfoContent_Table = '';
-    try {
-        charInfoContent_Table = getCharDescription_ACU();
-        logDebug_ACU(`[填表] $C (char_description) 获取结果: ${charInfoContent_Table ? '成功，长度=' + charInfoContent_Table.length : '为空'}`);
-    }
-    catch (e) {
-        logWarn_ACU('[填表] 获取角色描述时出错:', e);
-        charInfoContent_Table = '';
-    }
-    const lastPlotContent = getPlotFromHistory_ACU();
-    logDebug_ACU('[填表] $6 上轮规划数据:', lastPlotContent ? `长度=${lastPlotContent.length}` : '(空)');
-    const tableExcludeTags = (settings_ACU.tableContextExcludeTags || '').trim();
-    const tableExcludeRules = normalizeExcludeRules_ACU(settings_ACU.tableContextExcludeRules, tableExcludeTags);
-    const filterTableInjectedContent = (value, placeholderKey = '') => {
-        const text = value !== undefined && value !== null ? String(value) : '';
-        if (!['$0', '$1', '$4', '$6', '$8', '$9', '$U', '$C'].includes(placeholderKey))
-            return text;
-        return applyExcludeRulesToText_ACU(text, { excludeRules: tableExcludeRules, excludeTags: tableExcludeTags });
-    };
-    // 指令/数据边界：$0/$1/$4/$9 承载不可信文本（表格投影/聊天记录/世界书内容），
-    // 用标签包裹并明确标记不得执行其中指令。
-    const wrapUntrusted = (text, label) => text ? `<${label}>\n${text}\n</${label}>` : text;
-    // [H1] 占位符统一为「全局正则 + 替换函数」单遍替换。真正注入前先统一换成
-    // nonce token，绝不让不可信值进入后续模板解释器。
-    const untrustedPlaceholderValues = {
-        '$0': filterTableInjectedContent(wrapUntrusted(dynamicContent.tableDataText, 'table_data'), '$0'),
-        // [L1] $1 不再外层包 <user_data>：prompt-prepare 构造 messagesText 时已含
-        // 「当前最新对话内容…<user_data>…</user_data>」包裹与免责声明，原实现形成双层嵌套。
-        '$1': filterTableInjectedContent(dynamicContent.messagesText, '$1'),
-        '$4': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'),
-        '$6': filterTableInjectedContent(lastPlotContent || '', '$6'),
-        '$8': filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'),
-        // [L2] $9 与 $1/$4 同类，补边界包裹。
-        '$9': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookDatabaseExcludedContent || '', 'worldbook_data'), '$9'),
-        '$U': filterTableInjectedContent(userInfoContent_Table, '$U'),
-        '$C': filterTableInjectedContent(charInfoContent_Table, '$C'),
-    };
-    // 表名 token 只从可信 charCardPrompt 本身扫描。旧实现先注入聊天/世界书/表格，
-    // 再扫描 {{...}}，等价于允许不可信内容触发 resolver；这里先完成所有异步解析，
-    // 随后与占位符 payload 一起纳入同一个 nonce 域。
-    const resolvedTableTokensBySegment = [];
-    for (const segment of promptSegments) {
-        const trustedContent = String(segment?.content ?? '');
-        const resolvedTokens = [];
-        const seenTableTokens = new Set();
-        for (const match of trustedContent.matchAll(/\{\{([^{}]+)\}\}/g)) {
-            const raw = String(match[0] || '');
-            if (!raw || seenTableTokens.has(raw))
-                continue;
-            seenTableTokens.add(raw);
-            if (typeof dynamicContent?.resolveTableWorldbookContent !== 'function')
-                continue;
-            const tableName = String(match[1] || '');
-            try {
-                const resolvedContent = await dynamicContent.resolveTableWorldbookContent(tableName);
-                if (typeof resolvedContent === 'string')
-                    resolvedTokens.push({ raw, value: resolvedContent });
-            }
-            catch (error) {
-                logWarn_ACU(`[填表] 无法解析表名占位符 "${tableName}"，保留原 token。`, error);
-            }
+        // 已取消的调用不再启动模板或网络
+        abortSignal.throwIfAborted();
+        const effectiveTableApiPreset = options?.tableApiPreset !== undefined
+            ? String(options.tableApiPreset)
+            : (settings_ACU.tableApiPreset || '');
+        const apiPresetConfig = getApiConfigByPreset_ACU(effectiveTableApiPreset);
+        const effectiveApiMode = apiPresetConfig.apiMode;
+        const effectiveApiConfig = apiPresetConfig.apiConfig;
+        const effectiveTavernProfile = apiPresetConfig.tavernProfile;
+        const messages = [];
+        const sqliteMode = isSqliteMode();
+        const charCardPromptSetting = settings_ACU.charCardPrompt;
+        let promptSegments = [];
+        if (Array.isArray(charCardPromptSetting)) {
+            promptSegments = charCardPromptSetting;
         }
-        resolvedTableTokensBySegment.push(resolvedTokens);
-    }
-    const untrustedGuard = createUntrustedTemplateGuard_ACU([
-        ...promptSegments.map(segment => segment?.content ?? ''),
-        ...Object.values(untrustedPlaceholderValues),
-        ...resolvedTableTokensBySegment.flat().map(token => token.value),
-    ], 'TABLE_FILL_UNTRUSTED');
-    try {
-        for (let segmentIndex = 0; segmentIndex < promptSegments.length; segmentIndex += 1) {
-            const segment = promptSegments[segmentIndex];
-            let finalContent = String(segment?.content ?? '');
-            // 右边界（R8-13）：可信提示词里的「$100」「$Cx」不是占位符；后跟中文/标点照常替换。
-            finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)(?![0-9A-Za-z_])/g, (match) => (untrustedGuard.protect(untrustedPlaceholderValues[match])));
-            for (const token of resolvedTableTokensBySegment[segmentIndex] || []) {
-                finalContent = finalContent.split(token.raw).join(untrustedGuard.protect(token.value));
-            }
-            if (typeof globalThis.EjsTemplate?.evalTemplate === 'function') {
-                try {
-                    finalContent = await globalThis.EjsTemplate.evalTemplate(finalContent);
-                    logDebug_ACU('[填表] 已通过 st-prompt-template 处理提示词');
-                }
-                catch (e) {
-                    logWarn_ACU('[填表] st-prompt-template 处理失败，使用原始内容:', e);
-                }
-            }
-            finalContent = parseRandomTags_ACU(finalContent);
-            finalContent = replaceRandomVariables_ACU(finalContent);
-            // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下，在 <if> 之前执行）
-            finalContent = replaceDbSqlVariables(finalContent);
-            if (settings_ACU.promptTemplateSettings?.enabled !== false) {
-                // 填表条件必须与本次 $1 实际读取的 AI 上下文一致，不能越过批次边界读取聊天最新层。
-                const conditionalSeedContent = typeof dynamicContent?.conditionalSeedContent === 'string'
-                    ? dynamicContent.conditionalSeedContent
-                    : getLatestAIMessageContent_ACU();
-                const templateContext = {
-                    seedContent: conditionalSeedContent,
-                    allTablesJson: currentJsonTableData_ACU,
-                    plotContent: lastPlotContent || ''
-                };
-                finalContent = parseIfBlocksInContent_ACU(finalContent, templateContext, 0);
-            }
-            messages.push({ role: normalizeRoleForApi_ACU(segment.role), content: finalContent });
+        else if (typeof charCardPromptSetting === 'string') {
+            promptSegments = [{ role: 'USER', content: charCardPromptSetting }];
         }
-    }
-    finally {
-        // 全部模板处理完成后才把不可信 payload 一次性放回出站文本。
-        for (const message of messages)
-            message.content = untrustedGuard.restore(message.content);
-    }
-    // 纠错历史在模板处理之后拼接：上次回复里的 $1、{{表名}} 不会被当成占位符。
-    const requestMessages = withTableFillRetryHistory_ACU(messages, options?.tableFillRetryHistory, { tools: fillNativeToolsOn });
-    const reportTableFillResponse = (raw) => {
+        // 填表原生工具调用（可选项，默认关闭）：开关开时主段整体切换为工具版
+        // （要求调用 table_sql、正文不再写 SQL），只改本次请求的内存副本，不写回设置。
+        // 流式请求不挂工具（delta 不组装 tool_calls），静默走正文路径。
+        const fillRequestWantsStream = effectiveApiConfig.streamingEnabled !== undefined
+            ? effectiveApiConfig.streamingEnabled === true
+            : settings_ACU.streamingEnabled === true;
+        const fillNativeToolsOn = shouldUseTableFillNativeTools_ACU({
+            enabled: settings_ACU.tableFillNativeToolsEnabled === true,
+            streaming: fillRequestWantsStream,
+        });
+        if (fillNativeToolsOn) {
+            promptSegments = promptSegments.map((segment) => ((segment?.mainSlot === 'A' || segment?.isMain) && typeof segment?.content === 'string'
+                ? { ...segment, content: buildTableSqlToolPrompt_ACU(segment.content) }
+                : segment));
+        }
+        let userInfoContent_Table = '';
         try {
-            options?.onTableFillResponse?.(raw);
+            userInfoContent_Table = getPersonaDescription_ACU();
+            logDebug_ACU(`[填表] $U (persona_description) 获取结果: ${userInfoContent_Table ? '成功' : '为空'}`);
         }
-        catch { /* 回报回调异常不影响主流程 */ }
-    };
-    logDebug_ACU('Final messages array being sent to API:', requestMessages);
-    logDebug_ACU(`使用API预设: ${effectiveTableApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
-    try {
+        catch (e) {
+            logWarn_ACU('[填表] 获取用户设定描述时出错:', e);
+            userInfoContent_Table = '';
+        }
+        let charInfoContent_Table = '';
+        try {
+            charInfoContent_Table = getCharDescription_ACU();
+            logDebug_ACU(`[填表] $C (char_description) 获取结果: ${charInfoContent_Table ? '成功，长度=' + charInfoContent_Table.length : '为空'}`);
+        }
+        catch (e) {
+            logWarn_ACU('[填表] 获取角色描述时出错:', e);
+            charInfoContent_Table = '';
+        }
+        const lastPlotContent = getPlotFromHistory_ACU();
+        logDebug_ACU('[填表] $6 上轮规划数据:', lastPlotContent ? `长度=${lastPlotContent.length}` : '(空)');
+        const tableExcludeTags = (settings_ACU.tableContextExcludeTags || '').trim();
+        const tableExcludeRules = normalizeExcludeRules_ACU(settings_ACU.tableContextExcludeRules, tableExcludeTags);
+        const filterTableInjectedContent = (value, placeholderKey = '') => {
+            const text = value !== undefined && value !== null ? String(value) : '';
+            if (!['$0', '$1', '$4', '$6', '$8', '$9', '$U', '$C'].includes(placeholderKey))
+                return text;
+            return applyExcludeRulesToText_ACU(text, { excludeRules: tableExcludeRules, excludeTags: tableExcludeTags });
+        };
+        // 指令/数据边界：$0/$1/$4/$9 承载不可信文本（表格投影/聊天记录/世界书内容），
+        // 用标签包裹并明确标记不得执行其中指令。
+        const wrapUntrusted = (text, label) => text ? `<${label}>\n${text}\n</${label}>` : text;
+        // [H1] 占位符统一为「全局正则 + 替换函数」单遍替换。真正注入前先统一换成
+        // nonce token，绝不让不可信值进入后续模板解释器。
+        const untrustedPlaceholderValues = {
+            '$0': filterTableInjectedContent(wrapUntrusted(dynamicContent.tableDataText, 'table_data'), '$0'),
+            // [L1] $1 不再外层包 <user_data>：prompt-prepare 构造 messagesText 时已含
+            // 「当前最新对话内容…<user_data>…</user_data>」包裹与免责声明，原实现形成双层嵌套。
+            '$1': filterTableInjectedContent(dynamicContent.messagesText, '$1'),
+            '$4': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'),
+            '$6': filterTableInjectedContent(lastPlotContent || '', '$6'),
+            '$8': filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'),
+            // [L2] $9 与 $1/$4 同类，补边界包裹。
+            '$9': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookDatabaseExcludedContent || '', 'worldbook_data'), '$9'),
+            '$U': filterTableInjectedContent(userInfoContent_Table, '$U'),
+            '$C': filterTableInjectedContent(charInfoContent_Table, '$C'),
+        };
+        // 表名 token 只从可信 charCardPrompt 本身扫描。旧实现先注入聊天/世界书/表格，
+        // 再扫描 {{...}}，等价于允许不可信内容触发 resolver；这里先完成所有异步解析，
+        // 随后与占位符 payload 一起纳入同一个 nonce 域。
+        const resolvedTableTokensBySegment = [];
+        for (const segment of promptSegments) {
+            const trustedContent = String(segment?.content ?? '');
+            const resolvedTokens = [];
+            const seenTableTokens = new Set();
+            for (const match of trustedContent.matchAll(/\{\{([^{}]+)\}\}/g)) {
+                const raw = String(match[0] || '');
+                if (!raw || seenTableTokens.has(raw))
+                    continue;
+                seenTableTokens.add(raw);
+                if (typeof dynamicContent?.resolveTableWorldbookContent !== 'function')
+                    continue;
+                const tableName = String(match[1] || '');
+                try {
+                    const resolvedContent = await dynamicContent.resolveTableWorldbookContent(tableName);
+                    if (typeof resolvedContent === 'string')
+                        resolvedTokens.push({ raw, value: resolvedContent });
+                }
+                catch (error) {
+                    logWarn_ACU(`[填表] 无法解析表名占位符 "${tableName}"，保留原 token。`, error);
+                }
+            }
+            resolvedTableTokensBySegment.push(resolvedTokens);
+        }
+        const untrustedGuard = createUntrustedTemplateGuard_ACU([
+            ...promptSegments.map(segment => segment?.content ?? ''),
+            ...Object.values(untrustedPlaceholderValues),
+            ...resolvedTableTokensBySegment.flat().map(token => token.value),
+        ], 'TABLE_FILL_UNTRUSTED');
+        try {
+            for (let segmentIndex = 0; segmentIndex < promptSegments.length; segmentIndex += 1) {
+                const segment = promptSegments[segmentIndex];
+                let finalContent = String(segment?.content ?? '');
+                // 右边界（R8-13）：可信提示词里的「$100」「$Cx」不是占位符；后跟中文/标点照常替换。
+                finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)(?![0-9A-Za-z_])/g, (match) => (untrustedGuard.protect(untrustedPlaceholderValues[match])));
+                for (const token of resolvedTableTokensBySegment[segmentIndex] || []) {
+                    finalContent = finalContent.split(token.raw).join(untrustedGuard.protect(token.value));
+                }
+                if (typeof globalThis.EjsTemplate?.evalTemplate === 'function') {
+                    try {
+                        // 模板插件未必支持取消：停止时只结束本轮等待，迟到的结果不再继续组装或发请求
+                        finalContent = await runWithAbortSignal_ACU(abortSignal, () => globalThis.EjsTemplate.evalTemplate(finalContent));
+                        logDebug_ACU('[填表] 已通过 st-prompt-template 处理提示词');
+                    }
+                    catch (e) {
+                        abortSignal.throwIfAborted();
+                        if (e?.name === 'AbortError')
+                            throw e;
+                        logWarn_ACU('[填表] st-prompt-template 处理失败，使用原始内容:', e);
+                    }
+                }
+                abortSignal.throwIfAborted();
+                finalContent = parseRandomTags_ACU(finalContent);
+                finalContent = replaceRandomVariables_ACU(finalContent);
+                // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下，在 <if> 之前执行）
+                finalContent = replaceDbSqlVariables(finalContent);
+                if (settings_ACU.promptTemplateSettings?.enabled !== false) {
+                    // 填表条件必须与本次 $1 实际读取的 AI 上下文一致，不能越过批次边界读取聊天最新层。
+                    const conditionalSeedContent = typeof dynamicContent?.conditionalSeedContent === 'string'
+                        ? dynamicContent.conditionalSeedContent
+                        : getLatestAIMessageContent_ACU();
+                    const templateContext = {
+                        seedContent: conditionalSeedContent,
+                        allTablesJson: currentJsonTableData_ACU,
+                        plotContent: lastPlotContent || ''
+                    };
+                    finalContent = parseIfBlocksInContent_ACU(finalContent, templateContext, 0);
+                }
+                messages.push({ role: normalizeRoleForApi_ACU(segment.role), content: finalContent });
+            }
+        }
+        finally {
+            // 全部模板处理完成后才把不可信 payload 一次性放回出站文本。
+            for (const message of messages)
+                message.content = untrustedGuard.restore(message.content);
+        }
+        // 纠错历史在模板处理之后拼接：上次回复里的 $1、{{表名}} 不会被当成占位符。
+        const requestMessages = withTableFillRetryHistory_ACU(messages, options?.tableFillRetryHistory, { tools: fillNativeToolsOn });
+        const reportTableFillResponse = (raw) => {
+            try {
+                options?.onTableFillResponse?.(raw);
+            }
+            catch { /* 回报回调异常不影响主流程 */ }
+        };
+        logDebug_ACU('Final messages array being sent to API:', requestMessages);
+        logDebug_ACU(`使用API预设: ${effectiveTableApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
         if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
             throw new Error('自定义API的URL或模型未配置。');
         }
@@ -93597,7 +93648,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261020-1307"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261020-1339"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -93616,7 +93667,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261020-1307";
+        const stamp = "20261020-1339";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -113853,7 +113904,12 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
             if (attempt < maxRetries) {
                 retryHistory.push({ response: lastAiResponse, error: sanitizeRetryFeedback_ACU(lastErrorMessage) });
                 options.onProgress?.({ phase: 'retry', attempt, maxRetries, message: sanitizeRetryFeedback_ACU(lastErrorMessage, 50) });
-                await new Promise(resolve => setTimeout(resolve, 5000));
+                // 等待可被终止打断：停止后立即收尾，不再发下一次请求
+                await abortableDelay(5000, effectiveAbortController.signal);
+                if (isStopped()) {
+                    diagnoseResponse('user_aborted', attempt);
+                    return { job, success: false, attempt, aborted: true };
+                }
             }
         }
     }
@@ -115753,7 +115809,11 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                     const waitTime = 5000;
                     logDebug_ACU(`等待 ${waitTime}ms 后重试...`);
                     emitProgress({ phase: 'retry', attempt, maxRetries, message: sanitizeRetryFeedback_ACU(safeError, 50) });
-                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                    // 等待可被终止打断：停止后立即收尾，不再发下一次请求
+                    await abortableDelay(waitTime, effectiveAbortController.signal);
+                    if (effectiveAbortController.signal.aborted || isTableFillStopRequested_ACU()) {
+                        return { success: false, modifiedKeys: [], aborted: true };
+                    }
                     continue;
                 }
                 else {
@@ -149089,6 +149149,11 @@ function captureSendLease_ACU() {
 // 不能把它记成「用户终止」，否则会连带掐掉正在跑的、与这次发送无关的填表。
 let selfHostStopAt_ACU = 0;
 const SELF_HOST_STOP_WINDOW_MS_ACU = 2000;
+// 本轮正文已被停止（上游 issue #51）：宿主停止时按 GENERATION_ENDED → GENERATION_STOPPED 的顺序派发，
+// 有的宿主还会在停止后再交付一次本轮结束事件。停止时作废已排队的自动任务，并记住「本轮已停」，
+// 挡住停止之后才到的同轮结束事件；下一轮正文生成（非 quiet / dryRun / 插件自动触发）开始时恢复。
+// 只管自动链，不碰填表自身的 wasStoppedByUser，手动填表照常可用。
+let foregroundTurnStopped_ACU = false;
 /**
  * 召回期间这次发送已失效。用户按了停止：宿主已停，无需再做；
  * 其它原因（切聊天、宿主重载当前聊天、隔离标识变化）：宿主生成并未被中止，记忆不可信，停掉它。
@@ -149320,6 +149385,7 @@ function mainInitialize_ACU() {
                         // quiet / dryRun / 插件自动触发的生成不动正文，不作废。
                         if (!dryRun && !quietLike && !params?.automatic_trigger) {
                             cancelPendingAutoTasks_ACU('generation_started');
+                            foregroundTurnStopped_ACU = false;
                         }
                         const context = recordGenerationContext_ACU(type, params, dryRun, preSignature);
                         bindContinuationInternalAiGenerationStarted_ACU(context.seq);
@@ -149351,6 +149417,13 @@ function mainInitialize_ACU() {
                             _set_wasStoppedByUser_ACU(true);
                         hostGenerationStopSeq_ACU += 1;
                         const discarded = discardLatestGenerationContext_ACU();
+                        // 停掉的是后台 quiet / dryRun 生成时与正文轮次无关；上下文已被 ENDED 消费（拿不到）时按正文停止处理。
+                        const stoppedBackground = !!discarded
+                            && (discarded.dryRun || isQuietLikeGeneration_ACU(discarded.type, discarded.params));
+                        if (!stoppedBackground) {
+                            foregroundTurnStopped_ACU = true;
+                            cancelPendingAutoTasks_ACU('generation_stopped');
+                        }
                         // 被中止的生成不会再有 GENERATION_ENDED；通知桥把等待中的续写轮转为可重试，避免卡死。
                         void getContinuationHostGenerationBridge_ACU()?.onGenerationStopped(discarded?.seq);
                     }
@@ -149429,7 +149502,17 @@ function mainInitialize_ACU() {
                     // [152 收紧] 「新 AI 楼证据」签名：本事件时刻的 AI 楼数 + 最新 AI 楼 message_id（含 narrator，
                     // 与 auto-fill-echo-guard 同口径）。聊天数组在这里读一次，交给门控自行决定无配对假 ended 的去留。
                     const endedFloorSignature_ACU = floorScan_ACU.signature;
-                    if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext, endedFloorSignature_ACU)) {
+                    if (foregroundTurnStopped_ACU) {
+                        logDebug_ACU('ACU: Skip auto table update: 本轮正文已被停止。');
+                        logAutoFillSkip_ACU('generation_stopped', {
+                            eventType: 'GENERATION_ENDED',
+                            messageId: message_id,
+                            eventMessageId: message_id,
+                            chatKey: currentChatFileIdentifier_ACU,
+                            isolationKey: getCurrentIsolationKey_ACU(),
+                        });
+                    }
+                    else if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext, endedFloorSignature_ACU)) {
                         handleNewMessageDebounced_ACU('GENERATION_ENDED', autoFillIntent);
                     }
                     else if (generationContext) {
@@ -155197,7 +155280,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261020-1307";
+        const stamp = "20261020-1339";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

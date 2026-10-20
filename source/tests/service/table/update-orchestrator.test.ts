@@ -1407,6 +1407,33 @@ describe('executeCardUpdateCore_ACU', () => {
     mockShouldRotateBoundaryCheckpoint.mockReturnValue(false);
   });
 
+  // 上游 3cd3824b：重试前的 5 秒等待可被终止打断
+  it('重试等待期间终止立即收尾，不再请求或保存', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let enterRetry!: () => void;
+    const retryStarted = new Promise<void>(resolve => { enterRetry = resolve; });
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('格式不合格');
+    try {
+      const pending = executeCardUpdateCore_ACU([], 0, false, 'auto_standard', false,
+        ['sheet_0'], null, controller, null,
+        event => { if (event.phase === 'retry') enterRetry(); });
+      await retryStarted;
+      await vi.advanceTimersByTimeAsync(1000);
+      const stoppedAt = Date.now();
+      controller.abort();
+      expect(await pending).toMatchObject({ success: false, aborted: true });
+      expect(Date.now()).toBe(stoppedAt);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+      expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('SQLite legacy 收到非 SQL tableEdit 时拒绝，不走 JSON snapshot 分支', async () => {
     const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
     vi.mocked(isSqliteMode).mockReturnValue(true);
@@ -4778,6 +4805,32 @@ describe('collectGroupFillResponse_ACU', () => {
     baseSnapshot: {
       sheet_0: { name: '快照表', content: [['row_id'], ['snapshot']] },
     },
+  });
+
+  it.each([1, 3])('%s 组重试共享终止信号，等待中立即退出且清理计时器', async count => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let entered = 0;
+    let enterRetry!: () => void;
+    const retryStarted = new Promise<void>(resolve => { enterRetry = resolve; });
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('格式不合格');
+    try {
+      const pending = Promise.all(Array.from({ length: count }, () =>
+        collectGroupFillResponse_ACU(createJob() as any, undefined, controller, {
+          onProgress: event => { if (event.phase === 'retry' && ++entered === count) enterRetry(); },
+        })));
+      await retryStarted;
+      await vi.advanceTimersByTimeAsync(1000);
+      const stoppedAt = Date.now();
+      controller.abort();
+      for (const result of await pending) expect(result).toMatchObject({ success: false, aborted: true, attempt: 1 });
+      expect(Date.now()).toBe(stoppedAt);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(count);
+      expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
   });
 
   it('显式 baseSnapshot 传给 prepareAIInput_ACU，且 collect 阶段不触发 parse/save', async () => {

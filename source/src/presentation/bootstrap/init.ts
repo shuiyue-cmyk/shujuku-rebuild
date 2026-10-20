@@ -640,6 +640,12 @@ function captureSendLease_ACU(): SendLease_ACU {
 let selfHostStopAt_ACU = 0;
 const SELF_HOST_STOP_WINDOW_MS_ACU = 2_000;
 
+// 本轮正文已被停止（上游 issue #51）：宿主停止时按 GENERATION_ENDED → GENERATION_STOPPED 的顺序派发，
+// 有的宿主还会在停止后再交付一次本轮结束事件。停止时作废已排队的自动任务，并记住「本轮已停」，
+// 挡住停止之后才到的同轮结束事件；下一轮正文生成（非 quiet / dryRun / 插件自动触发）开始时恢复。
+// 只管自动链，不碰填表自身的 wasStoppedByUser，手动填表照常可用。
+let foregroundTurnStopped_ACU = false;
+
 /**
  * 召回期间这次发送已失效。用户按了停止：宿主已停，无需再做；
  * 其它原因（切聊天、宿主重载当前聊天、隔离标识变化）：宿主生成并未被中止，记忆不可信，停掉它。
@@ -878,6 +884,7 @@ export   function mainInitialize_ACU() {
               // quiet / dryRun / 插件自动触发的生成不动正文，不作废。
               if (!dryRun && !quietLike && !params?.automatic_trigger) {
                 cancelPendingAutoTasks_ACU('generation_started');
+                foregroundTurnStopped_ACU = false;
               }
               const context = recordGenerationContext_ACU(type, params, dryRun, preSignature);
               bindContinuationInternalAiGenerationStarted_ACU(context.seq);
@@ -907,6 +914,13 @@ export   function mainInitialize_ACU() {
               if (!selfInitiated) _set_wasStoppedByUser_ACU(true);
               hostGenerationStopSeq_ACU += 1;
               const discarded = discardLatestGenerationContext_ACU();
+              // 停掉的是后台 quiet / dryRun 生成时与正文轮次无关；上下文已被 ENDED 消费（拿不到）时按正文停止处理。
+              const stoppedBackground = !!discarded
+                && (discarded.dryRun || isQuietLikeGeneration_ACU(discarded.type, discarded.params));
+              if (!stoppedBackground) {
+                foregroundTurnStopped_ACU = true;
+                cancelPendingAutoTasks_ACU('generation_stopped');
+              }
               // 被中止的生成不会再有 GENERATION_ENDED；通知桥把等待中的续写轮转为可重试，避免卡死。
               void getContinuationHostGenerationBridge_ACU()?.onGenerationStopped(discarded?.seq);
             } catch (e) {}
@@ -983,7 +997,16 @@ export   function mainInitialize_ACU() {
                 // [152 收紧] 「新 AI 楼证据」签名：本事件时刻的 AI 楼数 + 最新 AI 楼 message_id（含 narrator，
                 // 与 auto-fill-echo-guard 同口径）。聊天数组在这里读一次，交给门控自行决定无配对假 ended 的去留。
                 const endedFloorSignature_ACU = floorScan_ACU.signature;
-                if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext, endedFloorSignature_ACU)) {
+                if (foregroundTurnStopped_ACU) {
+                  logDebug_ACU('ACU: Skip auto table update: 本轮正文已被停止。');
+                  logAutoFillSkip_ACU('generation_stopped', {
+                    eventType: 'GENERATION_ENDED',
+                    messageId: message_id,
+                    eventMessageId: message_id,
+                    chatKey: currentChatFileIdentifier_ACU,
+                    isolationKey: getCurrentIsolationKey_ACU(),
+                  });
+                } else if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext, endedFloorSignature_ACU)) {
                   handleNewMessageDebounced_ACU('GENERATION_ENDED', autoFillIntent);
                 } else if (generationContext) {
                   // 只有拿到配对上下文时「quiet/dryRun/自动触发」这条诊断才成立；

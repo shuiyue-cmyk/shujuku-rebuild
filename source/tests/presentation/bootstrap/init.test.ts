@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
   markChatChangedForEndedGate: vi.fn(),
@@ -1186,5 +1186,63 @@ describe('R9-10 启动链中途切聊天', () => {
     await runStartupChatInit_ACU('chat-a');
 
     expect(m.captureVault).toHaveBeenCalledOnce();
+  });
+});
+
+// 上游 issue #51：用户停止正文生成后，本轮的半截回复不自动填表 / 替换。
+// 宿主停止时的事件顺序是 GENERATION_ENDED → GENERATION_STOPPED（→ MESSAGE_RECEIVED），
+// 停止前已排队的任务要作废；停止后才到的同轮结束事件也不能再唤起自动链。
+describe('mainInitialize_ACU 用户停止正文生成后不对本轮回复自动填表', () => {
+  async function arm(): Promise<typeof import('../../../src/service/runtime/state-manager')> {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValue(false);
+    m.consumeGenerationContext.mockReturnValue(null);
+    m.api.chat = [{ is_user: true, message_id: 0 }, { is_user: false, message_id: 1, mes: '半截' }];
+    return sm;
+  }
+
+  afterEach(() => {
+    // 下一轮正常生成恢复资格，避免停止状态泄漏到其它用例
+    m.generationStartedHandler!('normal', {}, false);
+  });
+
+  it('停止时作废本轮已排队的自动任务', async () => {
+    await arm();
+    m.generationStoppedHandler!();
+    expect(m.cancelPendingAutoTasks).toHaveBeenCalledWith('generation_stopped');
+  });
+
+  it('停止后晚到的同轮结束事件不再唤起自动链；下一轮正常生成恢复', async () => {
+    await arm();
+    m.generationStoppedHandler!();
+    m.generationEndedHandler!(1);
+    expect(m.handleNewMessage).not.toHaveBeenCalled();
+    expect(m.logAutoFillSkip).toHaveBeenCalledWith('generation_stopped', expect.anything());
+
+    m.generationStartedHandler!('normal', {}, false);
+    m.generationEndedHandler!(1);
+    expect(m.handleNewMessage).toHaveBeenCalledWith('GENERATION_ENDED', expect.objectContaining({ eventMessageId: 1 }));
+  });
+
+  it('停止后的 quiet / dryRun / 插件自动触发生成不恢复资格', async () => {
+    const sm = await arm();
+    m.generationStoppedHandler!();
+    m.generationStartedHandler!('normal', {}, true);
+    m.generationStartedHandler!('normal', { automatic_trigger: true }, false);
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValueOnce(true);
+    m.generationStartedHandler!('quiet', { quiet_prompt: 'x' }, false);
+    m.generationEndedHandler!(1);
+    expect(m.handleNewMessage).not.toHaveBeenCalled();
+  });
+
+  it('停掉的是后台 quiet 生成：不影响正文轮次的自动任务', async () => {
+    const sm = await arm();
+    vi.mocked(sm.discardLatestGenerationContext_ACU).mockReturnValueOnce({ seq: 5, type: 'quiet', params: { quiet_prompt: 'x' }, dryRun: false, at: 1 } as any);
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValueOnce(true);
+    m.generationStoppedHandler!();
+    expect(m.cancelPendingAutoTasks).not.toHaveBeenCalled();
+    m.generationEndedHandler!(1);
+    expect(m.handleNewMessage).toHaveBeenCalledTimes(1);
   });
 });

@@ -19,6 +19,7 @@ import type { TableUpdatePostCommitWarning_ACU } from '../../shared/post-commit-
 export type { TableUpdatePostCommitWarning_ACU } from '../../shared/post-commit-warnings';
 export { formatPostCommitWarnings_ACU } from '../../shared/post-commit-warnings';
 import { logAutoFillSkip_ACU, logAutoFillStage_ACU } from '../../shared/trigger-diagnostics';
+import { abortableDelay } from '../../shared/abortable-delay';
 import { enqueueSummaryVectorIndexFlush_ACU } from '../vector/summary-vector-index-flush-queue';
 import {
   ensureSummaryVectorMirrorAfterTableFill_ACU,
@@ -1641,7 +1642,12 @@ export async function collectGroupFillResponse_ACU(
             if (attempt < maxRetries) {
                 retryHistory.push({ response: lastAiResponse, error: sanitizeRetryFeedback_ACU(lastErrorMessage) });
                 options.onProgress?.({ phase: 'retry', attempt, maxRetries, message: sanitizeRetryFeedback_ACU(lastErrorMessage, 50) });
-                await new Promise(resolve => setTimeout(resolve, 5000));
+                // 等待可被终止打断：停止后立即收尾，不再发下一次请求
+                await abortableDelay(5000, effectiveAbortController.signal);
+                if (isStopped()) {
+                    diagnoseResponse('user_aborted', attempt);
+                    return { job, success: false, attempt, aborted: true };
+                }
             }
         }
     }
@@ -3784,7 +3790,11 @@ export async function executeCardUpdateCore_ACU(
                     const waitTime = 5000;
                     logDebug_ACU(`等待 ${waitTime}ms 后重试...`);
                     emitProgress({ phase: 'retry', attempt, maxRetries, message: sanitizeRetryFeedback_ACU(safeError, 50) });
-                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                    // 等待可被终止打断：停止后立即收尾，不再发下一次请求
+                    await abortableDelay(waitTime, effectiveAbortController.signal);
+                    if (effectiveAbortController.signal.aborted || isTableFillStopRequested_ACU()) {
+                        return { success: false, modifiedKeys: [], aborted: true };
+                    }
                     continue;
                 } else {
                     return { success: false, modifiedKeys: [], error: `填表在 ${maxRetries} 次尝试后仍失败: ${safeError}`, errorCategory };
