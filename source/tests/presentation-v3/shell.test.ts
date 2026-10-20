@@ -219,7 +219,10 @@ describe('v3 外壳', () => {
     await flush();
     expect(document.querySelector('.ub-shell')?.classList.contains('is-rail-collapsed')).toBe(true);
     expect(document.querySelector('.ub-rail [data-page-id="dashboard"]')?.getAttribute('title')).toBeTruthy();
-    expect(document.querySelector('.ub-rail .ub-nav__group-title')).toBeNull();
+    // 分组标题留在 DOM 里只标记收起（Claude 风格据此做高度收起动画）
+    const groupTitles = Array.from(document.querySelectorAll('.ub-rail .ub-nav__group-title'));
+    expect(groupTitles.length).toBeGreaterThan(0);
+    expect(groupTitles.every(title => title.classList.contains('is-collapsed'))).toBe(true);
 
     // 切回默认风格：所选主题重新生效，侧栏照常展开，页首标题消失
     pick('界面风格', '默认').click();

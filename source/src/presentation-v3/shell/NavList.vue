@@ -2,7 +2,8 @@
   <nav class="ub-nav" :class="[`ub-nav--${variant}`, { 'ub-nav--icon-only': iconOnly }]" aria-label="页面导航">
     <template v-for="group in router.groups" :key="group.id">
       <div v-if="(router.visiblePagesByGroup[group.id] || []).length" class="ub-nav__group">
-        <div v-if="showGroupTitles" class="ub-nav__group-title">{{ group.title }}</div>
+        <!-- 侧栏收起时标题保留在 DOM 里只加 is-collapsed，Claude 风格据此做高度收起动画（默认风格不会收起侧栏） -->
+        <div v-if="showGroupTitles" class="ub-nav__group-title" :class="{ 'is-collapsed': iconOnly }" :aria-hidden="iconOnly ? 'true' : undefined">{{ group.title }}</div>
         <div class="ub-nav__items">
           <button
             v-for="page in router.visiblePagesByGroup[group.id]"
@@ -40,7 +41,7 @@ const emit = defineEmits<{ (e: 'navigate', pageId: string): void }>();
 
 const router = useRouterStore();
 const uiMode = useUiModeStore();
-const showGroupTitles = computed(() => !props.iconOnly && (!uiMode.isBasicMode || props.variant === 'tiles'));
+const showGroupTitles = computed(() => !uiMode.isBasicMode || props.variant === 'tiles');
 
 function iconOf(id: string): string {
   return ubPageEntry(id)?.icon ?? 'fa-solid fa-circle';
@@ -62,6 +63,10 @@ async function go(id: string): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: var(--ub-s4);
+}
+
+.ub-nav__group-title.is-collapsed {
+  display: none;
 }
 
 .ub-nav__group-title {

@@ -222,10 +222,14 @@
 
 /* ═══════════════ 外壳：侧栏 ═══════════════ */
 .ub-app[data-ub-style="claude"] .ub-rail {
+  /* 收起 / 展开时内容随宽度一起动：文字淡出淡入并被侧栏边缘裁掉，图标靠内边距平移到居中，
+     不再瞬间隐藏或改对齐方式（那两样都不能过渡，内容会先跳完，只剩外框在动）。 */
+  --ub-rail-motion: var(--cds-dur-sheet) var(--cds-ease-out);
+  overflow: hidden;
   padding: 0 var(--ub-s2) var(--ub-s2);
   border-right: var(--ub-hairline) solid var(--ub-divider);
   background: var(--ub-nav-bg);
-  transition: flex-basis var(--cds-dur-sheet) var(--cds-ease-out), width var(--cds-dur-sheet) var(--cds-ease-out);
+  transition: flex-basis var(--ub-rail-motion), width var(--ub-rail-motion);
 }
 
 .ub-app[data-ub-style="claude"] .ub-rail__head {
@@ -234,6 +238,7 @@
   margin: 0 calc(var(--ub-s2) * -1);
   padding: 0 var(--ub-s2) 0 var(--ub-s3);
   border-bottom: var(--ub-hairline) solid var(--ub-divider);
+  transition: padding var(--ub-rail-motion);
 }
 
 .ub-app[data-ub-style="claude"] .ub-rail__collapse {
@@ -242,11 +247,25 @@
 
 .ub-app[data-ub-style="claude"] .ub-rail__nav {
   margin-top: var(--ub-s3);
+  overflow-x: hidden;
 }
 
 .ub-app[data-ub-style="claude"] .ub-brand {
   gap: var(--ub-s2);
   padding: 0;
+}
+
+/* 侧栏里的品牌区随宽度收窄、淡出；收起按钮始终贴右 */
+.ub-app[data-ub-style="claude"] .ub-rail .ub-brand {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: opacity 200ms ease 120ms;
+}
+
+.ub-app[data-ub-style="claude"] .ub-rail__collapse {
+  flex: 0 0 auto;
 }
 
 /* 品牌图标换陶土底白线；尺寸小，去掉圆柱中间的分层线、线条略收细 */
@@ -293,15 +312,23 @@
   gap: var(--ub-s2);
   min-height: var(--ub-row-h);
   padding: 0 var(--ub-s2);
+  overflow: hidden;
   border-radius: var(--ub-r-control);
   color: var(--ub-text-2);
   font-size: var(--ub-fs-sm);
   font-weight: 500;
-  transition: background-color 150ms var(--cds-ease-hover), color 150ms ease;
+  white-space: nowrap;
+  transition: background-color 150ms var(--cds-ease-hover), color 150ms ease, padding var(--ub-rail-motion);
+}
+
+.ub-app[data-ub-style="claude"] .ub-rail__foot-label {
+  transition: opacity 200ms ease 120ms;
 }
 
 .ub-app[data-ub-style="claude"] .ub-rail__foot-btn i {
   --acu-icon-color: var(--ub-text-3);
+  /* 不让收起后仍占宽的透明文字把图标挤窄（会偏离中心） */
+  flex: 0 0 auto;
   width: calc(var(--ub-u) * 18);
   font-size: calc(var(--ub-u) * 13);
   text-align: center;
@@ -321,37 +348,30 @@
   box-shadow: var(--ub-focus-ring);
 }
 
-/* 侧栏收起：只留图标，页名改悬停提示 */
+/* 侧栏收起：只留图标，页名改悬停提示。
+   图标居中靠左内边距算出来（可过渡）：行宽 = 收起宽度 − 两侧内边距，图标宽 18。
+   文字收起时 100ms 先淡出，展开时等宽度先拉开一段再淡入。 */
 .ub-app[data-ub-style="claude"] .ub-shell.is-rail-collapsed .ub-rail {
+  --ub-rail-icon-inset: calc((var(--ub-rail-w-collapsed) - var(--ub-s2) * 2 - var(--ub-u) * 18) / 2);
   flex-basis: var(--ub-rail-w-collapsed);
   width: var(--ub-rail-w-collapsed);
 }
 
 .ub-app[data-ub-style="claude"] .ub-shell.is-rail-collapsed .ub-rail__head {
-  justify-content: center;
-  padding: 0;
+  /* 品牌区收到 0 宽后只剩间距 s2 + 按钮：左内边距让出这段间距，按钮正好居中 */
+  padding: 0 calc((var(--ub-rail-w-collapsed) - var(--ub-control-h-sm)) / 2) 0 calc((var(--ub-rail-w-collapsed) - var(--ub-control-h-sm)) / 2 - var(--ub-s2));
 }
 
-.ub-app[data-ub-style="claude"] .ub-shell.is-rail-collapsed .ub-brand {
-  display: none;
-}
-
-.ub-app[data-ub-style="claude"] .ub-shell.is-rail-collapsed .ub-rail__foot-label {
-  display: none;
-}
-
-.ub-app[data-ub-style="claude"] .ub-shell.is-rail-collapsed .ub-rail__foot-btn {
-  justify-content: center;
-  padding: 0;
-}
-
-.ub-app[data-ub-style="claude"] .ub-nav--rail.ub-nav--icon-only .ub-nav__item {
-  justify-content: center;
-  padding: 0;
-}
-
+.ub-app[data-ub-style="claude"] .ub-shell.is-rail-collapsed .ub-rail .ub-brand,
+.ub-app[data-ub-style="claude"] .ub-shell.is-rail-collapsed .ub-rail__foot-label,
 .ub-app[data-ub-style="claude"] .ub-nav--rail.ub-nav--icon-only .ub-nav__text {
-  display: none;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.ub-app[data-ub-style="claude"] .ub-shell.is-rail-collapsed .ub-rail__foot-btn,
+.ub-app[data-ub-style="claude"] .ub-nav--rail.ub-nav--icon-only .ub-nav__item {
+  padding: 0 0 0 var(--ub-rail-icon-inset);
 }
 
 /* ═══════════════ 外壳：导航 ═══════════════ */
@@ -368,6 +388,22 @@
   text-transform: uppercase;
 }
 
+/* 侧栏分组标题：收起时高度平滑收到 0，下面的图标跟着平滑上移，而不是整段消失后跳上去 */
+.ub-app[data-ub-style="claude"] .ub-nav--rail .ub-nav__group-title {
+  display: block;
+  max-height: calc(var(--ub-u) * 24);
+  overflow: hidden;
+  white-space: nowrap;
+  transition: max-height var(--cds-dur-sheet) var(--cds-ease-out), margin var(--cds-dur-sheet) var(--cds-ease-out), opacity 200ms ease 120ms;
+}
+
+.ub-app[data-ub-style="claude"] .ub-nav--rail .ub-nav__group-title.is-collapsed {
+  max-height: 0;
+  margin-bottom: 0;
+  opacity: 0;
+  transition: max-height var(--cds-dur-sheet) var(--cds-ease-out), margin var(--cds-dur-sheet) var(--cds-ease-out), opacity 100ms ease;
+}
+
 .ub-app[data-ub-style="claude"] .ub-nav--rail .ub-nav__items {
   gap: 1px;
 }
@@ -376,11 +412,17 @@
   gap: var(--ub-s2);
   min-height: var(--ub-row-h);
   padding: 0 var(--ub-s2);
+  overflow: hidden;
   border-radius: var(--ub-r-control);
   color: var(--ub-text-2);
   font-size: var(--ub-fs-sm);
   font-weight: 500;
-  transition: background-color 150ms var(--cds-ease-hover), color 150ms ease, transform 100ms ease;
+  white-space: nowrap;
+  transition: background-color 150ms var(--cds-ease-hover), color 150ms ease, transform 100ms ease, padding var(--cds-dur-sheet) var(--cds-ease-out);
+}
+
+.ub-app[data-ub-style="claude"] .ub-nav--rail .ub-nav__text {
+  transition: opacity 200ms ease 120ms;
 }
 
 .ub-app[data-ub-style="claude"] .ub-nav--rail .ub-nav__item:hover:not(.is-active) {
