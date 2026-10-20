@@ -127,12 +127,19 @@ export function applyAppearance(option: AcuUiScaleOption): void {
     style.id = APPEARANCE_STYLE_NODE_ID;
     doc.head.appendChild(style);
   }
-  style.textContent = buildCss(option);
+  // 外观任一字段变更（含侧栏收起 / 展开）都会走到这里；缩放没变就不写：
+  // 同一帧里整段重写样式表会让 iPad（WebKit）吞掉侧栏的过渡动画。
+  const css = buildCss(option);
+  if (style.textContent !== css) style.textContent = css;
 
   const root = doc.getElementById(APP_ROOT_ID);
   if (root) {
-    root.style.setProperty('--acu-ui-scale', option.cssScale);
-    root.setAttribute('data-acu-ui-scale', option.value);
+    if (root.style.getPropertyValue('--acu-ui-scale') !== option.cssScale) {
+      root.style.setProperty('--acu-ui-scale', option.cssScale);
+    }
+    if (root.getAttribute('data-acu-ui-scale') !== option.value) {
+      root.setAttribute('data-acu-ui-scale', option.value);
+    }
   }
 }
 
