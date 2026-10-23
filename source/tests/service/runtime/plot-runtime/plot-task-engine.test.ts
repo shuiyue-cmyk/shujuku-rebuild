@@ -1700,6 +1700,29 @@ describe('runPlotTasksRuntime_ACU', () => {
     expect(mockCallApiWithPlotPreset.mock.calls.some((call: any[]) => call[0][0].content === 'stage-2-never')).toBe(false);
   });
 
+  // 上游 #54：任务失败耗尽重试、整轮剧情推进因此失败时只记了 Warn；Warn 采集默认关闭，
+  // 失败原因会丢失且事后无法补回。阶段收尾处要记一次 Error 摘要（不含模型回复正文）。
+  it('任务重试耗尽导致阶段失败时记一次 Error 摘要：含任务、阶段、尝试次数与原因，不含回复正文', async () => {
+    const plotSettings = {
+      tasks: [
+        { id: 'task-short', name: '过短任务', stage: 1, order: 1, maxRetries: 1, minLength: 50, promptGroup: [{ role: 'user', content: 'p' }] },
+      ],
+    };
+    mockCallApiWithPlotPreset.mockResolvedValue('机密正文片段');
+    mockLogError.mockClear();
+
+    const result = await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(result.abortedByStageFailure).toBe(true);
+    const summaryCalls = mockLogError.mock.calls.filter((call: any[]) => String(call[0]).includes('本轮剧情推进失败'));
+    expect(summaryCalls).toHaveLength(1);
+    expect(summaryCalls[0][1]).toEqual({
+      stage: 1,
+      tasks: [{ taskId: 'task-short', taskName: '过短任务', attempts: 1, reason: expect.stringContaining('回复长度不足') }],
+    });
+    expect(JSON.stringify(mockLogError.mock.calls)).not.toContain('机密正文片段');
+  });
+
   it('用户中止时抛出 TaskAbortedByUser', async () => {
     mockAbortControllerRef.value = { signal: { aborted: true } };
     const plotSettings = {

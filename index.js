@@ -87459,16 +87459,29 @@ class AgentApiHttpError_ACU extends Error {
         this.status = status;
     }
 }
+/** 连接层瞬时故障的错误码（Node / undici / 宿主转发会带出）。 */
+const RETRYABLE_NETWORK_CODES_ACU = /^(?:ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH|ENETDOWN|UND_ERR_[A-Z_]+)$/;
+/**
+ * 报错文本里的瞬时网络失败特征；浏览器 fetch 失败只给 TypeError + 这类文本。
+ * 含 WebKit / iOS 的说法（Load failed、The network connection was lost 等）与 TT 原生层转发的说法（error sending request 等）。
+ */
+const RETRYABLE_NETWORK_TEXT_ACU = /failed to fetch|fetch failed|load failed|networkerror|network ?error|net::err_|\btimeout\b|timed out|connection reset|socket hang up|other side closed|\bterminated\b|econnrefused|econnreset|econnaborted|enotfound|eai_again|etimedout|epipe|ehostunreach|enetunreach|network connection was lost|internet connection appears to be offline|could not connect to the server|hostname could not be found|error sending request|connection closed before|connection refused|dns error|tcp connect error/i;
+function readErrorCode_ACU(value) {
+    if (!value || typeof value !== 'object')
+        return '';
+    const code = value.code;
+    return typeof code === 'string' ? code.toUpperCase() : '';
+}
 /**
  * 只有瞬时的传输层失败值得重试；响应内容校验失败（JSON 不合法等）由调用方自己决定，不在这里放行。
  * AbortError 一律判 false：那是用户按了停止，重试等于把刚掐断的请求再发一遍。
+ * TypeError 只在带网络失败特征时才算瞬时故障（跟上游 0d9cc1a5）——`x is not a function` 这类程序错误重试也不会好。
  */
 function isRetryableAiRequestError_ACU(error) {
     if (!error || typeof error !== 'object')
         return false;
     const candidate = error;
     const name = String(candidate.name || '');
-    const message = String(candidate.message || '');
     const status = Number(candidate.status);
     if (name === 'AbortError')
         return false;
@@ -87476,9 +87489,10 @@ function isRetryableAiRequestError_ACU(error) {
         return status === 408 || status === 429 || (status >= 500 && status <= 599);
     if (name === 'TimeoutError')
         return true;
-    if (error instanceof TypeError)
+    if (RETRYABLE_NETWORK_CODES_ACU.test(readErrorCode_ACU(error)) || RETRYABLE_NETWORK_CODES_ACU.test(readErrorCode_ACU(candidate.cause)))
         return true;
-    return /(?:timeout|timed out|network(?:\s+error)?|connection reset|socket hang up)/i.test(message);
+    const cause = candidate.cause && typeof candidate.cause === 'object' ? String(candidate.cause.message || '') : '';
+    return RETRYABLE_NETWORK_TEXT_ACU.test(`${String(candidate.message || '')} ${cause}`);
 }
 function isRecord_ACU$b(value) {
     return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -92895,6 +92909,7 @@ async function executeSinglePlotTask_ACU(task, sharedContext, runtimeOptions = {
                 error: lastErrorMessage || '任务在最大重试次数后仍未返回有效结果。',
                 // API 侧失败耗尽重试才标记：模型有回但过短/未摘到标签属于内容不合格，不触发发送中断。
                 ...(apiErrorSeen ? { apiRetriesExhausted: true } : {}),
+                attempts: maxRetries,
                 stage: taskStage,
                 order: normalizedTask.order ?? 0,
             };
@@ -93151,6 +93166,16 @@ async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions
             if (stageFailedResults.length > 0) {
                 stageFailedResults.forEach((result) => {
                     logWarn_ACU(`[剧情推进] [阶段:${result.stage ?? stageGroup.stage}] [任务:${result.taskName || result.taskId || '未命名任务'}] 未产出有效结果: ${result.error || '未知错误'}`);
+                });
+                // 上游 #54：整轮因此失败是终态，Warn 采集默认关闭时原因会丢；这里记一次 Error 摘要（不含模型回复正文）。
+                logError_ACU('[剧情推进] 剧情任务重试耗尽或执行失败，本轮剧情推进失败。', {
+                    stage: stageGroup.stage,
+                    tasks: stageFailedResults.map((result) => ({
+                        taskId: result.taskId,
+                        taskName: result.taskName,
+                        ...(result.attempts !== undefined ? { attempts: result.attempts } : {}),
+                        reason: result.error || '未知错误',
+                    })),
                 });
                 const failedTaskNames = stageFailedResults.map((result) => result.taskName || result.taskId || '未命名任务').join('、');
                 if (agentDecisionPromise) {
@@ -93648,7 +93673,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261023-1809"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261023-1823"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -93667,7 +93692,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261023-1809";
+        const stamp = "20261023-1823";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -155309,7 +155334,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261023-1809";
+        const stamp = "20261023-1823";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -185466,6 +185491,13 @@ function buildDebugIssueUrl_ACU(version = readAcuBuildVersion_ACU()) {
     return `${ACU_GITHUB_ISSUE_URL_ACU}?${params.toString()}`;
 }
 
+/**
+ * 有可信状态码时只按状态码判定；没有时才用关键词兜底（跟上游 0d9cc1a5）。
+ * 此前裸 `\b404\b` 一类正则会把楼层号、行号、条数当成状态码，正文关键词也会把真实状态码盖掉。
+ */
+function httpRule(statusTest, fallback) {
+    return (haystack, status) => (status !== null ? statusTest(status) : fallback.test(haystack));
+}
 const RETRY_LATER = '稍等片刻后重试一次，很多问题是服务商偶发抖动。';
 const SEE_PREVIOUS_LOG = '查看紧邻的上一条日志，通常会给出更具体的原因（HTTP 状态码、解析失败的内容等）。';
 const EXPORT_LOGS = '如果反复出现，点日志面板的「导出」把日志连同复现步骤反馈给作者。';
@@ -185545,7 +185577,7 @@ const RULES = [
     // ─── HTTP 状态码 ───
     {
         id: 'http-401',
-        test: /\b401\b|unauthorized|invalid[ _-]?api[ _-]?key|incorrect api key|invalid x-api-key|authentication[ _-]?error|invalid_api_key|no auth credentials|令牌无效|密钥无效|api key 无效/,
+        test: httpRule(status => status === 401, /unauthorized|invalid[ _-]?api[ _-]?key|incorrect api key|invalid x-api-key|authentication[ _-]?error|invalid_api_key|no auth credentials|令牌无效|密钥无效|api key 无效/),
         summary: 'API 拒绝了请求：密钥无效、填错或已过期（401）。',
         steps: [
             '到「API」页打开当前使用的预设，检查 API Key 是否完整、有没有多余空格。',
@@ -185555,7 +185587,7 @@ const RULES = [
     },
     {
         id: 'http-403',
-        test: /\b403\b|forbidden|permission[ _-]?denied|not allowed to|access denied|无权访问|权限不足/,
+        test: httpRule(status => status === 403, /forbidden|permission[ _-]?denied|not allowed to|access denied|无权访问|权限不足/),
         summary: '服务商拒绝访问（403）：Key 没有权限，或请求来源被限制。',
         steps: [
             '确认该 Key 有权使用所选模型（部分模型需要单独开通）。',
@@ -185565,7 +185597,7 @@ const RULES = [
     },
     {
         id: 'http-404',
-        test: /\b404\b|not[ _]found.*(model|endpoint|route)|model.*(not found|does not exist|not exist)|no such model|unknown model|invalid model|模型不存在|找不到模型/,
+        test: httpRule(status => status === 404, /not[ _]found.*(model|endpoint|route)|model.*(not found|does not exist|not exist)|no such model|unknown model|invalid model|模型不存在|找不到模型/),
         summary: '接口地址或模型名不存在（404）。',
         steps: [
             '到「API」页检查接口地址是否完整，不同服务商对结尾是否带 /v1 要求不同，按服务商文档填写。',
@@ -185577,7 +185609,7 @@ const RULES = [
         id: 'http-429',
         // 裸 `quota` 只在**不**是「字段名带 quota、值为 false」形态时才命中：中转站错误体常把
         // `quota_error:false` / `"quota_error": false` 原样回显，此前会把 HTTP 400 误报成限流/余额不足。
-        test: /\b429\b|rate[ _-]?limit|too many requests|quota(?![\w-]*["']?\s*[:=]\s*false)|insufficient (balance|funds)|exceeded your current|resource[ _-]?exhausted|请求过于频繁|限流|额度不足|余额不足|欠费|配额/,
+        test: httpRule(status => status === 429 || status === 402, /rate[ _-]?limit|too many requests|quota(?![\w-]*["']?\s*[:=]\s*false)|insufficient (balance|funds)|exceeded your current|resource[ _-]?exhausted|请求过于频繁|限流|额度不足|余额不足|欠费|配额/),
         summary: '请求过于频繁被限流，或账户额度 / 余额已用完（429）。',
         steps: [
             '先等 1–2 分钟再重试；短时间内连续重试只会让限流更久。',
@@ -185588,7 +185620,7 @@ const RULES = [
     },
     {
         id: 'http-5xx',
-        test: /\b(500|502|503|504|529)\b|bad gateway|service unavailable|gateway time-?out|internal server error|overloaded|server error|服务器错误|服务不可用|上游.*(错误|超时)/,
+        test: httpRule(status => status >= 500 && status <= 599, /bad gateway|service unavailable|gateway time-?out|internal server error|overloaded|server error|服务器错误|服务不可用|上游.*(错误|超时)/),
         summary: '服务商服务器出错或过载（5xx），不是本地配置问题。',
         steps: [
             RETRY_LATER,
@@ -185608,7 +185640,7 @@ const RULES = [
     },
     {
         id: 'http-400',
-        test: /\b400\b|bad request|invalid_request_error|unsupported parameter|invalid parameter|unrecognized request argument|unknown parameter|参数错误|请求参数无效/,
+        test: httpRule(status => status === 400, /bad request|invalid_request_error|unsupported parameter|invalid parameter|unrecognized request argument|unknown parameter|参数错误|请求参数无效/),
         summary: '服务商认为请求内容有问题（400）：通常是模型名或某个参数不被支持。',
         steps: [
             '到「API」页确认模型名拼写正确，最好通过「拉取模型列表」选择。',
@@ -186021,14 +186053,40 @@ function stripStackFrameLines(message) {
         .join('\n');
 }
 /**
+ * 从报错文本中取出 HTTP 状态码：只认紧跟在「HTTP / status / 状态码 / 失败 / 错误」之后的 4xx / 5xx
+ * （跟上游 0d9cc1a5；`status` 后的分隔符可省，兼容 `failed with status 502`）。多处命中取最靠前的一个。
+ */
+const HTTP_STATUS_PATTERNS_ACU = [
+    /\bhttp(?:\s*状态码?)?\s*[:：=/]?\s*([1-5]\d\d)\b/g,
+    /\bstatus(?:[ _]?code)?["'\s]*[:：=]?\s*([1-5]\d\d)\b/g,
+    /状态码[\s:：=]*([1-5]\d\d)\b/g,
+    /(?:失败|错误|error|failed)\s*(?:[（(][^）)\n]{0,80}[）)])?\s*[:：]?\s*([1-5]\d\d)\b/g,
+];
+function extractLogHttpStatus(text) {
+    const haystack = String(text ?? '').toLowerCase();
+    let best = null;
+    for (const pattern of HTTP_STATUS_PATTERNS_ACU) {
+        for (const match of haystack.matchAll(pattern)) {
+            const status = Number(match[1]);
+            if (status < 400 || status > 599)
+                continue;
+            if (!best || (match.index ?? 0) < best.index)
+                best = { index: match.index ?? 0, status };
+            break;
+        }
+    }
+    return best ? best.status : null;
+}
+/**
  * 为一条日志匹配处理建议。只对 error 级日志给建议；warn / debug 返回 null。
  */
 function resolveLogErrorHint(entry) {
     if (entry.level !== 'error')
         return null;
     const haystack = `${entry.tag} ${stripStackFrameLines(entry.message)}`.toLowerCase();
+    const status = extractLogHttpStatus(haystack);
     for (const rule of RULES) {
-        const matched = typeof rule.test === 'function' ? rule.test(haystack) : rule.test.test(haystack);
+        const matched = typeof rule.test === 'function' ? rule.test(haystack, status) : rule.test.test(haystack);
         if (matched)
             return { id: rule.id, summary: rule.summary, steps: rule.steps };
     }

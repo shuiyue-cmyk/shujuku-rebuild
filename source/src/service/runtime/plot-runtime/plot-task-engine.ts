@@ -801,6 +801,7 @@ import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-s
           error: lastErrorMessage || '任务在最大重试次数后仍未返回有效结果。',
           // API 侧失败耗尽重试才标记：模型有回但过短/未摘到标签属于内容不合格，不触发发送中断。
           ...(apiErrorSeen ? { apiRetriesExhausted: true } : {}),
+          attempts: maxRetries,
           stage: taskStage,
           order: normalizedTask.order ?? 0,
         };
@@ -1080,6 +1081,16 @@ import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-s
           logWarn_ACU(
             `[剧情推进] [阶段:${result.stage ?? stageGroup.stage}] [任务:${result.taskName || result.taskId || '未命名任务'}] 未产出有效结果: ${result.error || '未知错误'}`,
           );
+        });
+        // 上游 #54：整轮因此失败是终态，Warn 采集默认关闭时原因会丢；这里记一次 Error 摘要（不含模型回复正文）。
+        logError_ACU('[剧情推进] 剧情任务重试耗尽或执行失败，本轮剧情推进失败。', {
+          stage: stageGroup.stage,
+          tasks: stageFailedResults.map((result: any) => ({
+            taskId: result.taskId,
+            taskName: result.taskName,
+            ...(result.attempts !== undefined ? { attempts: result.attempts } : {}),
+            reason: result.error || '未知错误',
+          })),
         });
         const failedTaskNames = stageFailedResults.map((result: any) => result.taskName || result.taskId || '未命名任务').join('、');
         if (agentDecisionPromise) {

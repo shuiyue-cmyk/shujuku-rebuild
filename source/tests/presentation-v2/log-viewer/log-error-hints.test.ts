@@ -191,3 +191,42 @@ describe('resolveLogErrorHint', () => {
     expect(new Set(LOG_ERROR_HINT_RULE_IDS).size).toBe(LOG_ERROR_HINT_RULE_IDS.length);
   });
 });
+
+/**
+ * 跟上游 0d9cc1a5：状态码只认「HTTP / status / 状态码 / 失败 / 错误」上下文里的三位数。
+ * 此前裸 `\b404\b` 一类正则会把楼层号、行号、条数当成 HTTP 状态码，给出完全不相干的排查建议。
+ * 识别到可信状态码时只按状态码分类，正文里的关键词不能把它盖掉；识别不到才用关键词兜底。
+ */
+describe('HTTP 状态码识别', () => {
+  it.each([
+    ['[填表] 第 404 层的表格合并失败：缺少表头'],
+    ['[剧情推进] 处理到第 429 条 AI 回复时解析失败'],
+    ['JSON 解析失败 at line 500 column 3'],
+    ['[交火] 已写入 401 行纪要索引后中断'],
+  ])('楼层号 / 行号 / 条数不当作状态码：%s', (message) => {
+    expect(hintIdFor(message)).not.toMatch(/^http-/);
+  });
+
+  it.each([
+    ['Request failed with status 502', 'http-5xx'],
+    ['HTTP 429', 'http-429'],
+    ['状态码: 403', 'http-403'],
+    ['API端点状态检查失败: 401 Unauthorized.', 'http-401'],
+    ['API 拒绝了请求（HTTP 404）。', 'http-404'],
+  ])('带上下文的状态码照常识别：%s', (message, id) => {
+    expect(hintIdFor(message)).toBe(id);
+  });
+
+  it('有状态码时按状态码分类，正文关键词不覆盖', () => {
+    expect(hintIdFor('API请求失败: 400 {"error":{"message":"model is overloaded, unsupported parameter"}}')).toBe('http-400');
+  });
+
+  it('402（余额不足）归到额度 / 限流建议', () => {
+    expect(hintIdFor('API请求失败: 402 insufficient balance')).toBe('http-429');
+  });
+
+  it('没有状态码时仍按关键词兜底', () => {
+    expect(hintIdFor('rate limit exceeded, please slow down')).toBe('http-429');
+    expect(hintIdFor('upstream: Bad Gateway')).toBe('http-5xx');
+  });
+});

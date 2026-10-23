@@ -219,6 +219,22 @@ describe('callAIWithPreset_ACU', () => {
     expect(isRetryableAiRequestError_ACU(null)).toBe(false);
   });
 
+  // 跟上游 0d9cc1a5：TypeError 只在带网络失败特征时算瞬时故障；程序错误重试也不会好，只会白等几轮。
+  it('isRetryableAiRequestError_ACU：程序错误的 TypeError 不重试，连接层错误码与浏览器网络失败照常重试', () => {
+    expect(isRetryableAiRequestError_ACU(new TypeError("Cannot read properties of undefined (reading 'choices')"))).toBe(false);
+    expect(isRetryableAiRequestError_ACU(new TypeError('x is not a function'))).toBe(false);
+
+    expect(isRetryableAiRequestError_ACU(new TypeError('Load failed'))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(new TypeError('NetworkError when attempting to fetch resource.'))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(Object.assign(new Error('connect refused'), { code: 'ECONNREFUSED' }))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_SOCKET' } }))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(Object.assign(new TypeError('terminated'), { cause: { message: 'other side closed' } }))).toBe(true);
+    // WebKit / iOS 与 TT 原生层的说法
+    expect(isRetryableAiRequestError_ACU(new TypeError('The network connection was lost.'))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(new TypeError('The Internet connection appears to be offline.'))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(new Error('error sending request for url (https://x/v1/chat/completions)'))).toBe(true);
+  });
+
   it('408 Request Timeout 可重试，401/403/404 保持终态', () => {
     expect(isRetryableAiRequestError_ACU(Object.assign(new Error('timeout'), { status: 408 }))).toBe(true);
     expect(isRetryableAiRequestError_ACU(new AgentApiHttpError_ACU(408, 'request timeout'))).toBe(true);

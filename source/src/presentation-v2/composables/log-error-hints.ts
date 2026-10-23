@@ -18,10 +18,18 @@ export interface LogErrorHint {
 
 interface HintRule {
   id: string;
-  /** 在小写化后的 `tag + message` 上匹配。 */
-  test: RegExp | ((haystack: string) => boolean);
+  /** 在小写化后的 `tag + message` 上匹配；函数形式还能拿到识别出的可信 HTTP 状态码（没有为 null）。 */
+  test: RegExp | ((haystack: string, status: number | null) => boolean);
   summary: string;
   steps: string[];
+}
+
+/**
+ * 有可信状态码时只按状态码判定；没有时才用关键词兜底（跟上游 0d9cc1a5）。
+ * 此前裸 `\b404\b` 一类正则会把楼层号、行号、条数当成状态码，正文关键词也会把真实状态码盖掉。
+ */
+function httpRule(statusTest: (status: number) => boolean, fallback: RegExp): (haystack: string, status: number | null) => boolean {
+  return (haystack, status) => (status !== null ? statusTest(status) : fallback.test(haystack));
 }
 
 const RETRY_LATER = '稍等片刻后重试一次，很多问题是服务商偶发抖动。';
@@ -108,7 +116,7 @@ const RULES: HintRule[] = [
   // ─── HTTP 状态码 ───
   {
     id: 'http-401',
-    test: /\b401\b|unauthorized|invalid[ _-]?api[ _-]?key|incorrect api key|invalid x-api-key|authentication[ _-]?error|invalid_api_key|no auth credentials|令牌无效|密钥无效|api key 无效/,
+    test: httpRule(status => status === 401, /unauthorized|invalid[ _-]?api[ _-]?key|incorrect api key|invalid x-api-key|authentication[ _-]?error|invalid_api_key|no auth credentials|令牌无效|密钥无效|api key 无效/),
     summary: 'API 拒绝了请求：密钥无效、填错或已过期（401）。',
     steps: [
       '到「API」页打开当前使用的预设，检查 API Key 是否完整、有没有多余空格。',
@@ -118,7 +126,7 @@ const RULES: HintRule[] = [
   },
   {
     id: 'http-403',
-    test: /\b403\b|forbidden|permission[ _-]?denied|not allowed to|access denied|无权访问|权限不足/,
+    test: httpRule(status => status === 403, /forbidden|permission[ _-]?denied|not allowed to|access denied|无权访问|权限不足/),
     summary: '服务商拒绝访问（403）：Key 没有权限，或请求来源被限制。',
     steps: [
       '确认该 Key 有权使用所选模型（部分模型需要单独开通）。',
@@ -128,7 +136,7 @@ const RULES: HintRule[] = [
   },
   {
     id: 'http-404',
-    test: /\b404\b|not[ _]found.*(model|endpoint|route)|model.*(not found|does not exist|not exist)|no such model|unknown model|invalid model|模型不存在|找不到模型/,
+    test: httpRule(status => status === 404, /not[ _]found.*(model|endpoint|route)|model.*(not found|does not exist|not exist)|no such model|unknown model|invalid model|模型不存在|找不到模型/),
     summary: '接口地址或模型名不存在（404）。',
     steps: [
       '到「API」页检查接口地址是否完整，不同服务商对结尾是否带 /v1 要求不同，按服务商文档填写。',
@@ -140,7 +148,7 @@ const RULES: HintRule[] = [
     id: 'http-429',
     // 裸 `quota` 只在**不**是「字段名带 quota、值为 false」形态时才命中：中转站错误体常把
     // `quota_error:false` / `"quota_error": false` 原样回显，此前会把 HTTP 400 误报成限流/余额不足。
-    test: /\b429\b|rate[ _-]?limit|too many requests|quota(?![\w-]*["']?\s*[:=]\s*false)|insufficient (balance|funds)|exceeded your current|resource[ _-]?exhausted|请求过于频繁|限流|额度不足|余额不足|欠费|配额/,
+    test: httpRule(status => status === 429 || status === 402, /rate[ _-]?limit|too many requests|quota(?![\w-]*["']?\s*[:=]\s*false)|insufficient (balance|funds)|exceeded your current|resource[ _-]?exhausted|请求过于频繁|限流|额度不足|余额不足|欠费|配额/),
     summary: '请求过于频繁被限流，或账户额度 / 余额已用完（429）。',
     steps: [
       '先等 1–2 分钟再重试；短时间内连续重试只会让限流更久。',
@@ -151,7 +159,7 @@ const RULES: HintRule[] = [
   },
   {
     id: 'http-5xx',
-    test: /\b(500|502|503|504|529)\b|bad gateway|service unavailable|gateway time-?out|internal server error|overloaded|server error|服务器错误|服务不可用|上游.*(错误|超时)/,
+    test: httpRule(status => status >= 500 && status <= 599, /bad gateway|service unavailable|gateway time-?out|internal server error|overloaded|server error|服务器错误|服务不可用|上游.*(错误|超时)/),
     summary: '服务商服务器出错或过载（5xx），不是本地配置问题。',
     steps: [
       RETRY_LATER,
@@ -171,7 +179,7 @@ const RULES: HintRule[] = [
   },
   {
     id: 'http-400',
-    test: /\b400\b|bad request|invalid_request_error|unsupported parameter|invalid parameter|unrecognized request argument|unknown parameter|参数错误|请求参数无效/,
+    test: httpRule(status => status === 400, /bad request|invalid_request_error|unsupported parameter|invalid parameter|unrecognized request argument|unknown parameter|参数错误|请求参数无效/),
     summary: '服务商认为请求内容有问题（400）：通常是模型名或某个参数不被支持。',
     steps: [
       '到「API」页确认模型名拼写正确，最好通过「拉取模型列表」选择。',
@@ -601,13 +609,39 @@ function stripStackFrameLines(message: string): string {
 }
 
 /**
+ * 从报错文本中取出 HTTP 状态码：只认紧跟在「HTTP / status / 状态码 / 失败 / 错误」之后的 4xx / 5xx
+ * （跟上游 0d9cc1a5；`status` 后的分隔符可省，兼容 `failed with status 502`）。多处命中取最靠前的一个。
+ */
+const HTTP_STATUS_PATTERNS_ACU: readonly RegExp[] = [
+  /\bhttp(?:\s*状态码?)?\s*[:：=/]?\s*([1-5]\d\d)\b/g,
+  /\bstatus(?:[ _]?code)?["'\s]*[:：=]?\s*([1-5]\d\d)\b/g,
+  /状态码[\s:：=]*([1-5]\d\d)\b/g,
+  /(?:失败|错误|error|failed)\s*(?:[（(][^）)\n]{0,80}[）)])?\s*[:：]?\s*([1-5]\d\d)\b/g,
+];
+
+export function extractLogHttpStatus(text: string): number | null {
+  const haystack = String(text ?? '').toLowerCase();
+  let best: { index: number; status: number } | null = null;
+  for (const pattern of HTTP_STATUS_PATTERNS_ACU) {
+    for (const match of haystack.matchAll(pattern)) {
+      const status = Number(match[1]);
+      if (status < 400 || status > 599) continue;
+      if (!best || (match.index ?? 0) < best.index) best = { index: match.index ?? 0, status };
+      break;
+    }
+  }
+  return best ? best.status : null;
+}
+
+/**
  * 为一条日志匹配处理建议。只对 error 级日志给建议；warn / debug 返回 null。
  */
 export function resolveLogErrorHint(entry: Pick<LogEntry, 'level' | 'tag' | 'message'>): LogErrorHint | null {
   if (entry.level !== 'error') return null;
   const haystack = `${entry.tag} ${stripStackFrameLines(entry.message)}`.toLowerCase();
+  const status = extractLogHttpStatus(haystack);
   for (const rule of RULES) {
-    const matched = typeof rule.test === 'function' ? rule.test(haystack) : rule.test.test(haystack);
+    const matched = typeof rule.test === 'function' ? rule.test(haystack, status) : rule.test.test(haystack);
     if (matched) return { id: rule.id, summary: rule.summary, steps: rule.steps };
   }
   return null;

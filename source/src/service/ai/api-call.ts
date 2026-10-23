@@ -97,21 +97,36 @@ export class AgentApiHttpError_ACU extends Error {
   }
 }
 
+/** 连接层瞬时故障的错误码（Node / undici / 宿主转发会带出）。 */
+const RETRYABLE_NETWORK_CODES_ACU = /^(?:ECONNREFUSED|ECONNRESET|ECONNABORTED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH|ENETDOWN|UND_ERR_[A-Z_]+)$/;
+/**
+ * 报错文本里的瞬时网络失败特征；浏览器 fetch 失败只给 TypeError + 这类文本。
+ * 含 WebKit / iOS 的说法（Load failed、The network connection was lost 等）与 TT 原生层转发的说法（error sending request 等）。
+ */
+const RETRYABLE_NETWORK_TEXT_ACU = /failed to fetch|fetch failed|load failed|networkerror|network ?error|net::err_|\btimeout\b|timed out|connection reset|socket hang up|other side closed|\bterminated\b|econnrefused|econnreset|econnaborted|enotfound|eai_again|etimedout|epipe|ehostunreach|enetunreach|network connection was lost|internet connection appears to be offline|could not connect to the server|hostname could not be found|error sending request|connection closed before|connection refused|dns error|tcp connect error/i;
+
+function readErrorCode_ACU(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const code = (value as { code?: unknown }).code;
+  return typeof code === 'string' ? code.toUpperCase() : '';
+}
+
 /**
  * 只有瞬时的传输层失败值得重试；响应内容校验失败（JSON 不合法等）由调用方自己决定，不在这里放行。
  * AbortError 一律判 false：那是用户按了停止，重试等于把刚掐断的请求再发一遍。
+ * TypeError 只在带网络失败特征时才算瞬时故障（跟上游 0d9cc1a5）——`x is not a function` 这类程序错误重试也不会好。
  */
 export function isRetryableAiRequestError_ACU(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
-  const candidate = error as { name?: unknown; message?: unknown; status?: unknown };
+  const candidate = error as { name?: unknown; message?: unknown; status?: unknown; cause?: unknown };
   const name = String(candidate.name || '');
-  const message = String(candidate.message || '');
   const status = Number(candidate.status);
   if (name === 'AbortError') return false;
   if (Number.isFinite(status)) return status === 408 || status === 429 || (status >= 500 && status <= 599);
   if (name === 'TimeoutError') return true;
-  if (error instanceof TypeError) return true;
-  return /(?:timeout|timed out|network(?:\s+error)?|connection reset|socket hang up)/i.test(message);
+  if (RETRYABLE_NETWORK_CODES_ACU.test(readErrorCode_ACU(error)) || RETRYABLE_NETWORK_CODES_ACU.test(readErrorCode_ACU(candidate.cause))) return true;
+  const cause = candidate.cause && typeof candidate.cause === 'object' ? String((candidate.cause as { message?: unknown }).message || '') : '';
+  return RETRYABLE_NETWORK_TEXT_ACU.test(`${String(candidate.message || '')} ${cause}`);
 }
 
 function isRecord_ACU(value: unknown): value is Record<string, unknown> {
