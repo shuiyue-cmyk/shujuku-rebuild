@@ -111,8 +111,10 @@ export async function waitForAcuHostReady(maxWaitMs = 15000): Promise<boolean> {
  * 本插件适配与验证所依据的 TauriTavern 最低版本。
  * 2.3.0 起宿主把工具调用结果升为一等楼层（`{role:'tool', is_system:true}`）、新增 TOOL_CALLS_* 事件、
  * 引入 Agent 断点续连的 `{agentResume:true}` 生成事件，并变更了结构写入与保存管线契约。
+ * 2.4.0 修复了 2.3.0 中扩展的原生 confirm 返回 Promise、被直接当作「确定」执行的问题（TT #334），
+ * 并修复 Android 上信任已泄露私钥的 emSign 根证书（RUSTSEC-2026-0381），故基线提到 2.4.0。
  */
-export const ACU_REQUIRED_TAURITAVERN_VERSION = '2.3.0';
+export const ACU_REQUIRED_TAURITAVERN_VERSION = '2.4.0';
 
 /** 解析 `major.minor.patch` 形式的版本串；不可解析返回 null（不猜）。 */
 export function parseAcuVersionParts(value: unknown): [number, number, number] | null {

@@ -15,6 +15,11 @@
  * 结论：凡是表达“占满视口高度”的声明（含 `vh/dvh` 单位的 height/min-height/max-height），
  * 必须写成 `var(--tt-base-viewport-height, <原回退>)`。纯相对值（`100%`）不管——它们相对的是
  * 父层而非视口，换变量是错的；`width` 上的单位也不管（宽度不受 IME 高度契约影响）。
+ *
+ * TT 2.4.0 起（docs/API/Layout.md「旧契约」）：移动端原生宿主直接把 WebView 缩到系统栏、刘海与
+ * 停靠键盘之外，`--tt-ime-bottom` / `--tt-base-viewport-height` 已移除，`--tt-inset-*` 只是
+ * `env(safe-area-inset-*)` 的别名（宿主内恒为 0）。本约定写出的回退链在 2.4.0 上自然退化为
+ * `100dvh` 与 0，不会重复避让；保留它只为仍停在 2.3.0 的用户。
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';

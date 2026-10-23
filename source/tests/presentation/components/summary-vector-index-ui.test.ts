@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   process: vi.fn(),
   rebuild: vi.fn(),
   toast: vi.fn(),
+  confirm: vi.fn(),
   clear: vi.fn(),
   remove: vi.fn(),
   snapshot: null as any,
@@ -37,6 +38,7 @@ vi.mock('../../../src/data/repositories/profile-repo', () => ({
   get globalMeta_ACU() { return h.globalMeta; },
 }));
 vi.mock('../../../src/presentation/theme/toast', () => ({ showToastr_ACU: h.toast }));
+vi.mock('../../../src/presentation/theme/custom-confirm', () => ({ showCustomConfirm_ACU: h.confirm }));
 
 import {
   processSummaryVectorIndexBeforeGenerationWithUI_ACU,
@@ -47,7 +49,7 @@ describe('summary vector index UI recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.toast.mockReturnValue({ closest: () => ({ remove: h.remove }) });
-    vi.stubGlobal('confirm', vi.fn(() => true));
+    h.confirm.mockResolvedValue(true);
     h.process.mockResolvedValue({ success: false, skipped: true, reason: 'legacy_vector_scheme_rebuild_required' });
     h.rebuild.mockResolvedValue({ success: true, skipped: false, indexedRowCount: 6, chunkCount: 3, errors: [] });
   });
@@ -144,10 +146,21 @@ describe('summary vector index UI recovery', () => {
   });
 
   it('用户拒绝重建：不重建，沿用首轮跳过结果继续生成', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => false));
+    h.confirm.mockResolvedValue(false);
 
     const result = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
 
+    expect(h.rebuild).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ skipped: true, reason: 'legacy_vector_scheme_rebuild_required' });
+  });
+
+  it('宿主原生 confirm 不可靠（TT 2.3.0 返回 Promise 被当成「确定」）：只认插件确认框的结果', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => Promise.resolve(false)));
+    h.confirm.mockResolvedValue(false);
+
+    const result = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
+
+    expect(h.confirm).toHaveBeenCalledTimes(1);
     expect(h.rebuild).not.toHaveBeenCalled();
     expect(result).toMatchObject({ skipped: true, reason: 'legacy_vector_scheme_rebuild_required' });
   });

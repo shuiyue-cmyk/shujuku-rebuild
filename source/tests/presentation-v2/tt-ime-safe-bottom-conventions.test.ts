@@ -20,6 +20,11 @@
  *
  * 结论：凡是「打标 backdrop 且承载输入框（含经 slot 传入的编辑器）」的浮层，必须在**自己身上**
  * 重算底部安全区。两个更省事的改法都已实证否掉，见下面第二条用例的说明。
+ *
+ * TT 2.4.0 起（docs/API/Layout.md「旧契约」）：移动端原生宿主直接把 WebView 缩到系统栏、刘海与
+ * 停靠键盘之外，`--tt-ime-bottom` / `--tt-base-viewport-height` 已移除，`--tt-inset-*` 只是
+ * `env(safe-area-inset-*)` 的别名（宿主内恒为 0）。本约定写出的回退链在 2.4.0 上自然退化为
+ * `100dvh` 与 0，不会重复避让；保留它只为仍停在 2.3.0 的用户。
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';

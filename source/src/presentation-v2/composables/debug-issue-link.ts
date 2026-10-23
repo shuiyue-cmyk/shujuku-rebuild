@@ -37,7 +37,7 @@ export function buildDebugIssueBody_ACU(version: string = readAcuBuildVersion_AC
     '',
     '### 环境',
     `- 插件版本：${version}`,
-    '- 宿主与版本：（请填写，例如 TauriTavern 2.3.0 / SillyTavern 1.18.x）',
+    '- 宿主与版本：（请填写，例如 TauriTavern 2.4.0 / SillyTavern 1.19.x）',
     '- 平台：（请填写，Windows / macOS / Linux / Android / iOS）',
     '- 运行形态：（扩展 / 油猴脚本）',
     '',

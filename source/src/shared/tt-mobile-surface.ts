@@ -17,6 +17,9 @@
  *
  * 文档明确要求框架型扩展「显式写入 data-tt-mobile-surface，不要赌宿主 classifier 扫到结构」，
  * 本库所有 fixed 浮层因此显式打标。
+ *
+ * TT 2.4.0 起该属性「保留，无布局作用」：系统栏与键盘改由原生宿主在 WebView 层统一避让，
+ * classifier / geometry firewall / IME surface controller 均已移除。打标对 2.4.0 无影响，仅服务 2.3.0。
  */
 
 /** 宿主识别的属性名（layout-kit.js SURFACE_ATTR 同值）。 */

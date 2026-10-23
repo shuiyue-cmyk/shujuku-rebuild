@@ -14,13 +14,14 @@ import { getLatestSummaryVectorIndexSnapshotState_ACU } from '../../service/vect
 import { validateSummaryVectorIndexConfig_ACU } from '../../service/vector/vector-memory-config';
 import { globalMeta_ACU } from '../../data/repositories/profile-repo';
 import { showToastr_ACU } from '../theme/toast';
+import { showCustomConfirm_ACU } from '../theme/custom-confirm';
 
 const SUMMARY_VECTOR_REBUILD_REQUIRED_REASONS_ACU = new Set([
   'legacy_vector_scheme_rebuild_required',
   'embedding_identity_changed_rebuild_required',
 ]);
 
-const SUMMARY_VECTOR_SCHEME_REBUILD_CONFIRM_ACU = '向量方案已优化，需要重建';
+const SUMMARY_VECTOR_SCHEME_REBUILD_CONFIRM_ACU = '向量方案已优化，旧的交火索引已失效，需要重建后才能召回。现在重建吗？';
 
 function clearToastElement_ACU($toast: JQuery<HTMLElement> | null) {
   try { if ($toast) toastr_API_ACU?.clear?.($toast); } catch (e) {}
@@ -163,9 +164,8 @@ export async function processSummaryVectorIndexBeforeGenerationWithUI_ACU(
   }
 
   if (shouldRebuildSummaryVectorIndexWithUI_ACU(result.reason)) {
-    const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function'
-      ? window.confirm(SUMMARY_VECTOR_SCHEME_REBUILD_CONFIRM_ACU)
-      : true;
+    // 不用原生 confirm：TauriTavern 2.3.0 的原生 confirm 返回 Promise，会被当成「确定」直接执行
+    const confirmed = await showCustomConfirm_ACU('交火索引需要重建', SUMMARY_VECTOR_SCHEME_REBUILD_CONFIRM_ACU, { confirmLabel: '重建' });
     if (!confirmed) return result;
     let rebuilt = false;
     try {

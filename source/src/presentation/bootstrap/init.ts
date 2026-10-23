@@ -771,7 +771,7 @@ export   function mainInitialize_ACU() {
       mainInitializeDone_ACU = true;
       logDebug_ACU('AutoCardUpdater Initialization successful! Core APIs loaded.');
       showToastr_ACU('success', '数据库已加载！', '数据库');
-      // [版本闸门] TT 宿主低于 2.3.0 时弹模态提醒升级。不 await：模态窗由用户自行关闭，
+      // [版本闸门] TT 宿主低于要求基线（ACU_REQUIRED_TAURITAVERN_VERSION）时弹模态提醒升级。不 await：模态窗由用户自行关闭，
       // 不得阻塞后续初始化；非 TT 宿主与版本读取失败都按 fail-open 不打扰。
       void notifyAcuTauriVersionIfOutdated_ACU();
 

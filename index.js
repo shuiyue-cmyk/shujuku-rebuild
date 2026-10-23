@@ -93648,7 +93648,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261020-1400"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261023-1755"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -93667,7 +93667,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261020-1400";
+        const stamp = "20261023-1755";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -129708,8 +129708,10 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  * 本插件适配与验证所依据的 TauriTavern 最低版本。
  * 2.3.0 起宿主把工具调用结果升为一等楼层（`{role:'tool', is_system:true}`）、新增 TOOL_CALLS_* 事件、
  * 引入 Agent 断点续连的 `{agentResume:true}` 生成事件，并变更了结构写入与保存管线契约。
+ * 2.4.0 修复了 2.3.0 中扩展的原生 confirm 返回 Promise、被直接当作「确定」执行的问题（TT #334），
+ * 并修复 Android 上信任已泄露私钥的 emSign 根证书（RUSTSEC-2026-0381），故基线提到 2.4.0。
  */
-const ACU_REQUIRED_TAURITAVERN_VERSION = '2.3.0';
+const ACU_REQUIRED_TAURITAVERN_VERSION = '2.4.0';
 /** 解析 `major.minor.patch` 形式的版本串；不可解析返回 null（不猜）。 */
 function parseAcuVersionParts(value) {
     const text = String(value ?? '').trim().replace(/^v/i, '');
@@ -129840,7 +129842,8 @@ function isAcuTauriVersionOutdated(version, required = ACU_REQUIRED_TAURITAVERN_
  *
  * 本插件的楼层识别、填表与追平链路是按 TauriTavern 2.3.0 的宿主语义适配并验证的
  * （一等工具楼层 `{role:'tool', is_system:true}`、TOOL_CALLS_* 事件、Agent 断点续连的
- * `{agentResume:true}` 生成事件、结构写入与保存管线契约）。低于该版本时这些行为未经验证。
+ * `{agentResume:true}` 生成事件、结构写入与保存管线契约）；2.4.0 又修复了扩展确认框被直接
+ * 当作「确定」的问题与 Android 证书漏洞，所以要求基线为 2.4.0。
  *
  * 因此在 TT 宿主下于启动时读一次宿主版本，低于所需版本就弹模态提醒（**每次启动都提醒**，
  * 不依赖任何持久化状态）。非 TT 宿主不参与判定；版本读取失败按 fail-open 处理不打扰
@@ -129856,7 +129859,7 @@ function buildAcuTauriVersionWarningHtml_ACU(currentVersion, requiredVersion = A
     return [
         '<h3>建议升级 TauriTavern</h3>',
         `<p>宿主版本（TauriTavern）：<b>${current}</b>；扩展版本（UnbirthDB）：<b>${extension}</b>；本插件适配与验证的要求基线：<b>${required}</b>。</p>`,
-        `<p>检测到宿主版本低于要求基线。本插件的楼层识别与自动填表是按 ${required} 的宿主行为适配并验证的（工具调用结果作为独立楼层、生成事件与结构写入契约的变更）。低于该版本时行为未经验证，可能出现楼层识别偏差、填表或追平异常。</p>`,
+        `<p>检测到宿主版本低于要求基线。TauriTavern 2.4.0 修复了两个会影响你的问题：一是扩展的确认框不弹出、被直接当作「确定」执行；二是 Android 上的证书安全漏洞（RUSTSEC-2026-0381，可能让连接 API 时的加密被冒充）。更早的版本还可能出现楼层识别偏差、填表或追平异常。</p>`,
         `<p>请把宿主升级到 <b>${required}</b> 或更高版本后重新加载页面（扩展不用动）。可在 TauriTavern 内检查更新，或从官方 Releases 下载：<br>github.com/Darkatse/TauriTavern/releases</p>`,
     ].join('');
 }
@@ -131411,7 +131414,7 @@ const SUMMARY_VECTOR_REBUILD_REQUIRED_REASONS_ACU = new Set([
     'legacy_vector_scheme_rebuild_required',
     'embedding_identity_changed_rebuild_required',
 ]);
-const SUMMARY_VECTOR_SCHEME_REBUILD_CONFIRM_ACU = '向量方案已优化，需要重建';
+const SUMMARY_VECTOR_SCHEME_REBUILD_CONFIRM_ACU = '向量方案已优化，旧的交火索引已失效，需要重建后才能召回。现在重建吗？';
 function clearToastElement_ACU($toast) {
     try {
         if ($toast)
@@ -131549,9 +131552,8 @@ async function processSummaryVectorIndexBeforeGenerationWithUI_ACU(options = {})
         clearToastElement_ACU($toast);
     }
     if (shouldRebuildSummaryVectorIndexWithUI_ACU(result.reason)) {
-        const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function'
-            ? window.confirm(SUMMARY_VECTOR_SCHEME_REBUILD_CONFIRM_ACU)
-            : true;
+        // 不用原生 confirm：TauriTavern 2.3.0 的原生 confirm 返回 Promise，会被当成「确定」直接执行
+        const confirmed = await showCustomConfirm_ACU('交火索引需要重建', SUMMARY_VECTOR_SCHEME_REBUILD_CONFIRM_ACU, { confirmLabel: '重建' });
         if (!confirmed)
             return result;
         let rebuilt = false;
@@ -149283,7 +149285,7 @@ function mainInitialize_ACU() {
         mainInitializeDone_ACU = true;
         logDebug_ACU('AutoCardUpdater Initialization successful! Core APIs loaded.');
         showToastr_ACU('success', '数据库已加载！', '数据库');
-        // [版本闸门] TT 宿主低于 2.3.0 时弹模态提醒升级。不 await：模态窗由用户自行关闭，
+        // [版本闸门] TT 宿主低于要求基线（ACU_REQUIRED_TAURITAVERN_VERSION）时弹模态提醒升级。不 await：模态窗由用户自行关闭，
         // 不得阻塞后续初始化；非 TT 宿主与版本读取失败都按 fail-open 不打扰。
         void notifyAcuTauriVersionIfOutdated_ACU();
         loadSettings_ACU();
@@ -152658,7 +152660,8 @@ function exportTableTemplate_ACU({ scope = 'global' } = {}) {
     }
 }
 async function resetAllToDefaults_ACU() {
-    if (!confirm('确定要同时恢复【默认AI指令预设】和【默认表格模板】吗？\n\n这将覆盖您当前的自定义设置。此操作不可撤销。')) {
+    // 不用原生 confirm：TauriTavern 2.3.0 的原生 confirm 返回 Promise，会被当成「确定」直接执行
+    if (!(await showCustomConfirm_ACU('恢复默认设置', '确定要同时恢复【默认AI指令预设】和【默认表格模板】吗？\n\n这将覆盖您当前的自定义设置。此操作不可撤销。', { confirmLabel: '恢复默认', tone: 'danger' }))) {
         return false;
     }
     try {
@@ -152691,12 +152694,12 @@ async function resetAllToDefaults_ACU() {
 }
 // [新增] 使用通用模板覆盖最新层所有表格数据的函数
 async function overrideLatestLayerWithTemplate_ACU() {
-    if (!confirm('⚠️ 警告：此操作将使用当前通用模板覆盖聊天记录中最新一层的所有表格数据！\n\n' +
+    if (!(await showCustomConfirm_ACU('用模板覆盖最新一层', '此操作将使用当前通用模板覆盖聊天记录中最新一层的所有表格数据！\n\n' +
         '• 模板中有的表格会被覆盖（只保留表头，数据清空）\n' +
         '• 模板中没有的表格会被忽略（本地数据保持不变）\n' +
         '• 此操作仅影响最新的一条AI消息\n' +
         '• 删除最新层的聊天数据后即可恢复正常\n\n' +
-        '确定要继续吗？')) {
+        '确定要继续吗？', { confirmLabel: '覆盖', tone: 'danger' }))) {
         return false;
     }
     const chat = getChatArray_ACU();
@@ -155280,7 +155283,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261020-1400";
+        const stamp = "20261023-1755";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -171044,6 +171047,9 @@ const PiniaVuePlugin = function (_Vue) {
  *
  * 文档明确要求框架型扩展「显式写入 data-tt-mobile-surface，不要赌宿主 classifier 扫到结构」，
  * 本库所有 fixed 浮层因此显式打标。
+ *
+ * TT 2.4.0 起该属性「保留，无布局作用」：系统栏与键盘改由原生宿主在 WebView 层统一避让，
+ * classifier / geometry firewall / IME surface controller 均已移除。打标对 2.4.0 无影响，仅服务 2.3.0。
  */
 /** 宿主识别的属性名（layout-kit.js SURFACE_ATTR 同值）。 */
 const TT_MOBILE_SURFACE_ATTR_ACU = 'data-tt-mobile-surface';
@@ -185403,7 +185409,7 @@ function buildDebugIssueBody_ACU(version = readAcuBuildVersion_ACU()) {
         '',
         '### 环境',
         `- 插件版本：${version}`,
-        '- 宿主与版本：（请填写，例如 TauriTavern 2.3.0 / SillyTavern 1.18.x）',
+        '- 宿主与版本：（请填写，例如 TauriTavern 2.4.0 / SillyTavern 1.19.x）',
         '- 平台：（请填写，Windows / macOS / Linux / Android / iOS）',
         '- 运行形态：（扩展 / 油猴脚本）',
         '',

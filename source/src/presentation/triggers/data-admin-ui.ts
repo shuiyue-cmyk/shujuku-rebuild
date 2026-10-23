@@ -55,6 +55,7 @@ import { rebuildCurrentSummaryVectorIndexNow_ACU } from '../../service/vector/su
 import { importCombinedSettingsWithRollback_ACU } from '../../service/settings/combined-settings-transfer';
 import { chatHasLegacySummaryVectorFields_ACU } from '../../service/vector/summary-vector-mirror-rebuild';
 import { isAiFloor_ACU } from '../../shared/ai-floor';
+import { showCustomConfirm_ACU } from '../theme/custom-confirm';
 /**
  * presentation/triggers/data-admin-ui.ts — 导入/导出/重置 UI
  * 从 features/data/01_data_admin.js 迁移而来
@@ -209,7 +210,8 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
   }
 
   export async function resetAllToDefaults_ACU() {
-      if (!confirm('确定要同时恢复【默认AI指令预设】和【默认表格模板】吗？\n\n这将覆盖您当前的自定义设置。此操作不可撤销。')) {
+      // 不用原生 confirm：TauriTavern 2.3.0 的原生 confirm 返回 Promise，会被当成「确定」直接执行
+      if (!(await showCustomConfirm_ACU('恢复默认设置', '确定要同时恢复【默认AI指令预设】和【默认表格模板】吗？\n\n这将覆盖您当前的自定义设置。此操作不可撤销。', { confirmLabel: '恢复默认', tone: 'danger' }))) {
           return false;
       }
 
@@ -245,12 +247,12 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
 
   // [新增] 使用通用模板覆盖最新层所有表格数据的函数
   export async function overrideLatestLayerWithTemplate_ACU() {
-      if (!confirm('⚠️ 警告：此操作将使用当前通用模板覆盖聊天记录中最新一层的所有表格数据！\n\n' +
+      if (!(await showCustomConfirm_ACU('用模板覆盖最新一层', '此操作将使用当前通用模板覆盖聊天记录中最新一层的所有表格数据！\n\n' +
                   '• 模板中有的表格会被覆盖（只保留表头，数据清空）\n' +
                   '• 模板中没有的表格会被忽略（本地数据保持不变）\n' +
                   '• 此操作仅影响最新的一条AI消息\n' +
                   '• 删除最新层的聊天数据后即可恢复正常\n\n' +
-                  '确定要继续吗？')) {
+                  '确定要继续吗？', { confirmLabel: '覆盖', tone: 'danger' }))) {
           return false;
       }
 

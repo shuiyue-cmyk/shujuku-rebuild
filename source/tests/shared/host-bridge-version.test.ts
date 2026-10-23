@@ -26,8 +26,8 @@ afterEach(() => {
 });
 
 describe('ACU_REQUIRED_TAURITAVERN_VERSION', () => {
-  it('要求基线为 2.3.0', () => {
-    expect(ACU_REQUIRED_TAURITAVERN_VERSION).toBe('2.3.0');
+  it('要求基线为 2.4.0（修复扩展确认框被直接当作「确定」与 Android 证书漏洞）', () => {
+    expect(ACU_REQUIRED_TAURITAVERN_VERSION).toBe('2.4.0');
   });
 });
 
