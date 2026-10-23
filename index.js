@@ -87922,6 +87922,10 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         // 保留多个 system：默认开启；严格/半严格后处理也不把中部 system 降级为 user。
         // 后端不识别该键时忽略之，行为与旧 strict 一致，不改变现状。
         preserve_multiple_system: effectiveApiConfig.preserveMultipleSystem !== false,
+        // 系统提示词：TT 转接 Claude Messages / Gemini generateContent 时，只有带 use_sysprompt 才把开头连续的 system
+        // 放进协议的系统提示字段，不带就降成 user 并与相邻 user 合并（TT 2.4.0 payload/claude/messages.rs、makersuite.rs）。
+        // 与直接发送同口径；其余协议 TT 自己保留 system，不带该键。TT 只读不转发，直接发送的协议改写也不取它。
+        ...(customApiFormat_ACU === 'claude_messages' || customApiFormat_ACU === 'gemini_generate_content' ? { use_sysprompt: true } : {}),
         // 端点与密钥走「反向代理 + 代理密码」：填了 custom_url 时 TT 改用自己「自定义」连接里存的密钥，
         // Claude 协议以 x-api-key、Gemini 以 x-goog-api-key 与 ?key= 发出，预设密钥只在 Authorization 里，
         // 上游认错密钥（同一把密钥换协议就报未订阅）。custom_url 留空后 TT 一律取代理密码。
@@ -93673,7 +93677,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261023-1823"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261023-1922"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -93692,7 +93696,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261023-1823";
+        const stamp = "20261023-1922";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -155334,7 +155338,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261023-1823";
+        const stamp = "20261023-1922";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

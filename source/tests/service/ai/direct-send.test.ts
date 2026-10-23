@@ -127,6 +127,7 @@ describe('直接发送的协议改写', () => {
       { role: 'assistant', content: [{ type: 'text', text: '预填' }] },
     ]);
     expect(request.body.output_config).toEqual({ effort: 'high' });
+    expect(request.body, '转接专用的 use_sysprompt 不发给上游').not.toHaveProperty('use_sysprompt');
     expect(request.body).not.toHaveProperty('temperature');
     expect(request.body.top_p).toBe(0.95);
     expect(request.body.max_tokens).toBe(1000);

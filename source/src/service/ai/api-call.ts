@@ -573,6 +573,10 @@ export function buildCustomApiRequestBody_ACU(
     // 保留多个 system：默认开启；严格/半严格后处理也不把中部 system 降级为 user。
     // 后端不识别该键时忽略之，行为与旧 strict 一致，不改变现状。
     preserve_multiple_system: effectiveApiConfig.preserveMultipleSystem !== false,
+    // 系统提示词：TT 转接 Claude Messages / Gemini generateContent 时，只有带 use_sysprompt 才把开头连续的 system
+    // 放进协议的系统提示字段，不带就降成 user 并与相邻 user 合并（TT 2.4.0 payload/claude/messages.rs、makersuite.rs）。
+    // 与直接发送同口径；其余协议 TT 自己保留 system，不带该键。TT 只读不转发，直接发送的协议改写也不取它。
+    ...(customApiFormat_ACU === 'claude_messages' || customApiFormat_ACU === 'gemini_generate_content' ? { use_sysprompt: true } : {}),
     // 端点与密钥走「反向代理 + 代理密码」：填了 custom_url 时 TT 改用自己「自定义」连接里存的密钥，
     // Claude 协议以 x-api-key、Gemini 以 x-goog-api-key 与 ?key= 发出，预设密钥只在 Authorization 里，
     // 上游认错密钥（同一把密钥换协议就报未订阅）。custom_url 留空后 TT 一律取代理密码。

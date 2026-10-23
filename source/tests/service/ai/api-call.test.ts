@@ -365,6 +365,21 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(body.custom_prompt_post_processing).toBe('strict');
   });
 
+  // TT 转接 Claude Messages / Gemini generateContent 时，只有请求带 use_sysprompt 才把开头连续的 system
+  // 放进协议的系统提示字段；不带就降成 user 并与相邻 user 合并，提示词预设的 system 被改写。
+  // 其余协议 TT 自己保留 system（OpenAI 原样、Responses / Interactions 按 system 处理），不带该键。
+  it('Claude Messages 与 Gemini generateContent 转接时带 use_sysprompt，其余协议不带', () => {
+    const build = (customApiFormat: string) => buildCustomApiRequestBody_ACU(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'm', customApiFormat: customApiFormat as any },
+    );
+    expect(build('claude_messages').use_sysprompt).toBe(true);
+    expect(build('gemini_generate_content').use_sysprompt).toBe(true);
+    for (const format of ['openai_compat', 'openai_responses', 'gemini_interactions']) {
+      expect(build(format)).not.toHaveProperty('use_sysprompt');
+    }
+  });
+
   it('preserve_multiple_system 缺省为 true，显式 false 原样透传（移植上游 e1876435）', () => {
     const def = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],
