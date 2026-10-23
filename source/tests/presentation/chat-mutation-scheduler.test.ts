@@ -63,6 +63,7 @@ vi.mock('../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logError_ACU: 
 import {
   scheduleChatMutationRefresh_ACU,
   cancelPendingChatMutationRefresh_ACU,
+  flushChatMutationRefreshNow_ACU,
   __resetChatMutationSchedulerForTests_ACU,
 } from '../../src/presentation/bootstrap/chat-mutation-scheduler';
 
@@ -242,5 +243,61 @@ describe('chat mutation scheduler', () => {
     await vi.runAllTicks();
 
     expect(h.recoverDeleted).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 上游 #56：重新生成时宿主删掉旧回复后会 await MESSAGE_DELETED，再读世界书组装正文请求。
+ * 防抖调度返回 void，宿主等不到 1.2s 后才跑的回滚 ⇒ 新请求带着旧回复的表格结果。
+ * 立即刷新入口必须：撤掉待执行的防抖、立刻跑完整一轮（含删楼恢复与世界书刷新）后才 resolve，
+ * 并跳过前端回读等待，不把 800ms 加到正文启动时间里。
+ */
+describe('立即刷新（重新生成前的必要数据边界）', () => {
+  it('删楼后立即刷新：跑完删楼恢复与合并刷新才 resolve，跳过回读等待，之后防抖不再重复跑', async () => {
+    let releaseRefresh!: () => void;
+    h.refreshUI.mockImplementationOnce(() => new Promise(res => { releaseRefresh = () => res({ ok: true }); }));
+
+    scheduleChatMutationRefresh_ACU('chat_modified_deleted');
+    let settled = false;
+    const done = flushChatMutationRefreshNow_ACU().then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h.recoverDeleted).toHaveBeenCalledTimes(1);
+    expect(h.refreshUI).toHaveBeenCalledWith({ skipReadbackWait: true });
+    expect(settled, '合并刷新（含世界书更新）没完成前不能放行宿主').toBe(false);
+
+    releaseRefresh();
+    await done;
+    expect(settled).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.refreshUI, '已立即跑过，原防抖不能再跑一轮').toHaveBeenCalledTimes(1);
+  });
+
+  it('立即刷新时已有一轮在跑：等它结束后再补跑一轮，保证结果含这次删楼', async () => {
+    let releaseFirst!: () => void;
+    h.refreshUI.mockImplementationOnce(() => new Promise(res => { releaseFirst = () => res({ ok: true }); }));
+
+    scheduleChatMutationRefresh_ACU('chat_modified_swiped');
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(h.refreshUI).toHaveBeenCalledTimes(1);
+
+    scheduleChatMutationRefresh_ACU('chat_modified_deleted');
+    let settled = false;
+    const done = flushChatMutationRefreshNow_ACU().then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(false);
+
+    releaseFirst();
+    await done;
+    expect(h.refreshUI).toHaveBeenCalledTimes(2);
+    expect(h.refreshUI).toHaveBeenLastCalledWith({ skipReadbackWait: true });
+    expect(h.recoverDeleted, '补跑轮负责这次删楼的恢复').toHaveBeenCalledTimes(1);
+  });
+
+  it('刷新出错也会 resolve（宿主照常生成），不把异常抛给宿主事件链', async () => {
+    h.refreshUI.mockRejectedValue(new Error('boom'));
+    scheduleChatMutationRefresh_ACU('chat_modified_deleted');
+    await expect(flushChatMutationRefreshNow_ACU()).resolves.toBeUndefined();
   });
 });

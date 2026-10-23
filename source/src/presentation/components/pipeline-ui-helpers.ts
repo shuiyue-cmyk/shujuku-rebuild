@@ -18,7 +18,7 @@ import { logDebug_ACU } from '../../shared/utils';
 const FRONTEND_READBACK_WAIT_MS_ACU = 800;
 
 export async function refreshMergedDataAndNotifyWithUI_ACU(
-    { skipNotify = false, notifyMeta }: { skipNotify?: boolean; notifyMeta?: { persisted?: boolean } } = {},
+    { skipNotify = false, notifyMeta, skipReadbackWait = false }: { skipNotify?: boolean; notifyMeta?: { persisted?: boolean }; skipReadbackWait?: boolean } = {},
 ) {
     const result = await refreshMergedDataAndNotify_ACU();
 
@@ -53,8 +53,9 @@ export async function refreshMergedDataAndNotifyWithUI_ACU(
         logDebug_ACU('Skipped V2 visualizer refresh: surface inactive or not registered.');
     }
 
-    // 3. 仅当本次确实通知了前端读取方时才等待回读窗口，避免无读取方时白等
-    if (didNotifyFrontend) {
+    // 3. 仅当本次确实通知了前端读取方时才等待回读窗口，避免无读取方时白等；
+    //    重新生成前的立即刷新（skipReadbackWait）不等：宿主在等它放行正文请求
+    if (didNotifyFrontend && !skipReadbackWait) {
         await new Promise(resolve => setTimeout(resolve, FRONTEND_READBACK_WAIT_MS_ACU));
     }
 

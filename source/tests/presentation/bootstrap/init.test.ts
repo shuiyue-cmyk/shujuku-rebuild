@@ -8,6 +8,7 @@ const m = vi.hoisted(() => ({
   isRetryOfStoppedSend: vi.fn(() => false),
   chatChanged: undefined as undefined | ((name: string) => Promise<void>),
   chatMutationHandler: undefined as undefined | ((data: any) => Promise<void>),
+  messageDeletedHandler: undefined as undefined | ((data: any) => Promise<void>),
   chatDeletedHandler: undefined as undefined | (() => void),
   messageSentHandler: undefined as undefined | ((messageId: any) => void),
   generationStartedHandler: undefined as undefined | ((type: any, params: any, dryRun: any) => void),
@@ -145,6 +146,7 @@ beforeAll(async () => {
   m.api.eventSource.on.mockImplementation((event: string, callback: any) => {
     if (event === 'chat') m.chatChanged = callback;
     if (event === 'deleted' || event === 'swiped') m.chatMutationHandler = callback;
+    if (event === 'deleted') m.messageDeletedHandler = callback;
     if (event === 'chatdeleted') m.chatDeletedHandler = callback;
     if (event === 'messagesent') m.messageSentHandler = callback;
     if (event === 'genstarted') m.generationStartedHandler = callback;
@@ -1152,6 +1154,36 @@ describe('发送意图钩子的 IME 过滤', () => {
   });
 });
 
+/**
+ * 上游 #59（关联 #55）：宿主或其他脚本重建发送按钮 / 输入框后，挂在旧节点上的监听随旧节点失效，
+ * 发送意图再也记不上 ⇒ 剧情推进每轮被判「非用户发送」跳过；要等切换聊天的重装路径才恢复。
+ * 监听必须挂在文档上按目标委托，不依赖控件节点身份；重复安装不能重复计数。
+ */
+describe('发送意图钩子在发送控件重建后仍然有效', () => {
+  it('按钮与输入框被替换成新节点后，点击 / 回车仍记发送意图，且重复安装不重复计数', async () => {
+    const init = await import('../../../src/presentation/bootstrap/init');
+    document.body.innerHTML = '<div id="form"><button id="send_but"><span class="icon"></span></button><textarea id="send_textarea"></textarea></div>';
+    (window as any).__ACU_sendIntentHooksInstalled = null;
+    init.__installSendIntentCaptureHooksForTests_ACU();
+    init.__installSendIntentCaptureHooksForTests_ACU();
+
+    // 宿主重建控件：旧节点整体换掉，不再调用安装函数
+    document.getElementById('form')!.innerHTML = '<button id="send_but"><span class="icon"></span></button><textarea id="send_textarea"></textarea>';
+    m.markSendIntent.mockClear();
+
+    (document.querySelector('#send_but .icon') as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(m.markSendIntent, '点到按钮内部图标也算点发送').toHaveBeenCalledTimes(1);
+
+    (document.getElementById('send_textarea') as HTMLTextAreaElement)
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(m.markSendIntent).toHaveBeenCalledTimes(2);
+
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(m.markSendIntent, '发送控件之外的点击 / 回车不算').toHaveBeenCalledTimes(2);
+  });
+});
+
 // R9-10：启动链与 CHAT_CHANGED 链一样，在每个 await 之后复核聊天身份；
 // 启动链运行期间切了聊天就停下，交给随后补跑的 CHAT_CHANGED 链，不把旧聊天的表发布成新聊天的 runtime。
 describe('R9-10 启动链中途切聊天', () => {
@@ -1244,5 +1276,66 @@ describe('mainInitialize_ACU 用户停止正文生成后不对本轮回复自动
     expect(m.cancelPendingAutoTasks).not.toHaveBeenCalled();
     m.generationEndedHandler!(1);
     expect(m.handleNewMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 上游 #56：重新生成时宿主删掉旧回复后 await MESSAGE_DELETED，随后立即读世界书组装正文请求。
+// 防抖调度宿主等不到 ⇒ 新请求带着被替换回复的表格结果。重新生成路径上的这次删楼必须当场跑完
+// 回滚与世界书刷新再放行；其它删楼（用户手动删、普通生成期间）照旧走防抖。
+describe('mainInitialize_ACU 重新生成删旧回复时先刷新数据再放行宿主', () => {
+  beforeEach(async () => {
+    const scheduler = await import('../../../src/presentation/bootstrap/chat-mutation-scheduler');
+    scheduler.__resetChatMutationSchedulerForTests_ACU();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    m.generationEndedHandler!(1);
+    vi.useRealTimers();
+  });
+
+  it('regenerate 删旧回复：处理函数等到合并刷新（含世界书）完成才返回，且不等前端回读', async () => {
+    let release!: () => void;
+    m.refresh.mockImplementationOnce(() => new Promise(res => { release = () => res({ mergedData: {} }); }));
+    m.generationStartedHandler!('regenerate', {}, false);
+
+    let returned = false;
+    const pending = m.messageDeletedHandler!(1).then(() => { returned = true; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(m.refresh).toHaveBeenCalledWith({ skipReadbackWait: true });
+    expect(returned, '刷新没完成前宿主不能继续读世界书').toBe(false);
+
+    release();
+    await pending;
+    expect(returned).toBe(true);
+  });
+
+  it('普通删楼、或 regenerate 已被停止后的删楼：只走防抖，不阻塞宿主', async () => {
+    m.generationStartedHandler!('normal', {}, false);
+    await m.messageDeletedHandler!(1);
+    expect(m.refresh).not.toHaveBeenCalled();
+
+    m.generationStartedHandler!('regenerate', {}, false);
+    m.generationStoppedHandler!();
+    await m.messageDeletedHandler!(1);
+    expect(m.refresh).not.toHaveBeenCalled();
+  });
+
+  it('同一次 regenerate 只对第一次删楼立即刷新；之后用户再删楼照旧防抖', async () => {
+    m.generationStartedHandler!('regenerate', {}, false);
+    await m.messageDeletedHandler!(1);
+    expect(m.refresh).toHaveBeenCalledTimes(1);
+
+    await m.messageDeletedHandler!(0);
+    expect(m.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('dryRun / quiet 的 regenerate 不算', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    m.generationStartedHandler!('regenerate', {}, true);
+    await m.messageDeletedHandler!(1);
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValueOnce(true);
+    m.generationStartedHandler!('regenerate', { quiet_prompt: 'x' }, false);
+    await m.messageDeletedHandler!(1);
+    expect(m.refresh).not.toHaveBeenCalled();
   });
 });

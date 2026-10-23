@@ -93648,7 +93648,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261023-1755"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261023-1809"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -93667,7 +93667,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261023-1755";
+        const stamp = "20261023-1809";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -110490,7 +110490,7 @@ function bindTableFillStopButton_ACU(buttonId, onStop) {
  */
 /** 通知前端后等待其完成数据读取的窗口；仅在确实发出通知时才等待。 */
 const FRONTEND_READBACK_WAIT_MS_ACU = 800;
-async function refreshMergedDataAndNotifyWithUI_ACU({ skipNotify = false, notifyMeta } = {}) {
+async function refreshMergedDataAndNotifyWithUI_ACU({ skipNotify = false, notifyMeta, skipReadbackWait = false } = {}) {
     const result = await refreshMergedDataAndNotify_ACU();
     // 1. 通知前端 (iframe context)；notifyMeta.persisted=false 表示本次更新未写入聊天持久化（S2-1）
     let didNotifyFrontend = false;
@@ -110525,8 +110525,9 @@ async function refreshMergedDataAndNotifyWithUI_ACU({ skipNotify = false, notify
     else {
         logDebug_ACU('Skipped V2 visualizer refresh: surface inactive or not registered.');
     }
-    // 3. 仅当本次确实通知了前端读取方时才等待回读窗口，避免无读取方时白等
-    if (didNotifyFrontend) {
+    // 3. 仅当本次确实通知了前端读取方时才等待回读窗口，避免无读取方时白等；
+    //    重新生成前的立即刷新（skipReadbackWait）不等：宿主在等它放行正文请求
+    if (didNotifyFrontend && !skipReadbackWait) {
         await new Promise(resolve => setTimeout(resolve, FRONTEND_READBACK_WAIT_MS_ACU));
     }
     return result;
@@ -118766,6 +118767,8 @@ let latestReason_ACU = 'chat_modified_swiped';
  * 执行时读取并清零；执行中到达的删楼留给补跑轮。
  */
 let pendingDeletion_ACU = false;
+/** 最近一次启动的执行轮；立即刷新入口要等它结束再补跑。 */
+let currentRun_ACU = null;
 /**
  * 触发一次聊天变更刷新请求。同一时刻最多一轮执行；
  * 事件在 trailing 窗口内到达会被聚合，超过 MAX_WAIT_MS 则强制立即执行。
@@ -118799,11 +118802,35 @@ function cancelPendingChatMutationRefresh_ACU() {
     firstRequestAt_ACU = 0;
     pendingDeletion_ACU = false; // 旧聊天的删楼不能在新聊天上做恢复
 }
-async function runMutationRound_ACU() {
+/**
+ * 立即跑完一轮聊天变更刷新（上游 #56）：重新生成时宿主删掉旧回复后会 await MESSAGE_DELETED，
+ * 随后读世界书组装正文请求；防抖调度宿主等不到，新请求会带着旧回复的表格结果。
+ * 这里撤掉待执行的防抖，等在跑的一轮结束后立刻补跑一轮（删楼恢复 → 存储重建 → 合并刷新含世界书），
+ * 跑完才 resolve；跳过前端回读等待，不把它加到正文启动时间里。各步骤失败已在轮内隔离并记日志，
+ * 这里永不抛错，宿主照常继续生成。
+ */
+async function flushChatMutationRefreshNow_ACU() {
+    clearTimeout(chatMutationDebounceTimer_ACU);
+    _set_chatMutationDebounceTimer_ACU(null);
+    try {
+        while (running_ACU$1 && currentRun_ACU)
+            await currentRun_ACU;
+        await runMutationRound_ACU({ urgent: true });
+    }
+    catch (e) {
+        logWarn_ACU(`[聊天变更] 立即刷新失败: ${e?.message || e}`);
+    }
+}
+function runMutationRound_ACU(options = {}) {
     if (running_ACU$1) {
         pendingAfterRun_ACU = true;
-        return;
+        return currentRun_ACU ?? Promise.resolve();
     }
+    const run = executeMutationRound_ACU(options.urgent === true);
+    currentRun_ACU = run;
+    return run;
+}
+async function executeMutationRound_ACU(urgent) {
     running_ACU$1 = true;
     const startedGeneration = generation_ACU;
     firstRequestAt_ACU = 0;
@@ -118834,7 +118861,7 @@ async function runMutationRound_ACU() {
         }
         // UI 刷新失败不允许吞掉向量索引 dirty 标记（否则索引永远不对齐）
         try {
-            await refreshMergedDataAndNotifyWithUI_ACU();
+            await (urgent ? refreshMergedDataAndNotifyWithUI_ACU({ skipReadbackWait: true }) : refreshMergedDataAndNotifyWithUI_ACU());
         }
         catch (e) {
             logError_ACU(`[聊天变更] 合并数据与 UI 刷新失败: ${e?.message}`);
@@ -118892,6 +118919,7 @@ function __resetChatMutationSchedulerForTests_ACU() {
     running_ACU$1 = false;
     pendingAfterRun_ACU = false;
     pendingDeletion_ACU = false;
+    currentRun_ACU = null;
 }
 
 /**
@@ -148847,62 +148875,45 @@ function clearRuntimeForNoActiveChat_ACU(chatFileName) {
     notifyRuntimeTableCleared_ACU();
     logDebug_ACU(`ACU: No active chat after CHAT_CHANGED (${String(chatFileName)}), runtime table state cleared.`);
 }
-// [M1] 发送意图钩子改按「当前已绑定元素实例」记录（沿用 __ACU_sendIntentHooksInstalled 结构，
-// send/enter 字段由布尔改为当前绑定的元素引用）：宿主 DOM 重建后 #send_but/#send_textarea 是新
-// 元素实例，必须按实例比对才能感知并重绑。
-const SEND_INTENT_HOOK_MAX_SELF_RETRY_ACU = 10; // [L5] 元素缺失时自重排重试上限
+// 发送意图钩子挂在宿主文档上按目标委托（上游 #59 / #55）：此前挂在 #send_but / #send_textarea
+// 节点本身，宿主或其他脚本重建这两个控件后监听随旧节点失效，剧情推进每轮被判「非用户发送」跳过，
+// 要等切换聊天的重装路径才恢复。委托不依赖节点身份；按文档幂等安装（标记写在文档上，
+// 插件被重新注入时也不会叠出第二份监听），capture 阶段先于酒馆自身发送逻辑执行。
+const SEND_INTENT_DOC_MARK_ACU = '__ACU_sendIntentDelegated';
 function installSendIntentCaptureHooks_ACU() {
     try {
-        const parentDoc = (window.parent || window).document;
-        const doc = parentDoc || document;
-        const hooksState = window.__ACU_sendIntentHooksInstalled
-            || (window.__ACU_sendIntentHooksInstalled = { send: null, enter: null });
-        const sendBtn = doc.getElementById('send_but');
-        if (sendBtn && hooksState.send !== sendBtn) {
-            sendBtn.addEventListener('click', () => markUserSendIntent_ACU(), true);
-            sendBtn.addEventListener('pointerup', () => markUserSendIntent_ACU(), true);
-            sendBtn.addEventListener('touchend', () => markUserSendIntent_ACU(), true);
-            hooksState.send = sendBtn;
+        const doc = (window.parent || window).document || document;
+        if (!doc || doc[SEND_INTENT_DOC_MARK_ACU])
+            return;
+        const isWithin = (event, selector) => {
+            const target = event.target;
+            return typeof target?.closest === 'function' && !!target.closest(selector);
+        };
+        const onSendPointer = (event) => {
+            if (isWithin(event, '#send_but'))
+                markUserSendIntent_ACU();
+        };
+        for (const eventType of ['click', 'pointerup', 'touchend']) {
+            doc.addEventListener(eventType, onSendPointer, true);
         }
-        const ta = doc.getElementById('send_textarea');
-        if (ta && hooksState.enter !== ta) {
-            ta.addEventListener('keydown', (e) => {
-                try {
-                    const keyEvent = e;
-                    // 输入法上屏的回车不是「发送」：TT 2.3.0 已在宿主侧修掉 WebKit 的事件倒序（PR #208），
-                    // 但本钩子是我们自己的监听器，仍会把上屏回车记成一次发送意图，而该意图是自动填表/剧情的
-                    // 真实门控（isRecentUserSendIntent_ACU 被 init.ts 与 state-manager.ts 消费）⇒ 必须自行过滤。
-                    // keyCode 229 是「IME 处理中」的历史判据，旧 WebKit/Safari 不填 isComposing。
-                    if (keyEvent.isComposing || keyEvent.keyCode === 229)
-                        return;
-                    const key = keyEvent.key || keyEvent.code;
-                    if ((key === 'Enter' || key === 'NumpadEnter') && !keyEvent.shiftKey) {
-                        markUserSendIntent_ACU();
-                    }
+        doc.addEventListener('keydown', (event) => {
+            try {
+                if (!isWithin(event, '#send_textarea'))
+                    return;
+                // 输入法上屏的回车不是「发送」：TT 2.3.0 已在宿主侧修掉 WebKit 的事件倒序（PR #208），
+                // 但本钩子是我们自己的监听器，仍会把上屏回车记成一次发送意图，而该意图是自动填表/剧情的
+                // 真实门控（isRecentUserSendIntent_ACU 被 init.ts 与 state-manager.ts 消费）⇒ 必须自行过滤。
+                // keyCode 229 是「IME 处理中」的历史判据，旧 WebKit/Safari 不填 isComposing。
+                if (event.isComposing || event.keyCode === 229)
+                    return;
+                const key = event.key || event.code;
+                if ((key === 'Enter' || key === 'NumpadEnter') && !event.shiftKey) {
+                    markUserSendIntent_ACU();
                 }
-                catch (err) { }
-            }, true);
-            hooksState.enter = ta;
-        }
-        if (sendBtn && ta) {
-            window.__ACU_sendIntentHooksRetryCount = 0; // 绑定齐全，复位自重试计数
-            return;
-        }
-        // [L5] 元素缺失时自重排重试，加上限防止无限循环；超限放弃自动重试，
-        // 但 CHAT_CHANGED 重装路径仍会显式调用本函数按元素实例比对补绑。
-        const retryCount = Number(window.__ACU_sendIntentHooksRetryCount) || 0;
-        if (retryCount >= SEND_INTENT_HOOK_MAX_SELF_RETRY_ACU) {
-            logWarn_ACU(`[触发门控] 发送意图钩子自重试已达上限（${SEND_INTENT_HOOK_MAX_SELF_RETRY_ACU} 次；缺 send_but=${!sendBtn}, 缺 send_textarea=${!ta}），停止自动重试，等待 CHAT_CHANGED 重装路径补绑。`);
-            return;
-        }
-        if (!window.__ACU_sendIntentHooksRetryScheduled) {
-            window.__ACU_sendIntentHooksRetryScheduled = true;
-            window.__ACU_sendIntentHooksRetryCount = retryCount + 1;
-            setTimeout(() => {
-                window.__ACU_sendIntentHooksRetryScheduled = false;
-                installSendIntentCaptureHooks_ACU();
-            }, 1200);
-        }
+            }
+            catch (err) { }
+        }, true);
+        doc[SEND_INTENT_DOC_MARK_ACU] = true;
     }
     catch (e) {
         // ignore
@@ -149157,6 +149168,11 @@ const SELF_HOST_STOP_WINDOW_MS_ACU = 2000;
 // 只管自动链，不碰填表自身的 wasStoppedByUser，手动填表照常可用。
 let foregroundTurnStopped_ACU = false;
 /**
+ * 上游 #56：前台 regenerate 已开始、宿主还没删旧回复。宿主删完会 await MESSAGE_DELETED 再读世界书，
+ * 所以这一次删楼要当场跑完回滚与世界书刷新再放行；用完即清，停止 / 结束 / 其它前台生成也清掉。
+ */
+let regenerateAwaitingDeletion_ACU = false;
+/**
  * 召回期间这次发送已失效。用户按了停止：宿主已停，无需再做；
  * 其它原因（切聊天、宿主重载当前聊天、隔离标识变化）：宿主生成并未被中止，记忆不可信，停掉它。
  */
@@ -149388,6 +149404,7 @@ function mainInitialize_ACU() {
                         if (!dryRun && !quietLike && !params?.automatic_trigger) {
                             cancelPendingAutoTasks_ACU('generation_started');
                             foregroundTurnStopped_ACU = false;
+                            regenerateAwaitingDeletion_ACU = type === 'regenerate';
                         }
                         const context = recordGenerationContext_ACU(type, params, dryRun, preSignature);
                         bindContinuationInternalAiGenerationStarted_ACU(context.seq);
@@ -149424,6 +149441,7 @@ function mainInitialize_ACU() {
                             && (discarded.dryRun || isQuietLikeGeneration_ACU(discarded.type, discarded.params));
                         if (!stoppedBackground) {
                             foregroundTurnStopped_ACU = true;
+                            regenerateAwaitingDeletion_ACU = false;
                             cancelPendingAutoTasks_ACU('generation_stopped');
                         }
                         // 被中止的生成不会再有 GENERATION_ENDED；通知桥把等待中的续写轮转为可重试，避免卡死。
@@ -149801,6 +149819,14 @@ function mainInitialize_ACU() {
                             }
                         }
                         scheduleChatMutationRefresh_ACU(evName === 'MESSAGE_DELETED' ? 'chat_modified_deleted' : 'chat_modified_swiped');
+                        // 上游 #56：重新生成删掉旧回复后，宿主等本回调返回才读世界书组装正文请求；
+                        // 防抖要 1.2s 后才回滚，新请求会带着被替换回复的表格结果 ⇒ 这一次当场跑完再放行。
+                        if (evName === 'MESSAGE_DELETED' && regenerateAwaitingDeletion_ACU) {
+                            regenerateAwaitingDeletion_ACU = false;
+                            const startedAt = Date.now();
+                            await flushChatMutationRefreshNow_ACU();
+                            logDebug_ACU(`[聊天变更] 重新生成前已回滚被替换回复的表格数据并刷新世界书，耗时 ${Date.now() - startedAt}ms。`);
+                        }
                     });
                 }
             });
@@ -155283,7 +155309,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261023-1755";
+        const stamp = "20261023-1809";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

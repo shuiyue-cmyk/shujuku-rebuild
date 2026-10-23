@@ -40,6 +40,8 @@ let latestReason_ACU: 'chat_modified_deleted' | 'chat_modified_swiped' = 'chat_m
  * 执行时读取并清零；执行中到达的删楼留给补跑轮。
  */
 let pendingDeletion_ACU = false;
+/** 最近一次启动的执行轮；立即刷新入口要等它结束再补跑。 */
+let currentRun_ACU: Promise<void> | null = null;
 
 /**
  * 触发一次聊天变更刷新请求。同一时刻最多一轮执行；
@@ -77,11 +79,35 @@ export function cancelPendingChatMutationRefresh_ACU(): void {
   pendingDeletion_ACU = false; // 旧聊天的删楼不能在新聊天上做恢复
 }
 
-async function runMutationRound_ACU(): Promise<void> {
+/**
+ * 立即跑完一轮聊天变更刷新（上游 #56）：重新生成时宿主删掉旧回复后会 await MESSAGE_DELETED，
+ * 随后读世界书组装正文请求；防抖调度宿主等不到，新请求会带着旧回复的表格结果。
+ * 这里撤掉待执行的防抖，等在跑的一轮结束后立刻补跑一轮（删楼恢复 → 存储重建 → 合并刷新含世界书），
+ * 跑完才 resolve；跳过前端回读等待，不把它加到正文启动时间里。各步骤失败已在轮内隔离并记日志，
+ * 这里永不抛错，宿主照常继续生成。
+ */
+export async function flushChatMutationRefreshNow_ACU(): Promise<void> {
+  clearTimeout(chatMutationDebounceTimer_ACU);
+  _set_chatMutationDebounceTimer_ACU(null);
+  try {
+    while (running_ACU && currentRun_ACU) await currentRun_ACU;
+    await runMutationRound_ACU({ urgent: true });
+  } catch (e: any) {
+    logWarn_ACU(`[聊天变更] 立即刷新失败: ${e?.message || e}`);
+  }
+}
+
+function runMutationRound_ACU(options: { urgent?: boolean } = {}): Promise<void> {
   if (running_ACU) {
     pendingAfterRun_ACU = true;
-    return;
+    return currentRun_ACU ?? Promise.resolve();
   }
+  const run = executeMutationRound_ACU(options.urgent === true);
+  currentRun_ACU = run;
+  return run;
+}
+
+async function executeMutationRound_ACU(urgent: boolean): Promise<void> {
   running_ACU = true;
   const startedGeneration = generation_ACU;
   firstRequestAt_ACU = 0;
@@ -113,7 +139,7 @@ async function runMutationRound_ACU(): Promise<void> {
 
     // UI 刷新失败不允许吞掉向量索引 dirty 标记（否则索引永远不对齐）
     try {
-      await refreshMergedDataAndNotifyWithUI_ACU();
+      await (urgent ? refreshMergedDataAndNotifyWithUI_ACU({ skipReadbackWait: true }) : refreshMergedDataAndNotifyWithUI_ACU());
     } catch (e: any) {
       logError_ACU(`[聊天变更] 合并数据与 UI 刷新失败: ${e?.message}`);
     }
@@ -171,4 +197,5 @@ export function __resetChatMutationSchedulerForTests_ACU(): void {
   running_ACU = false;
   pendingAfterRun_ACU = false;
   pendingDeletion_ACU = false;
+  currentRun_ACU = null;
 }
