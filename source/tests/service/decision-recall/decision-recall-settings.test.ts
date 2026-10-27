@@ -18,12 +18,15 @@ import {
 import { DEFAULT_DECISION_MODEL_ACU, DEFAULT_SILICONFLOW_DECISION_MODEL_ACU } from '../../../src/shared/decision-gate-defaults';
 
 describe('normalizeDecisionRecallSettings_ACU', () => {
-  it('缺省时关闭、单独召回、硅基流动、召回 20 条、看概要加正文、重试 2 次、默认注入指令', () => {
+  it('缺省时关闭、单独召回、自定义接口（地址、Key、模型留空）、召回 20 条、看概要加正文、重试 2 次、默认注入指令', () => {
     expect(normalizeDecisionRecallSettings_ACU(undefined)).toEqual({
       enabled: false,
       mode: 'standalone',
       replacePlotRecallTasks: false,
-      provider: 'siliconflow',
+      provider: 'custom',
+      customUrl: '',
+      customApiKey: '',
+      customModel: '',
       openrouterApiKey: '',
       openrouterModel: DEFAULT_DECISION_MODEL_ACU,
       siliconflowApiKey: '',
@@ -59,7 +62,8 @@ describe('normalizeDecisionRecallSettings_ACU', () => {
   it('只认已知的服务商与打分内容，其它值回到默认', () => {
     expect(normalizeDecisionRecallSettings_ACU({ provider: 'openrouter' }).provider).toBe('openrouter');
     expect(normalizeDecisionRecallSettings_ACU({ provider: 'aihubmix' }).provider).toBe('aihubmix');
-    expect(normalizeDecisionRecallSettings_ACU({ provider: 'aliyun' }).provider).toBe('siliconflow');
+    expect(normalizeDecisionRecallSettings_ACU({ provider: 'siliconflow' }).provider).toBe('siliconflow');
+    expect(normalizeDecisionRecallSettings_ACU({ provider: 'aliyun' }).provider).toBe('custom');
     expect(normalizeDecisionRecallSettings_ACU({ scoringContent: 'summary' }).scoringContent).toBe('summary');
     expect(normalizeDecisionRecallSettings_ACU({ scoringContent: 'all' }).scoringContent).toBe('full');
   });
@@ -118,13 +122,27 @@ describe('resolveDecisionRecallEndpoint_ACU', () => {
       aihubmixApiKey: 'sk-ahm', aihubmixModel: 'jev-1.14',
     });
     expect(resolveDecisionRecallEndpoint_ACU({ ...base, provider: 'openrouter' })).toEqual({
-      label: 'OpenRouter', url: DECISION_API_URL_ACU, apiKey: 'sk-or', model: 'a/b',
+      label: 'OpenRouter', url: DECISION_API_URL_ACU, apiKey: 'sk-or', model: 'a/b', missing: '',
     });
     expect(resolveDecisionRecallEndpoint_ACU({ ...base, provider: 'siliconflow' })).toEqual({
-      label: '硅基流动（中国）', url: SILICONFLOW_DECISION_API_URL_ACU, apiKey: 'sk-sf', model: 'SemIf',
+      label: '硅基流动（中国）', url: SILICONFLOW_DECISION_API_URL_ACU, apiKey: 'sk-sf', model: 'SemIf', missing: '',
     });
     expect(resolveDecisionRecallEndpoint_ACU({ ...base, provider: 'aihubmix' })).toEqual({
-      label: 'AIHubMix', url: 'https://aihubmix.com/v1/systemone', apiKey: 'sk-ahm', model: 'jev-1.14',
+      label: 'AIHubMix', url: 'https://aihubmix.com/v1/systemone', apiKey: 'sk-ahm', model: 'jev-1.14', missing: '',
     });
+    expect(resolveDecisionRecallEndpoint_ACU({ ...base, provider: 'siliconflow', siliconflowApiKey: '' }).missing).toBe('Key');
+  });
+
+  it('自定义接口用自己填的地址、Key 与模型；地址或模型名没填好算没填好，Key 可留空', () => {
+    const custom = (patch: Record<string, unknown>) => resolveDecisionRecallEndpoint_ACU(normalizeDecisionRecallSettings_ACU({
+      provider: 'custom', customUrl: ' https://relay.example.com/v1/systemone ', customApiKey: ' sk-relay ', customModel: ' jev-latest ', ...patch,
+    }));
+    expect(custom({})).toEqual({
+      label: '自定义', url: 'https://relay.example.com/v1/systemone', apiKey: 'sk-relay', model: 'jev-latest', missing: '',
+    });
+    expect(custom({ customApiKey: '' }).missing).toBe('');
+    expect(custom({ customUrl: '' }).missing).toBe('接口地址');
+    expect(custom({ customUrl: 'relay.example.com/v1/systemone' }).missing).toBe('接口地址');
+    expect(custom({ customModel: '' }).missing).toBe('模型名');
   });
 });

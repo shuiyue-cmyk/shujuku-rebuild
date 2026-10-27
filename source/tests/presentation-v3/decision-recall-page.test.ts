@@ -117,9 +117,36 @@ describe('DecisionRecallPage', () => {
     expect(document.body.textContent).toContain('只启用了一个任务，不替换');
   });
 
+  it('默认是自定义接口：自己填接口地址、Key 与模型，没有常用模型下拉；填好后提示消失', async () => {
+    const { settings, saveSettings } = await openPage('decision-recall');
+    expect(settings.decisionRecallSettings?.provider ?? 'custom').toBe('custom');
+    expect(document.body.textContent).toContain('还没填 自定义 接口地址');
+    expect(document.querySelector('select[aria-label="常用决策模型"]')).toBeNull();
+    const fill = (label: string, value: string) => {
+      const input = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+      input.dispatchEvent(new Event('change'));
+    };
+
+    fill('决策接口地址', 'https://relay.example.com/v1/systemone');
+    await flush();
+    expect(document.body.textContent).toContain('还没填 自定义 模型名');
+    fill('自定义 Key', 'sk-relay');
+    fill('决策模型名', 'jev-latest');
+    await flush();
+
+    expect(settings.decisionRecallSettings).toMatchObject({
+      provider: 'custom', customUrl: 'https://relay.example.com/v1/systemone', customApiKey: 'sk-relay', customModel: 'jev-latest',
+    });
+    expect(saveSettings).toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain('还没填');
+  });
+
   it('没填 Key 时提示只会带上最新 5 条；换服务商后显示对应的 Key 与模型', async () => {
-    const { settings } = await openPage('decision-recall');
+    const { settings } = await openPage('decision-recall', { enabled: true, provider: 'siliconflow' });
     expect(document.body.textContent).toContain('还没填 硅基流动（中国） Key');
+    expect(document.querySelector('input[aria-label="决策接口地址"]')).toBeNull();
 
     const select = document.querySelector<HTMLSelectElement>('select[aria-label="决策召回服务商"]');
     if (select) {
@@ -137,8 +164,8 @@ describe('DecisionRecallPage', () => {
     expect(document.body.textContent).toContain('AIHubMix Key');
   });
 
-  it('决策模型默认直接填模型名，也可以从常用模型里选；清空回到默认', async () => {
-    const { settings } = await openPage('decision-recall');
+  it('预设服务商的决策模型可直接填模型名，也可以从常用模型里选；清空回到默认', async () => {
+    const { settings } = await openPage('decision-recall', { enabled: true, provider: 'siliconflow' });
     const modelInput = () => document.querySelector<HTMLInputElement>('input[aria-label="决策模型名"]')!;
     expect(modelInput().value).toBe('SemIf');
 

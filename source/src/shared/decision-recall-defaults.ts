@@ -42,13 +42,15 @@ export const AIHUBMIX_DECISION_MODELS_ACU: readonly { id: string; name: string; 
   { id: 'decision-model-preview', name: 'Decision Model Preview', free: false },
 ];
 
-export type DecisionRecallProvider_ACU = 'siliconflow' | 'openrouter' | 'aihubmix';
+/** custom：像交火那样自己填接口地址、Key 与模型；其余三家是预设。 */
+export type DecisionRecallProvider_ACU = 'custom' | 'siliconflow' | 'openrouter' | 'aihubmix';
 
 /** 用法：单独召回（剧情推进暂停）/ 替换剧情推进的任务（剧情推进照常运行）。 */
 export type DecisionRecallMode_ACU = 'standalone' | 'plot_task';
 
 /** 服务商名称。放在叶子模块里：设置模块在加载时就要用它，不能依赖可能处在循环引用中的判定模块。 */
 export const DECISION_RECALL_PROVIDER_LABELS_ACU: Record<DecisionRecallProvider_ACU, string> = {
+  custom: '自定义',
   siliconflow: '硅基流动（中国）',
   openrouter: 'OpenRouter',
   aihubmix: 'AIHubMix',
@@ -78,8 +80,11 @@ export function buildDefaultDecisionRecallSettings_ACU() {
     mode: 'standalone' as DecisionRecallMode_ACU,
     // 剧情推进页的开关：「替换剧情推进的任务」用法下，打开后才把多任务预设里标签只有 recall 的任务交给决策召回
     replacePlotRecallTasks: false,
-    // 硅基流动 SemIf 响应快、目前免费，一组 20 个问题也不至于拖慢发送
-    provider: 'siliconflow' as DecisionRecallProvider_ACU,
+    // 默认自己填接口地址、Key 与模型（同交火的填法）；三家预设仍可选
+    provider: 'custom' as DecisionRecallProvider_ACU,
+    customUrl: '',
+    customApiKey: '',
+    customModel: '',
     openrouterApiKey: '',
     openrouterModel: DEFAULT_DECISION_MODEL_ACU,
     siliconflowApiKey: '',

@@ -1,7 +1,7 @@
 /**
  * service/decision-recall/decision-recall-settings.ts — 决策召回设置的规整与接口选择。
  *
- * 与正文替换的「替换前判定」完全独立：三家服务商的 Key 与模型各存各的，切换服务商不丢另一家的设置。
+ * 与正文替换的「替换前判定」完全独立：自定义接口与三家预设的地址、Key 与模型各存各的，切换服务商不丢另一家的设置。
  */
 import { DECISION_API_URL_ACU, SILICONFLOW_DECISION_API_URL_ACU } from '../optimization/decision-gate';
 import { DEFAULT_DECISION_MODEL_ACU, DEFAULT_SILICONFLOW_DECISION_MODEL_ACU } from '../../shared/decision-gate-defaults';
@@ -26,6 +26,10 @@ export interface DecisionRecallSettings_ACU {
   /** 剧情推进页的「由决策召回执行 recall 任务」开关；关着时剧情推进照常调模型召回。 */
   replacePlotRecallTasks: boolean;
   provider: DecisionRecallProvider_ACU;
+  /** 自定义接口：完整的决策接口地址、Key（不需要鉴权的接口可留空）与模型名。 */
+  customUrl: string;
+  customApiKey: string;
+  customModel: string;
   openrouterApiKey: string;
   openrouterModel: string;
   siliconflowApiKey: string;
@@ -61,7 +65,10 @@ export function normalizeDecisionRecallSettings_ACU(raw: unknown): DecisionRecal
     enabled: source.enabled === true,
     mode: source.mode === 'plot_task' ? 'plot_task' : 'standalone',
     replacePlotRecallTasks: source.replacePlotRecallTasks === true,
-    provider: PROVIDERS_ACU.includes(source.provider) ? source.provider : 'siliconflow',
+    provider: PROVIDERS_ACU.includes(source.provider) ? source.provider : 'custom',
+    customUrl: text(source.customUrl),
+    customApiKey: text(source.customApiKey),
+    customModel: text(source.customModel),
     openrouterApiKey: text(source.openrouterApiKey),
     openrouterModel: text(source.openrouterModel) || DEFAULT_DECISION_MODEL_ACU,
     siliconflowApiKey: text(source.siliconflowApiKey),
@@ -75,16 +82,26 @@ export function normalizeDecisionRecallSettings_ACU(raw: unknown): DecisionRecal
   };
 }
 
-/** 当前所选服务商的接口地址、Key 与模型。 */
-export function resolveDecisionRecallEndpoint_ACU(settings: DecisionRecallSettings_ACU) {
+export interface DecisionRecallEndpoint_ACU {
+  label: string;
+  url: string;
+  apiKey: string;
+  model: string;
+  /** 还没填好的一项（「接口地址」「模型名」「Key」）；填好了是空串。没填好时不打分，只带固定的最新几条。 */
+  missing: string;
+}
+
+/** 当前所选服务商的接口地址、Key 与模型。自定义接口的 Key 可留空（本地或不需要鉴权的接口）。 */
+export function resolveDecisionRecallEndpoint_ACU(settings: DecisionRecallSettings_ACU): DecisionRecallEndpoint_ACU {
   const label = DECISION_RECALL_PROVIDER_LABELS_ACU[settings.provider];
-  if (settings.provider === 'openrouter') {
-    return { label, url: DECISION_API_URL_ACU, apiKey: settings.openrouterApiKey, model: settings.openrouterModel };
+  const preset = (url: string, apiKey: string, model: string) => ({ label, url, apiKey, model, missing: apiKey ? '' : 'Key' });
+  if (settings.provider === 'custom') {
+    const missing = !/^https?:\/\//i.test(settings.customUrl) ? '接口地址' : (!settings.customModel ? '模型名' : '');
+    return { label, url: settings.customUrl, apiKey: settings.customApiKey, model: settings.customModel, missing };
   }
-  if (settings.provider === 'aihubmix') {
-    return { label, url: AIHUBMIX_DECISION_API_URL_ACU, apiKey: settings.aihubmixApiKey, model: settings.aihubmixModel };
-  }
-  return { label, url: SILICONFLOW_DECISION_API_URL_ACU, apiKey: settings.siliconflowApiKey, model: settings.siliconflowModel };
+  if (settings.provider === 'openrouter') return preset(DECISION_API_URL_ACU, settings.openrouterApiKey, settings.openrouterModel);
+  if (settings.provider === 'aihubmix') return preset(AIHUBMIX_DECISION_API_URL_ACU, settings.aihubmixApiKey, settings.aihubmixModel);
+  return preset(SILICONFLOW_DECISION_API_URL_ACU, settings.siliconflowApiKey, settings.siliconflowModel);
 }
 
 /** 单独召回生效中：发送前由决策召回占用剧情推进的规划位，剧情推进暂停。 */

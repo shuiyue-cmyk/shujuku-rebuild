@@ -15,13 +15,27 @@
       </UbCallout>
     </UbSection>
 
-    <UbSection id="dr-model" title="决策模型" description="与正文替换的「替换前判定」各自独立；三家的 Key 与模型各存各的，切换服务商不会丢掉另一家的设置。" icon="fa-solid fa-scale-balanced">
+    <UbSection id="dr-model" title="决策模型" description="与正文替换的「替换前判定」各自独立；默认自己填接口地址、Key 与模型，也可以选三家预设。各家的设置各存各的，切换不会丢掉另一家的设置。" icon="fa-solid fa-scale-balanced">
       <UbRow label="服务商" :hint="providerView.providerHint">
         <UbSelect :options="providerOptions" :model-value="store.settings.provider" aria-label="决策召回服务商" @update:model-value="setProvider" />
       </UbRow>
-      <UbCallout v-if="!store.endpoint.apiKey" kind="warning">
-        还没填 {{ store.endpoint.label }} Key：纪要多于召回条数时不会打分，只带上最新 5 条纪要。
+      <UbCallout v-if="store.endpoint.missing" kind="warning">
+        还没填 {{ store.endpoint.label }} {{ store.endpoint.missing }}：纪要多于召回条数时不会打分，只带上最新 5 条纪要。
       </UbCallout>
+      <UbRow
+        v-if="store.settings.provider === 'custom'"
+        label="接口地址"
+        hint="填完整的决策接口地址，请求格式同硅基流动 /v1/systemone、OpenRouter /api/alpha/decisions（例如中转站提供的地址）。"
+        stack
+      >
+        <UbInput
+          :model-value="store.settings.customUrl"
+          placeholder="https://example.com/v1/systemone"
+          autocomplete="off"
+          aria-label="决策接口地址"
+          @change="store.patch({ customUrl: String($event) })"
+        />
+      </UbRow>
       <UbRow :key="store.settings.provider" :label="`${store.endpoint.label} Key`" :hint="providerView.keyHint" stack>
         <UbInput
           :model-value="store.endpoint.apiKey"
@@ -36,12 +50,12 @@
         <UbInput
           :key="`model-${store.settings.provider}-${inputKey}`"
           :model-value="store.endpoint.model"
-          :placeholder="defaultModel"
+          :placeholder="modelPlaceholder"
           autocomplete="off"
           aria-label="决策模型名"
           @change="setModelText"
         />
-        <div class="ub-dr__picker">
+        <div v-if="store.settings.provider !== 'custom'" class="ub-dr__picker">
           <UbSelect
             :options="modelOptions"
             :model-value="store.endpoint.model"
@@ -192,6 +206,12 @@ const providerOptions = (Object.keys(DECISION_RECALL_PROVIDER_LABELS_ACU) as Dec
   .map(value => ({ value, label: DECISION_RECALL_PROVIDER_LABELS_ACU[value] }));
 
 const PROVIDER_VIEW_ACU: Record<DecisionRecallProvider_ACU, { providerHint: string; keyHint: string; keyPlaceholder: string; modelHint: string }> = {
+  custom: {
+    providerHint: '像交火那样自己填接口地址、Key 与模型；接口要兼容决策模型的请求格式。',
+    keyHint: '服务商或中转站给的 Key；本地或不需要鉴权的接口可以留空。',
+    keyPlaceholder: 'sk-...',
+    modelHint: '',
+  },
   siliconflow: {
     providerHint: '大陆服务商；SemIf 响应快。截至 2026 年 10 月 12 日决策模型仍免费，但官方写的限时免费期已过、何时收费没有通知，请留意账户扣费。',
     keyHint: '在 cloud.siliconflow.cn 的 API 密钥页面创建。',
@@ -213,12 +233,14 @@ const PROVIDER_VIEW_ACU: Record<DecisionRecallProvider_ACU, { providerHint: stri
 };
 const providerView = computed(() => PROVIDER_VIEW_ACU[store.settings.provider]);
 
-const KEY_FIELD_ACU: Record<DecisionRecallProvider_ACU, 'siliconflowApiKey' | 'openrouterApiKey' | 'aihubmixApiKey'> = {
+const KEY_FIELD_ACU: Record<DecisionRecallProvider_ACU, 'customApiKey' | 'siliconflowApiKey' | 'openrouterApiKey' | 'aihubmixApiKey'> = {
+  custom: 'customApiKey',
   siliconflow: 'siliconflowApiKey',
   openrouter: 'openrouterApiKey',
   aihubmix: 'aihubmixApiKey',
 };
-const MODEL_FIELD_ACU: Record<DecisionRecallProvider_ACU, 'siliconflowModel' | 'openrouterModel' | 'aihubmixModel'> = {
+const MODEL_FIELD_ACU: Record<DecisionRecallProvider_ACU, 'customModel' | 'siliconflowModel' | 'openrouterModel' | 'aihubmixModel'> = {
+  custom: 'customModel',
   siliconflow: 'siliconflowModel',
   openrouter: 'openrouterModel',
   aihubmix: 'aihubmixModel',
@@ -227,12 +249,16 @@ const MODEL_FIELD_ACU: Record<DecisionRecallProvider_ACU, 'siliconflowModel' | '
 /** 常用模型列表：只用来快速填入；填的模型名不在列表里时下拉显示占位文字。 */
 const modelOptions = computed(() => store.activeModels.map(model => ({ value: model.id, label: model.free ? `${model.name}（免费）` : model.name })));
 const DEFAULT_MODEL_ACU: Record<DecisionRecallProvider_ACU, string> = {
+  custom: '',
   siliconflow: DEFAULT_SILICONFLOW_DECISION_MODEL_ACU,
   openrouter: DEFAULT_DECISION_MODEL_ACU,
   aihubmix: DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
 };
 const defaultModel = computed(() => DEFAULT_MODEL_ACU[store.settings.provider]);
-const modelHint = computed(() => `直接填模型名（同交火的填法），也可以从下面的常用模型里选；留空回到默认 ${defaultModel.value}。${providerView.value.modelHint}`);
+const modelPlaceholder = computed(() => defaultModel.value || '例如 SemIf、jev-latest');
+const modelHint = computed(() => (store.settings.provider === 'custom'
+  ? '填接口支持的决策模型名。'
+  : `直接填模型名，也可以从下面的常用模型里选；留空回到默认 ${defaultModel.value}。${providerView.value.modelHint}`));
 
 const scoringOptions = [
   { value: 'summary', label: '只看概要' },

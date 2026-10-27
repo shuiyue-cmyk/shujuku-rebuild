@@ -579,7 +579,7 @@ describe('决策召回总开关与剧情推进开关互不影响', () => {
   it('设置里还没有决策召回字段时按默认值补齐（默认单独召回）', () => {
     delete mockSettings.decisionRecallSettings;
     setDecisionRecallEnabled_ACU(true);
-    expect(mockSettings.decisionRecallSettings).toMatchObject({ enabled: true, mode: 'standalone', recallCount: 20, provider: 'siliconflow' });
+    expect(mockSettings.decisionRecallSettings).toMatchObject({ enabled: true, mode: 'standalone', recallCount: 20, provider: 'custom' });
   });
 });
 

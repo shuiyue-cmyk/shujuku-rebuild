@@ -45,7 +45,7 @@ function makeSources(rows: DecisionRecallRow_ACU[], indexContent: string | null 
   };
 }
 
-const settings = (patch: Record<string, unknown> = {}) => normalizeDecisionRecallSettings_ACU({ siliconflowApiKey: 'sk-test', recallCount: 3, maxRetries: 1, ...patch });
+const settings = (patch: Record<string, unknown> = {}) => normalizeDecisionRecallSettings_ACU({ provider: 'siliconflow', siliconflowApiKey: 'sk-test', recallCount: 3, maxRetries: 1, ...patch });
 
 /** 题干里写着编码，按编码给分；scoreOf 返回 null 表示这一题不作答。 */
 function scoringFetch(scoreOf: (code: string) => number | null) {
@@ -192,6 +192,30 @@ describe('runDecisionRecall_ACU', () => {
     expect(fetch.mock.calls[0][0]).toBe('https://aihubmix.com/v1/systemone');
     expect(fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer sk-ahm');
     expect(JSON.parse(fetch.mock.calls[0][1].body).model).toBe('jev-1.14');
+  });
+
+  it('自定义接口：请求发到自己填的地址；Key 留空时不带鉴权头', async () => {
+    const fetch = scoringFetch(() => 3);
+    const custom = { provider: 'custom', customUrl: 'http://127.0.0.1:8000/v1/systemone', customModel: 'local-decision' };
+    await runDecisionRecall_ACU({ userInput: 'x', settings: settings({ ...custom, customApiKey: '' }) }, { sources: makeSources(makeRows(12)), fetch, sleep: noSleep });
+    expect(fetch.mock.calls[0][0]).toBe('http://127.0.0.1:8000/v1/systemone');
+    expect(fetch.mock.calls[0][1].headers.Authorization).toBeUndefined();
+    expect(JSON.parse(fetch.mock.calls[0][1].body).model).toBe('local-decision');
+
+    await runDecisionRecall_ACU({ userInput: 'x', settings: settings({ ...custom, customApiKey: 'sk-relay' }) }, { sources: makeSources(makeRows(12)), fetch, sleep: noSleep });
+    expect(fetch.mock.calls[1][1].headers.Authorization).toBe('Bearer sk-relay');
+  });
+
+  it('自定义接口没填地址或模型名时不发请求，只带固定的最新 5 条，并提示缺哪一项', async () => {
+    const fetch = scoringFetch(() => 3);
+    const result = await runDecisionRecall_ACU(
+      { userInput: 'x', settings: settings({ provider: 'custom', customUrl: '', customModel: 'jev-latest' }) },
+      { sources: makeSources(makeRows(12)), fetch, sleep: noSleep },
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect(result.status === 'ok' && result.selected).toHaveLength(5);
+    expect(describeDecisionRecallWarning_ACU(result)).toContain('还没填 自定义 接口地址');
+    expect(describeDecisionRecallResult_ACU(result)).toContain('未填 接口地址');
   });
 
   it('纪要表为空或读不到时跳过，不发请求', async () => {

@@ -4984,6 +4984,7 @@ const AIHUBMIX_DECISION_MODELS_ACU = [
 ];
 /** 服务商名称。放在叶子模块里：设置模块在加载时就要用它，不能依赖可能处在循环引用中的判定模块。 */
 const DECISION_RECALL_PROVIDER_LABELS_ACU = {
+    custom: '自定义',
     siliconflow: '硅基流动（中国）',
     openrouter: 'OpenRouter',
     aihubmix: 'AIHubMix',
@@ -5007,8 +5008,11 @@ function buildDefaultDecisionRecallSettings_ACU() {
         mode: 'standalone',
         // 剧情推进页的开关：「替换剧情推进的任务」用法下，打开后才把多任务预设里标签只有 recall 的任务交给决策召回
         replacePlotRecallTasks: false,
-        // 硅基流动 SemIf 响应快、目前免费，一组 20 个问题也不至于拖慢发送
-        provider: 'siliconflow',
+        // 默认自己填接口地址、Key 与模型（同交火的填法）；三家预设仍可选
+        provider: 'custom',
+        customUrl: '',
+        customApiKey: '',
+        customModel: '',
         openrouterApiKey: '',
         openrouterModel: DEFAULT_DECISION_MODEL_ACU,
         siliconflowApiKey: '',
@@ -91220,7 +91224,7 @@ async function fetchDecisionModels_ACU(deps = {}) {
 /**
  * service/decision-recall/decision-recall-settings.ts — 决策召回设置的规整与接口选择。
  *
- * 与正文替换的「替换前判定」完全独立：三家服务商的 Key 与模型各存各的，切换服务商不丢另一家的设置。
+ * 与正文替换的「替换前判定」完全独立：自定义接口与三家预设的地址、Key 与模型各存各的，切换服务商不丢另一家的设置。
  */
 const PROVIDERS_ACU = Object.keys(DECISION_RECALL_PROVIDER_LABELS_ACU);
 /** 空串 / null 视为没填，回到默认值；Number 会把它们当成 0。 */
@@ -91240,7 +91244,10 @@ function normalizeDecisionRecallSettings_ACU(raw) {
         enabled: source.enabled === true,
         mode: source.mode === 'plot_task' ? 'plot_task' : 'standalone',
         replacePlotRecallTasks: source.replacePlotRecallTasks === true,
-        provider: PROVIDERS_ACU.includes(source.provider) ? source.provider : 'siliconflow',
+        provider: PROVIDERS_ACU.includes(source.provider) ? source.provider : 'custom',
+        customUrl: text(source.customUrl),
+        customApiKey: text(source.customApiKey),
+        customModel: text(source.customModel),
         openrouterApiKey: text(source.openrouterApiKey),
         openrouterModel: text(source.openrouterModel) || DEFAULT_DECISION_MODEL_ACU,
         siliconflowApiKey: text(source.siliconflowApiKey),
@@ -91253,16 +91260,19 @@ function normalizeDecisionRecallSettings_ACU(raw) {
         directive,
     };
 }
-/** 当前所选服务商的接口地址、Key 与模型。 */
+/** 当前所选服务商的接口地址、Key 与模型。自定义接口的 Key 可留空（本地或不需要鉴权的接口）。 */
 function resolveDecisionRecallEndpoint_ACU(settings) {
     const label = DECISION_RECALL_PROVIDER_LABELS_ACU[settings.provider];
-    if (settings.provider === 'openrouter') {
-        return { label, url: DECISION_API_URL_ACU, apiKey: settings.openrouterApiKey, model: settings.openrouterModel };
+    const preset = (url, apiKey, model) => ({ label, url, apiKey, model, missing: apiKey ? '' : 'Key' });
+    if (settings.provider === 'custom') {
+        const missing = !/^https?:\/\//i.test(settings.customUrl) ? '接口地址' : (!settings.customModel ? '模型名' : '');
+        return { label, url: settings.customUrl, apiKey: settings.customApiKey, model: settings.customModel, missing };
     }
-    if (settings.provider === 'aihubmix') {
-        return { label, url: AIHUBMIX_DECISION_API_URL_ACU, apiKey: settings.aihubmixApiKey, model: settings.aihubmixModel };
-    }
-    return { label, url: SILICONFLOW_DECISION_API_URL_ACU, apiKey: settings.siliconflowApiKey, model: settings.siliconflowModel };
+    if (settings.provider === 'openrouter')
+        return preset(DECISION_API_URL_ACU, settings.openrouterApiKey, settings.openrouterModel);
+    if (settings.provider === 'aihubmix')
+        return preset(AIHUBMIX_DECISION_API_URL_ACU, settings.aihubmixApiKey, settings.aihubmixModel);
+    return preset(SILICONFLOW_DECISION_API_URL_ACU, settings.siliconflowApiKey, settings.siliconflowModel);
 }
 /** 单独召回生效中：发送前由决策召回占用剧情推进的规划位，剧情推进暂停。 */
 function isDecisionRecallStandaloneActive_ACU(raw) {
@@ -91684,10 +91694,10 @@ async function runDecisionRecall_ACU(options, deps = {}) {
             scored: [], batchCount: 0, failedBatchCount: 0, unscoredCount: 0, missingKey: false, errors: [],
         };
     }
-    if (!endpoint.apiKey) {
+    if (endpoint.missing) {
         return {
             status: 'ok', ...base, selected: [...plan.fixed], scored: [], batchCount: 0, failedBatchCount: 0,
-            unscoredCount: plan.pool.length, missingKey: true, errors: [],
+            unscoredCount: plan.pool.length, missingKey: true, missingField: endpoint.missing, errors: [],
         };
     }
     const state = buildDecisionRecallState_ACU({ aiFloors: collectDecisionRecallAiFloors_ACU(sources.loadChat()), userInput: options.userInput });
@@ -91710,7 +91720,9 @@ async function runDecisionRecall_ACU(options, deps = {}) {
         const outcome = await runWithDeadline_ACU({ timeoutMs: deps.timeoutMs ?? DECISION_RECALL_TIMEOUT_MS_ACU, signal: runController.signal }, async (requestSignal) => {
             const response = await fetchImpl(endpoint.url, {
                 method: 'POST',
-                headers: { Authorization: `Bearer ${endpoint.apiKey}`, 'Content-Type': 'application/json' },
+                headers: endpoint.apiKey
+                    ? { Authorization: `Bearer ${endpoint.apiKey}`, 'Content-Type': 'application/json' }
+                    : { 'Content-Type': 'application/json' },
                 body: JSON.stringify(buildDecisionRecallBatchBody_ACU(endpoint.model, state, rows, settings.scoringContent)),
                 signal: requestSignal,
             });
@@ -91810,7 +91822,7 @@ function describeDecisionRecallWarning_ACU(result) {
     if (result.status !== 'ok')
         return '';
     if (result.missingKey)
-        return `决策召回还没填 ${result.providerLabel} Key，本次只带上最新 ${result.fixed.length} 条纪要。`;
+        return `决策召回还没填 ${result.providerLabel} ${result.missingField || 'Key'}，本次只带上最新 ${result.fixed.length} 条纪要。`;
     if (result.batchCount > 0 && result.failedBatchCount >= result.batchCount) {
         return `决策召回全部 ${result.batchCount} 组打分都失败了，本次只带上最新 ${result.fixed.length} 条纪要。`;
     }
@@ -91840,7 +91852,7 @@ function describeDecisionRecallResult_ACU(result) {
         .join(', ');
     const source = result.candidateSource === 'crossfire_index' ? '交火纪要索引' : '全部纪要';
     return `[决策召回] 候选 ${result.candidateCount} 条（${source}），分 ${result.batchCount} 组，失败 ${result.failedBatchCount} 组，`
-        + `未打上分 ${result.unscoredCount} 条${result.missingKey ? '（未填 Key）' : ''}；带上 ${result.selected.length} 条：${picked}`;
+        + `未打上分 ${result.unscoredCount} 条${result.missingKey ? `（未填 ${result.missingField || 'Key'}）` : ''}；带上 ${result.selected.length} 条：${picked}`;
 }
 function logDecisionRecallResult_ACU(result) {
     logDebug_ACU(describeDecisionRecallResult_ACU(result));
@@ -94608,7 +94620,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261027-1911"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261027-1920"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -94627,7 +94639,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1911";
+        const stamp = "20261027-1920";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -156271,7 +156283,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1911";
+        const stamp = "20261027-1920";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -205812,6 +205824,8 @@ const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
                 return SILICONFLOW_DECISION_MODELS_ACU;
             if (state.settings.provider === 'aihubmix')
                 return AIHUBMIX_DECISION_MODELS_ACU;
+            if (state.settings.provider === 'custom')
+                return [];
             return state.openrouterModels;
         },
     },
@@ -208553,6 +208567,12 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         const providerOptions = Object.keys(DECISION_RECALL_PROVIDER_LABELS_ACU)
             .map(value => ({ value, label: DECISION_RECALL_PROVIDER_LABELS_ACU[value] }));
         const PROVIDER_VIEW_ACU = {
+            custom: {
+                providerHint: '像交火那样自己填接口地址、Key 与模型；接口要兼容决策模型的请求格式。',
+                keyHint: '服务商或中转站给的 Key；本地或不需要鉴权的接口可以留空。',
+                keyPlaceholder: 'sk-...',
+                modelHint: '',
+            },
             siliconflow: {
                 providerHint: '大陆服务商；SemIf 响应快。截至 2026 年 10 月 12 日决策模型仍免费，但官方写的限时免费期已过、何时收费没有通知，请留意账户扣费。',
                 keyHint: '在 cloud.siliconflow.cn 的 API 密钥页面创建。',
@@ -208574,11 +208594,13 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         };
         const providerView = computed(() => PROVIDER_VIEW_ACU[store.settings.provider]);
         const KEY_FIELD_ACU = {
+            custom: 'customApiKey',
             siliconflow: 'siliconflowApiKey',
             openrouter: 'openrouterApiKey',
             aihubmix: 'aihubmixApiKey',
         };
         const MODEL_FIELD_ACU = {
+            custom: 'customModel',
             siliconflow: 'siliconflowModel',
             openrouter: 'openrouterModel',
             aihubmix: 'aihubmixModel',
@@ -208586,12 +208608,16 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         /** 常用模型列表：只用来快速填入；填的模型名不在列表里时下拉显示占位文字。 */
         const modelOptions = computed(() => store.activeModels.map(model => ({ value: model.id, label: model.free ? `${model.name}（免费）` : model.name })));
         const DEFAULT_MODEL_ACU = {
+            custom: '',
             siliconflow: DEFAULT_SILICONFLOW_DECISION_MODEL_ACU,
             openrouter: DEFAULT_DECISION_MODEL_ACU,
             aihubmix: DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
         };
         const defaultModel = computed(() => DEFAULT_MODEL_ACU[store.settings.provider]);
-        const modelHint = computed(() => `直接填模型名（同交火的填法），也可以从下面的常用模型里选；留空回到默认 ${defaultModel.value}。${providerView.value.modelHint}`);
+        const modelPlaceholder = computed(() => defaultModel.value || '例如 SemIf、jev-latest');
+        const modelHint = computed(() => (store.settings.provider === 'custom'
+            ? '填接口支持的决策模型名。'
+            : `直接填模型名，也可以从下面的常用模型里选；留空回到默认 ${defaultModel.value}。${providerView.value.modelHint}`));
         const scoringOptions = [
             { value: 'summary', label: '只看概要' },
             { value: 'full', label: '概要 + 纪要正文' },
@@ -208647,16 +208673,19 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 void store.loadModels();
         });
         watchChatChanged_ACU(() => refresh());
-        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, totalSeconds, codesPlaceholder, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, DEFAULT_MODEL_ACU, defaultModel, modelHint, scoringOptions, setProvider, setKey, setModel, setModelText, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
+        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, totalSeconds, codesPlaceholder, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, DEFAULT_MODEL_ACU, defaultModel, modelPlaceholder, modelHint, scoringOptions, setProvider, setKey, setModel, setModelText, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-dr__picker[data-v-c0410d85] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-c0410d85] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-c0410d85] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-c0410d85] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-c0410d85");
-var DecisionRecallPage_vue_vue_type_style_index_0_scoped_c0410d85_lang = null;
+injectSfcStyle("\n.ub-dr__picker[data-v-bda196ff] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-bda196ff] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-bda196ff] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-bda196ff] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-bda196ff");
+var DecisionRecallPage_vue_vue_type_style_index_0_scoped_bda196ff_lang = null;
 
-const _hoisted_1$c = { class: "ub-dr__picker" };
+const _hoisted_1$c = {
+	key: 0,
+	class: "ub-dr__picker"
+};
 const _hoisted_2$b = { class: "ub-dr__meta" };
 const _hoisted_3$a = { class: "ub-dr__actions" };
 const _hoisted_4$8 = { class: "ub-dr__actions" };
@@ -208701,7 +208730,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						icon: "fa-solid fa-route",
 						onClick: _cache[0] || (_cache[0] = ($event) => $setup.routerStore.setActivePage("plot"))
 					}, {
-						default: withCtx(() => [..._cache[5] || (_cache[5] = [createTextVNode(
+						default: withCtx(() => [..._cache[6] || (_cache[6] = [createTextVNode(
 							"去剧情推进页",
 							-1
 							/* CACHED */
@@ -208715,7 +208744,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 			createVNode($setup["UbSection"], {
 				id: "dr-model",
 				title: "决策模型",
-				description: "与正文替换的「替换前判定」各自独立；三家的 Key 与模型各存各的，切换服务商不会丢掉另一家的设置。",
+				description: "与正文替换的「替换前判定」各自独立；默认自己填接口地址、Key 与模型，也可以选三家预设。各家的设置各存各的，切换不会丢掉另一家的设置。",
 				icon: "fa-solid fa-scale-balanced"
 			}, {
 				default: withCtx(() => [
@@ -208731,15 +208760,30 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["options", "model-value"])]),
 						_: 1
 					}, 8, ["hint"]),
-					!$setup.store.endpoint.apiKey ? (openBlock(), createBlock($setup["UbCallout"], {
+					$setup.store.endpoint.missing ? (openBlock(), createBlock($setup["UbCallout"], {
 						key: 0,
 						kind: "warning"
 					}, {
 						default: withCtx(() => [createTextVNode(
-							" 还没填 " + toDisplayString($setup.store.endpoint.label) + " Key：纪要多于召回条数时不会打分，只带上最新 5 条纪要。 ",
+							" 还没填 " + toDisplayString($setup.store.endpoint.label) + " " + toDisplayString($setup.store.endpoint.missing) + "：纪要多于召回条数时不会打分，只带上最新 5 条纪要。 ",
 							1
 							/* TEXT */
 						)]),
+						_: 1
+					})) : createCommentVNode("v-if", true),
+					$setup.store.settings.provider === "custom" ? (openBlock(), createBlock($setup["UbRow"], {
+						key: 1,
+						label: "接口地址",
+						hint: "填完整的决策接口地址，请求格式同硅基流动 /v1/systemone、OpenRouter /api/alpha/decisions（例如中转站提供的地址）。",
+						stack: ""
+					}, {
+						default: withCtx(() => [createVNode($setup["UbInput"], {
+							"model-value": $setup.store.settings.customUrl,
+							placeholder: "https://example.com/v1/systemone",
+							autocomplete: "off",
+							"aria-label": "决策接口地址",
+							onChange: _cache[1] || (_cache[1] = ($event) => $setup.store.patch({ customUrl: String($event) }))
+						}, null, 8, ["model-value"])]),
 						_: 1
 					})) : createCommentVNode("v-if", true),
 					(openBlock(), createBlock($setup["UbRow"], {
@@ -208770,11 +208814,11 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
 							key: `model-${$setup.store.settings.provider}-${$setup.inputKey}`,
 							"model-value": $setup.store.endpoint.model,
-							placeholder: $setup.defaultModel,
+							placeholder: $setup.modelPlaceholder,
 							autocomplete: "off",
 							"aria-label": "决策模型名",
 							onChange: $setup.setModelText
-						}, null, 8, ["model-value", "placeholder"])), createBaseVNode("div", _hoisted_1$c, [createVNode($setup["UbSelect"], {
+						}, null, 8, ["model-value", "placeholder"])), $setup.store.settings.provider !== "custom" ? (openBlock(), createElementBlock("div", _hoisted_1$c, [createVNode($setup["UbSelect"], {
 							options: $setup.modelOptions,
 							"model-value": $setup.store.endpoint.model,
 							placeholder: "从常用模型里选",
@@ -208786,7 +208830,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							title: "刷新模型列表",
 							disabled: $setup.store.modelsLoading,
 							onClick: $setup.store.loadModels
-						}, null, 8, ["disabled", "onClick"])) : createCommentVNode("v-if", true)])]),
+						}, null, 8, ["disabled", "onClick"])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true)]),
 						_: 1
 					}, 8, ["hint"])
 				]),
@@ -208811,7 +208855,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							max: $setup.maxCount,
 							step: 1,
 							"aria-label": "召回条数",
-							onChange: _cache[1] || (_cache[1] = ($event) => $setup.setNumber("recallCount", $event))
+							onChange: _cache[2] || (_cache[2] = ($event) => $setup.setNumber("recallCount", $event))
 						}, null, 8, ["model-value", "max"]))]),
 						_: 1
 					}, 8, ["hint"]),
@@ -208823,7 +208867,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							options: $setup.scoringOptions,
 							"model-value": $setup.store.settings.scoringContent,
 							"aria-label": "打分时看什么",
-							"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.store.patch({ scoringContent: $event }))
+							"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.store.patch({ scoringContent: $event }))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -208839,7 +208883,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							max: $setup.maxRetries,
 							step: 1,
 							"aria-label": "失败重试次数",
-							onChange: _cache[3] || (_cache[3] = ($event) => $setup.setNumber("maxRetries", $event))
+							onChange: _cache[4] || (_cache[4] = ($event) => $setup.setNumber("maxRetries", $event))
 						}, null, 8, ["model-value", "max"]))]),
 						_: 1
 					}, 8, ["hint"])
@@ -208857,7 +208901,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 					key: 0,
 					variant: "accent"
 				}, {
-					default: withCtx(() => [..._cache[6] || (_cache[6] = [createTextVNode(
+					default: withCtx(() => [..._cache[7] || (_cache[7] = [createTextVNode(
 						"未保存",
 						-1
 						/* CACHED */
@@ -208872,7 +208916,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						"auto-resize": "",
 						mono: "",
 						"aria-label": "注入指令",
-						"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.directiveDraft = $event)
+						"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.directiveDraft = $event)
 					}, null, 8, ["model-value"]),
 					createBaseVNode(
 						"p",
@@ -208886,7 +208930,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						icon: "fa-solid fa-rotate-left",
 						onClick: $setup.resetDirective
 					}, {
-						default: withCtx(() => [..._cache[7] || (_cache[7] = [createTextVNode(
+						default: withCtx(() => [..._cache[8] || (_cache[8] = [createTextVNode(
 							"恢复默认",
 							-1
 							/* CACHED */
@@ -208899,7 +208943,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.directiveDirty,
 						onClick: $setup.saveDirective
 					}, {
-						default: withCtx(() => [..._cache[8] || (_cache[8] = [createTextVNode(
+						default: withCtx(() => [..._cache[9] || (_cache[9] = [createTextVNode(
 							"保存指令",
 							-1
 							/* CACHED */
@@ -208930,7 +208974,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						busy: $setup.store.testBusy,
 						onClick: $setup.store.runTest
 					}, {
-						default: withCtx(() => [..._cache[9] || (_cache[9] = [createTextVNode(
+						default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
 							"测试召回",
 							-1
 							/* CACHED */
@@ -208951,7 +208995,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-c0410d85"]]);
+var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-bda196ff"]]);
 
 const developerCopy = {
     panels: {

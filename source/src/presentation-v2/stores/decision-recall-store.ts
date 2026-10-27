@@ -141,6 +141,7 @@ export const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
     activeModels(state): readonly DecisionModelOption_ACU[] {
       if (state.settings.provider === 'siliconflow') return SILICONFLOW_DECISION_MODELS_ACU;
       if (state.settings.provider === 'aihubmix') return AIHUBMIX_DECISION_MODELS_ACU;
+      if (state.settings.provider === 'custom') return [];
       return state.openrouterModels;
     },
   },

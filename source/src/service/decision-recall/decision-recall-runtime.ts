@@ -79,7 +79,10 @@ export type DecisionRecallRunResult_ACU =
     failedBatchCount: number;
     /** 没打上分的纪要条数（失败组 + 漏答）。 */
     unscoredCount: number;
+    /** 接口没填好（缺地址、模型名或 Key），没有打分。 */
     missingKey: boolean;
+    /** 缺的是哪一项，配合 missingKey 给提示。 */
+    missingField?: string;
     providerLabel: string;
     errors: string[];
   };
@@ -140,10 +143,10 @@ export async function runDecisionRecall_ACU(
       scored: [], batchCount: 0, failedBatchCount: 0, unscoredCount: 0, missingKey: false, errors: [],
     };
   }
-  if (!endpoint.apiKey) {
+  if (endpoint.missing) {
     return {
       status: 'ok', ...base, selected: [...plan.fixed], scored: [], batchCount: 0, failedBatchCount: 0,
-      unscoredCount: plan.pool.length, missingKey: true, errors: [],
+      unscoredCount: plan.pool.length, missingKey: true, missingField: endpoint.missing, errors: [],
     };
   }
 
@@ -172,7 +175,9 @@ export async function runDecisionRecall_ACU(
       async requestSignal => {
         const response = await fetchImpl(endpoint.url, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${endpoint.apiKey}`, 'Content-Type': 'application/json' },
+          headers: endpoint.apiKey
+            ? { Authorization: `Bearer ${endpoint.apiKey}`, 'Content-Type': 'application/json' }
+            : { 'Content-Type': 'application/json' },
           body: JSON.stringify(buildDecisionRecallBatchBody_ACU(endpoint.model, state, rows, settings.scoringContent)),
           signal: requestSignal,
         });
@@ -262,7 +267,7 @@ export async function runDecisionRecall_ACU(
 /** 打分有失败或没填 Key 时的提示；全部正常时返回空串。单独召回与替换剧情推进任务共用。 */
 export function describeDecisionRecallWarning_ACU(result: DecisionRecallRunResult_ACU): string {
   if (result.status !== 'ok') return '';
-  if (result.missingKey) return `决策召回还没填 ${result.providerLabel} Key，本次只带上最新 ${result.fixed.length} 条纪要。`;
+  if (result.missingKey) return `决策召回还没填 ${result.providerLabel} ${result.missingField || 'Key'}，本次只带上最新 ${result.fixed.length} 条纪要。`;
   if (result.batchCount > 0 && result.failedBatchCount >= result.batchCount) {
     return `决策召回全部 ${result.batchCount} 组打分都失败了，本次只带上最新 ${result.fixed.length} 条纪要。`;
   }
@@ -290,7 +295,7 @@ export function describeDecisionRecallResult_ACU(result: DecisionRecallRunResult
     .join(', ');
   const source = result.candidateSource === 'crossfire_index' ? '交火纪要索引' : '全部纪要';
   return `[决策召回] 候选 ${result.candidateCount} 条（${source}），分 ${result.batchCount} 组，失败 ${result.failedBatchCount} 组，`
-    + `未打上分 ${result.unscoredCount} 条${result.missingKey ? '（未填 Key）' : ''}；带上 ${result.selected.length} 条：${picked}`;
+    + `未打上分 ${result.unscoredCount} 条${result.missingKey ? `（未填 ${result.missingField || 'Key'}）` : ''}；带上 ${result.selected.length} 条：${picked}`;
 }
 
 export function logDecisionRecallResult_ACU(result: DecisionRecallRunResult_ACU): void {
