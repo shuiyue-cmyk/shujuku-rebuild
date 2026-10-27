@@ -22,13 +22,19 @@ export const DECISION_RECALL_MAX_COUNT_ACU = DECISION_RECALL_MAX_TOTAL_ACU - DEC
 export const DEFAULT_DECISION_RECALL_COUNT_ACU = 20;
 /** 打分时参考最近几楼 AI 回复（另带最新的用户输入）。 */
 export const DECISION_RECALL_CONTEXT_AI_FLOORS_ACU = 2;
-/** 同时在途的打分请求上限：硅基流动按每分钟 token 数限流，一次全发容易撞 429。 */
+/** 默认同时在途的打分请求数：硅基流动按每分钟 token 数限流，一次全发容易撞 429；用户可调到 1–100。 */
 export const DECISION_RECALL_CONCURRENCY_ACU = 3;
+export const DECISION_RECALL_MAX_CONCURRENCY_ACU = 100;
+/** 每次请求放几条纪要：默认 20，用户可调到 1–50。 */
+export const DECISION_RECALL_MAX_BATCH_SIZE_ACU = 50;
+/** 同一组判定几次取平均：决策模型便宜且不收输出费，多跑几次更稳；默认 1，最多 10。 */
+export const DEFAULT_DECISION_RECALL_JUDGE_RUNS_ACU = 1;
+export const DECISION_RECALL_MAX_JUDGE_RUNS_ACU = 10;
 export const DEFAULT_DECISION_RECALL_MAX_RETRIES_ACU = 2;
 export const DECISION_RECALL_MAX_RETRIES_LIMIT_ACU = 5;
 /** 一组 20 个问题比替换前判定的单个问题慢得多，超时放宽到 60 秒。 */
 export const DECISION_RECALL_TIMEOUT_MS_ACU = 60000;
-/** 整次召回（全部分组加重试等待）的总时限：到时还没打完分的组按失败处理，不让发送一直卡着。 */
+/** 整次召回（全部分组加重试等待）的总时限，按判定次数放宽（× 判定次数）：到时还没打完分的按失败处理，不让发送一直卡着。 */
 export const DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU = 90000;
 
 /** AIHubMix 的决策接口（与硅基流动同格式，允许网页直连）。 */
@@ -92,6 +98,9 @@ export function buildDefaultDecisionRecallSettings_ACU() {
     aihubmixApiKey: '',
     aihubmixModel: DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
     recallCount: DEFAULT_DECISION_RECALL_COUNT_ACU,
+    batchSize: DECISION_RECALL_BATCH_SIZE_ACU,
+    judgeRuns: DEFAULT_DECISION_RECALL_JUDGE_RUNS_ACU,
+    concurrency: DECISION_RECALL_CONCURRENCY_ACU,
     scoringContent: 'full' as DecisionRecallScoringContent_ACU,
     maxRetries: DEFAULT_DECISION_RECALL_MAX_RETRIES_ACU,
     directive: DEFAULT_DECISION_RECALL_DIRECTIVE_ACU,

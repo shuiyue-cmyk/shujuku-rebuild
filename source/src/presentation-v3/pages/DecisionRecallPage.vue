@@ -87,6 +87,42 @@
           @change="setNumber('recallCount', $event)"
         />
       </UbRow>
+      <UbRow label="每组条数" :hint="`每次请求里放几条纪要（1–${maxBatchSize}）。条数少，模型看得更仔细，但请求更多，前文每次都要重发一遍。`">
+        <UbInput
+          :key="`batchSize-${inputKey}`"
+          :model-value="store.settings.batchSize"
+          type="number"
+          :min="1"
+          :max="maxBatchSize"
+          :step="1"
+          aria-label="每组条数"
+          @change="setNumber('batchSize', $event)"
+        />
+      </UbRow>
+      <UbRow label="判定次数" :hint="`同一组让决策模型判定几次，每条纪要取平均分（1–${maxJudgeRuns}）。次数越多越稳，请求数也成倍增加；失败的那几次不计入平均。`">
+        <UbInput
+          :key="`judgeRuns-${inputKey}`"
+          :model-value="store.settings.judgeRuns"
+          type="number"
+          :min="1"
+          :max="maxJudgeRuns"
+          :step="1"
+          aria-label="判定次数"
+          @change="setNumber('judgeRuns', $event)"
+        />
+      </UbRow>
+      <UbRow label="并发数" :hint="`决策召回自己同时发出几个请求（1–${maxConcurrency}），与其它功能无关。硅基流动等按每分钟 token 数限流的服务商并发太高会被限流。`">
+        <UbInput
+          :key="`concurrency-${inputKey}`"
+          :model-value="store.settings.concurrency"
+          type="number"
+          :min="1"
+          :max="maxConcurrency"
+          :step="1"
+          aria-label="并发数"
+          @change="setNumber('concurrency', $event)"
+        />
+      </UbRow>
       <UbRow label="打分时看什么" hint="只看概要更省、更快；加上纪要正文判断更准，但每组输入多好几倍。">
         <UbSegmented :options="scoringOptions" :model-value="store.settings.scoringContent" aria-label="打分时看什么" @update:model-value="store.patch({ scoringContent: $event })" />
       </UbRow>
@@ -146,15 +182,16 @@ import { useDecisionRecallStore } from '../../presentation-v2/stores/decision-re
 import { useRouterStore } from '../../presentation-v2/stores/router-store';
 import { useToastStore } from '../../presentation-v2/stores/toast-store';
 import { DECISION_RECALL_PROVIDER_LABELS_ACU } from '../../service/decision-recall/decision-recall-settings';
+import { resolveDecisionRecallTotalTimeoutMs_ACU } from '../../service/decision-recall/decision-recall-runtime';
 import {
-  DECISION_RECALL_BATCH_SIZE_ACU,
   DECISION_RECALL_CODES_PLACEHOLDER_ACU,
-  DECISION_RECALL_CONCURRENCY_ACU,
+  DECISION_RECALL_MAX_BATCH_SIZE_ACU,
+  DECISION_RECALL_MAX_CONCURRENCY_ACU,
+  DECISION_RECALL_MAX_JUDGE_RUNS_ACU,
   DECISION_RECALL_FIXED_RECENT_COUNT_ACU,
   DECISION_RECALL_MAX_COUNT_ACU,
   DECISION_RECALL_MAX_RETRIES_LIMIT_ACU,
   DECISION_RECALL_MAX_TOTAL_ACU,
-  DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU,
   DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
   DEFAULT_DECISION_RECALL_DIRECTIVE_ACU,
   type DecisionRecallProvider_ACU,
@@ -189,10 +226,14 @@ const fixedCount = DECISION_RECALL_FIXED_RECENT_COUNT_ACU;
 const maxCount = DECISION_RECALL_MAX_COUNT_ACU;
 const maxTotal = DECISION_RECALL_MAX_TOTAL_ACU;
 const maxRetries = DECISION_RECALL_MAX_RETRIES_LIMIT_ACU;
-const totalSeconds = Math.round(DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU / 1000);
+const maxBatchSize = DECISION_RECALL_MAX_BATCH_SIZE_ACU;
+const maxJudgeRuns = DECISION_RECALL_MAX_JUDGE_RUNS_ACU;
+const maxConcurrency = DECISION_RECALL_MAX_CONCURRENCY_ACU;
+/** 总时限按判定次数放宽。 */
+const totalSeconds = computed(() => Math.round(resolveDecisionRecallTotalTimeoutMs_ACU(store.settings.judgeRuns) / 1000));
 const codesPlaceholder = DECISION_RECALL_CODES_PLACEHOLDER_ACU;
-const ruleDescription = `每组 ${DECISION_RECALL_BATCH_SIZE_ACU} 条纪要发一次请求、最多同时 ${DECISION_RECALL_CONCURRENCY_ACU} 组；`
-  + '参考最近两楼 AI 回复和用户最新输入，不带世界书；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。';
+const ruleDescription = computed(() => `每组 ${store.settings.batchSize} 条纪要发一次请求、每组判定 ${store.settings.judgeRuns} 次取平均、最多同时 ${store.settings.concurrency} 个请求；`
+  + '参考最近两楼 AI 回复和用户最新输入，不带世界书；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。');
 
 const modeOptions = [
   { value: 'standalone', label: '单独召回' },
@@ -283,7 +324,7 @@ function setModelText(value: string | number): void {
 
 /** 清空或填超范围时规整后的值可能与原值相同，输入框不会自己刷新：换个 key 让它按规整后的值重绘。 */
 const inputKey = ref(0);
-function setNumber(key: 'recallCount' | 'maxRetries', value: string | number): void {
+function setNumber(key: 'recallCount' | 'maxRetries' | 'batchSize' | 'judgeRuns' | 'concurrency', value: string | number): void {
   store.patch({ [key]: value });
   inputKey.value += 1;
 }

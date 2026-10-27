@@ -12,9 +12,7 @@ import { abortableDelay } from '../../shared/abortable-delay';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { maskSensitiveText_ACU } from '../../shared/log-buffer';
 import {
-  DECISION_RECALL_BATCH_SIZE_ACU,
   DECISION_RECALL_CODES_PLACEHOLDER_ACU,
-  DECISION_RECALL_CONCURRENCY_ACU,
   DECISION_RECALL_INPUT_PLACEHOLDER_ACU,
   DECISION_RECALL_TIMEOUT_MS_ACU,
   DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU,
@@ -27,6 +25,7 @@ import {
 import {
   buildDecisionRecallBatchBody_ACU,
   buildDecisionRecallState_ACU,
+  DECISION_RECALL_LEVELS_ACU,
   interpretDecisionRecallBatchResponse_ACU,
   type DecisionRecallRow_ACU,
   type DecisionRecallScore_ACU,
@@ -76,7 +75,12 @@ export type DecisionRecallRunResult_ACU =
     candidateCount: number;
     candidateSource: 'crossfire_index' | 'all_rows';
     batchCount: number;
+    /** 打分全部失败的组数（每组判定的几次都失败）。 */
     failedBatchCount: number;
+    /** 每组判定几次取平均。 */
+    judgeRuns: number;
+    /** 失败的判定次数（含失败组里的）；部分失败的组按成功的几次取平均。 */
+    failedRunCount: number;
     /** 没打上分的纪要条数（失败组 + 漏答）。 */
     unscoredCount: number;
     /** 接口没填好（缺地址、模型名或 Key），没有打分。 */
@@ -91,6 +95,15 @@ type GroupOutcome_ACU =
   | { kind: 'scored'; scores: Map<string, DecisionRecallScore_ACU> }
   | { kind: 'failed'; error: string }
   | { kind: 'aborted' };
+
+/** 整次召回的总时限：判定几次就放宽几倍。 */
+export function resolveDecisionRecallTotalTimeoutMs_ACU(judgeRuns: number): number {
+  return DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU * Math.max(1, Math.floor(judgeRuns) || 1);
+}
+
+function nearestLevelLabel_ACU(score: number): string {
+  return DECISION_RECALL_LEVELS_ACU.reduce((best, level) => (Math.abs(level.score - score) < Math.abs(best.score - score) ? level : best)).label;
+}
 
 function retryDelayMs_ACU(attempt: number, rateLimited: boolean): number {
   return (rateLimited ? 4000 : 1500) * (attempt + 1);
@@ -135,6 +148,8 @@ export async function runDecisionRecall_ACU(
     candidateCount: plan.pool.length,
     candidateSource: candidateCodes ? 'crossfire_index' as const : 'all_rows' as const,
     providerLabel: endpoint.label,
+    judgeRuns: settings.judgeRuns,
+    failedRunCount: 0,
   };
 
   if (!plan.needsScoring) {
@@ -151,7 +166,7 @@ export async function runDecisionRecall_ACU(
   }
 
   const state = buildDecisionRecallState_ACU({ aiFloors: collectDecisionRecallAiFloors_ACU(sources.loadChat()), userInput: options.userInput });
-  const groups = chunkDecisionRecallRows_ACU(plan.pool, DECISION_RECALL_BATCH_SIZE_ACU);
+  const groups = chunkDecisionRecallRows_ACU(plan.pool, settings.batchSize);
   const fetchImpl = deps.fetch ?? globalThis.fetch;
 
   // 总时限与鉴权类错误都要能停下其余各组的在途请求，但不算用户中止
@@ -164,9 +179,10 @@ export async function runDecisionRecall_ACU(
     if (!stopError) stopError = error;
     stopRun();
   };
+  const totalTimeoutMs = deps.totalTimeoutMs ?? resolveDecisionRecallTotalTimeoutMs_ACU(settings.judgeRuns);
   const totalTimer = setTimeout(
-    () => stopWith(`${TOTAL_TIMEOUT_ERROR_ACU}（${Math.round((deps.totalTimeoutMs ?? DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU) / 1000)} 秒）`),
-    deps.totalTimeoutMs ?? DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU,
+    () => stopWith(`${TOTAL_TIMEOUT_ERROR_ACU}（${Math.round(totalTimeoutMs / 1000)} 秒）`),
+    totalTimeoutMs,
   );
 
   const requestGroup = async (rows: DecisionRecallRow_ACU[]): Promise<GroupRequestOutcome_ACU> => {
@@ -219,16 +235,19 @@ export async function runDecisionRecall_ACU(
     return { kind: 'failed', error: lastError };
   };
 
-  const outcomes: GroupOutcome_ACU[] = new Array(groups.length);
-  let nextGroup = 0;
+  // 每组判定几次就排几个请求，并发数作用在全部请求上
+  const runs = settings.judgeRuns;
+  const units = groups.flatMap((_rows, groupIndex) => Array.from({ length: runs }, () => groupIndex));
+  const outcomes: GroupOutcome_ACU[] = new Array(units.length);
+  let nextUnit = 0;
   const worker = async () => {
-    while (nextGroup < groups.length && !isAborted()) {
-      const index = nextGroup++;
-      outcomes[index] = await scoreGroup(groups[index]);
+    while (nextUnit < units.length && !isAborted()) {
+      const index = nextUnit++;
+      outcomes[index] = await scoreGroup(groups[units[index]]);
     }
   };
   try {
-    await Promise.all(Array.from({ length: Math.min(DECISION_RECALL_CONCURRENCY_ACU, groups.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(settings.concurrency, units.length) }, worker));
   } finally {
     clearTimeout(totalTimer);
     signal?.removeEventListener('abort', stopRun);
@@ -238,29 +257,48 @@ export async function runDecisionRecall_ACU(
   const scored: DecisionRecallScoredEntry_ACU[] = [];
   const errors: string[] = [];
   let failedBatchCount = 0;
+  let failedRunCount = 0;
   let unscoredCount = 0;
-  groups.forEach((rows, index) => {
-    const outcome = outcomes[index];
-    if (outcome.kind !== 'scored') {
+  groups.forEach((rows, groupIndex) => {
+    const scoredRuns: Array<Map<string, DecisionRecallScore_ACU>> = [];
+    for (const outcome of outcomes.slice(groupIndex * runs, (groupIndex + 1) * runs)) {
+      if (outcome?.kind === 'scored') {
+        scoredRuns.push(outcome.scores);
+      } else {
+        failedRunCount += 1;
+        if (outcome?.kind === 'failed') errors.push(outcome.error);
+      }
+    }
+    if (scoredRuns.length === 0) {
       failedBatchCount += 1;
       unscoredCount += rows.length;
-      if (outcome.kind === 'failed') errors.push(outcome.error);
       return;
     }
+    // 每条纪要按答了它的那几次取平均；一次都没答的不参与挑选
     for (const row of rows) {
-      const score = outcome.scores.get(row.rowKey);
-      if (score) scored.push({ row, ...score });
-      else unscoredCount += 1;
+      const answered = scoredRuns.map(scores => scores.get(row.rowKey)).filter((score): score is DecisionRecallScore_ACU => !!score);
+      if (answered.length === 0) {
+        unscoredCount += 1;
+        continue;
+      }
+      if (answered.length === 1) {
+        scored.push({ row, ...answered[0] });
+        continue;
+      }
+      const score = answered.reduce((sum, entry) => sum + entry.score, 0) / answered.length;
+      scored.push({ row, score, choice: nearestLevelLabel_ACU(score) });
     }
   });
   scored.sort((left, right) => (right.score - left.score) || (right.row.rowOrder - left.row.rowOrder));
   if (failedBatchCount > 0) {
     logWarn_ACU(`[决策召回] ${failedBatchCount}/${groups.length} 组打分失败，已跳过：${[...new Set(errors)].join('；')}`);
+  } else if (failedRunCount > 0) {
+    logWarn_ACU(`[决策召回] ${failedRunCount}/${units.length} 次判定失败，已按成功的几次取平均：${[...new Set(errors)].join('；')}`);
   }
 
   return {
     status: 'ok', ...base, selected: pickDecisionRecallRows_ACU(plan.fixed, scored, settings.recallCount),
-    scored, batchCount: groups.length, failedBatchCount, unscoredCount, missingKey: false, errors,
+    scored, batchCount: groups.length, failedBatchCount, failedRunCount, unscoredCount, missingKey: false, errors,
   };
 }
 
@@ -273,6 +311,9 @@ export function describeDecisionRecallWarning_ACU(result: DecisionRecallRunResul
   }
   if (result.failedBatchCount > 0) {
     return `决策召回有 ${result.failedBatchCount}/${result.batchCount} 组打分失败，已跳过这些组，从其余纪要里选取。`;
+  }
+  if (result.failedRunCount > 0) {
+    return `决策召回有 ${result.failedRunCount}/${result.batchCount * result.judgeRuns} 次判定失败，已按成功的几次取平均。`;
   }
   const skipped = result.unscoredCount;
   if (skipped > 0) return `决策模型漏答了 ${skipped} 条纪要，这些纪要本次没参与挑选。`;

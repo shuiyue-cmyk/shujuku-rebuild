@@ -192,6 +192,24 @@ describe('DecisionRecallPage', () => {
     expect(modelInput().value).toBe('SemIf');
   });
 
+  it('每组条数、判定次数、并发数可填，超范围时规整后保存', async () => {
+    const { settings } = await openPage('decision-recall');
+    const fill = (label: string, value: string) => {
+      const input = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+      input.value = value;
+      input.dispatchEvent(new Event('input'));
+      input.dispatchEvent(new Event('change'));
+    };
+    fill('每组条数', '10');
+    fill('判定次数', '99');
+    fill('并发数', '64');
+    await flush();
+    expect(settings.decisionRecallSettings).toMatchObject({ batchSize: 10, judgeRuns: 10, concurrency: 64 });
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="判定次数"]')!.value).toBe('10');
+    // 总时限按判定次数放宽
+    expect(document.body.textContent).toContain('整次召回最多 900 秒');
+  });
+
   it('召回条数填超范围时规整到 45 再保存', async () => {
     const { settings } = await openPage('decision-recall');
     const input = document.querySelector<HTMLInputElement>('input[aria-label="召回条数"]')!;

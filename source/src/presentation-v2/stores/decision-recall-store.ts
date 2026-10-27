@@ -87,7 +87,8 @@ export function formatDecisionRecallTestOutput_ACU(result: DecisionRecallRunResu
   if (result.status !== 'ok') return describeDecisionRecallResult_ACU(result).replace(/^\[决策召回\] /, '');
   const lines: string[] = [];
   const source = result.candidateSource === 'crossfire_index' ? '交火筛过的纪要索引' : '全部纪要';
-  lines.push(`候选 ${result.candidateCount} 条（来自${source}），分 ${result.batchCount} 组打分，失败 ${result.failedBatchCount} 组。`);
+  const runs = result.judgeRuns > 1 ? `，每组判定 ${result.judgeRuns} 次取平均（失败 ${result.failedRunCount} 次）` : '';
+  lines.push(`候选 ${result.candidateCount} 条（来自${source}），分 ${result.batchCount} 组打分${runs}，失败 ${result.failedBatchCount} 组。`);
   const warning = describeDecisionRecallWarning_ACU(result);
   if (warning) lines.push(warning);
   const reasons = describeDecisionRecallErrors_ACU(result);

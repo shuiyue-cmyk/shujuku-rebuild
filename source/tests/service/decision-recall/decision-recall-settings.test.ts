@@ -34,6 +34,9 @@ describe('normalizeDecisionRecallSettings_ACU', () => {
       aihubmixApiKey: '',
       aihubmixModel: 'jev-latest',
       recallCount: 20,
+      batchSize: 20,
+      judgeRuns: 1,
+      concurrency: 3,
       scoringContent: 'full',
       maxRetries: 2,
       directive: DEFAULT_DECISION_RECALL_DIRECTIVE_ACU,
@@ -51,6 +54,19 @@ describe('normalizeDecisionRecallSettings_ACU', () => {
     expect(normalizeDecisionRecallSettings_ACU({ recallCount: '' }).recallCount).toBe(20);
     expect(normalizeDecisionRecallSettings_ACU({ maxRetries: '' }).maxRetries).toBe(2);
     expect(normalizeDecisionRecallSettings_ACU({ maxRetries: null }).maxRetries).toBe(2);
+  });
+
+  it('每组条数夹到 1–50、判定次数夹到 1–10、并发数夹到 1–100，清空回到默认', () => {
+    const n = normalizeDecisionRecallSettings_ACU;
+    expect(n({ batchSize: 80 }).batchSize).toBe(50);
+    expect(n({ batchSize: 0 }).batchSize).toBe(1);
+    expect(n({ batchSize: '' }).batchSize).toBe(20);
+    expect(n({ judgeRuns: 30 }).judgeRuns).toBe(10);
+    expect(n({ judgeRuns: 0 }).judgeRuns).toBe(1);
+    expect(n({ judgeRuns: '3' }).judgeRuns).toBe(3);
+    expect(n({ concurrency: 500 }).concurrency).toBe(100);
+    expect(n({ concurrency: 0 }).concurrency).toBe(1);
+    expect(n({ concurrency: '' }).concurrency).toBe(3);
   });
 
   it('重试次数夹到 0–5，0 表示不重试', () => {

@@ -4964,13 +4964,19 @@ const DECISION_RECALL_MAX_COUNT_ACU = DECISION_RECALL_MAX_TOTAL_ACU - DECISION_R
 const DEFAULT_DECISION_RECALL_COUNT_ACU = 20;
 /** 打分时参考最近几楼 AI 回复（另带最新的用户输入）。 */
 const DECISION_RECALL_CONTEXT_AI_FLOORS_ACU = 2;
-/** 同时在途的打分请求上限：硅基流动按每分钟 token 数限流，一次全发容易撞 429。 */
+/** 默认同时在途的打分请求数：硅基流动按每分钟 token 数限流，一次全发容易撞 429；用户可调到 1–100。 */
 const DECISION_RECALL_CONCURRENCY_ACU = 3;
+const DECISION_RECALL_MAX_CONCURRENCY_ACU = 100;
+/** 每次请求放几条纪要：默认 20，用户可调到 1–50。 */
+const DECISION_RECALL_MAX_BATCH_SIZE_ACU = 50;
+/** 同一组判定几次取平均：决策模型便宜且不收输出费，多跑几次更稳；默认 1，最多 10。 */
+const DEFAULT_DECISION_RECALL_JUDGE_RUNS_ACU = 1;
+const DECISION_RECALL_MAX_JUDGE_RUNS_ACU = 10;
 const DEFAULT_DECISION_RECALL_MAX_RETRIES_ACU = 2;
 const DECISION_RECALL_MAX_RETRIES_LIMIT_ACU = 5;
 /** 一组 20 个问题比替换前判定的单个问题慢得多，超时放宽到 60 秒。 */
 const DECISION_RECALL_TIMEOUT_MS_ACU = 60000;
-/** 整次召回（全部分组加重试等待）的总时限：到时还没打完分的组按失败处理，不让发送一直卡着。 */
+/** 整次召回（全部分组加重试等待）的总时限，按判定次数放宽（× 判定次数）：到时还没打完分的按失败处理，不让发送一直卡着。 */
 const DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU = 90000;
 /** AIHubMix 的决策接口（与硅基流动同格式，允许网页直连）。 */
 const AIHUBMIX_DECISION_API_URL_ACU = 'https://aihubmix.com/v1/systemone';
@@ -5020,6 +5026,9 @@ function buildDefaultDecisionRecallSettings_ACU() {
         aihubmixApiKey: '',
         aihubmixModel: DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
         recallCount: DEFAULT_DECISION_RECALL_COUNT_ACU,
+        batchSize: DECISION_RECALL_BATCH_SIZE_ACU,
+        judgeRuns: DEFAULT_DECISION_RECALL_JUDGE_RUNS_ACU,
+        concurrency: DECISION_RECALL_CONCURRENCY_ACU,
         scoringContent: 'full',
         maxRetries: DEFAULT_DECISION_RECALL_MAX_RETRIES_ACU,
         directive: DEFAULT_DECISION_RECALL_DIRECTIVE_ACU,
@@ -91255,6 +91264,9 @@ function normalizeDecisionRecallSettings_ACU(raw) {
         aihubmixApiKey: text(source.aihubmixApiKey),
         aihubmixModel: text(source.aihubmixModel) || DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
         recallCount: readInteger_ACU(source.recallCount, DEFAULT_DECISION_RECALL_COUNT_ACU, 1, DECISION_RECALL_MAX_COUNT_ACU),
+        batchSize: readInteger_ACU(source.batchSize, DECISION_RECALL_BATCH_SIZE_ACU, 1, DECISION_RECALL_MAX_BATCH_SIZE_ACU),
+        judgeRuns: readInteger_ACU(source.judgeRuns, DEFAULT_DECISION_RECALL_JUDGE_RUNS_ACU, 1, DECISION_RECALL_MAX_JUDGE_RUNS_ACU),
+        concurrency: readInteger_ACU(source.concurrency, DECISION_RECALL_CONCURRENCY_ACU, 1, DECISION_RECALL_MAX_CONCURRENCY_ACU),
         scoringContent: source.scoringContent === 'summary' ? 'summary' : 'full',
         maxRetries: readInteger_ACU(source.maxRetries, DEFAULT_DECISION_RECALL_MAX_RETRIES_ACU, 0, DECISION_RECALL_MAX_RETRIES_LIMIT_ACU),
         directive,
@@ -91655,6 +91667,13 @@ function collectIndexedCodes_ACU(content, rows) {
  * 分数从高到低凑满条数 → 与固定条数合并、按表号排列。
  * 没填 Key 时不发请求，只带固定条数。任何一组失败都不会让这次发送停下。
  */
+/** 整次召回的总时限：判定几次就放宽几倍。 */
+function resolveDecisionRecallTotalTimeoutMs_ACU(judgeRuns) {
+    return DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU * Math.max(1, Math.floor(judgeRuns) || 1);
+}
+function nearestLevelLabel_ACU(score) {
+    return DECISION_RECALL_LEVELS_ACU.reduce((best, level) => (Math.abs(level.score - score) < Math.abs(best.score - score) ? level : best)).label;
+}
 function retryDelayMs_ACU(attempt, rateLimited) {
     return (rateLimited ? 4000 : 1500) * (attempt + 1);
 }
@@ -91687,6 +91706,8 @@ async function runDecisionRecall_ACU(options, deps = {}) {
         candidateCount: plan.pool.length,
         candidateSource: candidateCodes ? 'crossfire_index' : 'all_rows',
         providerLabel: endpoint.label,
+        judgeRuns: settings.judgeRuns,
+        failedRunCount: 0,
     };
     if (!plan.needsScoring) {
         return {
@@ -91701,7 +91722,7 @@ async function runDecisionRecall_ACU(options, deps = {}) {
         };
     }
     const state = buildDecisionRecallState_ACU({ aiFloors: collectDecisionRecallAiFloors_ACU(sources.loadChat()), userInput: options.userInput });
-    const groups = chunkDecisionRecallRows_ACU(plan.pool, DECISION_RECALL_BATCH_SIZE_ACU);
+    const groups = chunkDecisionRecallRows_ACU(plan.pool, settings.batchSize);
     const fetchImpl = deps.fetch ?? globalThis.fetch;
     // 总时限与鉴权类错误都要能停下其余各组的在途请求，但不算用户中止
     const runController = new AbortController();
@@ -91715,7 +91736,8 @@ async function runDecisionRecall_ACU(options, deps = {}) {
             stopError = error;
         stopRun();
     };
-    const totalTimer = setTimeout(() => stopWith(`${TOTAL_TIMEOUT_ERROR_ACU}（${Math.round((deps.totalTimeoutMs ?? DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU) / 1000)} 秒）`), deps.totalTimeoutMs ?? DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU);
+    const totalTimeoutMs = deps.totalTimeoutMs ?? resolveDecisionRecallTotalTimeoutMs_ACU(settings.judgeRuns);
+    const totalTimer = setTimeout(() => stopWith(`${TOTAL_TIMEOUT_ERROR_ACU}（${Math.round(totalTimeoutMs / 1000)} 秒）`), totalTimeoutMs);
     const requestGroup = async (rows) => {
         const outcome = await runWithDeadline_ACU({ timeoutMs: deps.timeoutMs ?? DECISION_RECALL_TIMEOUT_MS_ACU, signal: runController.signal }, async (requestSignal) => {
             const response = await fetchImpl(endpoint.url, {
@@ -91770,16 +91792,19 @@ async function runDecisionRecall_ACU(options, deps = {}) {
         }
         return { kind: 'failed', error: lastError };
     };
-    const outcomes = new Array(groups.length);
-    let nextGroup = 0;
+    // 每组判定几次就排几个请求，并发数作用在全部请求上
+    const runs = settings.judgeRuns;
+    const units = groups.flatMap((_rows, groupIndex) => Array.from({ length: runs }, () => groupIndex));
+    const outcomes = new Array(units.length);
+    let nextUnit = 0;
     const worker = async () => {
-        while (nextGroup < groups.length && !isAborted()) {
-            const index = nextGroup++;
-            outcomes[index] = await scoreGroup(groups[index]);
+        while (nextUnit < units.length && !isAborted()) {
+            const index = nextUnit++;
+            outcomes[index] = await scoreGroup(groups[units[index]]);
         }
     };
     try {
-        await Promise.all(Array.from({ length: Math.min(DECISION_RECALL_CONCURRENCY_ACU, groups.length) }, worker));
+        await Promise.all(Array.from({ length: Math.min(settings.concurrency, units.length) }, worker));
     }
     finally {
         clearTimeout(totalTimer);
@@ -91790,31 +91815,50 @@ async function runDecisionRecall_ACU(options, deps = {}) {
     const scored = [];
     const errors = [];
     let failedBatchCount = 0;
+    let failedRunCount = 0;
     let unscoredCount = 0;
-    groups.forEach((rows, index) => {
-        const outcome = outcomes[index];
-        if (outcome.kind !== 'scored') {
+    groups.forEach((rows, groupIndex) => {
+        const scoredRuns = [];
+        for (const outcome of outcomes.slice(groupIndex * runs, (groupIndex + 1) * runs)) {
+            if (outcome?.kind === 'scored') {
+                scoredRuns.push(outcome.scores);
+            }
+            else {
+                failedRunCount += 1;
+                if (outcome?.kind === 'failed')
+                    errors.push(outcome.error);
+            }
+        }
+        if (scoredRuns.length === 0) {
             failedBatchCount += 1;
             unscoredCount += rows.length;
-            if (outcome.kind === 'failed')
-                errors.push(outcome.error);
             return;
         }
+        // 每条纪要按答了它的那几次取平均；一次都没答的不参与挑选
         for (const row of rows) {
-            const score = outcome.scores.get(row.rowKey);
-            if (score)
-                scored.push({ row, ...score });
-            else
+            const answered = scoredRuns.map(scores => scores.get(row.rowKey)).filter((score) => !!score);
+            if (answered.length === 0) {
                 unscoredCount += 1;
+                continue;
+            }
+            if (answered.length === 1) {
+                scored.push({ row, ...answered[0] });
+                continue;
+            }
+            const score = answered.reduce((sum, entry) => sum + entry.score, 0) / answered.length;
+            scored.push({ row, score, choice: nearestLevelLabel_ACU(score) });
         }
     });
     scored.sort((left, right) => (right.score - left.score) || (right.row.rowOrder - left.row.rowOrder));
     if (failedBatchCount > 0) {
         logWarn_ACU(`[决策召回] ${failedBatchCount}/${groups.length} 组打分失败，已跳过：${[...new Set(errors)].join('；')}`);
     }
+    else if (failedRunCount > 0) {
+        logWarn_ACU(`[决策召回] ${failedRunCount}/${units.length} 次判定失败，已按成功的几次取平均：${[...new Set(errors)].join('；')}`);
+    }
     return {
         status: 'ok', ...base, selected: pickDecisionRecallRows_ACU(plan.fixed, scored, settings.recallCount),
-        scored, batchCount: groups.length, failedBatchCount, unscoredCount, missingKey: false, errors,
+        scored, batchCount: groups.length, failedBatchCount, failedRunCount, unscoredCount, missingKey: false, errors,
     };
 }
 /** 打分有失败或没填 Key 时的提示；全部正常时返回空串。单独召回与替换剧情推进任务共用。 */
@@ -91828,6 +91872,9 @@ function describeDecisionRecallWarning_ACU(result) {
     }
     if (result.failedBatchCount > 0) {
         return `决策召回有 ${result.failedBatchCount}/${result.batchCount} 组打分失败，已跳过这些组，从其余纪要里选取。`;
+    }
+    if (result.failedRunCount > 0) {
+        return `决策召回有 ${result.failedRunCount}/${result.batchCount * result.judgeRuns} 次判定失败，已按成功的几次取平均。`;
     }
     const skipped = result.unscoredCount;
     if (skipped > 0)
@@ -94620,7 +94667,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261027-1920"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261027-1933"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -94639,7 +94686,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1920";
+        const stamp = "20261027-1933";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -156283,7 +156330,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1920";
+        const stamp = "20261027-1933";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -205763,7 +205810,8 @@ function formatDecisionRecallTestOutput_ACU(result) {
         return describeDecisionRecallResult_ACU(result).replace(/^\[决策召回\] /, '');
     const lines = [];
     const source = result.candidateSource === 'crossfire_index' ? '交火筛过的纪要索引' : '全部纪要';
-    lines.push(`候选 ${result.candidateCount} 条（来自${source}），分 ${result.batchCount} 组打分，失败 ${result.failedBatchCount} 组。`);
+    const runs = result.judgeRuns > 1 ? `，每组判定 ${result.judgeRuns} 次取平均（失败 ${result.failedRunCount} 次）` : '';
+    lines.push(`候选 ${result.candidateCount} 条（来自${source}），分 ${result.batchCount} 组打分${runs}，失败 ${result.failedBatchCount} 组。`);
     const warning = describeDecisionRecallWarning_ACU(result);
     if (warning)
         lines.push(warning);
@@ -208553,10 +208601,14 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         const maxCount = DECISION_RECALL_MAX_COUNT_ACU;
         const maxTotal = DECISION_RECALL_MAX_TOTAL_ACU;
         const maxRetries = DECISION_RECALL_MAX_RETRIES_LIMIT_ACU;
-        const totalSeconds = Math.round(DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU / 1000);
+        const maxBatchSize = DECISION_RECALL_MAX_BATCH_SIZE_ACU;
+        const maxJudgeRuns = DECISION_RECALL_MAX_JUDGE_RUNS_ACU;
+        const maxConcurrency = DECISION_RECALL_MAX_CONCURRENCY_ACU;
+        /** 总时限按判定次数放宽。 */
+        const totalSeconds = computed(() => Math.round(resolveDecisionRecallTotalTimeoutMs_ACU(store.settings.judgeRuns) / 1000));
         const codesPlaceholder = DECISION_RECALL_CODES_PLACEHOLDER_ACU;
-        const ruleDescription = `每组 ${DECISION_RECALL_BATCH_SIZE_ACU} 条纪要发一次请求、最多同时 ${DECISION_RECALL_CONCURRENCY_ACU} 组；`
-            + '参考最近两楼 AI 回复和用户最新输入，不带世界书；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。';
+        const ruleDescription = computed(() => `每组 ${store.settings.batchSize} 条纪要发一次请求、每组判定 ${store.settings.judgeRuns} 次取平均、最多同时 ${store.settings.concurrency} 个请求；`
+            + '参考最近两楼 AI 回复和用户最新输入，不带世界书；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。');
         const modeOptions = [
             { value: 'standalone', label: '单独召回' },
             { value: 'plot_task', label: '替换剧情推进的任务' },
@@ -208673,14 +208725,14 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 void store.loadModels();
         });
         watchChatChanged_ACU(() => refresh());
-        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, totalSeconds, codesPlaceholder, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, DEFAULT_MODEL_ACU, defaultModel, modelPlaceholder, modelHint, scoringOptions, setProvider, setKey, setModel, setModelText, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
+        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, maxBatchSize, maxJudgeRuns, maxConcurrency, totalSeconds, codesPlaceholder, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, DEFAULT_MODEL_ACU, defaultModel, modelPlaceholder, modelHint, scoringOptions, setProvider, setKey, setModel, setModelText, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-dr__picker[data-v-bda196ff] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-bda196ff] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-bda196ff] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-bda196ff] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-bda196ff");
-var DecisionRecallPage_vue_vue_type_style_index_0_scoped_bda196ff_lang = null;
+injectSfcStyle("\n.ub-dr__picker[data-v-a551847d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-a551847d] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-a551847d] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-a551847d] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-a551847d");
+var DecisionRecallPage_vue_vue_type_style_index_0_scoped_a551847d_lang = null;
 
 const _hoisted_1$c = {
 	key: 0,
@@ -208730,7 +208782,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						icon: "fa-solid fa-route",
 						onClick: _cache[0] || (_cache[0] = ($event) => $setup.routerStore.setActivePage("plot"))
 					}, {
-						default: withCtx(() => [..._cache[6] || (_cache[6] = [createTextVNode(
+						default: withCtx(() => [..._cache[9] || (_cache[9] = [createTextVNode(
 							"去剧情推进页",
 							-1
 							/* CACHED */
@@ -208860,6 +208912,54 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					}, 8, ["hint"]),
 					createVNode($setup["UbRow"], {
+						label: "每组条数",
+						hint: `每次请求里放几条纪要（1–${$setup.maxBatchSize}）。条数少，模型看得更仔细，但请求更多，前文每次都要重发一遍。`
+					}, {
+						default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
+							key: `batchSize-${$setup.inputKey}`,
+							"model-value": $setup.store.settings.batchSize,
+							type: "number",
+							min: 1,
+							max: $setup.maxBatchSize,
+							step: 1,
+							"aria-label": "每组条数",
+							onChange: _cache[3] || (_cache[3] = ($event) => $setup.setNumber("batchSize", $event))
+						}, null, 8, ["model-value", "max"]))]),
+						_: 1
+					}, 8, ["hint"]),
+					createVNode($setup["UbRow"], {
+						label: "判定次数",
+						hint: `同一组让决策模型判定几次，每条纪要取平均分（1–${$setup.maxJudgeRuns}）。次数越多越稳，请求数也成倍增加；失败的那几次不计入平均。`
+					}, {
+						default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
+							key: `judgeRuns-${$setup.inputKey}`,
+							"model-value": $setup.store.settings.judgeRuns,
+							type: "number",
+							min: 1,
+							max: $setup.maxJudgeRuns,
+							step: 1,
+							"aria-label": "判定次数",
+							onChange: _cache[4] || (_cache[4] = ($event) => $setup.setNumber("judgeRuns", $event))
+						}, null, 8, ["model-value", "max"]))]),
+						_: 1
+					}, 8, ["hint"]),
+					createVNode($setup["UbRow"], {
+						label: "并发数",
+						hint: `决策召回自己同时发出几个请求（1–${$setup.maxConcurrency}），与其它功能无关。硅基流动等按每分钟 token 数限流的服务商并发太高会被限流。`
+					}, {
+						default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
+							key: `concurrency-${$setup.inputKey}`,
+							"model-value": $setup.store.settings.concurrency,
+							type: "number",
+							min: 1,
+							max: $setup.maxConcurrency,
+							step: 1,
+							"aria-label": "并发数",
+							onChange: _cache[5] || (_cache[5] = ($event) => $setup.setNumber("concurrency", $event))
+						}, null, 8, ["model-value", "max"]))]),
+						_: 1
+					}, 8, ["hint"]),
+					createVNode($setup["UbRow"], {
 						label: "打分时看什么",
 						hint: "只看概要更省、更快；加上纪要正文判断更准，但每组输入多好几倍。"
 					}, {
@@ -208867,7 +208967,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							options: $setup.scoringOptions,
 							"model-value": $setup.store.settings.scoringContent,
 							"aria-label": "打分时看什么",
-							"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.store.patch({ scoringContent: $event }))
+							"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.store.patch({ scoringContent: $event }))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -208883,13 +208983,13 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							max: $setup.maxRetries,
 							step: 1,
 							"aria-label": "失败重试次数",
-							onChange: _cache[4] || (_cache[4] = ($event) => $setup.setNumber("maxRetries", $event))
+							onChange: _cache[7] || (_cache[7] = ($event) => $setup.setNumber("maxRetries", $event))
 						}, null, 8, ["model-value", "max"]))]),
 						_: 1
 					}, 8, ["hint"])
 				]),
 				_: 1
-			}),
+			}, 8, ["description"]),
 			createVNode($setup["UbSection"], {
 				id: "dr-directive",
 				title: "注入指令",
@@ -208901,7 +209001,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 					key: 0,
 					variant: "accent"
 				}, {
-					default: withCtx(() => [..._cache[7] || (_cache[7] = [createTextVNode(
+					default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
 						"未保存",
 						-1
 						/* CACHED */
@@ -208916,7 +209016,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						"auto-resize": "",
 						mono: "",
 						"aria-label": "注入指令",
-						"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.directiveDraft = $event)
+						"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.directiveDraft = $event)
 					}, null, 8, ["model-value"]),
 					createBaseVNode(
 						"p",
@@ -208930,7 +209030,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						icon: "fa-solid fa-rotate-left",
 						onClick: $setup.resetDirective
 					}, {
-						default: withCtx(() => [..._cache[8] || (_cache[8] = [createTextVNode(
+						default: withCtx(() => [..._cache[11] || (_cache[11] = [createTextVNode(
 							"恢复默认",
 							-1
 							/* CACHED */
@@ -208943,7 +209043,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.directiveDirty,
 						onClick: $setup.saveDirective
 					}, {
-						default: withCtx(() => [..._cache[9] || (_cache[9] = [createTextVNode(
+						default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
 							"保存指令",
 							-1
 							/* CACHED */
@@ -208974,7 +209074,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						busy: $setup.store.testBusy,
 						onClick: $setup.store.runTest
 					}, {
-						default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
+						default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
 							"测试召回",
 							-1
 							/* CACHED */
@@ -208995,7 +209095,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-bda196ff"]]);
+var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-a551847d"]]);
 
 const developerCopy = {
     panels: {

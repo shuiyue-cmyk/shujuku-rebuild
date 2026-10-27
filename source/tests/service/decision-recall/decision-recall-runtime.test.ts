@@ -23,6 +23,7 @@ import {
   describeDecisionRecallErrors_ACU,
   describeDecisionRecallResult_ACU,
   describeDecisionRecallWarning_ACU,
+  resolveDecisionRecallTotalTimeoutMs_ACU,
   runDecisionRecall_ACU,
 } from '../../../src/service/decision-recall/decision-recall-runtime';
 import { collectIndexedCodes_ACU, type DecisionRecallSources_ACU } from '../../../src/service/decision-recall/decision-recall-sources';
@@ -192,6 +193,72 @@ describe('runDecisionRecall_ACU', () => {
     expect(fetch.mock.calls[0][0]).toBe('https://aihubmix.com/v1/systemone');
     expect(fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer sk-ahm');
     expect(JSON.parse(fetch.mock.calls[0][1].body).model).toBe('jev-1.14');
+  });
+
+  it('每组条数可调：20 条候选按每组 5 条分 4 组', async () => {
+    const fetch = scoringFetch(() => 3);
+    const result = await runDecisionRecall_ACU({ userInput: 'x', settings: settings({ batchSize: 5 }) }, { sources: makeSources(makeRows(25)), fetch, sleep: noSleep });
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(Object.keys(JSON.parse(fetch.mock.calls[0][1].body).questions)).toHaveLength(5);
+    expect(result.status === 'ok' && result.batchCount).toBe(4);
+  });
+
+  it('并发数可调：最多同时发出所填的请求数', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const scoring = scoringFetch(() => 3);
+    const fetch = vi.fn(async (url: string, init: any) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return scoring(url, init);
+    });
+    await runDecisionRecall_ACU({ userInput: 'x', settings: settings({ batchSize: 1, concurrency: 10 }) }, { sources: makeSources(makeRows(35)), fetch, sleep: noSleep });
+    expect(fetch).toHaveBeenCalledTimes(30);
+    expect(peak).toBe(10);
+  });
+
+  it('多次判定：同一组跑 N 次，每条纪要取平均分', async () => {
+    const perCall = [5, 3, 1];
+    let call = 0;
+    const fetch = vi.fn(async (url: string, init: any) => {
+      const score = perCall[call++ % perCall.length];
+      return scoringFetch(code => (code === 'AM0001' ? score : 2))(url, init);
+    });
+    const result = await runDecisionRecall_ACU({ userInput: 'x', settings: settings({ judgeRuns: 3 }) }, { sources: makeSources(makeRows(12)), fetch, sleep: noSleep });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.scored.find(entry => entry.row.indexCode === 'AM0001')!.score).toBeCloseTo(3);
+    expect(result.scored.find(entry => entry.row.indexCode === 'AM0002')!.score).toBeCloseTo(2);
+    expect(result.judgeRuns).toBe(3);
+  });
+
+  it('多次判定里失败的那几次不计入平均；全部失败才算这一组失败', async () => {
+    let call = 0;
+    const fetch = vi.fn(async (url: string, init: any) => {
+      call += 1;
+      if (call === 1) return { ok: false, status: 500, json: async () => ({}) } as any;
+      return scoringFetch(code => (code === 'AM0001' ? 5 : 2))(url, init);
+    });
+    const result = await runDecisionRecall_ACU({ userInput: 'x', settings: settings({ judgeRuns: 2, maxRetries: 0 }) }, { sources: makeSources(makeRows(12)), fetch, sleep: noSleep });
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.failedBatchCount).toBe(0);
+    expect(result.failedRunCount).toBe(1);
+    expect(result.scored.find(entry => entry.row.indexCode === 'AM0001')!.score).toBeCloseTo(5);
+    expect(describeDecisionRecallWarning_ACU(result)).toContain('1/2 次判定失败');
+
+    const failing = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }) as any);
+    const allFailed = await runDecisionRecall_ACU({ userInput: 'x', settings: settings({ judgeRuns: 3, maxRetries: 0 }) }, { sources: makeSources(makeRows(12)), fetch: failing, sleep: noSleep });
+    expect(failing).toHaveBeenCalledTimes(3);
+    expect(allFailed.status === 'ok' && allFailed.failedBatchCount).toBe(1);
+  });
+
+  it('总时限按判定次数放宽：90 秒 × 判定次数', () => {
+    expect(resolveDecisionRecallTotalTimeoutMs_ACU(1)).toBe(90000);
+    expect(resolveDecisionRecallTotalTimeoutMs_ACU(4)).toBe(360000);
   });
 
   it('自定义接口：请求发到自己填的地址；Key 留空时不带鉴权头', async () => {
