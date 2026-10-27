@@ -121,6 +121,22 @@ describe('mount — 当前文档场景', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('构建水印默认隐藏，只在数据库界面打开时显示，关闭后再隐藏', async () => {
+    const { mount } = await freshImport();
+    const { installGlobalBuildBadge_ACU, BUILD_BADGE_ELEMENT_ID_ACU } = await import('../../../src/presentation/bootstrap/install-build-badge');
+    installGlobalBuildBadge_ACU();
+    const badge = document.getElementById(BUILD_BADGE_ELEMENT_ID_ACU)!;
+    expect(badge.style.display).toBe('none');
+
+    await mount.openAcuV2App();
+    expect(badge.style.display).toBe('');
+
+    mount.closeAcuV2App();
+    expect(badge.style.display).toBe('none');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   function findButton(doc: Document, title: string): HTMLButtonElement | null {
     return doc.querySelector<HTMLButtonElement>(`button[title="${title}"]`)
       ?? Array.from(doc.querySelectorAll<HTMLButtonElement>('.ub-rail button')).find(button => button.textContent?.includes(title))

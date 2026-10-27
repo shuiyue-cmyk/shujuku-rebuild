@@ -93699,7 +93699,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261027-1004"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261027-1031"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -93718,7 +93718,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1004";
+        const stamp = "20261027-1031";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -103462,8 +103462,8 @@ function abortAllActiveRequests_ACU(options = {}) {
     });
 }
 // ═══ 全局「聊天变更」中止信号（仅切聊天 CHAT_CHANGED 时中止在飞的依赖楼层的 API 调用） ═══
-// 注意：删楼 / 滑动（MESSAGE_DELETED / MESSAGE_SWIPED）不会触发中止；
-// 这些场景由各写回路径自己校验目标（如正文优化的消息写回目标快照）。
+// 注意：删楼 / 滑动（MESSAGE_DELETED / MESSAGE_SWIPED）不经这里整体中止：在途填表请求按各自目标楼层
+// 单独判定、只中止失效的那些（table-fill-target-watch）；其余由各写回路径自己校验目标（如正文优化的消息写回目标快照）。
 let chatMutationAbortController_ACU = null;
 /** 获取当前聊天变更中止信号（供依赖楼层的调用方监听：楼层变化即中止） */
 function getChatMutationAbortSignal_ACU() {
@@ -112698,6 +112698,34 @@ function captureTableFillTargetGuard_ACU(chat, readLiveChat = () => getChatArray
     };
 }
 
+const activeWatches_ACU = new Set();
+/** 登记一个在途填表请求；返回注销函数，请求结束（无论成败）时必须调用。 */
+function watchTableFillTarget_ACU(guard, targetIndex, controller) {
+    const watch = { guard, targetIndex, controller };
+    activeWatches_ACU.add(watch);
+    return () => { activeWatches_ACU.delete(watch); };
+}
+/** 中止目标楼层已失效的在途填表请求，返回本次中止的请求数（共用同一个中止信号的只计一次）。 */
+function abortTableFillRequestsWithStaleTarget_ACU() {
+    const aborted = new Set();
+    for (const watch of activeWatches_ACU) {
+        if (watch.controller.signal.aborted)
+            continue;
+        let current = true;
+        try {
+            current = watch.guard.isCurrent(watch.targetIndex);
+        }
+        catch {
+            // 判定不了就不动它，交给提交阶段的守卫
+        }
+        if (current)
+            continue;
+        watch.controller.abort();
+        aborted.add(watch.controller);
+    }
+    return aborted.size;
+}
+
 /**
  * service/table/update-orchestrator.ts — 表格更新编排（service 层：纯业务逻辑）
  * 从 presentation/triggers/update-process.ts 提取。
@@ -113759,8 +113787,39 @@ function buildGroupRetryFeedback_ACU(error, previous) {
         retryHistory: previous?.retryHistory,
     };
 }
+const STALE_FILL_TARGET_ERROR_ACU = '目标楼层已被删除、重新生成或切换了回复版本，已中止本次填表请求，结果不会写入。';
+/**
+ * 收集一组填表回复。目标楼层守卫判定失效（删楼 / 滑动 / 重新生成）时不发请求；
+ * 请求在途期间登记到目标楼层监视，宿主派发删楼 / 滑动事件时当场中止，不等回复回来再在提交阶段被拒。
+ */
 async function collectGroupFillResponse_ACU(job, feedback, abortController = new AbortController(), options = {}) {
     const effectiveAbortController = abortController || new AbortController();
+    const targetGuard = job.targetGuard;
+    const isTargetStale = () => !!targetGuard && !targetGuard.isCurrent(job.saveTargetIndex);
+    const staleResult = (attempt) => {
+        logWarn_ACU(`[${formatGroupAttemptLabel_ACU(job)}] ${STALE_FILL_TARGET_ERROR_ACU}`);
+        return {
+            job,
+            success: false,
+            attempt,
+            aborted: true,
+            error: STALE_FILL_TARGET_ERROR_ACU,
+            rawError: STALE_FILL_TARGET_ERROR_ACU,
+            errorCategory: 'precondition',
+        };
+    };
+    if (isTargetStale())
+        return staleResult(0);
+    const unwatch = targetGuard ? watchTableFillTarget_ACU(targetGuard, job.saveTargetIndex, effectiveAbortController) : null;
+    try {
+        const response = await collectGroupFillResponseCore_ACU(job, feedback, effectiveAbortController, options);
+        return response.aborted && isTargetStale() ? staleResult(response.attempt) : response;
+    }
+    finally {
+        unwatch?.();
+    }
+}
+async function collectGroupFillResponseCore_ACU(job, feedback, effectiveAbortController, options) {
     const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && isTableFillStopRequested_ACU());
     const maxRetries = options.maxRetriesOverride || settings_ACU.tableMaxRetries || 3;
     // 准备期诊断（移植上游 ece65f80）：仅自动填表链路开启时留痕，不记业务载荷。
@@ -114822,6 +114881,12 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
     const postCommitWarnings = [];
     let committedDataBucketCount = 0;
     let aborted = false;
+    // 因目标楼层失效被中止时报这个原因，而不是笼统的「已终止」（那是用户点终止的说法）
+    let staleTargetError;
+    const noteStaleTarget = (response) => {
+        if (response.aborted && response.error === STALE_FILL_TARGET_ERROR_ACU)
+            staleTargetError = response.error;
+    };
     for (let bucketIndex = 0; bucketIndex < orderedBuckets.length; bucketIndex++) {
         if (isStopped()) {
             aborted = true;
@@ -114960,6 +115025,7 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                     isolationKey: executionScope.isolationKey,
                     templateScope: executionScope.templateScope,
                     sqlApplyScope: executionScope.sqlApplyScope,
+                    targetGuard: options.isImportMode === true ? undefined : executionScope.targetGuard,
                     performanceRunId: options.performanceRunId,
                     performanceParentSpanId: options.performanceParentSpanId,
                 });
@@ -115027,6 +115093,7 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                         collectError = collectError || (settledResponse.reason instanceof Error ? settledResponse.reason.message : String(settledResponse.reason || 'AI响应收集失败'));
                         continue;
                     }
+                    noteStaleTarget(settledResponse.value);
                     if (!settledResponse.value.success || settledResponse.value.aborted || !settledResponse.value.aiResponse) {
                         collectFailed = true;
                         collectError = collectError || settledResponse.value.error || settledResponse.value.rawError || 'AI响应收集失败';
@@ -115059,6 +115126,8 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                         })));
                         for (let i = 0; i < retrySettled.length; i++) {
                             const settledResponse = retrySettled[i];
+                            if (settledResponse.status === 'fulfilled')
+                                noteStaleTarget(settledResponse.value);
                             if (settledResponse.status === 'fulfilled' && settledResponse.value.success && !settledResponse.value.aborted && settledResponse.value.aiResponse) {
                                 responseByGroupKey.set(settledResponse.value.job.groupKey, settledResponse.value);
                             }
@@ -115166,7 +115235,7 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
         }
     }
     if (aborted) {
-        return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
+        return { success: false, failedGroups: [...failedGroups], error: staleTargetError || '手动更新已终止。', aborted: true, committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
     }
     return failedGroups.size > 0
         ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) }
@@ -115489,11 +115558,12 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                     isolationKey: executionScope.isolationKey,
                     templateScope: executionScope.templateScope,
                     sqlApplyScope: executionScope.sqlApplyScope,
+                    targetGuard: isImportMode ? undefined : executionScope.targetGuard,
                 };
                 const collectResult = await collectGroupFillResponse_ACU(currentJob, { retryHistory }, effectiveAbortController, { onProgress: emitProgress, maxRetriesOverride: 1, worldbookReadContext: attemptReadContext });
                 lastAiResponse = collectResult.rawAiResponse || collectResult.aiResponse || '';
                 if (collectResult.aborted) {
-                    return { success: false, modifiedKeys: [], aborted: true };
+                    return { success: false, modifiedKeys: [], aborted: true, ...(collectResult.error ? { error: collectResult.error } : {}) };
                 }
                 if (!collectResult.success || !collectResult.aiResponse) {
                     throw new UpdateAttemptError_ACU(collectResult.rawError || collectResult.error || 'AI响应收集失败', collectResult.errorCategory || 'infrastructure');
@@ -122171,8 +122241,8 @@ let autoTaskEventEpoch_ACU = 0;
 let mvuGateOwnerEventEpoch_ACU = 0;
 /**
  * 作废排队中的自动填表与正文替换（移植上游 2657754a + f874c888）：取消防抖，
- * 并让已进入 MVU 等待 / 物化等待的旧任务在下一个检查点退出。已发出的 AI 请求不在此取消，
- * 由各自的写回守卫兜底。
+ * 并让已进入 MVU 等待 / 物化等待的旧任务在下一个检查点退出。已发出的 AI 请求不在此取消：
+ * 填表请求由删楼 / 滑动事件按目标楼层守卫当场中止（table-fill-target-watch），其余由各自的写回守卫兜底。
  */
 function cancelPendingAutoTasks_ACU(reason) {
     autoTaskEventEpoch_ACU += 1;
@@ -149860,6 +149930,11 @@ function mainInitialize_ACU() {
                         logDebug_ACU(`ACU ${evName} event detected. Triggering data reload and merge from chat history.`);
                         // 删楼或切换版本后旧任务的楼层锚点已失效，排队中的自动任务一并作废。
                         cancelPendingAutoTasks_ACU(evName === 'MESSAGE_DELETED' ? 'message_deleted' : 'message_swiped');
+                        // 已发出的填表请求：目标楼层换成另一条回复的当场中止，回复回来也会被提交阶段拒收，不必再花 token。
+                        const abortedFillRequests_ACU = abortTableFillRequestsWithStaleTarget_ACU();
+                        if (abortedFillRequests_ACU > 0) {
+                            logDebug_ACU(`[聊天变更] ${evName} 后中止了 ${abortedFillRequests_ACU} 个目标楼层已失效的在途填表请求。`);
+                        }
                         // 删楼守卫：同步登记此刻在场的楼层（重新生成的流式新回复要到事件派发完才追加）。
                         if (evName === 'MESSAGE_DELETED') {
                             try {
@@ -155356,11 +155431,12 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
  * 角标缺失 = 设备没有加载本插件代码（缓存/CDN 旧版本）；角标时间戳旧 = 加载了旧构建。
  * 曾随 biotracker 面板实现（af269aa），biotracker 整层删除时被连带移除，此处以独立模块还回。
  * 构建时间戳由 rollup 注入 globalThis.__ACU_BUILD_STAMP__（每次 build 唯一，免手动维护）。
+ * 只在数据库界面打开时显示（mount.ts 开关界面时切换）：常驻右下角会压在聊天页的发送键上。
  */
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1004";
+        const stamp = "20261027-1031";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -155377,12 +155453,23 @@ function installGlobalBuildBadge_ACU() {
         const badge = doc.createElement('div');
         badge.id = BUILD_BADGE_ELEMENT_ID_ACU;
         badge.textContent = `UnbirthDB·${readBuildStamp_ACU()}`;
-        badge.style.cssText = 'position:fixed;bottom:calc(2px + env(safe-area-inset-bottom, 0px));right:calc(6px + env(safe-area-inset-right, 0px));z-index:2147483600;font-size:10px;line-height:1;opacity:0.55;pointer-events:none;color:#9a9a9a;mix-blend-mode:difference;user-select:none;font-family:monospace;';
+        badge.style.cssText = 'position:fixed;bottom:calc(2px + env(safe-area-inset-bottom, 0px));right:calc(6px + env(safe-area-inset-right, 0px));z-index:2147483600;font-size:10px;line-height:1;opacity:0.55;pointer-events:none;color:#9a9a9a;mix-blend-mode:difference;user-select:none;font-family:monospace;display:none;';
         (doc.body || doc.documentElement).appendChild(badge);
         return true;
     }
     catch {
         return false;
+    }
+}
+/** 数据库界面打开时显示水印，关闭时隐藏；水印未安装时什么都不做。 */
+function setGlobalBuildBadgeVisible_ACU(visible) {
+    try {
+        const badge = globalThis.document?.getElementById(BUILD_BADGE_ELEMENT_ID_ACU);
+        if (badge)
+            badge.style.display = visible ? '' : 'none';
+    }
+    catch {
+        // 水印只是诊断辅助，失败不影响界面开关
     }
 }
 
@@ -213482,6 +213569,7 @@ async function openAcuV2App() {
     const s = ensureMounted();
     renderErrorReportCount_ACU = 0;
     s.root.style.display = '';
+    setGlobalBuildBadgeVisible_ACU(true);
     const store = useRootShellStore(s.pinia);
     const wasOpen = store.isOpen;
     store.setOpen(true);
@@ -213506,6 +213594,7 @@ function closeAcuV2App() {
     if (!state)
         return;
     state.root.style.display = 'none';
+    setGlobalBuildBadgeVisible_ACU(false);
     const store = useRootShellStore(state.pinia);
     store.setOpen(false);
     store.requestScrollReset();

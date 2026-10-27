@@ -606,8 +606,8 @@ export function abortAllActiveRequests_ACU(options: { keepPlot?: boolean } = {})
 }
 
 // ═══ 全局「聊天变更」中止信号（仅切聊天 CHAT_CHANGED 时中止在飞的依赖楼层的 API 调用） ═══
-// 注意：删楼 / 滑动（MESSAGE_DELETED / MESSAGE_SWIPED）不会触发中止；
-// 这些场景由各写回路径自己校验目标（如正文优化的消息写回目标快照）。
+// 注意：删楼 / 滑动（MESSAGE_DELETED / MESSAGE_SWIPED）不经这里整体中止：在途填表请求按各自目标楼层
+// 单独判定、只中止失效的那些（table-fill-target-watch）；其余由各写回路径自己校验目标（如正文优化的消息写回目标快照）。
 let chatMutationAbortController_ACU: AbortController | null = null;
 
 /** 获取当前聊天变更中止信号（供依赖楼层的调用方监听：楼层变化即中止） */

@@ -421,6 +421,7 @@ import {
   type CardUpdateResult,
   type CardUpdateProgressEvent,
 } from '../../../src/service/table/update-orchestrator';
+import { abortTableFillRequestsWithStaleTarget_ACU } from '../../../src/service/table/table-fill-target-watch';
 
 beforeEach(() => {
   mockChatArrayForSeedStage.length = 0;
@@ -1432,6 +1433,52 @@ describe('executeCardUpdateCore_ACU', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('请求在途时目标楼层被删：中止请求、不重试不保存，返回可读原因', async () => {
+    mockChatArrayForSeedStage.push({ is_user: false, mes: 'AI回复', send_date: '旧回复' });
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockImplementation((_content: any, controller: AbortController) => new Promise((_resolve, reject) => {
+      controller.signal.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+      // 宿主删掉了目标楼层并派发删楼事件
+      mockChatArrayForSeedStage.length = 0;
+      abortTableFillRequestsWithStaleTarget_ACU();
+    }));
+
+    const result = await executeCardUpdateCore_ACU(
+      [{ is_user: false, mes: 'AI回复' }],
+      0, false, 'auto_standard', false,
+      ['sheet_0'], null, new AbortController(),
+    );
+
+    expect(result).toMatchObject({ success: false, aborted: true });
+    expect(result.error).toContain('目标楼层');
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('导入模式不受目标楼层守卫约束，删楼不中止', async () => {
+    mockSettings = { ...mockSettings, tableMaxRetries: 1 };
+    mockChatArrayForSeedStage.push({ is_user: false, mes: 'AI回复', send_date: '旧回复' });
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    let aborted = 0;
+    mockCallCustomOpenAI.mockImplementation(async () => {
+      mockChatArrayForSeedStage.length = 0;
+      aborted = abortTableFillRequestsWithStaleTarget_ACU();
+      return '格式不合格';
+    });
+
+    await executeCardUpdateCore_ACU(
+      [{ is_user: false, mes: 'AI回复' }],
+      0, true, 'auto_standard', false,
+      ['sheet_0'], null, new AbortController(),
+    );
+
+    expect(aborted).toBe(0);
   });
 
   it('SQLite legacy 收到非 SQL tableEdit 时拒绝，不走 JSON snapshot 分支', async () => {
@@ -4934,6 +4981,83 @@ describe('collectGroupFillResponse_ACU', () => {
     expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
   });
 
+  function abortableAiCall_ACU(onStarted: () => void) {
+    return (_content: any, controller: AbortController) => new Promise<string>((_resolve, reject) => {
+      controller.signal.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+      onStarted();
+    });
+  }
+
+  it('目标楼层在请求发出前已换成另一条回复：不准备输入、不调用 AI', async () => {
+    const job = { ...createJob(), targetGuard: { isCurrent: () => false } };
+
+    const result = await collectGroupFillResponse_ACU(job as any);
+
+    expect(result).toMatchObject({ success: false, aborted: true, attempt: 0 });
+    expect(result.error).toContain('目标楼层');
+    expect(mockPrepareAIInput).not.toHaveBeenCalled();
+    expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
+  });
+
+  it('请求在途时目标楼层被删 / 滑动：当场中止，不再重试', async () => {
+    const current = { value: true };
+    const job = { ...createJob(), targetGuard: { isCurrent: () => current.value } };
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    let requestStarted!: () => void;
+    const started = new Promise<void>(resolve => { requestStarted = resolve; });
+    mockCallCustomOpenAI.mockImplementation(abortableAiCall_ACU(() => requestStarted()));
+
+    const pending = collectGroupFillResponse_ACU(job as any);
+    await started;
+    current.value = false;
+
+    expect(abortTableFillRequestsWithStaleTarget_ACU()).toBe(1);
+    const result = await pending;
+    expect(result).toMatchObject({ success: false, aborted: true, attempt: 1 });
+    expect(result.error).toContain('目标楼层');
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+  });
+
+  it('目标楼层仍是同一条回复时不中止；请求结束后不再登记', async () => {
+    const current = { value: true };
+    const job = { ...createJob(), targetGuard: { isCurrent: () => current.value } };
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    let finish!: (value: string) => void;
+    let requestStarted!: () => void;
+    const started = new Promise<void>(resolve => { requestStarted = resolve; });
+    mockCallCustomOpenAI.mockImplementation(() => new Promise<string>(resolve => { finish = resolve; requestStarted(); }));
+
+    const pending = collectGroupFillResponse_ACU(job as any);
+    await started;
+    expect(abortTableFillRequestsWithStaleTarget_ACU()).toBe(0);
+    finish('<tableEdit>insertRow(0,{"0":"x"})</tableEdit>');
+    expect((await pending).success).toBe(true);
+
+    current.value = false;
+    expect(abortTableFillRequestsWithStaleTarget_ACU()).toBe(0);
+  });
+
+  it('用户终止（目标楼层仍有效）照旧按终止返回，不说成楼层变化', async () => {
+    const controller = new AbortController();
+    const job = { ...createJob(), targetGuard: { isCurrent: () => true } };
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    let requestStarted!: () => void;
+    const started = new Promise<void>(resolve => { requestStarted = resolve; });
+    mockCallCustomOpenAI.mockImplementation(abortableAiCall_ACU(() => requestStarted()));
+
+    const pending = collectGroupFillResponse_ACU(job as any, undefined, controller);
+    await started;
+    controller.abort();
+
+    const result = await pending;
+    expect(result).toMatchObject({ success: false, aborted: true });
+    expect(result.error).toBeUndefined();
+  });
+
   it('输入准备返回结构化 readiness 失败时不在编排器内轮询', async () => {
     const job = createJob();
     mockPrepareAIInput.mockResolvedValue({
@@ -6811,6 +6935,50 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     expect(mockCallCustomOpenAI.mock.calls[0][2]).toEqual(expect.objectContaining({
       autoFillDiagnostics: true, performanceRunId: 'run-4', batchNumber: expect.any(Number),
     }));
+  });
+
+  it('分组填表请求在途时目标楼层被删：当场中止，不保存，失败原因说明楼层已变', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const chat: any[] = [{ is_user: true, mes: '问' }, { is_user: false, mes: '足够长的 AI 回复正文', send_date: '旧回复' }];
+    vi.mocked(getChatArray_ACU).mockReturnValue(chat);
+    mockCallCustomOpenAI.mockImplementation((_content: any, controller: AbortController) => new Promise((_resolve, reject) => {
+      controller.signal.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+      chat.splice(1, 1);
+      abortTableFillRequestsWithStaleTarget_ACU();
+    }));
+
+    const result = await processGroupedRuntimeChunk_ACU([
+      { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
+    ], 'auto_independent', { abortController: new AbortController() });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('目标楼层');
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('分组填表被用户终止（目标楼层仍有效）照旧报「已终止」', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: true, mes: '问' }, { is_user: false, mes: '足够长的 AI 回复正文', send_date: '旧回复' }]);
+    const controller = new AbortController();
+    mockCallCustomOpenAI.mockImplementation((_content: any, requestController: AbortController) => new Promise((_resolve, reject) => {
+      requestController.signal.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+      controller.abort();
+    }));
+
+    const result = await processGroupedRuntimeChunk_ACU([
+      { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
+    ], 'auto_independent', { abortController: controller });
+
+    expect(result).toMatchObject({ success: false, aborted: true, error: '手动更新已终止。' });
   });
 
   // 上游 issue #18 第三条：计数若只按「bucket 是否提交」统计，会把零 operation 的伪提交

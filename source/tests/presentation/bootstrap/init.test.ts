@@ -49,6 +49,7 @@ const m = vi.hoisted(() => ({
   dormantAudit: vi.fn(),
   clearAutoFillDebounce: vi.fn(),
   cancelPendingAutoTasks: vi.fn(),
+  abortStaleFill: vi.fn(() => 0),
   runtimeOnlyFlush: vi.fn(async () => ({ flushed: false, sheetKeys: [] })),
   ensureSeedCheckpoint: vi.fn(async () => false),
   recordGenerationContext: vi.fn(() => ({ seq: 1 })),
@@ -137,6 +138,7 @@ vi.mock('../../../src/presentation/components/summary-vector-index-ui', () => ({
 vi.mock('../../../src/service/vector/summary-vector-index-cache-service', () => ({ preloadSummaryVectorIndexCacheForCurrentChat_ACU: (...args: any[]) => m.preload(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({ restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU: (...args: any[]) => m.restoreFlush(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-realign-state', () => ({ markSummaryVectorIndexDirtyForRealign_ACU: vi.fn() }));
+vi.mock('../../../src/service/table/table-fill-target-watch', () => ({ abortTableFillRequestsWithStaleTarget_ACU: (...args: any[]) => m.abortStaleFill(...args) }));
 vi.mock('../../../src/service/chat/checkpoint-delete-guard', () => ({ captureCheckpointVaultForCurrentChat_ACU: (...args: any[]) => m.captureVault(...args), installCheckpointDeleteGuard_ACU: vi.fn() }));
 vi.mock('../../../src/service/template/dormant-data-service', () => ({ auditDormantDataIntegrity_ACU: (...args: any[]) => m.dormantAudit(...args) }));
 
@@ -605,6 +607,16 @@ describe('mainInitialize_ACU 重新生成 / 删楼 / 切换版本作废排队中
     vi.useFakeTimers();
     await m.chatMutationHandler!({});
     expect(m.cancelPendingAutoTasks).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('删楼、切换回复版本时当场中止目标楼层已失效的在途填表请求', async () => {
+    m.abortStaleFill.mockClear();
+    vi.useFakeTimers();
+    await m.messageDeletedHandler!(1);
+    expect(m.abortStaleFill).toHaveBeenCalledTimes(1);
+    await m.chatMutationHandler!({});
+    expect(m.abortStaleFill).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
 });

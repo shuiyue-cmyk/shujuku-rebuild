@@ -29,6 +29,7 @@ import {
   getAcuHostWindow,
 } from './host-document';
 import { createHostDocumentApp, __resetHostRendererForTests } from './host-renderer';
+import { setGlobalBuildBadgeVisible_ACU } from '../../presentation/bootstrap/install-build-badge';
 
 const ROOT_ID = 'acu-app-v2';
 
@@ -137,6 +138,7 @@ export async function openAcuV2App(): Promise<void> {
   const s = ensureMounted();
   renderErrorReportCount_ACU = 0;
   s.root.style.display = '';
+  setGlobalBuildBadgeVisible_ACU(true);
   const store = useRootShellStore(s.pinia);
   const wasOpen = store.isOpen;
   store.setOpen(true);
@@ -162,6 +164,7 @@ export function __getAcuV2AppForTests(): VueApp | null {
 export function closeAcuV2App(): void {
   if (!state) return;
   state.root.style.display = 'none';
+  setGlobalBuildBadgeVisible_ACU(false);
   const store = useRootShellStore(state.pinia);
   store.setOpen(false);
   store.requestScrollReset();

@@ -92,6 +92,7 @@ import {
   emitMessageUpdated_ACU
 } from '../../data/gateways/chat-gateway';
 import { scanAiFloorSignature_ACU, toAiFloorSignatureEx_ACU } from '../../service/table/auto-fill-echo-guard';
+import { abortTableFillRequestsWithStaleTarget_ACU } from '../../service/table/table-fill-target-watch';
 import { notifyAcuTauriVersionIfOutdated_ACU } from './tauri-version-gate';
 import {
   refreshMergedDataAndNotifyWithUI_ACU
@@ -1264,6 +1265,11 @@ export   function mainInitialize_ACU() {
                     logDebug_ACU(`ACU ${evName} event detected. Triggering data reload and merge from chat history.`);
                     // 删楼或切换版本后旧任务的楼层锚点已失效，排队中的自动任务一并作废。
                     cancelPendingAutoTasks_ACU(evName === 'MESSAGE_DELETED' ? 'message_deleted' : 'message_swiped');
+                    // 已发出的填表请求：目标楼层换成另一条回复的当场中止，回复回来也会被提交阶段拒收，不必再花 token。
+                    const abortedFillRequests_ACU = abortTableFillRequestsWithStaleTarget_ACU();
+                    if (abortedFillRequests_ACU > 0) {
+                        logDebug_ACU(`[聊天变更] ${evName} 后中止了 ${abortedFillRequests_ACU} 个目标楼层已失效的在途填表请求。`);
+                    }
                     // 删楼守卫：同步登记此刻在场的楼层（重新生成的流式新回复要到事件派发完才追加）。
                     if (evName === 'MESSAGE_DELETED') {
                         try { noteMessagesPresentAtDeletion_ACU(); } catch (error) { logWarn_ACU('[删楼守卫] 删楼当刻登记在场楼层失败:', error); }

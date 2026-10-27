@@ -104,6 +104,7 @@ import { getCurrentFlightModeState_ACU, stageFlightModeHiddenRowIds_ACU } from '
 import { isAiFloor_ACU, isDataBearingMessage_ACU } from '../../shared/ai-floor';
 import { stripHtmlCommentMarkersOutsideSqlLiterals_ACU } from './sql-protocol-markers';
 import { captureTableFillTargetGuard_ACU, type TableFillTargetGuard_ACU } from './table-fill-target-guard';
+import { watchTableFillTarget_ACU } from './table-fill-target-watch';
 
 interface ManualRefillSummaryVectorCleanup_ACU {
     sourceTableKey: string;
@@ -515,6 +516,8 @@ export interface GroupFillJob_ACU {
     isolationKey?: string;
     templateScope?: TemplateScope_ACU;
     sqlApplyScope?: SqlTableApplyScope_ACU;
+    /** 与提交阶段同一个目标楼层守卫：失效时不发请求，在途请求随删楼 / 滑动事件中止。导入模式不带。 */
+    targetGuard?: Pick<TableFillTargetGuard_ACU, 'isCurrent'>;
     performanceRunId?: string;
     performanceParentSpanId?: string;
 }
@@ -1428,25 +1431,65 @@ function buildGroupRetryFeedback_ACU(error: string, previous: GroupFillResponse_
     };
 }
 
+type GroupFillFeedback_ACU = {
+    lastSqlError?: string | null;
+    lastUnifiedError?: string | null;
+    /** 触发本次重试的那次回复（与 lastSqlError / lastUnifiedError 配对）。 */
+    lastAiResponse?: string;
+    /** 更早的纠错历史。 */
+    retryHistory?: readonly TableFillRetryTurn_ACU[];
+};
+
+type GroupFillCollectOptions_ACU = {
+    onProgress?: (event: CardUpdateProgressEvent) => void;
+    maxRetriesOverride?: number;
+    respectGlobalStop?: boolean;
+    worldbookReadContext?: LorebookReadContext_ACU;
+};
+
+const STALE_FILL_TARGET_ERROR_ACU = '目标楼层已被删除、重新生成或切换了回复版本，已中止本次填表请求，结果不会写入。';
+
+/**
+ * 收集一组填表回复。目标楼层守卫判定失效（删楼 / 滑动 / 重新生成）时不发请求；
+ * 请求在途期间登记到目标楼层监视，宿主派发删楼 / 滑动事件时当场中止，不等回复回来再在提交阶段被拒。
+ */
 export async function collectGroupFillResponse_ACU(
     job: GroupFillJob_ACU,
-    feedback?: {
-        lastSqlError?: string | null;
-        lastUnifiedError?: string | null;
-        /** 触发本次重试的那次回复（与 lastSqlError / lastUnifiedError 配对）。 */
-        lastAiResponse?: string;
-        /** 更早的纠错历史。 */
-        retryHistory?: readonly TableFillRetryTurn_ACU[];
-    },
+    feedback?: GroupFillFeedback_ACU,
     abortController: AbortController | null = new AbortController(),
-    options: {
-        onProgress?: (event: CardUpdateProgressEvent) => void;
-        maxRetriesOverride?: number;
-        respectGlobalStop?: boolean;
-        worldbookReadContext?: LorebookReadContext_ACU;
-    } = {}
+    options: GroupFillCollectOptions_ACU = {},
 ): Promise<GroupFillResponse_ACU> {
     const effectiveAbortController = abortController || new AbortController();
+    const targetGuard = job.targetGuard;
+    const isTargetStale = () => !!targetGuard && !targetGuard.isCurrent(job.saveTargetIndex);
+    const staleResult = (attempt: number): GroupFillResponse_ACU => {
+        logWarn_ACU(`[${formatGroupAttemptLabel_ACU(job)}] ${STALE_FILL_TARGET_ERROR_ACU}`);
+        return {
+            job,
+            success: false,
+            attempt,
+            aborted: true,
+            error: STALE_FILL_TARGET_ERROR_ACU,
+            rawError: STALE_FILL_TARGET_ERROR_ACU,
+            errorCategory: 'precondition',
+        };
+    };
+    if (isTargetStale()) return staleResult(0);
+    const unwatch = targetGuard ? watchTableFillTarget_ACU(targetGuard, job.saveTargetIndex, effectiveAbortController) : null;
+    try {
+        const response = await collectGroupFillResponseCore_ACU(job, feedback, effectiveAbortController, options);
+        return response.aborted && isTargetStale() ? staleResult(response.attempt) : response;
+    } finally {
+        unwatch?.();
+    }
+}
+
+async function collectGroupFillResponseCore_ACU(
+    job: GroupFillJob_ACU,
+    feedback: GroupFillFeedback_ACU | undefined,
+    effectiveAbortController: AbortController,
+    options: GroupFillCollectOptions_ACU,
+): Promise<GroupFillResponse_ACU> {
     const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && isTableFillStopRequested_ACU());
     const maxRetries = options.maxRetriesOverride || settings_ACU.tableMaxRetries || 3;
     // 准备期诊断（移植上游 ece65f80）：仅自动填表链路开启时留痕，不记业务载荷。
@@ -2625,6 +2668,11 @@ async function processGroupedRuntimeChunkCore_ACU(
     const postCommitWarnings: TableUpdatePostCommitWarning_ACU[] = [];
     let committedDataBucketCount = 0;
     let aborted = false;
+    // 因目标楼层失效被中止时报这个原因，而不是笼统的「已终止」（那是用户点终止的说法）
+    let staleTargetError: string | undefined;
+    const noteStaleTarget = (response: GroupFillResponse_ACU): void => {
+        if (response.aborted && response.error === STALE_FILL_TARGET_ERROR_ACU) staleTargetError = response.error;
+    };
     for (let bucketIndex = 0; bucketIndex < orderedBuckets.length; bucketIndex++) {
         if (isStopped()) {
             aborted = true;
@@ -2780,6 +2828,7 @@ async function processGroupedRuntimeChunkCore_ACU(
                     isolationKey: executionScope.isolationKey,
                     templateScope: executionScope.templateScope,
                     sqlApplyScope: executionScope.sqlApplyScope,
+                    targetGuard: options.isImportMode === true ? undefined : executionScope.targetGuard,
                     performanceRunId: options.performanceRunId,
                     performanceParentSpanId: options.performanceParentSpanId,
                 });
@@ -2854,6 +2903,7 @@ async function processGroupedRuntimeChunkCore_ACU(
                     collectError = collectError || (settledResponse.reason instanceof Error ? settledResponse.reason.message : String(settledResponse.reason || 'AI响应收集失败'));
                     continue;
                 }
+                noteStaleTarget(settledResponse.value);
                 if (!settledResponse.value.success || settledResponse.value.aborted || !settledResponse.value.aiResponse) {
                     collectFailed = true;
                     collectError = collectError || settledResponse.value.error || settledResponse.value.rawError || 'AI响应收集失败';
@@ -2893,6 +2943,7 @@ async function processGroupedRuntimeChunkCore_ACU(
                     )));
                     for (let i = 0; i < retrySettled.length; i++) {
                         const settledResponse = retrySettled[i];
+                        if (settledResponse.status === 'fulfilled') noteStaleTarget(settledResponse.value);
                         if (settledResponse.status === 'fulfilled' && settledResponse.value.success && !settledResponse.value.aborted && settledResponse.value.aiResponse) {
                             responseByGroupKey.set(settledResponse.value.job.groupKey, settledResponse.value);
                         }
@@ -3002,7 +3053,7 @@ async function processGroupedRuntimeChunkCore_ACU(
     }
 
     if (aborted) {
-        return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
+        return { success: false, failedGroups: [...failedGroups], error: staleTargetError || '手动更新已终止。', aborted: true, committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
     }
     return failedGroups.size > 0
         ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, committedDataBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) }
@@ -3376,6 +3427,7 @@ export async function executeCardUpdateCore_ACU(
                     isolationKey: executionScope.isolationKey,
                     templateScope: executionScope.templateScope,
                     sqlApplyScope: executionScope.sqlApplyScope,
+                    targetGuard: isImportMode ? undefined : executionScope.targetGuard,
                 };
                 const collectResult = await collectGroupFillResponse_ACU(
                     currentJob,
@@ -3386,7 +3438,7 @@ export async function executeCardUpdateCore_ACU(
                 lastAiResponse = collectResult.rawAiResponse || collectResult.aiResponse || '';
 
                 if (collectResult.aborted) {
-                    return { success: false, modifiedKeys: [], aborted: true };
+                    return { success: false, modifiedKeys: [], aborted: true, ...(collectResult.error ? { error: collectResult.error } : {}) };
                 }
                 if (!collectResult.success || !collectResult.aiResponse) {
                     throw new UpdateAttemptError_ACU(

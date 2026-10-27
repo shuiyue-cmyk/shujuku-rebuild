@@ -244,8 +244,8 @@ import {
 
   /**
    * 作废排队中的自动填表与正文替换（移植上游 2657754a + f874c888）：取消防抖，
-   * 并让已进入 MVU 等待 / 物化等待的旧任务在下一个检查点退出。已发出的 AI 请求不在此取消，
-   * 由各自的写回守卫兜底。
+   * 并让已进入 MVU 等待 / 物化等待的旧任务在下一个检查点退出。已发出的 AI 请求不在此取消：
+   * 填表请求由删楼 / 滑动事件按目标楼层守卫当场中止（table-fill-target-watch），其余由各自的写回守卫兜底。
    */
   export function cancelPendingAutoTasks_ACU(reason: string): void {
     autoTaskEventEpoch_ACU += 1;
