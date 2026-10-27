@@ -82342,6 +82342,23 @@ function isFinalGenerationBlueLightEntry_ACU(entry) {
     return entry?.enabled !== false
         && String(entry?.type || '').trim().toLowerCase() === 'constant';
 }
+/**
+ * 收回正文绿灯，回到接管基线：关掉开关，并把放行时改成的常驻类型还原成接管前的类型。
+ * 只关开关会留下常驻类型（Agent 页的「常量」、原生编辑器的蓝灯），新聊天里看着还是上一聊天放行过的那批。
+ * 已关但仍是常驻的条目（旧版本收回时留下的）同样还原；接管前本就常驻或没记下接管前类型的不动类型。
+ */
+function buildGreenlightReleasePatch_ACU(snapshot, bookName, entry) {
+    const patch = {};
+    if (isFinalGenerationBlueLightEntry_ACU(entry))
+        patch.enabled = false;
+    const previousType = getSnapshotEntryForBookAndUid_ACU(snapshot, bookName, entry?.uid)?.previousType;
+    if (typeof previousType === 'string' && previousType.trim() !== ''
+        && previousType.trim().toLowerCase() !== 'constant'
+        && String(entry?.type || '').trim().toLowerCase() === 'constant') {
+        patch.type = previousType;
+    }
+    return Object.keys(patch).length > 0 ? { uid: entry.uid, ...patch } : null;
+}
 function buildFinalGreenlightKey_ACU(bookName, uid) {
     return `${String(bookName || '').trim()}\u0000${String(uid ?? '').trim()}`;
 }
@@ -83097,9 +83114,11 @@ async function writeFinalGenerationGreenlightsExclusive_ACU(greenlights) {
                 ...(shouldRestoreLegacyClearedKeys ? { keys: [...previousKeys] } : {}),
             };
         }
+        // 未放行的一律关掉（含非常驻的开启条目），放行时改成的常驻类型一并还原
+        const releasePatch = buildGreenlightReleasePatch_ACU(snapshot, bookName, entry);
         if (entry.enabled === false)
-            return null;
-        return { uid: entry.uid, enabled: false };
+            return releasePatch;
+        return { ...releasePatch, uid: entry.uid, enabled: false };
     }, { readContext: undefined });
     return patchResult.patched > 0;
 }
@@ -83185,11 +83204,7 @@ async function clearFinalGenerationGreenlightsExclusive_ACU(readContext) {
     }
     let patched = 0;
     try {
-        const patchResult = await patchSnapshotEntries_ACU(snapshotUidSetByBook, (_bookName, entry) => {
-            if (!isFinalGenerationBlueLightEntry_ACU(entry))
-                return null;
-            return { uid: entry.uid, enabled: false };
-        }, { readContext });
+        const patchResult = await patchSnapshotEntries_ACU(snapshotUidSetByBook, (bookName, entry) => buildGreenlightReleasePatch_ACU(snapshot, bookName, entry), { readContext });
         patched = patchResult.patched;
         staleFromRefresh = [...new Set([...staleFromRefresh, ...patchResult.staleBookNames])];
     }
@@ -83230,25 +83245,32 @@ async function clearFinalGenerationGreenlightsExclusive_ACU(readContext) {
  * 共用的，平时要到下一轮剧情推进开头才收回，于是删聊天 / 新开聊天后新聊天会一直显示并沿用上一聊天
  * 的开关。须在 resetPlotAgentWorldbookSessionSnapshot_ACU 之前调用：同步取走切换前的内存快照
  * （换了角色卡时那批书不在新作用域里），入队后先按它收回，再按当前聊天的作用域收回一遍
- * （页面刷新后内存快照为空的情况）。只关亮着的绿灯，不动接管账本；失败只告警，下一轮剧情推进开头还会再清。
+ * （页面刷新后内存快照为空的情况）。关掉亮着的绿灯并把类型还原回接管前（见 buildGreenlightReleasePatch_ACU），
+ * 不动关键词、Skill 信息和接管账本；失败只告警，下一轮剧情推进开头还会再清。
  */
 function releaseFinalGenerationGreenlightsForChatSwitch_ACU(options) {
-    const previousUidSetByBook = buildSnapshotUidSetByBook_ACU(getPlotAgentWorldbookSnapshot_ACU());
+    const previousSnapshot = getPlotAgentWorldbookSnapshot_ACU();
+    const previousUidSetByBook = buildSnapshotUidSetByBook_ACU(previousSnapshot);
     return runExclusiveAgentWorldbookOperation_ACU(async () => {
+        let previousPatched = 0;
         if (previousUidSetByBook.size > 0) {
             try {
-                await patchSnapshotEntries_ACU(previousUidSetByBook, (_bookName, entry) => (isFinalGenerationBlueLightEntry_ACU(entry) ? { uid: entry.uid, enabled: false } : null));
+                previousPatched = (await patchSnapshotEntries_ACU(previousUidSetByBook, (bookName, entry) => buildGreenlightReleasePatch_ACU(previousSnapshot, bookName, entry))).patched;
             }
             catch (error) {
                 logWarn_ACU('[Agent世界书] 切换聊天时收回上一聊天的正文绿灯失败，下一轮剧情推进开头会再清一次。', error);
             }
         }
-        if (!options.includeCurrentScope)
+        if (!options.includeCurrentScope) {
+            logDebug_ACU(`[Agent世界书] 切换聊天收回正文绿灯：上一聊天改回 ${previousPatched} 条`);
             return;
+        }
         const result = await clearFinalGenerationGreenlightsExclusive_ACU();
         if (result.status === 'failed') {
             logWarn_ACU('[Agent世界书] 切换聊天时清理当前聊天的正文绿灯失败，下一轮剧情推进开头会再清一次。', result.error);
+            return;
         }
+        logDebug_ACU(`[Agent世界书] 切换聊天收回正文绿灯：上一聊天改回 ${previousPatched} 条，当前作用域 ${result.status}（改回 ${result.patched} 条）`);
     });
 }
 function takeoverWorldbookGreenlights_ACU() {
@@ -93677,7 +93699,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261023-1922"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261027-1004"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -93696,7 +93718,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261023-1922";
+        const stamp = "20261027-1004";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -155338,7 +155360,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261023-1922";
+        const stamp = "20261027-1004";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

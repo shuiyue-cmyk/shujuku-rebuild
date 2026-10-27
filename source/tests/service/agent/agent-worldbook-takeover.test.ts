@@ -47,6 +47,7 @@ vi.mock('../../../src/data/storage/tavern-storage', () => ({
 
 vi.mock('../../../src/shared/utils', () => ({
   hashUserInput_ACU: mockHashUserInput,
+  logDebug_ACU: vi.fn(),
   logWarn_ACU: vi.fn(),
 }));
 
@@ -215,7 +216,7 @@ describe('切换聊天时收回上一聊天的正文绿灯', () => {
     resetPlotAgentWorldbookSessionSnapshot_ACU();
     await release;
 
-    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, keys: ['钥匙A'] });
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, type: 'selective', keys: ['钥匙A'] });
   });
 
   it('页面刷新后内存快照为空时，按当前聊天作用域收回；不含当前作用域时什么都不写', async () => {
@@ -228,6 +229,69 @@ describe('切换聊天时收回上一聊天的正文绿灯', () => {
 
     await releaseFinalGenerationGreenlightsForChatSwitch_ACU({ includeCurrentScope: true });
     expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false });
+  });
+
+  it('收回绿灯时把放行改成的常驻类型还原回接管前，新聊天不留上一聊天的「常量」', async () => {
+    await greenlightInBookA();
+
+    const release = releaseFinalGenerationGreenlightsForChatSwitch_ACU({ includeCurrentScope: true });
+    resetPlotAgentWorldbookSessionSnapshot_ACU();
+    await release;
+
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, type: 'selective', keys: ['钥匙A'] });
+  });
+
+  it('页面刷新后按当前作用域收回时同样还原类型', async () => {
+    await greenlightInBookA();
+    resetPlotAgentWorldbookSessionSnapshot_ACU();
+
+    await releaseFinalGenerationGreenlightsForChatSwitch_ACU({ includeCurrentScope: true });
+
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, type: 'selective' });
+  });
+
+  it('剧情推进开头清绿灯也还原类型，并顺带清掉旧版本留下的「已关但仍是常量」', async () => {
+    await greenlightInBookA();
+    // 旧版本只关开关：uid 1 已关但类型还是常驻
+    mockEntriesByBook.set('角色A世界书', (mockEntriesByBook.get('角色A世界书') || []).map(entry => (
+      entry.uid === 1 ? { ...entry, enabled: false } : entry
+    )));
+
+    const result = await clearFinalGenerationGreenlights_ACU();
+
+    expect(result.status).toBe('cleared');
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, type: 'selective' });
+  });
+
+  it('写正文绿灯时未放行但被手动打开的受控条目照样关掉', async () => {
+    await greenlightInBookA();
+    mockEntriesByBook.set('角色A世界书', (mockEntriesByBook.get('角色A世界书') || []).map(entry => (
+      entry.uid === 2 ? { ...entry, enabled: true } : entry
+    )));
+
+    await writeFinalGenerationGreenlights_ACU([{ bookName: '角色A世界书', uid: 1 }]);
+
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 2)).toMatchObject({ enabled: false, type: 'selective' });
+  });
+
+  it('接管前本来就是常驻的条目，收回后仍是常驻', async () => {
+    mockEntriesByBook.set('角色A世界书', [
+      { uid: 1, enabled: true, keys: ['钥匙A'], type: 'selective', comment: skillComment_ACU, content: '内容A' },
+      { uid: 2, enabled: true, keys: ['钥匙B'], type: 'selective', comment: skillCommentB_ACU, content: '内容B' },
+    ]);
+    await takeoverWorldbookGreenlights_ACU();
+    // 模拟接管前即为常驻：账本记录的接管前类型为 constant
+    const snapshot = getPlotAgentWorldbookSnapshot_ACU();
+    snapshot.books['角色A世界书'] = snapshot.books['角色A世界书'].map((entry: any) => (entry.uid === 2 ? { ...entry, previousType: 'constant' } : entry));
+    setPlotAgentWorldbookSnapshot_ACU(snapshot);
+    mockStateSnapshot.current = snapshot;
+    await writeFinalGenerationGreenlights_ACU([{ bookName: '角色A世界书', uid: 2 }]);
+
+    const release = releaseFinalGenerationGreenlightsForChatSwitch_ACU({ includeCurrentScope: false });
+    resetPlotAgentWorldbookSessionSnapshot_ACU();
+    await release;
+
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 2)).toMatchObject({ enabled: false, type: 'constant' });
   });
 });
 
@@ -953,7 +1017,7 @@ describe('agent worldbook takeover native trigger suppression', () => {
     await writeFinalGenerationGreenlights_ACU([{ bookName: '角色A世界书', uid: 2, reason: '第二轮正文需要' }]);
     const entries = mockEntriesByBook.get('角色A世界书') || [];
 
-    expect(entries.find(entry => entry.uid === 1)).toMatchObject({ enabled: false });
+    expect(entries.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, type: 'selective' });
     expect(entries.find(entry => entry.uid === 2)).toMatchObject({ enabled: true, type: 'constant', keys: ['钥匙B'] });
     expect(await readFinalGenerationGreenlights_ACU()).toEqual([{ bookName: '角色A世界书', uid: 2 }]);
   });
@@ -969,7 +1033,7 @@ describe('agent worldbook takeover native trigger suppression', () => {
     const cleared = await clearFinalGenerationGreenlights_ACU();
 
     expect(cleared).toMatchObject({ status: 'cleared', patched: 2, staleBookNames: [] });
-    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, type: 'constant', keys: ['钥匙A'] });
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, type: 'selective', keys: ['钥匙A'] });
     expect(finalGenerationGreenlightEntry()).toBeUndefined();
     expect(await readFinalGenerationGreenlights_ACU()).toEqual([]);
   });
@@ -992,7 +1056,7 @@ describe('agent worldbook takeover native trigger suppression', () => {
     expect(cleared.patched).toBeGreaterThanOrEqual(1);
     expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({
       enabled: false,
-      type: 'constant',
+      type: 'selective',
       keys: ['仍有关键词'],
     });
     expect(await readFinalGenerationGreenlights_ACU()).toEqual([]);
@@ -1808,7 +1872,7 @@ describe('clearFinalGenerationGreenlights_ACU with strict readContext (T1 baseli
 
     expect(cleared.status).toBe('isolated_stale');
     expect(cleared.staleBookNames).toEqual(['已删除世界书']);
-    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, type: 'constant' });
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({ enabled: false, type: 'selective' });
     expect(finalGenerationGreenlightEntry('角色A世界书')).toBeUndefined();
   });
 
