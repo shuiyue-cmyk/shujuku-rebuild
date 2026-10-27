@@ -32,9 +32,23 @@
           @change="setKey"
         />
       </UbRow>
-      <UbRow label="决策模型" :hint="providerView.modelHint">
+      <UbRow label="决策模型" :hint="modelHint" stack>
+        <UbInput
+          :key="`model-${store.settings.provider}-${inputKey}`"
+          :model-value="store.endpoint.model"
+          :placeholder="defaultModel"
+          autocomplete="off"
+          aria-label="决策模型名"
+          @change="setModelText"
+        />
         <div class="ub-dr__picker">
-          <UbSelect :options="modelOptions" :model-value="store.endpoint.model" aria-label="决策模型" @update:model-value="setModel" />
+          <UbSelect
+            :options="modelOptions"
+            :model-value="store.endpoint.model"
+            placeholder="从常用模型里选"
+            aria-label="常用决策模型"
+            @update:model-value="setModel"
+          />
           <UbIconButton
             v-if="store.settings.provider === 'openrouter'"
             icon="fa-solid fa-rotate"
@@ -127,9 +141,11 @@ import {
   DECISION_RECALL_MAX_RETRIES_LIMIT_ACU,
   DECISION_RECALL_MAX_TOTAL_ACU,
   DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU,
+  DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
   DEFAULT_DECISION_RECALL_DIRECTIVE_ACU,
   type DecisionRecallProvider_ACU,
 } from '../../shared/decision-recall-defaults';
+import { DEFAULT_DECISION_MODEL_ACU, DEFAULT_SILICONFLOW_DECISION_MODEL_ACU } from '../../shared/decision-gate-defaults';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
 import UbBadge from '../ui/UbBadge.vue';
 import UbButton from '../ui/UbButton.vue';
@@ -180,19 +196,19 @@ const PROVIDER_VIEW_ACU: Record<DecisionRecallProvider_ACU, { providerHint: stri
     providerHint: '大陆服务商；SemIf 响应快。截至 2026 年 10 月 12 日决策模型仍免费，但官方写的限时免费期已过、何时收费没有通知，请留意账户扣费。',
     keyHint: '在 cloud.siliconflow.cn 的 API 密钥页面创建。',
     keyPlaceholder: 'sk-...',
-    modelHint: '默认 SemIf；Kev-4B 较慢，一组 20 条可能超时。',
+    modelHint: 'Kev-4B 较慢，一组 20 条可能超时。',
   },
   openrouter: {
     providerHint: '按输入计费、输出不收费；单次文本超过约 32KB 会变慢、变不准，打分内容选「概要 + 纪要正文」且前文很长时留意。',
     keyHint: '在 openrouter.ai 的 Keys 页面创建。',
     keyPlaceholder: 'sk-or-...',
-    modelHint: '默认 Jev 最新版；标「免费」的不扣费。',
+    modelHint: '标「免费」的不扣费；点刷新按钮拉取最新列表。',
   },
   aihubmix: {
     providerHint: '按输入计费、输出不收费（Jev 最新版标价每百万输入 token 0.0462 美元）。',
     keyHint: '在 aihubmix.com 的 API 密钥页面创建。',
     keyPlaceholder: 'sk-...',
-    modelHint: '默认 Jev 最新版。',
+    modelHint: '',
   },
 };
 const providerView = computed(() => PROVIDER_VIEW_ACU[store.settings.provider]);
@@ -208,14 +224,15 @@ const MODEL_FIELD_ACU: Record<DecisionRecallProvider_ACU, 'siliconflowModel' | '
   aihubmix: 'aihubmixModel',
 };
 
-/** 列表还没拉到（或拉取失败）时，当前所选模型仍要能显示。 */
-const modelOptions = computed(() => {
-  const options = store.activeModels.map(model => ({ value: model.id, label: model.free ? `${model.name}（免费）` : model.name }));
-  if (!options.some(option => option.value === store.endpoint.model)) {
-    options.unshift({ value: store.endpoint.model, label: store.endpoint.model });
-  }
-  return options;
-});
+/** 常用模型列表：只用来快速填入；填的模型名不在列表里时下拉显示占位文字。 */
+const modelOptions = computed(() => store.activeModels.map(model => ({ value: model.id, label: model.free ? `${model.name}（免费）` : model.name })));
+const DEFAULT_MODEL_ACU: Record<DecisionRecallProvider_ACU, string> = {
+  siliconflow: DEFAULT_SILICONFLOW_DECISION_MODEL_ACU,
+  openrouter: DEFAULT_DECISION_MODEL_ACU,
+  aihubmix: DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
+};
+const defaultModel = computed(() => DEFAULT_MODEL_ACU[store.settings.provider]);
+const modelHint = computed(() => `直接填模型名（同交火的填法），也可以从下面的常用模型里选；留空回到默认 ${defaultModel.value}。${providerView.value.modelHint}`);
 
 const scoringOptions = [
   { value: 'summary', label: '只看概要' },
@@ -231,6 +248,11 @@ function setKey(value: string | number): void {
 }
 function setModel(value: string): void {
   store.patch({ [MODEL_FIELD_ACU[store.settings.provider]]: value });
+}
+/** 清空时规整回默认模型，与原值相同时输入框不会自己刷新：换 key 重绘。 */
+function setModelText(value: string | number): void {
+  setModel(String(value));
+  inputKey.value += 1;
 }
 
 /** 清空或填超范围时规整后的值可能与原值相同，输入框不会自己刷新：换个 key 让它按规整后的值重绘。 */

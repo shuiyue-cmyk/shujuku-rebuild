@@ -94608,7 +94608,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261027-1708"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261027-1911"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -94627,7 +94627,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1708";
+        const stamp = "20261027-1911";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -156271,7 +156271,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1708";
+        const stamp = "20261027-1911";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -208557,19 +208557,19 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 providerHint: '大陆服务商；SemIf 响应快。截至 2026 年 10 月 12 日决策模型仍免费，但官方写的限时免费期已过、何时收费没有通知，请留意账户扣费。',
                 keyHint: '在 cloud.siliconflow.cn 的 API 密钥页面创建。',
                 keyPlaceholder: 'sk-...',
-                modelHint: '默认 SemIf；Kev-4B 较慢，一组 20 条可能超时。',
+                modelHint: 'Kev-4B 较慢，一组 20 条可能超时。',
             },
             openrouter: {
                 providerHint: '按输入计费、输出不收费；单次文本超过约 32KB 会变慢、变不准，打分内容选「概要 + 纪要正文」且前文很长时留意。',
                 keyHint: '在 openrouter.ai 的 Keys 页面创建。',
                 keyPlaceholder: 'sk-or-...',
-                modelHint: '默认 Jev 最新版；标「免费」的不扣费。',
+                modelHint: '标「免费」的不扣费；点刷新按钮拉取最新列表。',
             },
             aihubmix: {
                 providerHint: '按输入计费、输出不收费（Jev 最新版标价每百万输入 token 0.0462 美元）。',
                 keyHint: '在 aihubmix.com 的 API 密钥页面创建。',
                 keyPlaceholder: 'sk-...',
-                modelHint: '默认 Jev 最新版。',
+                modelHint: '',
             },
         };
         const providerView = computed(() => PROVIDER_VIEW_ACU[store.settings.provider]);
@@ -208583,14 +208583,15 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
             openrouter: 'openrouterModel',
             aihubmix: 'aihubmixModel',
         };
-        /** 列表还没拉到（或拉取失败）时，当前所选模型仍要能显示。 */
-        const modelOptions = computed(() => {
-            const options = store.activeModels.map(model => ({ value: model.id, label: model.free ? `${model.name}（免费）` : model.name }));
-            if (!options.some(option => option.value === store.endpoint.model)) {
-                options.unshift({ value: store.endpoint.model, label: store.endpoint.model });
-            }
-            return options;
-        });
+        /** 常用模型列表：只用来快速填入；填的模型名不在列表里时下拉显示占位文字。 */
+        const modelOptions = computed(() => store.activeModels.map(model => ({ value: model.id, label: model.free ? `${model.name}（免费）` : model.name })));
+        const DEFAULT_MODEL_ACU = {
+            siliconflow: DEFAULT_SILICONFLOW_DECISION_MODEL_ACU,
+            openrouter: DEFAULT_DECISION_MODEL_ACU,
+            aihubmix: DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
+        };
+        const defaultModel = computed(() => DEFAULT_MODEL_ACU[store.settings.provider]);
+        const modelHint = computed(() => `直接填模型名（同交火的填法），也可以从下面的常用模型里选；留空回到默认 ${defaultModel.value}。${providerView.value.modelHint}`);
         const scoringOptions = [
             { value: 'summary', label: '只看概要' },
             { value: 'full', label: '概要 + 纪要正文' },
@@ -208605,6 +208606,11 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         }
         function setModel(value) {
             store.patch({ [MODEL_FIELD_ACU[store.settings.provider]]: value });
+        }
+        /** 清空时规整回默认模型，与原值相同时输入框不会自己刷新：换 key 重绘。 */
+        function setModelText(value) {
+            setModel(String(value));
+            inputKey.value += 1;
         }
         /** 清空或填超范围时规整后的值可能与原值相同，输入框不会自己刷新：换个 key 让它按规整后的值重绘。 */
         const inputKey = ref(0);
@@ -208641,14 +208647,14 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 void store.loadModels();
         });
         watchChatChanged_ACU(() => refresh());
-        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, totalSeconds, codesPlaceholder, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, scoringOptions, setProvider, setKey, setModel, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
+        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, totalSeconds, codesPlaceholder, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, DEFAULT_MODEL_ACU, defaultModel, modelHint, scoringOptions, setProvider, setKey, setModel, setModelText, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-dr__picker[data-v-9f2cd686] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-9f2cd686] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-9f2cd686] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-9f2cd686] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-9f2cd686");
-var DecisionRecallPage_vue_vue_type_style_index_0_scoped_9f2cd686_lang = null;
+injectSfcStyle("\n.ub-dr__picker[data-v-c0410d85] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-c0410d85] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-c0410d85] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-c0410d85] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-c0410d85");
+var DecisionRecallPage_vue_vue_type_style_index_0_scoped_c0410d85_lang = null;
 
 const _hoisted_1$c = { class: "ub-dr__picker" };
 const _hoisted_2$b = { class: "ub-dr__meta" };
@@ -208758,12 +208764,21 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 					}, 8, ["label", "hint"])),
 					createVNode($setup["UbRow"], {
 						label: "决策模型",
-						hint: $setup.providerView.modelHint
+						hint: $setup.modelHint,
+						stack: ""
 					}, {
-						default: withCtx(() => [createBaseVNode("div", _hoisted_1$c, [createVNode($setup["UbSelect"], {
+						default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
+							key: `model-${$setup.store.settings.provider}-${$setup.inputKey}`,
+							"model-value": $setup.store.endpoint.model,
+							placeholder: $setup.defaultModel,
+							autocomplete: "off",
+							"aria-label": "决策模型名",
+							onChange: $setup.setModelText
+						}, null, 8, ["model-value", "placeholder"])), createBaseVNode("div", _hoisted_1$c, [createVNode($setup["UbSelect"], {
 							options: $setup.modelOptions,
 							"model-value": $setup.store.endpoint.model,
-							"aria-label": "决策模型",
+							placeholder: "从常用模型里选",
+							"aria-label": "常用决策模型",
 							"onUpdate:modelValue": $setup.setModel
 						}, null, 8, ["options", "model-value"]), $setup.store.settings.provider === "openrouter" ? (openBlock(), createBlock($setup["UbIconButton"], {
 							key: 0,
@@ -208936,7 +208951,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-9f2cd686"]]);
+var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-c0410d85"]]);
 
 const developerCopy = {
     panels: {

@@ -137,6 +137,34 @@ describe('DecisionRecallPage', () => {
     expect(document.body.textContent).toContain('AIHubMix Key');
   });
 
+  it('决策模型默认直接填模型名，也可以从常用模型里选；清空回到默认', async () => {
+    const { settings } = await openPage('decision-recall');
+    const modelInput = () => document.querySelector<HTMLInputElement>('input[aria-label="决策模型名"]')!;
+    expect(modelInput().value).toBe('SemIf');
+
+    modelInput().value = 'my-custom-model';
+    modelInput().dispatchEvent(new Event('input'));
+    modelInput().dispatchEvent(new Event('change'));
+    await flush();
+    expect(settings.decisionRecallSettings.siliconflowModel).toBe('my-custom-model');
+    // 不在常用列表里：下拉显示占位
+    expect(document.querySelector<HTMLSelectElement>('select[aria-label="常用决策模型"]')!.value).toBe('__ub_placeholder__');
+
+    const preset = document.querySelector<HTMLSelectElement>('select[aria-label="常用决策模型"]')!;
+    preset.value = 'SemIf';
+    preset.dispatchEvent(new Event('change'));
+    await flush();
+    expect(settings.decisionRecallSettings.siliconflowModel).toBe('SemIf');
+    expect(modelInput().value).toBe('SemIf');
+
+    modelInput().value = '';
+    modelInput().dispatchEvent(new Event('input'));
+    modelInput().dispatchEvent(new Event('change'));
+    await flush();
+    expect(settings.decisionRecallSettings.siliconflowModel).toBe('SemIf');
+    expect(modelInput().value).toBe('SemIf');
+  });
+
   it('召回条数填超范围时规整到 45 再保存', async () => {
     const { settings } = await openPage('decision-recall');
     const input = document.querySelector<HTMLInputElement>('input[aria-label="召回条数"]')!;
