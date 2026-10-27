@@ -74,6 +74,11 @@ import {
   normalizePlotTasks_ACU
 } from '../../plot/plot-logic';
 import {
+  isDecisionRecallPlotTask_ACU,
+  runDecisionRecallForPlotTask_ACU
+} from '../../decision-recall/decision-recall-plot-task';
+import { describeDecisionRecallWarning_ACU } from '../../decision-recall/decision-recall-runtime';
+import {
   parseRandomTags_ACU,
   replaceRandomVariables_ACU,
   getLatestAIMessageContent_ACU,
@@ -612,10 +617,44 @@ import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-s
     });
   }
 
+  /**
+   * 改由决策召回执行的任务：不调模型、不读世界书，产出与模型回复同形的 recall 标签块。
+   * 打分失败、没填 Key 只提示不算任务失败（按已有结果继续）；用户终止照常抛出。
+   */
+  async function executeDecisionRecallPlotTask_ACU(normalizedTask: Record<string, any>, sharedContext: Record<string, any>, taskLabel: string, taskStage: number) {
+    checkPlotAbortRequested_ACU();
+    const outcome = await runDecisionRecallForPlotTask_ACU(normalizedTask, {
+      userInput: String(sharedContext.userMessage || ''),
+      signal: abortController_ACU?.signal || null,
+    });
+    if (outcome.kind === 'aborted') throw new Error('TaskAbortedByUser');
+    const warning = describeDecisionRecallWarning_ACU(outcome.result);
+    if (warning) sharedContext.reportWarning?.(warning);
+    const tagResult = extractPlotTagsFromResponse_ACU(outcome.rawResponse, normalizedTask.extractTags, normalizedTask.extractInjectTags);
+    logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 由决策召回执行：${outcome.result.status === 'ok' ? `带上 ${outcome.result.selected.length} 条纪要` : '纪要表为空或读不到，未带纪要'}。`);
+    return {
+      taskId: normalizedTask.id,
+      taskName: taskLabel,
+      success: true,
+      rawResponse: outcome.rawResponse,
+      extractedTags: tagResult.extractedTags,
+      injectedFragments: tagResult.injectedFragments,
+      injectOnlyTags: tagResult.injectOnlyTags,
+      injectOnlyFragments: tagResult.injectOnlyFragments,
+      injectOnlyTagNames: tagResult.injectOnlyTagNames,
+      error: null as string | null,
+      stage: taskStage,
+      order: normalizedTask.order ?? 0,
+    };
+  }
+
   async function executeSinglePlotTask_ACU(task: Record<string, any>, sharedContext: Record<string, any>, runtimeOptions: any = {}) {
     const normalizedTask = normalizePlotTask_ACU(task, { index: task?.order ?? 0, fallbackTask: task || null });
     const taskLabel = normalizedTask.name || normalizedTask.id || '未命名任务';
     const taskStage = normalizePositiveInteger_ACU(normalizedTask.stage, 1);
+    if (isDecisionRecallPlotTask_ACU(normalizedTask, normalizePlotTasks_ACU(sharedContext?.plotSettings).length)) {
+      return executeDecisionRecallPlotTask_ACU(normalizedTask, sharedContext, taskLabel, taskStage);
+    }
     const maxRetries = normalizePositiveInteger_ACU(
       normalizedTask.maxRetries,
       sharedContext?.plotSettings?.loopSettings?.maxRetries ?? DEFAULT_PLOT_SETTINGS_ACU.loopSettings?.maxRetries ?? 3,

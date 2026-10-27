@@ -118,4 +118,23 @@ describe('usePlotTaskEditing', () => {
     expect(raw.plotTasks[1].stage).toBe(2);
     expect(raw.finalSystemDirective).toBe('我是注入指令');
   });
+
+  it('「改由决策召回执行」随任务载入、修改与保存往返，不会丢', async () => {
+    const { usePlotTaskEditing } = await setup();
+    const e = usePlotTaskEditing();
+    e.loadFromRaw(
+      [
+        { id: 'r', name: '召回', extractTags: 'recall', decisionRecall: true, promptGroup: [{ role: 'USER', content: 'x' }] },
+        { id: 'p', name: '规划', extractTags: 'plot', promptGroup: [{ role: 'USER', content: 'y' }] },
+      ],
+      '',
+    );
+    expect(e.tasks.value.map(t => t.decisionRecall)).toEqual([true, false]);
+    e.selectTask('p');
+    e.patchCurrent({ decisionRecall: true });
+    const raw = e.serializeIntoPresetRaw({ name: '预设' });
+    expect(raw.plotTasks.map((t: any) => t.decisionRecall)).toEqual([true, true]);
+    e.addTask();
+    expect(e.tasks.value[2].decisionRecall).toBe(false);
+  });
 });

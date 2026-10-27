@@ -54,6 +54,7 @@ describe('router-store · pageRegistry 基线', () => {
       ['form-fill', '填表工作台', 'config'],
       ['table', '填表规则', 'config'],
       ['plot', '剧情推进', 'config'],
+      ['decision-recall', '决策召回', 'config'],
       ['agent', 'Agent', 'config'],
       ['api', 'API', 'config'],
       ['continuation', '智能续写', 'feature'],

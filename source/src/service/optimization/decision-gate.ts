@@ -67,7 +67,7 @@ export interface DecisionModelOption_ACU {
   free: boolean;
 }
 
-interface DecisionFetchDeps_ACU {
+export interface DecisionFetchDeps_ACU {
   fetch?: typeof fetch;
   timeoutMs?: number;
   /** 外部取消（正文优化的「取消」按钮）。 */
@@ -124,7 +124,7 @@ export function buildDecisionRequestBody_ACU(model: string, text: string) {
 }
 
 /** 概率可能是 { 选项: p } 或 [{ choice, probability }]；读不到返回 null。 */
-function readOptionProbability_ACU(probabilities: unknown, label: string): number | null {
+export function readOptionProbability_ACU(probabilities: unknown, label: string): number | null {
   if (Array.isArray(probabilities)) {
     const entry = probabilities.find((item: any) => (item?.choice ?? item?.label ?? item?.option) === label);
     const value = Number(entry?.probability ?? entry?.p);
@@ -159,7 +159,7 @@ export function interpretDecisionResponse_ACU(payload: any, threshold: number): 
  * 在超时与外部取消约束下跑完整个请求（含读取响应体）；超时与取消各自给出可读原因，供调用方区分。
  * 只约束 fetch 不够：响应头到了、响应体卡住时 response.json() 会一直挂着。
  */
-async function runWithDeadline_ACU<T>(
+export async function runWithDeadline_ACU<T>(
   deps: DecisionFetchDeps_ACU,
   work: (signal: AbortSignal) => Promise<T>,
 ): Promise<{ value?: T; failure?: string; error?: unknown; ok: boolean }> {
@@ -186,7 +186,7 @@ async function runWithDeadline_ACU<T>(
   }
 }
 
-async function readErrorMessage_ACU(response: Response): Promise<string> {
+export async function readErrorMessage_ACU(response: Response): Promise<string> {
   try {
     const body: any = await response.json();
     return String(body?.error?.message ?? body?.message ?? '').trim();

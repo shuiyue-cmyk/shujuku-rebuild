@@ -13,6 +13,7 @@ import ContentReplacePage from '../pages/ContentReplacePage.vue';
 import ContinuationPage from '../pages/ContinuationPage.vue';
 import DashboardPage from '../pages/DashboardPage.vue';
 import DataMgmtPage from '../pages/DataMgmtPage.vue';
+import DecisionRecallPage from '../pages/DecisionRecallPage.vue';
 import DeveloperPage from '../pages/DeveloperPage.vue';
 import FormFillPage from '../pages/FormFillPage.vue';
 import PlotPage from '../pages/PlotPage.vue';
@@ -31,6 +32,7 @@ export const UB_PAGE_CATALOG: Readonly<Record<string, UbPageEntry>> = Object.fre
   'form-fill': { component: markRaw(FormFillPage), icon: 'fa-solid fa-table-list', blurb: '表格进度、自动更新节奏、手动填表与模板。' },
   table: { component: markRaw(TablePage), icon: 'fa-solid fa-book-open', blurb: '填表时参考哪些世界书、写到哪里、提示词与标签筛选。' },
   plot: { component: markRaw(PlotPage), icon: 'fa-solid fa-route', blurb: '剧情推进预设、任务流程与参考世界书。' },
+  'decision-recall': { component: markRaw(DecisionRecallPage), icon: 'fa-solid fa-ranking-star', blurb: '让决策模型给纪要打分，挑出相关的带进本轮输入。' },
   agent: { component: markRaw(AgentPage), icon: 'fa-solid fa-robot', blurb: '让 Agent 接管世界书条目，按需召回。' },
   api: { component: markRaw(ApiPage), icon: 'fa-solid fa-plug', blurb: '数据库各功能调用的模型连接。' },
   continuation: { component: markRaw(ContinuationPage), icon: 'fa-solid fa-feather-pointed', blurb: '交给 AI 自动续写剧情。' },

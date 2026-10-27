@@ -113,6 +113,7 @@
         :task="taskEditing.currentTask.value"
         :api-preset-options="apiPresetOptions"
         :task-api-override="currentTaskApiOverride"
+        :task-count="tasks.length"
         @patch="taskEditing.patchCurrent($event)"
         @task-api-override="emit('update-task-api-override', $event)"
         @segment-add="taskEditing.addSegment($event)"

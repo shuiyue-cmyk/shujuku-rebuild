@@ -40,7 +40,7 @@ describe('v3 外壳', () => {
     }
     expect(visited.sort()).toEqual([
       'advanced-tools', 'agent', 'api', 'content-replace', 'continuation', 'dashboard',
-      'data-mgmt', 'developer', 'form-fill', 'plot', 'table', 'vector-index',
+      'data-mgmt', 'decision-recall', 'developer', 'form-fill', 'plot', 'table', 'vector-index',
     ]);
     expect(errors).toEqual([]);
   });

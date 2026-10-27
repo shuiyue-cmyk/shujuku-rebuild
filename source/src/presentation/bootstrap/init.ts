@@ -40,6 +40,7 @@ import {
   markStoppedSendForRetry_ACU,
   clearStoppedSendRetry_ACU,
   isRetryOfStoppedSend_ACU,
+  shouldProcessDecisionRecallForGeneration_ACU,
   shouldProcessPlotForGeneration_ACU,
   shouldProcessSummaryVectorIndexForGeneration_ACU,
   _set_allChatMessages_ACU,
@@ -118,6 +119,10 @@ import {
 import {
   runOptimizationLogicWithUI_ACU
 } from '../components/plot-planning-ui';
+import {
+  DECISION_RECALL_PENDING_NOTICE_ACU,
+  runDecisionRecallWithUI_ACU
+} from '../components/decision-recall-ui';
 import {
   beginPlotPendingDisguise_ACU,
   shouldBeginPlotPendingDisguise_ACU,
@@ -1039,7 +1044,12 @@ export   function mainInitialize_ACU() {
             // 租约在任何 await 之前捕获：等待期间的停止 / 切聊天也要算进来
             const sendLease = captureSendLease_ACU();
             const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
-            const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
+            // 单独开启的决策召回与剧情推进互斥，占用剧情推进的发送前规划位（写回本轮输入、伪装、中止恢复同一套）；
+            // 两个开关同时为真（如导入旧设置）时以决策召回为准。
+            const shouldProcessDecisionRecall = shouldProcessDecisionRecallForGeneration_ACU(type, params, dryRun);
+            const shouldProcessPlot = shouldProcessDecisionRecall || shouldProcessPlotForGeneration_ACU(type, params, dryRun);
+            const runPlanning_ACU = shouldProcessDecisionRecall ? runDecisionRecallWithUI_ACU : runOptimizationLogicWithUI_ACU;
+            const planningNotice_ACU = shouldProcessDecisionRecall ? DECISION_RECALL_PENDING_NOTICE_ACU : PLOT_PENDING_NOTICE_ACU;
             // 「重新生成」是否在重试本库刚停掉的那次发送（门控已据此放行召回与规划）；任何一次用户发送都消费掉标记
             const retryOfStoppedSend = isRetryOfStoppedSend_ACU(type);
             if (!dryRun && !params?.automatic_trigger && !isQuietLikeGeneration_ACU(type, params)) {
@@ -1135,7 +1145,7 @@ export   function mainInitialize_ACU() {
             const s1 = await orchestrateAfterCommandsStrategy1_ACU(
               lastMessage,
               lastMessageIndex,
-              runOptimizationLogicWithUI_ACU,
+              runPlanning_ACU,
               plotScope_ACU ? { runtimeScope: plotScope_ACU } : undefined,
             );
 
@@ -1202,9 +1212,9 @@ export   function mainInitialize_ACU() {
               lastIsUserFloor: lastAtStart?.is_user === true,
               text: textInBox,
             })) {
-              disguise = beginPlotPendingDisguise_ACU(String(textInBox || ''));
+              disguise = beginPlotPendingDisguise_ACU(String(textInBox || ''), { notice: planningNotice_ACU });
             } else if (disguise) {
-              disguise.setNotice(PLOT_PENDING_NOTICE_ACU);
+              disguise.setNotice(planningNotice_ACU);
             }
 
             // [重构] 调用 service 层策略2编排
@@ -1214,7 +1224,7 @@ export   function mainInitialize_ACU() {
             }
             const s2 = await orchestrateAfterCommandsStrategy2_ACU(
               String(textInBox || ''),
-              runOptimizationLogicWithUI_ACU,
+              runPlanning_ACU,
               plotScope_ACU ? { runtimeScope: plotScope_ACU } : undefined,
             );
 

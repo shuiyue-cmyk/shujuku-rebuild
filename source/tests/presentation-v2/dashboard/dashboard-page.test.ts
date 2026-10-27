@@ -663,6 +663,7 @@ describe("DashboardPage", () => {
     ).map((button) => button.dataset.acuToggleKey);
     expect(visibleToggleKeys).toEqual([
       "plotEnabled",
+      "decisionRecallEnabled",
       "continuationPageEnabled",
       "contentReplaceEnabled",
       "summaryVectorIndexModeEnabled",
@@ -734,6 +735,7 @@ describe("DashboardPage", () => {
     ).map((button) => button.dataset.acuToggleKey);
     expect(visibleToggleKeys).toEqual([
       "plotEnabled",
+      "decisionRecallEnabled",
       "continuationPageEnabled",
       "contentReplaceEnabled",
       "summaryVectorIndexModeEnabled",

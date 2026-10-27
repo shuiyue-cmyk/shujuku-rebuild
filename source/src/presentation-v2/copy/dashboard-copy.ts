@@ -209,6 +209,11 @@ export const dashboardCopy = {
       label: "智能续写",
       description: "手动功能。代替你自动发送提示词，AI 根据内容持续续写。",
     },
+    decisionRecall: {
+      label: "决策召回",
+      description:
+        "默认关闭。发送前让决策模型给纪要打分，挑出相关的带进本轮输入。与剧情推进互斥：开启会关闭剧情推进，反之亦然。",
+    },
     contentReplace: {
       label: "正文替换",
       description:

@@ -150,6 +150,12 @@ const {
   };
 });
 
+const decisionRecallTaskMocks = vi.hoisted(() => ({ run: vi.fn() }));
+vi.mock('../../../../src/service/decision-recall/decision-recall-plot-task', async () => {
+  const actual = await vi.importActual<any>('../../../../src/service/decision-recall/decision-recall-plot-task');
+  return { ...actual, runDecisionRecallForPlotTask_ACU: (...args: any[]) => decisionRecallTaskMocks.run(...args) };
+});
+
 vi.mock('../../../../src/shared/defaults-json.js', () => ({
   DEFAULT_PLOT_SETTINGS_ACU: {
     loopSettings: { maxRetries: 3 },
@@ -2306,5 +2312,92 @@ describe('runPlotTasksRuntime_ACU', () => {
       call[1]?.phase === 'table_worldbook_index'
     ))).toBe(false);
     expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('runPlotTasksRuntime_ACU 由决策召回执行的任务', () => {
+  const recallTask = {
+    id: 'recall-task', name: '召回', stage: 1, order: 0, maxRetries: 1,
+    extractTags: 'recall', decisionRecall: true, promptGroup: [{ role: 'user', content: '召回提示词' }],
+  };
+  const planTask = {
+    id: 'plan-task', name: '规划', stage: 2, order: 1, maxRetries: 1,
+    extractTags: 'plot', promptGroup: [{ role: 'user', content: '规划提示词' }],
+  };
+  const okOutcome = (codes: string[]) => ({
+    kind: 'done',
+    rawResponse: `<recall>\n${codes.join('\n')}\n</recall>`,
+    result: { status: 'ok', selected: codes.map(indexCode => ({ indexCode })), fixed: [], scored: [], missingKey: false, failedBatchCount: 0, batchCount: 1, providerLabel: '硅基流动（中国）' },
+  });
+
+  beforeEach(() => {
+    decisionRecallTaskMocks.run.mockReset();
+    mockCallApiWithPlotPreset.mockResolvedValue('<plot>规划结果</plot>');
+    mockExtractPlotTagsFromResponse.mockImplementation((rawText: string) => {
+      const recall = /<recall>([\s\S]*?)<\/recall>/.exec(String(rawText))?.[1];
+      return recall !== undefined
+        ? { tagNames: ['recall'], extractedTags: { recall }, injectedFragments: [`<recall>${recall}</recall>`], injectOnlyTags: {}, injectOnlyFragments: [], injectOnlyTagNames: [] }
+        : { tagNames: [], extractedTags: {}, injectedFragments: [], injectOnlyTags: {}, injectOnlyFragments: [], injectOnlyTagNames: [] };
+    });
+  });
+
+  it('多任务预设里标签恰好是 recall 的任务不调模型，改由决策召回产出 recall 标签，其余任务照常', async () => {
+    decisionRecallTaskMocks.run.mockResolvedValue(okOutcome(['AM0002', 'AM0007']));
+
+    const result = await runPlotTasksRuntime_ACU({ tasks: [recallTask, planTask] }, '当前输入');
+
+    expect(decisionRecallTaskMocks.run).toHaveBeenCalledTimes(1);
+    expect(decisionRecallTaskMocks.run.mock.calls[0][1].userInput).toBe('当前输入');
+    // 只有规划任务调了模型
+    expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(1);
+    const recallResult = result.successfulResults.find((item: any) => item.taskId === 'recall-task');
+    expect(recallResult?.success).toBe(true);
+    expect(recallResult?.extractedTags).toEqual({ recall: '\nAM0002\nAM0007\n' });
+  });
+
+  it('单任务预设不生效：照常调模型', async () => {
+    mockCallApiWithPlotPreset.mockResolvedValue('<recall>模型召回</recall>');
+
+    await runPlotTasksRuntime_ACU({ tasks: [recallTask] }, '当前输入');
+
+    expect(decisionRecallTaskMocks.run).not.toHaveBeenCalled();
+    expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(1);
+  });
+
+  it('标签不止 recall 时不生效：照常调模型', async () => {
+    mockCallApiWithPlotPreset.mockResolvedValue('<recall>模型召回</recall>');
+
+    await runPlotTasksRuntime_ACU({ tasks: [{ ...recallTask, extractTags: 'recall,match' }, planTask] }, '当前输入');
+
+    expect(decisionRecallTaskMocks.run).not.toHaveBeenCalled();
+    expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(2);
+  });
+
+  it('没开开关的 recall 任务照常调模型', async () => {
+    mockCallApiWithPlotPreset.mockResolvedValue('<recall>模型召回</recall>');
+
+    await runPlotTasksRuntime_ACU({ tasks: [{ ...recallTask, decisionRecall: false }, planTask] }, '当前输入');
+
+    expect(decisionRecallTaskMocks.run).not.toHaveBeenCalled();
+  });
+
+  it('打分有失败或没填 Key 时只提示，任务照常算成功', async () => {
+    const outcome = okOutcome(['AM0001']);
+    (outcome.result as any).missingKey = true;
+    (outcome.result as any).fixed = [{ indexCode: 'AM0001' }];
+    decisionRecallTaskMocks.run.mockResolvedValue(outcome);
+    const reportWarning = vi.fn();
+
+    const result = await runPlotTasksRuntime_ACU({ tasks: [recallTask, planTask] }, '当前输入', { reportWarning });
+
+    expect(reportWarning).toHaveBeenCalledWith(expect.stringContaining('Key'));
+    expect(result.successfulResults.some((item: any) => item.taskId === 'recall-task')).toBe(true);
+  });
+
+  it('决策召回被终止时按用户终止处理，不再跑后面的任务', async () => {
+    decisionRecallTaskMocks.run.mockResolvedValue({ kind: 'aborted' });
+
+    await expect(runPlotTasksRuntime_ACU({ tasks: [recallTask, planTask] }, '当前输入')).rejects.toThrow('TaskAbortedByUser');
+    expect(mockCallApiWithPlotPreset).not.toHaveBeenCalled();
   });
 });

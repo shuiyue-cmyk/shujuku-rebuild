@@ -265,6 +265,8 @@ export function normalizePlotTask_ACU(task: Record<string, any> | null, { index 
       description: normalizeOptionalString_ACU(cloned.description, fallback?.description),
       triggerWhen: normalizeOptionalString_ACU(cloned.triggerWhen, fallback?.triggerWhen),
       agentControl: normalizePlotTaskAgentControl_ACU(cloned.agentControl, fallback?.agentControl),
+      // 改由决策召回执行（只在多任务预设、标签恰好是 recall 的任务上生效，见 decision-recall-plot-task）
+      decisionRecall: cloned.decisionRecall === true,
     };
 }
 

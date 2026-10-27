@@ -7,6 +7,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { buildDefaultDecisionGateSettings_ACU } from '../../shared/decision-gate-defaults';
+import { buildDefaultDecisionRecallSettings_ACU } from '../../shared/decision-recall-defaults';
 import { STORAGE_KEY_ALL_SETTINGS_ACU, STORAGE_KEY_CUSTOM_TEMPLATE_ACU, normalizeIsolationCode_ACU, isReservedIsolationCode_ACU, RESERVED_ISOLATION_CODE_MESSAGE_ACU } from '../../shared/data-constants';
 import { DEFAULT_BUILTIN_PLOT_PRESETS_ACU, DEFAULT_CHAR_CARD_PROMPT_SQL_ACU, DEFAULT_MERGE_SUMMARY_PROMPT_ACU, DEFAULT_PLOT_PROMPT_GROUP_ACU, DEFAULT_PLOT_SETTINGS_ACU, DEFAULT_TABLE_TEMPLATE_ACU, ORIGINAL_DEFAULT_TABLE_TEMPLATE_ACU, TABLE_TEMPLATE_ACU, _set_TABLE_TEMPLATE_ACU } from '../../shared/defaults-json.js';
 import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU, DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU, SUMMARY_INDEX_V2_WRITER_FORCE_ENABLE_VERSION_ACU, TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU, TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU, TEMPLATE_ASSISTANT_PROMPT_FORCE_DEFAULT_VERSION_ACU, USER_PREFILL_PROFILE_FORCE_DEFAULT_VERSION_ACU, USER_PREFILL_VECTOR_FORCE_DEFAULT_VERSION_ACU, VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU, VECTOR_MEMORY_RECALL_PARAM_KEYS_ACU, VECTOR_MEMORY_RECALL_PARAMS_FORCE_OVERRIDE_VERSION_ACU, buildDefaultAgentWorldbookControl_ACU, buildDefaultAgentWorldbookPromptTemplates_ACU, buildDefaultPlotWorldbookConfig_ACU, buildDefaultContentOptimizationPromptGroup_ACU, upgradeContentOptimizationDefaultPrompt_ACU, defaultWorldbookConfig_ACU, defaultVectorMemoryConfig_ACU } from '../../shared/defaults';
@@ -1220,6 +1221,8 @@ export   function buildDefaultSettings_ACU() {
             promptGroup: buildDefaultContentOptimizationPromptGroup_ACU(), // 提示词组（段落编辑器）
             promptPresets: [] as any[],                 // 提示词组预设列表
           },
+          // 决策召回：决策模型给纪要打分挑相关的带进本轮输入；单独开启时与剧情推进互斥
+          decisionRecallSettings: buildDefaultDecisionRecallSettings_ACU(),
           // [向量记忆] 全局配置，跟随数据库设置而非角色/对话
           vectorMemoryConfig: null as any,
       };
@@ -1315,7 +1318,26 @@ export function setGlobalPlotEnabled_ACU(modeEnabled: boolean): boolean {
     settings_ACU.plotSettings.enabled = enabled;
     globalMeta_ACU.plotEnabledGlobal = enabled;
     saveGlobalMeta_ACU();
+    // 单独开启的决策召回与剧情推进互斥：开剧情推进即关决策召回（由调用方随后保存设置）
+    if (enabled && settings_ACU.decisionRecallSettings?.enabled === true) {
+        settings_ACU.decisionRecallSettings = { ...settings_ACU.decisionRecallSettings, enabled: false };
+    }
     return enabled;
+}
+
+/**
+ * 单独开启 / 关闭决策召回。开启时关掉剧情推进（互斥），返回是否因此关掉了剧情推进；由调用方随后保存设置。
+ * 剧情推进里由决策召回执行的任务不看这个开关。
+ */
+export function setDecisionRecallEnabled_ACU(modeEnabled: boolean): { enabled: boolean; plotDisabled: boolean } {
+    const enabled = !!modeEnabled;
+    const current = settings_ACU.decisionRecallSettings && typeof settings_ACU.decisionRecallSettings === 'object'
+        ? settings_ACU.decisionRecallSettings
+        : buildDefaultDecisionRecallSettings_ACU();
+    settings_ACU.decisionRecallSettings = { ...current, enabled };
+    const plotDisabled = enabled && settings_ACU.plotSettings?.enabled === true;
+    if (plotDisabled) setGlobalPlotEnabled_ACU(false);
+    return { enabled, plotDisabled };
 }
 
 export function setSummaryVectorIndexMode_ACU(modeEnabled: boolean) {

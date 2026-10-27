@@ -8,6 +8,7 @@
 // ═══ 业务状态 + 门控逻辑（保留在本文件） ═══
 
 import { buildDefaultDecisionGateSettings_ACU } from '../../shared/decision-gate-defaults';
+import { buildDefaultDecisionRecallSettings_ACU } from '../../shared/decision-recall-defaults';
 import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
 import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU, DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU } from '../../shared/defaults';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
@@ -271,6 +272,18 @@ export function shouldProcessPlotForGeneration_ACU(type: any, params: any, dryRu
   if (isRetryOfStoppedSend_ACU(type)) return true;
   const fresh = hasFreshUserGenerationTrigger_ACU();
   logDebug_ACU(`[状态管理] shouldProcessPlot: type=${type}, dryRun=${dryRun}, freshMsg=${fresh.hasFreshUserMessage}, freshIntent=${fresh.hasFreshIntent}, result=${fresh.result}`);
+  return fresh.result;
+}
+
+/** 决策召回单独开启时（与剧情推进互斥）发送前是否要跑；口径同剧情推进。 */
+export function shouldProcessDecisionRecallForGeneration_ACU(type: any, params: any, dryRun: any) {
+  if (dryRun) return false;
+  if (settings_ACU?.decisionRecallSettings?.enabled !== true) return false;
+  if (isQuietLikeGeneration_ACU(type, params)) return false;
+  if (params?.automatic_trigger) return false;
+  if (isRetryOfStoppedSend_ACU(type)) return true;
+  const fresh = hasFreshUserGenerationTrigger_ACU();
+  logDebug_ACU(`[状态管理] shouldProcessDecisionRecall: type=${type}, freshMsg=${fresh.hasFreshUserMessage}, freshIntent=${fresh.hasFreshIntent}, result=${fresh.result}`);
   return fresh.result;
 }
 
@@ -542,6 +555,7 @@ export let settings_ACU: any = {
       retryCount: 3,
       promptGroup: [],
     },
+    decisionRecallSettings: buildDefaultDecisionRecallSettings_ACU(),
     characterSettings: {},
 };
 

@@ -316,6 +316,8 @@ import {
   _set_settingsStorageReadyForSave_ACU,
   summarizeSettingsForLog_ACU,
   loadTemplateFromStorage_ACU,
+  setDecisionRecallEnabled_ACU,
+  setGlobalPlotEnabled_ACU,
 } from '../../../src/service/settings/settings-service';
 
 beforeEach(() => {
@@ -545,6 +547,51 @@ describe('buildDefaultSettings_ACU', () => {
     const defaults2 = buildDefaultSettings_ACU();
     defaults1.plotSettings.customField = 'modified';
     expect(defaults2.plotSettings.customField).toBeUndefined();
+  });
+});
+
+describe('决策召回与剧情推进互斥', () => {
+  beforeEach(() => {
+    mockSettings.plotSettings = { plotWorldbookConfig: null, enabled: true };
+    mockSettings.decisionRecallSettings = { enabled: false, recallCount: 12 };
+    mockGlobalMeta.plotEnabledGlobal = true;
+  });
+
+  it('开决策召回时关掉剧情推进（含全局开关），其它决策召回设置不动', () => {
+    expect(setDecisionRecallEnabled_ACU(true)).toEqual({ enabled: true, plotDisabled: true });
+    expect(mockSettings.decisionRecallSettings).toEqual({ enabled: true, recallCount: 12 });
+    expect(mockSettings.plotSettings.enabled).toBe(false);
+    expect(mockGlobalMeta.plotEnabledGlobal).toBe(false);
+  });
+
+  it('剧情推进本来就关着时只开决策召回', () => {
+    mockSettings.plotSettings.enabled = false;
+    mockGlobalMeta.plotEnabledGlobal = false;
+    expect(setDecisionRecallEnabled_ACU(true)).toEqual({ enabled: true, plotDisabled: false });
+  });
+
+  it('关决策召回不会把剧情推进打开', () => {
+    setDecisionRecallEnabled_ACU(true);
+    setDecisionRecallEnabled_ACU(false);
+    expect(mockSettings.decisionRecallSettings.enabled).toBe(false);
+    expect(mockSettings.plotSettings.enabled).toBe(false);
+  });
+
+  it('开剧情推进时关掉决策召回；关剧情推进不动决策召回', () => {
+    setDecisionRecallEnabled_ACU(true);
+    setGlobalPlotEnabled_ACU(true);
+    expect(mockSettings.decisionRecallSettings.enabled).toBe(false);
+    expect(mockSettings.decisionRecallSettings.recallCount).toBe(12);
+
+    mockSettings.decisionRecallSettings.enabled = true;
+    setGlobalPlotEnabled_ACU(false);
+    expect(mockSettings.decisionRecallSettings.enabled).toBe(true);
+  });
+
+  it('设置里还没有决策召回字段时按默认值补齐', () => {
+    delete mockSettings.decisionRecallSettings;
+    setDecisionRecallEnabled_ACU(true);
+    expect(mockSettings.decisionRecallSettings).toMatchObject({ enabled: true, recallCount: 20, provider: 'siliconflow' });
   });
 });
 

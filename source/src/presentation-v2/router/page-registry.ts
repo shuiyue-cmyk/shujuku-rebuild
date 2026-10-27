@@ -28,6 +28,8 @@ export const ACU_V2_PAGE_REGISTRY: readonly AcuV2Page[] = Object.freeze([
   { id: 'form-fill', title: '填表工作台', group: 'config' },
   { id: 'table', title: '填表规则', group: 'config' },
   { id: 'plot', title: '剧情推进', group: 'config', featureGate: FEATURE_GATE_PLOT },
+  // 不设功能开关：替换剧情推进任务时剧情推进开着、单独开启却关着，两种用法都要能进这一页
+  { id: 'decision-recall', title: '决策召回', group: 'config' },
   { id: 'agent', title: 'Agent', group: 'config' },
   { id: 'api', title: 'API', group: 'config' },
 

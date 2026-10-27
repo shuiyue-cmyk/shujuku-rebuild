@@ -82,9 +82,11 @@ import { useDashboardPage } from '../../presentation-v2/composables/useDashboard
 import { useTemplateRuntimeChangeTick } from '../../presentation-v2/composables/useTemplateRuntimeChangeListener';
 import { dashboardCopy } from '../../presentation-v2/copy/dashboard-copy';
 import { useDialogStore } from '../../presentation-v2/stores/dialog-store';
+import { useDecisionRecallStore } from '../../presentation-v2/stores/decision-recall-store';
 import { usePlotPresetStore } from '../../presentation-v2/stores/plot-preset-store';
 import { useRouterStore } from '../../presentation-v2/stores/router-store';
 import { useToastStore } from '../../presentation-v2/stores/toast-store';
+import { settings_ACU } from '../../service/runtime/state-manager';
 import { logError_ACU } from '../../shared/utils';
 import { syncFeaturePageGates_UB } from '../composables/feature-gates';
 import UbBadge from '../ui/UbBadge.vue';
@@ -174,8 +176,16 @@ async function handleToggleChange(key: string, value: boolean): Promise<void> {
     await toggleFlightMode(value);
     return;
   }
+  const plotWasOn = settings_ACU.plotSettings?.enabled === true;
+  const recallWasOn = settings_ACU.decisionRecallSettings?.enabled === true;
   dashboard.setToggle(key, value);
-  if (key === 'plotEnabled') plotStore.refreshFromSettings();
+  if (key === 'plotEnabled' || key === 'decisionRecallEnabled') {
+    plotStore.refreshFromSettings();
+    useDecisionRecallStore().refreshFromSettings();
+    // 单独开启的决策召回与剧情推进互斥：开一个时另一个被关掉要告诉用户
+    if (key === 'decisionRecallEnabled' && value && plotWasOn) toastStore.info('已关闭剧情推进：单独开启决策召回时与剧情推进互斥。');
+    if (key === 'plotEnabled' && value && recallWasOn) toastStore.info('已关闭决策召回：开启剧情推进时与单独开启的决策召回互斥。');
+  }
   syncGates();
 }
 

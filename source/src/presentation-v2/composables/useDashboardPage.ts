@@ -17,6 +17,7 @@ import {
 } from "../../service/runtime/state-manager";
 import {
   saveSettings_ACU,
+  setDecisionRecallEnabled_ACU,
   setGlobalPlotEnabled_ACU,
   setSummaryVectorIndexMode_ACU,
 } from "../../service/settings/settings-service";
@@ -922,6 +923,12 @@ export function useDashboardPage(): DashboardPageState {
           value: settings_ACU.plotSettings?.enabled === true,
         },
         {
+          key: "decisionRecallEnabled",
+          label: dashboardCopy.toggles.decisionRecall.label,
+          description: dashboardCopy.toggles.decisionRecall.description,
+          value: settings_ACU.decisionRecallSettings?.enabled === true,
+        },
+        {
           key: "continuationPageEnabled",
           label: dashboardCopy.toggles.continuation.label,
           description: dashboardCopy.toggles.continuation.description,
@@ -1081,6 +1088,9 @@ export function useDashboardPage(): DashboardPageState {
         }
         settings_ACU.plotSettings.enabled = next;
       }
+      saveSettings_ACU();
+    } else if (key === "decisionRecallEnabled") {
+      setDecisionRecallEnabled_ACU(!!value);
       saveSettings_ACU();
     } else if (key === "summaryVectorIndexModeEnabled") {
       setSummaryVectorIndexMode_ACU(!!value);

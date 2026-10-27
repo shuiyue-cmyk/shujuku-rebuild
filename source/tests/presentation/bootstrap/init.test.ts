@@ -86,7 +86,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
       context: m.generationEndMatchStatus === 'ambiguous' ? null : context,
     };
   },
-  consumeGenerationContextForEnded_ACU: (...args: any[]) => m.consumeGenerationContext(...args), discardLatestGenerationContext_ACU: vi.fn(), getCurrentIsolationKey_ACU: vi.fn(() => ''), markUserSendIntent_ACU: (...args: any[]) => m.markSendIntent(...args), isProcessing_Plot_ACU: false, isQuietLikeGeneration_ACU: vi.fn(), isRecentUserSendIntent_ACU: vi.fn(), recordGenerationContext_ACU: m.recordGenerationContext, recordLastUserSend_ACU: vi.fn(), settings_ACU: { plotSettings: {} }, shouldProcessAutoTableUpdateForGenerationEnded_ACU: vi.fn(), shouldProcessPlotForGeneration_ACU: vi.fn(), shouldProcessSummaryVectorIndexForGeneration_ACU: (...args: any[]) => m.shouldProcessSummary(...args),
+  consumeGenerationContextForEnded_ACU: (...args: any[]) => m.consumeGenerationContext(...args), discardLatestGenerationContext_ACU: vi.fn(), getCurrentIsolationKey_ACU: vi.fn(() => ''), markUserSendIntent_ACU: (...args: any[]) => m.markSendIntent(...args), isProcessing_Plot_ACU: false, isQuietLikeGeneration_ACU: vi.fn(), isRecentUserSendIntent_ACU: vi.fn(), recordGenerationContext_ACU: m.recordGenerationContext, recordLastUserSend_ACU: vi.fn(), settings_ACU: { plotSettings: {} }, shouldProcessAutoTableUpdateForGenerationEnded_ACU: vi.fn(), shouldProcessDecisionRecallForGeneration_ACU: vi.fn(() => false), shouldProcessPlotForGeneration_ACU: vi.fn(), shouldProcessSummaryVectorIndexForGeneration_ACU: (...args: any[]) => m.shouldProcessSummary(...args),
   _set_allChatMessages_ACU: m.setMessages, _set_currentChatFileIdentifier_ACU: (value: string) => { m.currentChatKey = value; m.setChat(value); }, _set_currentJsonTableData_ACU: m.setData, _set_independentTableStates_ACU: m.setTables, _set_isProcessing_Plot_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: m.setTotal, _set_wasStoppedByUser_ACU: m.setWasStoppedByUser, abortOnChatMutation_ACU: vi.fn(), clearAutoFillDebounce_ACU: (...args: any[]) => m.clearAutoFillDebounce(...args), getChatMutationAbortSignal_ACU: () => null,
 }));
 vi.mock('../../../src/service/runtime/plot-runtime/plot-runtime-scope', () => ({
@@ -134,6 +134,10 @@ vi.mock('../../../src/service/plot/plot-orchestrator', () => ({
 }));
 vi.mock('../../../src/shared/host-input', () => ({ getSendTextareaValue_ACU: vi.fn(), setSendTextareaValue_ACU: vi.fn() }));
 vi.mock('../../../src/presentation/components/plot-planning-ui', () => ({ runOptimizationLogicWithUI_ACU: vi.fn() }));
+vi.mock('../../../src/presentation/components/decision-recall-ui', () => ({
+  runDecisionRecallWithUI_ACU: vi.fn(),
+  DECISION_RECALL_PENDING_NOTICE_ACU: { message: '决策召回中', title: '决策召回' },
+}));
 vi.mock('../../../src/presentation/components/summary-vector-index-ui', () => ({ processSummaryVectorIndexBeforeGenerationWithUI_ACU: (...args: any[]) => m.processBeforeGen(...args), isSummaryVectorRecallFailure_ACU: (r: any) => !!r && r.success !== true && r.skipped !== true, SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU: '召回失败已停止', shouldRebuildSummaryVectorIndexWithUI_ACU: (...args: any[]) => m.shouldRebuild(...args), rebuildCurrentSummaryVectorIndexWithUI_ACU: (...args: any[]) => m.rebuild(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-cache-service', () => ({ preloadSummaryVectorIndexCacheForCurrentChat_ACU: (...args: any[]) => m.preload(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({ restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU: (...args: any[]) => m.restoreFlush(...args) }));
@@ -481,6 +485,61 @@ describe('mainInitialize_ACU 剧情 API 重试耗尽中断发送', () => {
     } finally {
       (window as any).SillyTavern = prevSillyTavern;
     }
+  });
+});
+
+describe('mainInitialize_ACU 单独开启的决策召回占用剧情推进的规划位', () => {
+  // mockReturnValue 不会被 clearAllMocks 清掉：用完恢复成关闭，免得串到后面的用例
+  afterEach(async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessDecisionRecallForGeneration_ACU).mockReturnValue(false);
+  });
+
+  it('决策召回开着时：剧情推进关着也照样进规划，交给决策召回，结果照常写回本轮输入', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    const decisionUi = await import('../../../src/presentation/components/decision-recall-ui');
+    const plotUi = await import('../../../src/presentation/components/plot-planning-ui');
+    vi.mocked(sm.shouldProcessDecisionRecallForGeneration_ACU).mockReturnValue(true);
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(false);
+    const lastMessage: any = { is_user: true, mes: 'A 输入' };
+    m.api.chat = [lastMessage];
+    m.currentChatKey = 'chat-a';
+    m.orchestrate.mockResolvedValueOnce({ action: 'planned', finalMessage: 'A 输入 + 召回', originalMessage: 'A 输入' });
+
+    const params: any = {};
+    await m.afterCommandsHandler!('normal', params, false);
+
+    expect(m.orchestrate).toHaveBeenCalledTimes(1);
+    expect(m.orchestrate.mock.calls[0][2]).toBe(decisionUi.runDecisionRecallWithUI_ACU);
+    expect(m.orchestrate.mock.calls[0][2]).not.toBe(plotUi.runOptimizationLogicWithUI_ACU);
+    expect(lastMessage.mes).toBe('A 输入 + 召回');
+    expect(params.prompt).toBe('A 输入 + 召回');
+  });
+
+  it('决策召回关着时：照旧交给剧情推进规划', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    const plotUi = await import('../../../src/presentation/components/plot-planning-ui');
+    vi.mocked(sm.shouldProcessDecisionRecallForGeneration_ACU).mockReturnValue(false);
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(true);
+    m.api.chat = [{ is_user: true, mes: 'A 输入' }];
+    m.currentChatKey = 'chat-a';
+    m.orchestrate.mockResolvedValueOnce({ action: 'skipped' });
+
+    await m.afterCommandsHandler!('normal', {}, false);
+
+    expect(m.orchestrate.mock.calls[0][2]).toBe(plotUi.runOptimizationLogicWithUI_ACU);
+  });
+
+  it('两个都关着时不进规划', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessDecisionRecallForGeneration_ACU).mockReturnValue(false);
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(false);
+    m.api.chat = [{ is_user: true, mes: 'A 输入' }];
+    m.currentChatKey = 'chat-a';
+
+    await m.afterCommandsHandler!('normal', {}, false);
+
+    expect(m.orchestrate).not.toHaveBeenCalled();
   });
 });
 
