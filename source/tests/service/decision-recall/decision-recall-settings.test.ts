@@ -4,6 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  isDecisionRecallReplacingPlotTasks_ACU,
   isDecisionRecallStandaloneActive_ACU,
   isDecisionRecallTaskModeActive_ACU,
   normalizeDecisionRecallSettings_ACU,
@@ -21,6 +22,7 @@ describe('normalizeDecisionRecallSettings_ACU', () => {
     expect(normalizeDecisionRecallSettings_ACU(undefined)).toEqual({
       enabled: false,
       mode: 'standalone',
+      replacePlotRecallTasks: false,
       provider: 'siliconflow',
       openrouterApiKey: '',
       openrouterModel: DEFAULT_DECISION_MODEL_ACU,
@@ -98,6 +100,14 @@ describe('决策召回用法', () => {
     expect(isDecisionRecallTaskModeActive_ACU({ enabled: true, mode: 'plot_task' })).toBe(true);
     // 旧设置没有用法字段：按单独召回
     expect(isDecisionRecallStandaloneActive_ACU({ enabled: true })).toBe(true);
+  });
+
+  it('只有用法是替换剧情推进的任务、且剧情推进页的开关开着时才替换', () => {
+    expect(isDecisionRecallReplacingPlotTasks_ACU({ enabled: true, mode: 'plot_task', replacePlotRecallTasks: true })).toBe(true);
+    expect(isDecisionRecallReplacingPlotTasks_ACU({ enabled: true, mode: 'plot_task' })).toBe(false);
+    expect(isDecisionRecallReplacingPlotTasks_ACU({ enabled: true, mode: 'standalone', replacePlotRecallTasks: true })).toBe(false);
+    expect(isDecisionRecallReplacingPlotTasks_ACU({ enabled: false, mode: 'plot_task', replacePlotRecallTasks: true })).toBe(false);
+    expect(normalizeDecisionRecallSettings_ACU({ replacePlotRecallTasks: 'yes' }).replacePlotRecallTasks).toBe(false);
   });
 });
 

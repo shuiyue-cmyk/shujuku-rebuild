@@ -2318,7 +2318,7 @@ describe('runPlotTasksRuntime_ACU', () => {
 describe('runPlotTasksRuntime_ACU 由决策召回执行的任务', () => {
   const recallTask = {
     id: 'recall-task', name: '召回', stage: 1, order: 0, maxRetries: 1,
-    extractTags: 'recall', decisionRecall: true, promptGroup: [{ role: 'user', content: '召回提示词' }],
+    extractTags: 'recall', promptGroup: [{ role: 'user', content: '召回提示词' }],
   };
   const planTask = {
     id: 'plan-task', name: '规划', stage: 2, order: 1, maxRetries: 1,
@@ -2332,7 +2332,7 @@ describe('runPlotTasksRuntime_ACU 由决策召回执行的任务', () => {
 
   beforeEach(() => {
     decisionRecallTaskMocks.run.mockReset();
-    (mockSettings as any).decisionRecallSettings = { enabled: true, mode: 'plot_task' };
+    (mockSettings as any).decisionRecallSettings = { enabled: true, mode: 'plot_task', replacePlotRecallTasks: true };
     mockCallApiWithPlotPreset.mockResolvedValue('<plot>规划结果</plot>');
     mockExtractPlotTagsFromResponse.mockImplementation((rawText: string) => {
       const recall = /<recall>([\s\S]*?)<\/recall>/.exec(String(rawText))?.[1];
@@ -2378,24 +2378,26 @@ describe('runPlotTasksRuntime_ACU 由决策召回执行的任务', () => {
     delete (mockSettings as any).decisionRecallSettings;
   });
 
-  it('决策召回用法是单独召回或总开关关着时，任务里的开关不生效：照常调模型', async () => {
+  it('决策召回用法是单独召回或总开关关着时不替换：照常调模型', async () => {
     mockCallApiWithPlotPreset.mockResolvedValue('<recall>模型召回</recall>');
 
-    (mockSettings as any).decisionRecallSettings = { enabled: true, mode: 'standalone' };
+    (mockSettings as any).decisionRecallSettings = { enabled: true, mode: 'standalone', replacePlotRecallTasks: true };
     await runPlotTasksRuntime_ACU({ tasks: [recallTask, planTask] }, '当前输入');
-    (mockSettings as any).decisionRecallSettings = { enabled: false, mode: 'plot_task' };
+    (mockSettings as any).decisionRecallSettings = { enabled: false, mode: 'plot_task', replacePlotRecallTasks: true };
     await runPlotTasksRuntime_ACU({ tasks: [recallTask, planTask] }, '当前输入');
 
     expect(decisionRecallTaskMocks.run).not.toHaveBeenCalled();
     expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(4);
   });
 
-  it('没开开关的 recall 任务照常调模型', async () => {
+  it('剧情推进页的「由决策召回执行 recall 任务」没开时照常调模型', async () => {
     mockCallApiWithPlotPreset.mockResolvedValue('<recall>模型召回</recall>');
+    (mockSettings as any).decisionRecallSettings = { enabled: true, mode: 'plot_task', replacePlotRecallTasks: false };
 
-    await runPlotTasksRuntime_ACU({ tasks: [{ ...recallTask, decisionRecall: false }, planTask] }, '当前输入');
+    await runPlotTasksRuntime_ACU({ tasks: [recallTask, planTask] }, '当前输入');
 
     expect(decisionRecallTaskMocks.run).not.toHaveBeenCalled();
+    expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(2);
   });
 
   it('打分有失败或没填 Key 时只提示，任务照常算成功', async () => {

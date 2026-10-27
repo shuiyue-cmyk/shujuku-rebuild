@@ -4,16 +4,15 @@
       <UbRow label="用法" :hint="modeHint">
         <UbSegmented :options="modeOptions" :model-value="store.settings.mode" aria-label="决策召回用法" @update:model-value="setMode" />
       </UbRow>
-      <template v-if="store.settings.mode === 'plot_task'">
-        <UbCallout v-if="!store.plotTaskStatus.plotEnabled" kind="warning">剧情推进当前关着：在仪表盘打开剧情推进后，替换的任务才会运行。</UbCallout>
-        <UbCallout v-else-if="store.plotTaskStatus.taskCount < 2" kind="warning">
-          当前剧情推进预设只有一个任务，替换不了：请换成有多个任务的预设，或改用「单独召回」。
-        </UbCallout>
-        <UbCallout v-else-if="store.plotTaskStatus.replacedTaskNames.length" kind="success">
-          当前预设里由决策召回执行的任务：{{ store.plotTaskStatus.replacedTaskNames.join('、') }}。
-        </UbCallout>
-        <UbCallout v-else kind="info">{{ noReplacedTaskText }}</UbCallout>
-      </template>
+      <UbCallout v-if="store.settings.mode === 'plot_task'" :kind="store.replaceStatus.kind">
+        {{ store.replaceStatus.text }}
+        <UbButton
+          v-if="store.plotTaskStatus.plotEnabled && !store.settings.replacePlotRecallTasks"
+          size="sm"
+          icon="fa-solid fa-route"
+          @click="routerStore.setActivePage('plot')"
+        >去剧情推进页</UbButton>
+      </UbCallout>
     </UbSection>
 
     <UbSection id="dr-model" title="决策模型" description="与正文替换的「替换前判定」各自独立；三家的 Key 与模型各存各的，切换服务商不会丢掉另一家的设置。" icon="fa-solid fa-scale-balanced">
@@ -169,10 +168,7 @@ const modeOptions = [
 ];
 const modeHint = computed(() => (store.settings.mode === 'standalone'
   ? '发送前由决策召回挑选纪要写进本轮输入，剧情推进暂停（剧情推进页灰掉，它自己的开关不变）。'
-  : '剧情推进照常运行；多任务预设里「标签摘取」恰好是 recall 的任务，在剧情推进的任务编辑里打开「改由决策召回执行」后由这里执行。'));
-const noReplacedTaskText = computed(() => (store.plotTaskStatus.eligibleTaskNames.length
-  ? `当前预设里可以替换的任务：${store.plotTaskStatus.eligibleTaskNames.join('、')}。到剧情推进页编辑预设，在任务里打开「改由决策召回执行」。`
-  : '当前预设里没有「标签摘取」恰好是 recall 的任务。到剧情推进页编辑预设，把召回任务的标签设为 recall 后再打开「改由决策召回执行」。'));
+  : '剧情推进照常运行；在剧情推进页打开「由决策召回执行 recall 任务」后，多任务预设里「标签摘取」只有 recall 的任务改由这里执行，没开时照常由剧情推进调模型召回。'));
 
 const providerOptions = (Object.keys(DECISION_RECALL_PROVIDER_LABELS_ACU) as DecisionRecallProvider_ACU[])
   .map(value => ({ value, label: DECISION_RECALL_PROVIDER_LABELS_ACU[value] }));
@@ -246,7 +242,9 @@ function setMode(value: string): void {
   if (!store.patch({ mode: value })) return;
   // 剧情推进入口随用法灰显 / 恢复
   routerStore.syncFeatureGatesFromSettings();
-  toastStore.info(value === 'standalone' ? '已改为单独召回：剧情推进暂停。' : '已改为替换剧情推进的任务：剧情推进恢复运行。');
+  toastStore.info(value === 'standalone'
+    ? '已改为单独召回：剧情推进暂停。'
+    : '已改为替换剧情推进的任务：剧情推进恢复运行，到剧情推进页打开「由决策召回执行 recall 任务」后才替换。');
 }
 
 const directiveDraft = ref(store.settings.directive);

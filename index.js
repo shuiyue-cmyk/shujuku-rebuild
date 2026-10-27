@@ -4949,7 +4949,7 @@ function buildDefaultDecisionGateSettings_ACU() {
  * 取分数最高的若干条，连同固定带上的最新几条，按表号顺序写进本轮输入（走剧情推进的注入通道）。
  * 总开关在仪表盘进阶开关里（关着时侧栏不显示决策召回页），开启后在决策召回页选用法，两种用法共用这一份设置：
  * - 单独召回（默认）：发送前由决策召回占用剧情推进的规划位，剧情推进暂停（剧情推进页灰掉，它自己的开关不动）；
- * - 替换剧情推进的任务：剧情推进照常运行，多任务预设里、标签恰好是 recall 且打开了开关的任务改由决策召回执行。
+ * - 替换剧情推进的任务：剧情推进照常运行，剧情推进页的「由决策召回执行 recall 任务」开着时，多任务预设里标签恰好是 recall 的任务改由决策召回执行。
  * 交火开着时从交火筛过的纪要索引里选，否则从全部纪要里选。
  */
 /** 最新几条纪要固定带上，不参与打分。 */
@@ -5003,6 +5003,8 @@ function buildDefaultDecisionRecallSettings_ACU() {
     return {
         enabled: false,
         mode: 'standalone',
+        // 剧情推进页的开关：「替换剧情推进的任务」用法下，打开后才把多任务预设里标签只有 recall 的任务交给决策召回
+        replacePlotRecallTasks: false,
         // 硅基流动 SemIf 响应快、目前免费，一组 20 个问题也不至于拖慢发送
         provider: 'siliconflow',
         openrouterApiKey: '',
@@ -89653,8 +89655,6 @@ function normalizePlotTask_ACU(task, { index = 0, fallbackTask = null } = {}) {
         description: normalizeOptionalString_ACU(cloned.description, fallback?.description),
         triggerWhen: normalizeOptionalString_ACU(cloned.triggerWhen, fallback?.triggerWhen),
         agentControl: normalizePlotTaskAgentControl_ACU(cloned.agentControl, fallback?.agentControl),
-        // 改由决策召回执行（只在多任务预设、标签恰好是 recall 的任务上生效，见 decision-recall-plot-task）
-        decisionRecall: cloned.decisionRecall === true,
     };
 }
 function buildLegacyWrappedPlotTask_ACU(source, { taskId = 'defaultPlotTask', taskName = '默认任务', order = 0 } = {}) {
@@ -91237,6 +91237,7 @@ function normalizeDecisionRecallSettings_ACU(raw) {
     return {
         enabled: source.enabled === true,
         mode: source.mode === 'plot_task' ? 'plot_task' : 'standalone',
+        replacePlotRecallTasks: source.replacePlotRecallTasks === true,
         provider: PROVIDERS_ACU.includes(source.provider) ? source.provider : 'siliconflow',
         openrouterApiKey: text(source.openrouterApiKey),
         openrouterModel: text(source.openrouterModel) || DEFAULT_DECISION_MODEL_ACU,
@@ -91266,10 +91267,15 @@ function isDecisionRecallStandaloneActive_ACU(raw) {
     const settings = normalizeDecisionRecallSettings_ACU(raw);
     return settings.enabled && settings.mode === 'standalone';
 }
-/** 替换剧情推进任务的用法生效中：剧情推进照常运行，打开了开关的 recall 任务改由决策召回执行。 */
+/** 替换剧情推进任务的用法生效中：剧情推进照常运行（是否真的替换还看剧情推进页的开关）。 */
 function isDecisionRecallTaskModeActive_ACU(raw) {
     const settings = normalizeDecisionRecallSettings_ACU(raw);
     return settings.enabled && settings.mode === 'plot_task';
+}
+/** 本轮剧情推进要把标签只有 recall 的任务交给决策召回：用法是替换剧情推进的任务，且剧情推进页的开关开着。 */
+function isDecisionRecallReplacingPlotTasks_ACU(raw) {
+    const settings = normalizeDecisionRecallSettings_ACU(raw);
+    return settings.enabled && settings.mode === 'plot_task' && settings.replacePlotRecallTasks;
 }
 
 /**
@@ -91807,8 +91813,8 @@ function buildDecisionRecallFinalMessage_ACU(directive, userInput, codes) {
 /**
  * service/decision-recall/decision-recall-plot-task.ts — 剧情推进任务改由决策召回执行。
  *
- * 只在决策召回开着、用法选了「替换剧情推进的任务」时生效，且只在多任务预设上生效（单任务预设请用「单独召回」）；
- * 任务的标签必须恰好是一个 recall、没有注入专用标签，
+ * 只在决策召回开着、用法选了「替换剧情推进的任务」、剧情推进页的「由决策召回执行 recall 任务」开着时生效，
+ * 且只在多任务预设上生效（单任务预设不替换）；自动匹配标签恰好是一个 recall、没有注入专用标签的任务，
  * 因为决策召回只产出编码列表，产不出别的标签。产出是与模型回复同形的 recall 标签块，
  * 交给剧情推进照常摘取、传给后续任务、按预设自己的最终注入指令写进本轮输入。
  */
@@ -91826,13 +91832,12 @@ function canPlotTaskUseDecisionRecall_ACU(task, presetTaskCount) {
         && splitTags_ACU(task.extractInjectTags).length === 0;
 }
 /**
- * 本轮是否真的由决策召回执行：决策召回开着且用法是「替换剧情推进的任务」，任务开了开关且仍满足条件
- * （关掉决策召回、换成单独召回、改了标签或删到只剩一个任务后自动退回模型执行）。
+ * 本轮这个任务是否由决策召回执行：替换开着且任务满足条件
+ * （关掉剧情推进页的开关、关掉决策召回、换成单独召回、改了标签或删到只剩一个任务后照常由模型执行）。
  */
 function isDecisionRecallPlotTask_ACU(task, presetTaskCount) {
-    return task?.decisionRecall === true
-        && canPlotTaskUseDecisionRecall_ACU(task, presetTaskCount)
-        && isDecisionRecallTaskModeActive_ACU(settings_ACU?.decisionRecallSettings);
+    return canPlotTaskUseDecisionRecall_ACU(task, presetTaskCount)
+        && isDecisionRecallReplacingPlotTasks_ACU(settings_ACU?.decisionRecallSettings);
 }
 /** 跑一次决策召回并产出任务回复；纪要表为空或读不到时产出空的 recall 块（不算任务失败，也不注入）。 */
 async function runDecisionRecallForPlotTask_ACU(task, options, deps = {}) {
@@ -94525,7 +94530,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261027-1620"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261027-1637"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -94544,7 +94549,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1620";
+        const stamp = "20261027-1637";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -156188,7 +156193,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1620";
+        const stamp = "20261027-1637";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -193432,7 +193437,6 @@ function taskFromRaw(raw, index = 0) {
         description: typeof normalized.description === 'string' ? normalized.description : '',
         triggerWhen: typeof normalized.triggerWhen === 'string' ? normalized.triggerWhen : '',
         agentControl: cloneAgentControl(normalized.agentControl),
-        decisionRecall: normalized.decisionRecall === true,
     };
 }
 function tasksFromRaw(rawList) {
@@ -193473,7 +193477,6 @@ function makeDefaultTask(index, existing = []) {
             dependsOnTaskIds: [],
             blocksTaskIds: [],
         },
-        decisionRecall: false,
     };
 }
 function usePlotTaskEditing() {
@@ -193630,7 +193633,6 @@ function usePlotTaskEditing() {
                 ...(Number.isFinite(t.agentControl?.preferredStage) ? { preferredStage: Math.trunc(Number(t.agentControl.preferredStage)) } : {}),
                 ...(Number.isFinite(t.agentControl?.preferredOrder) ? { preferredOrder: Math.trunc(Number(t.agentControl.preferredOrder)) } : {}),
             },
-            decisionRecall: t.decisionRecall === true,
         }));
         out.finalSystemDirective = finalDirective.value;
         return out;
@@ -194103,25 +194105,12 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
     props: {
         task: {},
         apiPresetOptions: {},
-        taskApiOverride: {},
-        taskCount: {},
-        decisionRecallTaskMode: { type: Boolean }
+        taskApiOverride: {}
     },
     emits: ["patch", "task-api-override", "segment-add", "segment-delete", "segment-move", "segment-update"],
     setup(__props, { expose: __expose, emit: __emit }) {
         __expose();
         const props = __props;
-        const decisionRecallAvailable = computed(() => props.decisionRecallTaskMode === true
-            && canPlotTaskUseDecisionRecall_ACU(props.task, props.taskCount ?? 0));
-        const decisionRecallHint = computed(() => {
-            if (props.decisionRecallTaskMode !== true)
-                return '需要先在仪表盘的进阶开关打开决策召回，并在「决策召回」页把用法选为「替换剧情推进的任务」。';
-            if ((props.taskCount ?? 0) < 2)
-                return '只在有多个任务的预设里可用；只有一个任务时请在「决策召回」页改用「单独召回」。';
-            if (!decisionRecallAvailable.value)
-                return '只有「标签摘取」恰好是 recall、且没有填「提取写入标签」的任务可以改由决策召回执行。';
-            return '开启后这个任务不调模型、不读剧情推进选的世界书，改由决策模型给纪要打分、挑出相关的写进 recall 标签；Key、模型与条数在「决策召回」页设置。';
-        });
         const emit = __emit;
         const taskApiSelectOptions = computed(() => [
             { value: '', label: '继承剧情推进 API 预设' },
@@ -194154,14 +194143,14 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
             const normalized = Math.trunc(n);
             return normalized >= min ? normalized : undefined;
         }
-        const __returned__ = { props, decisionRecallAvailable, decisionRecallHint, emit, taskApiSelectOptions, patch, patchAgentControl, parseTaskIdList, formatTaskIdList, parseOptionalInteger, UbInput, UbPromptSegments, UbRow, UbSection, UbSelect, UbSwitch, UbTextarea };
+        const __returned__ = { props, emit, taskApiSelectOptions, patch, patchAgentControl, parseTaskIdList, formatTaskIdList, parseOptionalInteger, UbInput, UbPromptSegments, UbRow, UbSection, UbSelect, UbSwitch, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-pte[data-v-5e2f0861] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s5);\n}\n.ub-pte__segs[data-v-5e2f0861] {\r\n  padding: var(--ub-s3);\n}\n.ub-pte__empty[data-v-5e2f0861] {\r\n  padding: var(--ub-s5);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-card);\r\n  color: var(--ub-text-3);\r\n  text-align: center;\n}\r\n", "src/presentation-v3/parts/PlotTaskEditor.vue#style-0-5e2f0861");
-var PlotTaskEditor_vue_vue_type_style_index_0_scoped_5e2f0861_lang = null;
+injectSfcStyle("\n.ub-pte[data-v-5bbd16c6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s5);\n}\n.ub-pte__segs[data-v-5bbd16c6] {\r\n  padding: var(--ub-s3);\n}\n.ub-pte__empty[data-v-5bbd16c6] {\r\n  padding: var(--ub-s5);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-card);\r\n  color: var(--ub-text-3);\r\n  text-align: center;\n}\r\n", "src/presentation-v3/parts/PlotTaskEditor.vue#style-0-5bbd16c6");
+var PlotTaskEditor_vue_vue_type_style_index_0_scoped_5bbd16c6_lang = null;
 
 const _hoisted_1$r = {
 	key: 0,
@@ -194261,19 +194250,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 						onChange: _cache[6] || (_cache[6] = ($event) => $setup.patch({ extractInjectTags: String($event) }))
 					}, null, 8, ["model-value"])]),
 					_: 1
-				}),
-				createVNode($setup["UbRow"], {
-					label: "改由决策召回执行",
-					hint: $setup.decisionRecallHint
-				}, {
-					default: withCtx(() => [createVNode($setup["UbSwitch"], {
-						"model-value": $props.task.decisionRecall && $setup.decisionRecallAvailable,
-						disabled: !$setup.decisionRecallAvailable,
-						"aria-label": "改由决策召回执行",
-						"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.patch({ decisionRecall: $event }))
-					}, null, 8, ["model-value", "disabled"])]),
-					_: 1
-				}, 8, ["hint"])
+				})
 			]),
 			_: 1
 		}),
@@ -194294,7 +194271,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 						"auto-resize": "",
 						placeholder: "例如：从长期记忆中选择与当前剧情最相关的事件。",
 						"aria-label": "任务描述",
-						"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.patch({ description: $event }))
+						"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.patch({ description: $event }))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				}),
@@ -194310,7 +194287,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 						"auto-resize": "",
 						placeholder: "例如：用户输入涉及旧事件、承诺、人物关系变化或未解决伏笔时触发。",
 						"aria-label": "触发条件",
-						"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.patch({ triggerWhen: $event }))
+						"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.patch({ triggerWhen: $event }))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				}),
@@ -194318,7 +194295,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 					default: withCtx(() => [createVNode($setup["UbSwitch"], {
 						"model-value": $props.task.agentControl.enabled,
 						"aria-label": "Agent 控制此任务",
-						"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.patchAgentControl({ enabled: $event }))
+						"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.patchAgentControl({ enabled: $event }))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				}, 8, ["label"]),
@@ -194326,7 +194303,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 					default: withCtx(() => [createVNode($setup["UbSwitch"], {
 						"model-value": $props.task.agentControl.selectable,
 						"aria-label": "允许 Agent 选择/跳过",
-						"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.patchAgentControl({ selectable: $event }))
+						"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.patchAgentControl({ selectable: $event }))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				}),
@@ -194334,7 +194311,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 					default: withCtx(() => [createVNode($setup["UbSwitch"], {
 						"model-value": $props.task.agentControl.defaultSelected,
 						"aria-label": "Agent 无决策时默认选中",
-						"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.patchAgentControl({ defaultSelected: $event }))
+						"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.patchAgentControl({ defaultSelected: $event }))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				}),
@@ -194342,7 +194319,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 					default: withCtx(() => [createVNode($setup["UbSwitch"], {
 						"model-value": $props.task.agentControl.allowSequential,
 						"aria-label": "允许串联",
-						"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.patchAgentControl({ allowSequential: $event }))
+						"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.patchAgentControl({ allowSequential: $event }))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				}),
@@ -194350,7 +194327,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 					default: withCtx(() => [createVNode($setup["UbSwitch"], {
 						"model-value": $props.task.agentControl.allowParallel,
 						"aria-label": "允许并行",
-						"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.patchAgentControl({ allowParallel: $event }))
+						"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.patchAgentControl({ allowParallel: $event }))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				}),
@@ -194364,7 +194341,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 						step: 1,
 						"model-value": $props.task.agentControl.preferredStage ?? "",
 						"aria-label": "偏好阶段",
-						onChange: _cache[15] || (_cache[15] = ($event) => $setup.patchAgentControl({ preferredStage: $setup.parseOptionalInteger($event, 1) }))
+						onChange: _cache[14] || (_cache[14] = ($event) => $setup.patchAgentControl({ preferredStage: $setup.parseOptionalInteger($event, 1) }))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				}),
@@ -194378,7 +194355,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 						step: 1,
 						"model-value": $props.task.agentControl.preferredOrder ?? "",
 						"aria-label": "偏好顺序",
-						onChange: _cache[16] || (_cache[16] = ($event) => $setup.patchAgentControl({ preferredOrder: $setup.parseOptionalInteger($event, 0) }))
+						onChange: _cache[15] || (_cache[15] = ($event) => $setup.patchAgentControl({ preferredOrder: $setup.parseOptionalInteger($event, 0) }))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				}),
@@ -194391,7 +194368,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 						"model-value": $setup.formatTaskIdList($props.task.agentControl.dependsOnTaskIds),
 						placeholder: "例如：recallTask, summaryTask",
 						"aria-label": "依赖任务 ID",
-						onChange: _cache[17] || (_cache[17] = ($event) => $setup.patchAgentControl({ dependsOnTaskIds: $setup.parseTaskIdList($event) }))
+						onChange: _cache[16] || (_cache[16] = ($event) => $setup.patchAgentControl({ dependsOnTaskIds: $setup.parseTaskIdList($event) }))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				}),
@@ -194404,7 +194381,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 						"model-value": $setup.formatTaskIdList($props.task.agentControl.blocksTaskIds),
 						placeholder: "例如：legacyRecallTask",
 						"aria-label": "阻塞任务 ID",
-						onChange: _cache[18] || (_cache[18] = ($event) => $setup.patchAgentControl({ blocksTaskIds: $setup.parseTaskIdList($event) }))
+						onChange: _cache[17] || (_cache[17] = ($event) => $setup.patchAgentControl({ blocksTaskIds: $setup.parseTaskIdList($event) }))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				})
@@ -194422,7 +194399,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 					"model-value": $props.taskApiOverride,
 					placeholder: "继承剧情推进 API 预设",
 					"aria-label": "当前任务 API 预设",
-					"onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => $setup.emit("task-api-override", $event))
+					"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.emit("task-api-override", $event))
 				}, null, 8, ["options", "model-value"])]),
 				_: 1
 			})]),
@@ -194438,159 +194415,16 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 				"allow-move": true,
 				rows: 6,
 				"empty-text": "当前任务还没有提示词段。点击按钮添加第一段。",
-				onAdd: _cache[20] || (_cache[20] = ($event) => $setup.emit("segment-add", $event)),
-				onDelete: _cache[21] || (_cache[21] = ($event) => $setup.emit("segment-delete", $event)),
-				onMove: _cache[22] || (_cache[22] = (index, delta) => $setup.emit("segment-move", index, delta)),
-				onUpdate: _cache[23] || (_cache[23] = (index, p) => $setup.emit("segment-update", index, p))
+				onAdd: _cache[19] || (_cache[19] = ($event) => $setup.emit("segment-add", $event)),
+				onDelete: _cache[20] || (_cache[20] = ($event) => $setup.emit("segment-delete", $event)),
+				onMove: _cache[21] || (_cache[21] = (index, delta) => $setup.emit("segment-move", index, delta)),
+				onUpdate: _cache[22] || (_cache[22] = (index, p) => $setup.emit("segment-update", index, p))
 			}, null, 8, ["segments"])])]),
 			_: 1
 		})
 	])) : (openBlock(), createElementBlock("p", _hoisted_3$n, "请先在上方选择一个任务。"));
 }
-var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$u], ["__scopeId", "data-v-5e2f0861"]]);
-
-/**
- * decision-recall-store — 「决策召回」页的状态：设置读写、模型列表、测试召回。
- *
- * 设置权威源是 settings_ACU.decisionRecallSettings。总开关在仪表盘进阶开关里（setDecisionRecallEnabled_ACU），
- * 这一页只选用法：「单独召回」时剧情推进暂停，「替换剧情推进的任务」时剧情推进照常运行。
- */
-function readPlotTaskStatus_ACU() {
-    const tasks = normalizePlotTasks_ACU(settings_ACU?.plotSettings || {});
-    const eligible = tasks.filter((task) => canPlotTaskUseDecisionRecall_ACU(task, tasks.length));
-    return {
-        plotEnabled: settings_ACU?.plotSettings?.enabled === true,
-        taskCount: tasks.length,
-        replacedTaskNames: eligible.filter((task) => task.decisionRecall === true).map((task) => String(task.name || task.id)),
-        eligibleTaskNames: eligible.filter((task) => task.decisionRecall !== true).map((task) => String(task.name || task.id)),
-    };
-}
-function readSettings_ACU() {
-    return normalizeDecisionRecallSettings_ACU(settings_ACU?.decisionRecallSettings);
-}
-/** 保存失败时撤销到修改前的设置并提示。 */
-function persistOrRollback_ACU(snapshot, rollback) {
-    const result = saveSettings_ACU();
-    if (!result || result.saved !== false)
-        return true;
-    settings_ACU.decisionRecallSettings = snapshot;
-    rollback?.();
-    useToastStore().error(`决策召回设置保存失败，已撤销本次修改：${result.error || result.warning || '未知错误'}`, { muteable: false });
-    return false;
-}
-function levelLabel_ACU(score) {
-    const nearest = DECISION_RECALL_LEVELS_ACU.reduce((best, level) => (Math.abs(level.score - score) < Math.abs(best.score - score) ? level : best));
-    return nearest.label;
-}
-/** 测试结果的可读文本：摘要一行，然后列出带上的纪要（固定 / 分数），再列分数最高的几条落选纪要。 */
-function formatDecisionRecallTestOutput_ACU(result) {
-    if (result.status !== 'ok')
-        return describeDecisionRecallResult_ACU(result).replace(/^\[决策召回\] /, '');
-    const lines = [];
-    const source = result.candidateSource === 'crossfire_index' ? '交火筛过的纪要索引' : '全部纪要';
-    lines.push(`候选 ${result.candidateCount} 条（来自${source}），分 ${result.batchCount} 组打分，失败 ${result.failedBatchCount} 组。`);
-    const warning = describeDecisionRecallWarning_ACU(result);
-    if (warning)
-        lines.push(warning);
-    const scoreByKey = new Map(result.scored.map(entry => [entry.row.rowKey, entry]));
-    const fixedKeys = new Set(result.fixed.map(row => row.rowKey));
-    lines.push('', `带上 ${result.selected.length} 条（按表号顺序）：`);
-    for (const row of result.selected) {
-        const entry = scoreByKey.get(row.rowKey);
-        const tag = fixedKeys.has(row.rowKey) ? '固定' : entry ? `${entry.score.toFixed(2)} 分 · ${levelLabel_ACU(entry.score)}` : '未打分';
-        lines.push(`· ${row.indexCode}［${tag}］${row.summary}`);
-    }
-    const selectedKeys = new Set(result.selected.map(row => row.rowKey));
-    const runnersUp = result.scored.filter(entry => !selectedKeys.has(entry.row.rowKey)).slice(0, 10);
-    if (runnersUp.length > 0) {
-        lines.push('', '落选里分数最高的几条：');
-        for (const entry of runnersUp)
-            lines.push(`· ${entry.row.indexCode}［${entry.score.toFixed(2)} 分 · ${levelLabel_ACU(entry.score)}］${entry.row.summary}`);
-    }
-    return lines.join('\n');
-}
-const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
-    state: () => ({
-        settings: readSettings_ACU(),
-        plotTaskStatus: readPlotTaskStatus_ACU(),
-        openrouterModels: [],
-        modelsLoading: false,
-        testInput: '',
-        testOutput: '',
-        testBusy: false,
-    }),
-    getters: {
-        endpoint: state => resolveDecisionRecallEndpoint_ACU(state.settings),
-        /** 「单独召回」生效中：剧情推进暂停。 */
-        standaloneActive: state => state.settings.enabled && state.settings.mode === 'standalone',
-        /** 「替换剧情推进的任务」生效中：剧情推进照常运行，打开了开关的 recall 任务改由决策召回执行。 */
-        taskModeActive: state => state.settings.enabled && state.settings.mode === 'plot_task',
-        activeModels(state) {
-            if (state.settings.provider === 'siliconflow')
-                return SILICONFLOW_DECISION_MODELS_ACU;
-            if (state.settings.provider === 'aihubmix')
-                return AIHUBMIX_DECISION_MODELS_ACU;
-            return state.openrouterModels;
-        },
-    },
-    actions: {
-        refreshFromSettings() {
-            this.settings = readSettings_ACU();
-            this.plotTaskStatus = readPlotTaskStatus_ACU();
-        },
-        /** 规整后写回并保存；返回是否保存成功。 */
-        patch(patch) {
-            const snapshot = settings_ACU.decisionRecallSettings;
-            const next = normalizeDecisionRecallSettings_ACU({ ...this.settings, ...patch });
-            settings_ACU.decisionRecallSettings = { ...next };
-            const saved = persistOrRollback_ACU(snapshot);
-            this.refreshFromSettings();
-            return saved;
-        },
-        /** OpenRouter 的决策模型列表（公开接口）；硅基流动与 AIHubMix 用内置列表。 */
-        async loadModels() {
-            if (this.settings.provider !== 'openrouter' || this.modelsLoading)
-                return;
-            this.modelsLoading = true;
-            try {
-                this.openrouterModels = await fetchDecisionModels_ACU();
-            }
-            catch (error) {
-                logError_ACU('[ACU-V2] load decision recall models failed', error);
-                useToastStore().warning(`读取决策模型列表失败（${error?.message || '未知错误'}），可稍后重试；当前所选模型不受影响。`);
-            }
-            finally {
-                this.modelsLoading = false;
-            }
-        },
-        setTestInput(value) {
-            this.testInput = String(value ?? '');
-        },
-        /** 用测试输入和当前聊天的前文跑一次完整选取，只显示结果，不写进聊天。 */
-        async runTest() {
-            if (this.testBusy)
-                return;
-            const userInput = this.testInput.trim();
-            if (!userInput) {
-                this.testOutput = '请先填一句模拟的用户输入。';
-                return;
-            }
-            this.testBusy = true;
-            this.testOutput = '正在打分…';
-            try {
-                const result = await runDecisionRecall_ACU({ userInput, settings: this.settings });
-                this.testOutput = formatDecisionRecallTestOutput_ACU(result);
-            }
-            catch (error) {
-                logError_ACU('[ACU-V2] decision recall test failed', error);
-                this.testOutput = `测试失败：${error?.message || error}`;
-            }
-            finally {
-                this.testBusy = false;
-            }
-        },
-    },
-});
+var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$u], ["__scopeId", "data-v-5bbd16c6"]]);
 
 var _sfc_main$u = /*@__PURE__*/ defineComponent({
     __name: 'PlotPresetSheet',
@@ -194615,8 +194449,6 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
         __expose();
         const props = __props;
         const emit = __emit;
-        // 任务编辑里的「改由决策召回执行」只在决策召回用法为「替换剧情推进的任务」时可用
-        const decisionRecallStore = useDecisionRecallStore();
         const rateFields = [
             { key: 'rateMain', label: 'sulv1', step: 0.05 },
             { key: 'ratePersonal', label: 'sulv2', step: 0.05 },
@@ -194632,14 +194464,14 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
             const target = idx + delta;
             return target >= 0 && target < tasks.value.length;
         }
-        const __returned__ = { props, emit, decisionRecallStore, rateFields, tasks, canMove, UbButton, UbCallout, UbIconButton, UbInput, UbRow, UbRulePairs, UbSection, UbSheet, UbTextarea, PlotTaskEditor };
+        const __returned__ = { props, emit, rateFields, tasks, canMove, UbButton, UbCallout, UbIconButton, UbInput, UbRow, UbRulePairs, UbSection, UbSheet, UbTextarea, PlotTaskEditor };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-pps-form[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s5);\n}\n.ub-pps-list[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-pps-list__item[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-pps-list__item + .ub-pps-list__item[data-v-0ad2c5d5] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-pps-list__info[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-pps-list__name[data-v-0ad2c5d5] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-pps-list__star[data-v-0ad2c5d5] {\r\n  color: var(--ub-warn);\r\n  font-size: 0.85em;\n}\n.ub-pps-list__meta[data-v-0ad2c5d5] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-pps-list__actions[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  gap: 2px;\n}\n.ub-pps-empty[data-v-0ad2c5d5] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-pps-tasks[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3);\r\n  overflow-x: auto;\n}\n.ub-pps-task[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: 2px;\r\n  flex: 0 0 auto;\r\n  min-width: calc(var(--ub-u) * 130);\r\n  max-width: calc(var(--ub-u) * 220);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border: 1.5px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-pps-task.is-active[data-v-0ad2c5d5] {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\n}\n.ub-pps-task.is-off[data-v-0ad2c5d5] {\r\n  opacity: 0.55;\n}\n.ub-pps-task__name[data-v-0ad2c5d5] {\r\n  max-width: 100%;\r\n  overflow: hidden;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 700;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-pps-task__meta[data-v-0ad2c5d5] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\r\n", "src/presentation-v3/parts/PlotPresetSheet.vue#style-0-0ad2c5d5");
-var PlotPresetSheet_vue_vue_type_style_index_0_scoped_0ad2c5d5_lang = null;
+injectSfcStyle("\n.ub-pps-form[data-v-3b300f52] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s5);\n}\n.ub-pps-list[data-v-3b300f52] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-pps-list__item[data-v-3b300f52] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-pps-list__item + .ub-pps-list__item[data-v-3b300f52] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-pps-list__info[data-v-3b300f52] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-pps-list__name[data-v-3b300f52] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-pps-list__star[data-v-3b300f52] {\r\n  color: var(--ub-warn);\r\n  font-size: 0.85em;\n}\n.ub-pps-list__meta[data-v-3b300f52] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-pps-list__actions[data-v-3b300f52] {\r\n  display: flex;\r\n  gap: 2px;\n}\n.ub-pps-empty[data-v-3b300f52] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-pps-tasks[data-v-3b300f52] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3);\r\n  overflow-x: auto;\n}\n.ub-pps-task[data-v-3b300f52] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: 2px;\r\n  flex: 0 0 auto;\r\n  min-width: calc(var(--ub-u) * 130);\r\n  max-width: calc(var(--ub-u) * 220);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border: 1.5px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-pps-task.is-active[data-v-3b300f52] {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\n}\n.ub-pps-task.is-off[data-v-3b300f52] {\r\n  opacity: 0.55;\n}\n.ub-pps-task__name[data-v-3b300f52] {\r\n  max-width: 100%;\r\n  overflow: hidden;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 700;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-pps-task__meta[data-v-3b300f52] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\r\n", "src/presentation-v3/parts/PlotPresetSheet.vue#style-0-3b300f52");
+var PlotPresetSheet_vue_vue_type_style_index_0_scoped_3b300f52_lang = null;
 
 const _hoisted_1$q = {
 	key: 0,
@@ -194917,8 +194749,6 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 					task: $props.taskEditing.currentTask.value,
 					"api-preset-options": $props.apiPresetOptions,
 					"task-api-override": $props.currentTaskApiOverride,
-					"task-count": $setup.tasks.length,
-					"decision-recall-task-mode": $setup.decisionRecallStore.taskModeActive,
 					onPatch: _cache[6] || (_cache[6] = ($event) => $props.taskEditing.patchCurrent($event)),
 					onTaskApiOverride: _cache[7] || (_cache[7] = ($event) => $setup.emit("update-task-api-override", $event)),
 					onSegmentAdd: _cache[8] || (_cache[8] = ($event) => $props.taskEditing.addSegment($event)),
@@ -194928,9 +194758,7 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 				}, null, 8, [
 					"task",
 					"api-preset-options",
-					"task-api-override",
-					"task-count",
-					"decision-recall-task-mode"
+					"task-api-override"
 				]),
 				createVNode($setup["UbSection"], {
 					title: "最终注入指令",
@@ -194997,7 +194825,7 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 		"before-close"
 	]);
 }
-var PlotPresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$t], ["__scopeId", "data-v-0ad2c5d5"]]);
+var PlotPresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$t], ["__scopeId", "data-v-3b300f52"]]);
 
 var _sfc_main$t = /*@__PURE__*/ defineComponent({
     __name: 'PlotPresetSection',
@@ -205805,6 +205633,166 @@ function useDashboardPage() {
 }
 
 /**
+ * decision-recall-store — 「决策召回」页的状态：设置读写、模型列表、测试召回。
+ *
+ * 设置权威源是 settings_ACU.decisionRecallSettings。总开关在仪表盘进阶开关里（setDecisionRecallEnabled_ACU），
+ * 这一页只选用法：「单独召回」时剧情推进暂停，「替换剧情推进的任务」时剧情推进照常运行；
+ * 是否真的替换由剧情推进页的「由决策召回执行 recall 任务」开关决定（replacePlotRecallTasks，也存在这里）。
+ */
+function readPlotTaskStatus_ACU() {
+    const tasks = normalizePlotTasks_ACU(settings_ACU?.plotSettings || {});
+    return {
+        plotEnabled: settings_ACU?.plotSettings?.enabled === true,
+        taskCount: tasks.length,
+        matchedTaskNames: tasks
+            .filter((task) => canPlotTaskUseDecisionRecall_ACU(task, tasks.length))
+            .map((task) => String(task.name || task.id)),
+    };
+}
+function readSettings_ACU() {
+    return normalizeDecisionRecallSettings_ACU(settings_ACU?.decisionRecallSettings);
+}
+/** 保存失败时撤销到修改前的设置并提示。 */
+function persistOrRollback_ACU(snapshot, rollback) {
+    const result = saveSettings_ACU();
+    if (!result || result.saved !== false)
+        return true;
+    settings_ACU.decisionRecallSettings = snapshot;
+    rollback?.();
+    useToastStore().error(`决策召回设置保存失败，已撤销本次修改：${result.error || result.warning || '未知错误'}`, { muteable: false });
+    return false;
+}
+function levelLabel_ACU(score) {
+    const nearest = DECISION_RECALL_LEVELS_ACU.reduce((best, level) => (Math.abs(level.score - score) < Math.abs(best.score - score) ? level : best));
+    return nearest.label;
+}
+/** 测试结果的可读文本：摘要一行，然后列出带上的纪要（固定 / 分数），再列分数最高的几条落选纪要。 */
+function formatDecisionRecallTestOutput_ACU(result) {
+    if (result.status !== 'ok')
+        return describeDecisionRecallResult_ACU(result).replace(/^\[决策召回\] /, '');
+    const lines = [];
+    const source = result.candidateSource === 'crossfire_index' ? '交火筛过的纪要索引' : '全部纪要';
+    lines.push(`候选 ${result.candidateCount} 条（来自${source}），分 ${result.batchCount} 组打分，失败 ${result.failedBatchCount} 组。`);
+    const warning = describeDecisionRecallWarning_ACU(result);
+    if (warning)
+        lines.push(warning);
+    const scoreByKey = new Map(result.scored.map(entry => [entry.row.rowKey, entry]));
+    const fixedKeys = new Set(result.fixed.map(row => row.rowKey));
+    lines.push('', `带上 ${result.selected.length} 条（按表号顺序）：`);
+    for (const row of result.selected) {
+        const entry = scoreByKey.get(row.rowKey);
+        const tag = fixedKeys.has(row.rowKey) ? '固定' : entry ? `${entry.score.toFixed(2)} 分 · ${levelLabel_ACU(entry.score)}` : '未打分';
+        lines.push(`· ${row.indexCode}［${tag}］${row.summary}`);
+    }
+    const selectedKeys = new Set(result.selected.map(row => row.rowKey));
+    const runnersUp = result.scored.filter(entry => !selectedKeys.has(entry.row.rowKey)).slice(0, 10);
+    if (runnersUp.length > 0) {
+        lines.push('', '落选里分数最高的几条：');
+        for (const entry of runnersUp)
+            lines.push(`· ${entry.row.indexCode}［${entry.score.toFixed(2)} 分 · ${levelLabel_ACU(entry.score)}］${entry.row.summary}`);
+    }
+    return lines.join('\n');
+}
+const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
+    state: () => ({
+        settings: readSettings_ACU(),
+        plotTaskStatus: readPlotTaskStatus_ACU(),
+        openrouterModels: [],
+        modelsLoading: false,
+        testInput: '',
+        testOutput: '',
+        testBusy: false,
+    }),
+    getters: {
+        endpoint: state => resolveDecisionRecallEndpoint_ACU(state.settings),
+        /** 「单独召回」生效中：剧情推进暂停。 */
+        standaloneActive: state => state.settings.enabled && state.settings.mode === 'standalone',
+        /** 「替换剧情推进的任务」用法生效中：剧情推进照常运行，剧情推进页显示替换开关。 */
+        taskModeActive: state => state.settings.enabled && state.settings.mode === 'plot_task',
+        /** 剧情推进页的替换开关也开着：标签只有 recall 的任务改由决策召回执行。 */
+        replacingPlotTasks: state => state.settings.enabled && state.settings.mode === 'plot_task' && state.settings.replacePlotRecallTasks,
+        /** 替换会不会生效、落在哪些任务上（决策召回页与剧情推进页共用）。 */
+        replaceStatus(state) {
+            const status = state.plotTaskStatus;
+            if (!status.plotEnabled)
+                return { kind: 'warning', text: '剧情推进当前关着：在仪表盘打开剧情推进后才会替换。' };
+            if (!state.settings.replacePlotRecallTasks) {
+                return { kind: 'info', text: '剧情推进页的「由决策召回执行 recall 任务」没开：照常由剧情推进调模型召回。' };
+            }
+            if (status.taskCount < 2)
+                return { kind: 'warning', text: '当前剧情推进预设只有一个任务，不替换：照常由剧情推进调模型召回。' };
+            if (status.matchedTaskNames.length)
+                return { kind: 'success', text: `当前预设里由决策召回执行的任务：${status.matchedTaskNames.join('、')}。` };
+            return { kind: 'info', text: '当前预设里没有「标签摘取」只有 recall 的任务，不替换：照常由剧情推进调模型召回。' };
+        },
+        activeModels(state) {
+            if (state.settings.provider === 'siliconflow')
+                return SILICONFLOW_DECISION_MODELS_ACU;
+            if (state.settings.provider === 'aihubmix')
+                return AIHUBMIX_DECISION_MODELS_ACU;
+            return state.openrouterModels;
+        },
+    },
+    actions: {
+        refreshFromSettings() {
+            this.settings = readSettings_ACU();
+            this.plotTaskStatus = readPlotTaskStatus_ACU();
+        },
+        /** 规整后写回并保存；返回是否保存成功。 */
+        patch(patch) {
+            const snapshot = settings_ACU.decisionRecallSettings;
+            const next = normalizeDecisionRecallSettings_ACU({ ...this.settings, ...patch });
+            settings_ACU.decisionRecallSettings = { ...next };
+            const saved = persistOrRollback_ACU(snapshot);
+            this.refreshFromSettings();
+            return saved;
+        },
+        /** OpenRouter 的决策模型列表（公开接口）；硅基流动与 AIHubMix 用内置列表。 */
+        async loadModels() {
+            if (this.settings.provider !== 'openrouter' || this.modelsLoading)
+                return;
+            this.modelsLoading = true;
+            try {
+                this.openrouterModels = await fetchDecisionModels_ACU();
+            }
+            catch (error) {
+                logError_ACU('[ACU-V2] load decision recall models failed', error);
+                useToastStore().warning(`读取决策模型列表失败（${error?.message || '未知错误'}），可稍后重试；当前所选模型不受影响。`);
+            }
+            finally {
+                this.modelsLoading = false;
+            }
+        },
+        setTestInput(value) {
+            this.testInput = String(value ?? '');
+        },
+        /** 用测试输入和当前聊天的前文跑一次完整选取，只显示结果，不写进聊天。 */
+        async runTest() {
+            if (this.testBusy)
+                return;
+            const userInput = this.testInput.trim();
+            if (!userInput) {
+                this.testOutput = '请先填一句模拟的用户输入。';
+                return;
+            }
+            this.testBusy = true;
+            this.testOutput = '正在打分…';
+            try {
+                const result = await runDecisionRecall_ACU({ userInput, settings: this.settings });
+                this.testOutput = formatDecisionRecallTestOutput_ACU(result);
+            }
+            catch (error) {
+                logError_ACU('[ACU-V2] decision recall test failed', error);
+                this.testOutput = `测试失败：${error?.message || error}`;
+            }
+            finally {
+                this.testBusy = false;
+            }
+        },
+    },
+});
+
+/**
  * 功能页入口（剧情推进 / 决策召回 / 智能续写 / 交火模式 / 正文替换）的显隐同步，以及剧情推进入口的灰显。
  * gate 必须读 settings 权威源：开关列表带渲染降级（读失败返回空表），
  * 从它派生会把"读不到"误判成"关了"而隐藏入口。
@@ -208478,10 +208466,7 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         ];
         const modeHint = computed(() => (store.settings.mode === 'standalone'
             ? '发送前由决策召回挑选纪要写进本轮输入，剧情推进暂停（剧情推进页灰掉，它自己的开关不变）。'
-            : '剧情推进照常运行；多任务预设里「标签摘取」恰好是 recall 的任务，在剧情推进的任务编辑里打开「改由决策召回执行」后由这里执行。'));
-        const noReplacedTaskText = computed(() => (store.plotTaskStatus.eligibleTaskNames.length
-            ? `当前预设里可以替换的任务：${store.plotTaskStatus.eligibleTaskNames.join('、')}。到剧情推进页编辑预设，在任务里打开「改由决策召回执行」。`
-            : '当前预设里没有「标签摘取」恰好是 recall 的任务。到剧情推进页编辑预设，把召回任务的标签设为 recall 后再打开「改由决策召回执行」。'));
+            : '剧情推进照常运行；在剧情推进页打开「由决策召回执行 recall 任务」后，多任务预设里「标签摘取」只有 recall 的任务改由这里执行，没开时照常由剧情推进调模型召回。'));
         const providerOptions = Object.keys(DECISION_RECALL_PROVIDER_LABELS_ACU)
             .map(value => ({ value, label: DECISION_RECALL_PROVIDER_LABELS_ACU[value] }));
         const PROVIDER_VIEW_ACU = {
@@ -208549,7 +208534,9 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 return;
             // 剧情推进入口随用法灰显 / 恢复
             routerStore.syncFeatureGatesFromSettings();
-            toastStore.info(value === 'standalone' ? '已改为单独召回：剧情推进暂停。' : '已改为替换剧情推进的任务：剧情推进恢复运行。');
+            toastStore.info(value === 'standalone'
+                ? '已改为单独召回：剧情推进暂停。'
+                : '已改为替换剧情推进的任务：剧情推进恢复运行，到剧情推进页打开「由决策召回执行 recall 任务」后才替换。');
         }
         const directiveDraft = ref(store.settings.directive);
         const directiveDirty = computed(() => directiveDraft.value !== store.settings.directive);
@@ -208571,14 +208558,14 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 void store.loadModels();
         });
         watchChatChanged_ACU(() => refresh());
-        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, codesPlaceholder, ruleDescription, modeOptions, modeHint, noReplacedTaskText, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, scoringOptions, setProvider, setKey, setModel, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
+        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, codesPlaceholder, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, scoringOptions, setProvider, setKey, setModel, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-dr__picker[data-v-d14153b1] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-d14153b1] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-d14153b1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-d14153b1] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-d14153b1");
-var DecisionRecallPage_vue_vue_type_style_index_0_scoped_d14153b1_lang = null;
+injectSfcStyle("\n.ub-dr__picker[data-v-d1d8633e] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-d1d8633e] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-d1d8633e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-d1d8633e] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-d1d8633e");
+var DecisionRecallPage_vue_vue_type_style_index_0_scoped_d1d8633e_lang = null;
 
 const _hoisted_1$c = { class: "ub-dr__picker" };
 const _hoisted_2$b = { class: "ub-dr__meta" };
@@ -208611,53 +208598,29 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						"onUpdate:modelValue": $setup.setMode
 					}, null, 8, ["model-value"])]),
 					_: 1
-				}, 8, ["hint"]), $setup.store.settings.mode === "plot_task" ? (openBlock(), createElementBlock(
-					Fragment,
-					{ key: 0 },
-					[!$setup.store.plotTaskStatus.plotEnabled ? (openBlock(), createBlock($setup["UbCallout"], {
+				}, 8, ["hint"]), $setup.store.settings.mode === "plot_task" ? (openBlock(), createBlock($setup["UbCallout"], {
+					key: 0,
+					kind: $setup.store.replaceStatus.kind
+				}, {
+					default: withCtx(() => [createTextVNode(
+						toDisplayString($setup.store.replaceStatus.text) + " ",
+						1
+						/* TEXT */
+					), $setup.store.plotTaskStatus.plotEnabled && !$setup.store.settings.replacePlotRecallTasks ? (openBlock(), createBlock($setup["UbButton"], {
 						key: 0,
-						kind: "warning"
-					}, {
-						default: withCtx(() => [..._cache[4] || (_cache[4] = [createTextVNode(
-							"剧情推进当前关着：在仪表盘打开剧情推进后，替换的任务才会运行。",
-							-1
-							/* CACHED */
-						)])]),
-						_: 1
-					})) : $setup.store.plotTaskStatus.taskCount < 2 ? (openBlock(), createBlock($setup["UbCallout"], {
-						key: 1,
-						kind: "warning"
+						size: "sm",
+						icon: "fa-solid fa-route",
+						onClick: _cache[0] || (_cache[0] = ($event) => $setup.routerStore.setActivePage("plot"))
 					}, {
 						default: withCtx(() => [..._cache[5] || (_cache[5] = [createTextVNode(
-							" 当前剧情推进预设只有一个任务，替换不了：请换成有多个任务的预设，或改用「单独召回」。 ",
+							"去剧情推进页",
 							-1
 							/* CACHED */
 						)])]),
 						_: 1
-					})) : $setup.store.plotTaskStatus.replacedTaskNames.length ? (openBlock(), createBlock($setup["UbCallout"], {
-						key: 2,
-						kind: "success"
-					}, {
-						default: withCtx(() => [createTextVNode(
-							" 当前预设里由决策召回执行的任务：" + toDisplayString($setup.store.plotTaskStatus.replacedTaskNames.join("、")) + "。 ",
-							1
-							/* TEXT */
-						)]),
-						_: 1
-					})) : (openBlock(), createBlock($setup["UbCallout"], {
-						key: 3,
-						kind: "info"
-					}, {
-						default: withCtx(() => [createTextVNode(
-							toDisplayString($setup.noReplacedTaskText),
-							1
-							/* TEXT */
-						)]),
-						_: 1
-					}))],
-					64
-					/* STABLE_FRAGMENT */
-				)) : createCommentVNode("v-if", true)]),
+					})) : createCommentVNode("v-if", true)]),
+					_: 1
+				}, 8, ["kind"])) : createCommentVNode("v-if", true)]),
 				_: 1
 			}),
 			createVNode($setup["UbSection"], {
@@ -208750,7 +208713,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							max: $setup.maxCount,
 							step: 1,
 							"aria-label": "召回条数",
-							onChange: _cache[0] || (_cache[0] = ($event) => $setup.setNumber("recallCount", $event))
+							onChange: _cache[1] || (_cache[1] = ($event) => $setup.setNumber("recallCount", $event))
 						}, null, 8, ["model-value", "max"]))]),
 						_: 1
 					}, 8, ["hint"]),
@@ -208762,7 +208725,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							options: $setup.scoringOptions,
 							"model-value": $setup.store.settings.scoringContent,
 							"aria-label": "打分时看什么",
-							"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.store.patch({ scoringContent: $event }))
+							"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.store.patch({ scoringContent: $event }))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -208778,7 +208741,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							max: $setup.maxRetries,
 							step: 1,
 							"aria-label": "失败重试次数",
-							onChange: _cache[2] || (_cache[2] = ($event) => $setup.setNumber("maxRetries", $event))
+							onChange: _cache[3] || (_cache[3] = ($event) => $setup.setNumber("maxRetries", $event))
 						}, null, 8, ["model-value", "max"]))]),
 						_: 1
 					}, 8, ["hint"])
@@ -208811,7 +208774,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						"auto-resize": "",
 						mono: "",
 						"aria-label": "注入指令",
-						"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.directiveDraft = $event)
+						"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.directiveDraft = $event)
 					}, null, 8, ["model-value"]),
 					createBaseVNode(
 						"p",
@@ -208890,7 +208853,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-d14153b1"]]);
+var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-d1d8633e"]]);
 
 const developerCopy = {
     panels: {
@@ -210485,18 +210448,20 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
         const decisionRecallStore = useDecisionRecallStore();
         /** 决策召回「单独召回」生效中：剧情推进暂停，整页灰掉不可编辑。 */
         const paused = computed(() => routerStore.featureGates[FEATURE_FLAG_PLOT_PAUSED] === true);
-        /** 「替换剧情推进的任务」生效中：提醒这里选的世界书不用于由决策召回执行的任务。 */
-        const decisionRecallTaskMode = computed(() => decisionRecallStore.taskModeActive);
+        /** 确实有任务交给决策召回：提醒这里选的世界书不用于这些任务。 */
+        const decisionRecallReplacing = computed(() => decisionRecallStore.replacingPlotTasks
+            && decisionRecallStore.plotTaskStatus.matchedTaskNames.length > 0);
         const worldbook = useWorldbookSelector();
         const plotWorldbook = usePlotWorldbookConfig();
         const wbEntries = usePlotWorldbookEntries();
         const entryFilter = ref('');
         const entryEmptyText = ref(plotCopy.worldbook.emptyDefault);
-        const sections = [
+        const sections = computed(() => [
             { id: 'plot-preset', label: '预设' },
+            ...(decisionRecallStore.taskModeActive ? [{ id: 'plot-decision-recall', label: '决策召回' }] : []),
             { id: 'plot-experience', label: '发送体验' },
             { id: 'plot-worldbook', label: '世界书' },
-        ];
+        ]);
         const currentWorldbookLabel = computed(() => {
             if (plotWorldbook.source.value === 'character') {
                 return worldbook.charPrimary.value ? `角色卡所有世界书 · 主册 ${worldbook.charPrimary.value}` : '角色卡所有世界书';
@@ -210545,15 +210510,17 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
             await refreshWorldbookEntries();
         }
         onMounted(() => void refreshAll());
+        // 换预设或保存预设后，重新匹配交给决策召回的任务
+        watch(() => [plotPresetStore.activePresetName, plotPresetStore.presets], () => decisionRecallStore.refreshFromSettings());
         watchChatChanged_ACU(() => void refreshAll());
-        const __returned__ = { plotPresetStore, routerStore, decisionRecallStore, paused, decisionRecallTaskMode, worldbook, plotWorldbook, wbEntries, entryFilter, entryEmptyText, sections, currentWorldbookLabel, resolveEntryEmptyText, get entriesRefreshSeq() { return entriesRefreshSeq; }, set entriesRefreshSeq(v) { entriesRefreshSeq = v; }, refreshWorldbookEntries, onWorldbookSourceChange, onManualWorldbookToggle, refreshAll, get plotCopy() { return plotCopy; }, PlotPresetSection, WorldbookEntries, WorldbookSourcePicker, UbButton, UbCallout, UbPage, UbRow, UbSection, UbSwitch };
+        const __returned__ = { plotPresetStore, routerStore, decisionRecallStore, paused, decisionRecallReplacing, worldbook, plotWorldbook, wbEntries, entryFilter, entryEmptyText, sections, currentWorldbookLabel, resolveEntryEmptyText, get entriesRefreshSeq() { return entriesRefreshSeq; }, set entriesRefreshSeq(v) { entriesRefreshSeq = v; }, refreshWorldbookEntries, onWorldbookSourceChange, onManualWorldbookToggle, refreshAll, get plotCopy() { return plotCopy; }, PlotPresetSection, WorldbookEntries, WorldbookSourcePicker, UbButton, UbCallout, UbPage, UbRow, UbSection, UbSwitch };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-plot__body[data-v-4d00d0ae] {\r\n  display: contents;\n}\n.ub-plot__body.is-paused[data-v-4d00d0ae] {\r\n  display: block;\r\n  opacity: 0.45;\r\n  filter: grayscale(1);\r\n  pointer-events: none;\r\n  user-select: none;\n}\n.ub-plot__current[data-v-4d00d0ae] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-plot__current strong[data-v-4d00d0ae] {\r\n  color: var(--ub-text);\n}\r\n", "src/presentation-v3/pages/PlotPage.vue#style-0-4d00d0ae");
-var PlotPage_vue_vue_type_style_index_0_scoped_4d00d0ae_lang = null;
+injectSfcStyle("\n.ub-plot__body[data-v-8e07289f] {\r\n  display: contents;\n}\n.ub-plot__body.is-paused[data-v-8e07289f] {\r\n  display: block;\r\n  opacity: 0.45;\r\n  filter: grayscale(1);\r\n  pointer-events: none;\r\n  user-select: none;\n}\n.ub-plot__current[data-v-8e07289f] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-plot__current strong[data-v-8e07289f] {\r\n  color: var(--ub-text);\n}\r\n", "src/presentation-v3/pages/PlotPage.vue#style-0-8e07289f");
+var PlotPage_vue_vue_type_style_index_0_scoped_8e07289f_lang = null;
 
 const _hoisted_1$9 = ["inert"];
 const _hoisted_2$8 = ["inert"];
@@ -210565,7 +210532,7 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 0,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [_cache[9] || (_cache[9] = createTextVNode(
+				default: withCtx(() => [_cache[10] || (_cache[10] = createTextVNode(
 					" 决策召回正在「单独召回」，剧情推进已暂停：发送前由决策召回挑选纪要，这一页的设置暂不生效。 到决策召回页把用法换成「替换剧情推进的任务」，或在仪表盘关掉决策召回，即可恢复。 ",
 					-1
 					/* CACHED */
@@ -210574,7 +210541,7 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 					icon: "fa-solid fa-ranking-star",
 					onClick: _cache[0] || (_cache[0] = ($event) => $setup.routerStore.setActivePage("decision-recall"))
 				}, {
-					default: withCtx(() => [..._cache[8] || (_cache[8] = [createTextVNode(
+					default: withCtx(() => [..._cache[9] || (_cache[9] = [createTextVNode(
 						"去决策召回页",
 						-1
 						/* CACHED */
@@ -210587,6 +210554,36 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 				class: normalizeClass(["ub-plot__body", { "is-paused": $setup.paused }]),
 				inert: $setup.paused || undefined
 			}, [createVNode($setup["PlotPresetSection"], { id: "plot-preset" })], 10, _hoisted_1$9),
+			$setup.decisionRecallStore.taskModeActive ? (openBlock(), createBlock($setup["UbSection"], {
+				key: 1,
+				id: "plot-decision-recall",
+				title: "决策召回",
+				description: "决策召回的用法是「替换剧情推进的任务」；Key、模型与召回条数在决策召回页设置。",
+				icon: "fa-solid fa-ranking-star"
+			}, {
+				default: withCtx(() => [createVNode($setup["UbRow"], {
+					label: "由决策召回执行 recall 任务",
+					hint: "开启后自动匹配当前预设里「标签摘取」只有 recall 的任务，不调模型，改由决策召回给纪要打分挑选；只有一个任务的预设不替换。关着时照常由剧情推进调模型召回。"
+				}, {
+					default: withCtx(() => [createVNode($setup["UbSwitch"], {
+						"model-value": $setup.decisionRecallStore.settings.replacePlotRecallTasks,
+						"aria-label": "由决策召回执行 recall 任务",
+						"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.decisionRecallStore.patch({ replacePlotRecallTasks: $event }))
+					}, null, 8, ["model-value"])]),
+					_: 1
+				}), $setup.decisionRecallStore.settings.replacePlotRecallTasks ? (openBlock(), createBlock($setup["UbCallout"], {
+					key: 0,
+					kind: $setup.decisionRecallStore.replaceStatus.kind
+				}, {
+					default: withCtx(() => [createTextVNode(
+						toDisplayString($setup.decisionRecallStore.replaceStatus.text),
+						1
+						/* TEXT */
+					)]),
+					_: 1
+				}, 8, ["kind"])) : createCommentVNode("v-if", true)]),
+				_: 1
+			})) : createCommentVNode("v-if", true),
 			createVNode($setup["UbSection"], {
 				id: "plot-experience",
 				title: "发送体验",
@@ -210600,7 +210597,7 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 					default: withCtx(() => [createVNode($setup["UbSwitch"], {
 						"model-value": $setup.plotPresetStore.pendingDisguiseEnabled,
 						"aria-label": "等待期间显示伪装发送楼层",
-						"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.plotPresetStore.setPendingDisguiseEnabled($event))
+						"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.plotPresetStore.setPendingDisguiseEnabled($event))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				})]),
@@ -210617,11 +210614,11 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 				padded: ""
 			}, {
 				default: withCtx(() => [
-					$setup.decisionRecallTaskMode ? (openBlock(), createBlock($setup["UbCallout"], {
+					$setup.decisionRecallReplacing ? (openBlock(), createBlock($setup["UbCallout"], {
 						key: 0,
 						kind: "info"
 					}, {
-						default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
+						default: withCtx(() => [..._cache[11] || (_cache[11] = [createTextVNode(
 							"由决策召回执行的任务不读这里选的世界书，只从纪要表里挑选；其余任务照常使用。",
 							-1
 							/* CACHED */
@@ -210634,7 +210631,7 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 						names: $setup.worldbook.names.value,
 						status: $setup.worldbook.status.value,
 						error: $setup.worldbook.error.value,
-						"onUpdate:source": _cache[2] || (_cache[2] = ($event) => $setup.onWorldbookSourceChange($event)),
+						"onUpdate:source": _cache[3] || (_cache[3] = ($event) => $setup.onWorldbookSourceChange($event)),
 						onToggleBook: $setup.onManualWorldbookToggle
 					}, null, 8, [
 						"source",
@@ -210643,7 +210640,7 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 						"status",
 						"error"
 					]),
-					createBaseVNode("p", _hoisted_3$7, [_cache[11] || (_cache[11] = createTextVNode(
+					createBaseVNode("p", _hoisted_3$7, [_cache[12] || (_cache[12] = createTextVNode(
 						"目前已选：",
 						-1
 						/* CACHED */
@@ -210662,11 +210659,11 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 						status: $setup.wbEntries.status.value,
 						error: $setup.wbEntries.error.value,
 						"empty-text": $setup.entryEmptyText,
-						"onUpdate:filter": _cache[3] || (_cache[3] = ($event) => $setup.entryFilter = $event),
-						onSelectAll: _cache[4] || (_cache[4] = ($event) => $setup.wbEntries.selectAll($event)),
-						onDeselectAll: _cache[5] || (_cache[5] = ($event) => $setup.wbEntries.deselectAll($event)),
-						onToggle: _cache[6] || (_cache[6] = (bookName, uid, checked) => $setup.wbEntries.toggleEntry(bookName, uid, checked)),
-						onToggleGroup: _cache[7] || (_cache[7] = ($event) => $setup.wbEntries.toggleGroupExpanded($event))
+						"onUpdate:filter": _cache[4] || (_cache[4] = ($event) => $setup.entryFilter = $event),
+						onSelectAll: _cache[5] || (_cache[5] = ($event) => $setup.wbEntries.selectAll($event)),
+						onDeselectAll: _cache[6] || (_cache[6] = ($event) => $setup.wbEntries.deselectAll($event)),
+						onToggle: _cache[7] || (_cache[7] = (bookName, uid, checked) => $setup.wbEntries.toggleEntry(bookName, uid, checked)),
+						onToggleGroup: _cache[8] || (_cache[8] = ($event) => $setup.wbEntries.toggleGroupExpanded($event))
 					}, null, 8, [
 						"groups",
 						"filter",
@@ -210680,9 +210677,9 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 			}, 8, ["title", "description"])], 10, _hoisted_2$8)
 		]),
 		_: 1
-	});
+	}, 8, ["sections"]);
 }
-var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$a], ["__scopeId", "data-v-4d00d0ae"]]);
+var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$a], ["__scopeId", "data-v-8e07289f"]]);
 
 /**
  * useFormFillInjectionTarget — 填表"注入目标世界书"（Component A，§4.2）

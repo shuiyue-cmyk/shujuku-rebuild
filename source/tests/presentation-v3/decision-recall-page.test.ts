@@ -1,11 +1,10 @@
 /**
- * DecisionRecallPage / PlotTaskEditor — 决策召回总开关不动剧情推进开关、侧栏显隐与剧情推进灰显、用法切换与设置保存，
- * 剧情推进任务的「改由决策召回执行」开关。
+ * DecisionRecallPage / PlotPage — 决策召回总开关不动剧情推进开关、侧栏显隐与剧情推进灰显、用法切换与设置保存，
+ * 剧情推进页的「由决策召回执行 recall 任务」开关与自动匹配。
  *
  * @vitest-environment jsdom
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { type App, createApp, h, nextTick } from 'vue';
+import { afterEach, describe, expect, it } from 'vitest';
 import { byText, createV3Settings, flush, mountV3 } from './v3-harness';
 
 function settingsWith(decisionRecall: Record<string, unknown>, plotPatch: Record<string, unknown> = {}) {
@@ -25,11 +24,12 @@ async function openPage(pageId: string, decisionRecall: Record<string, unknown> 
 const switchByToggleKey = (key: string) => document.querySelector<HTMLButtonElement>(`button[role="switch"][data-acu-toggle-key="${key}"]`);
 const navItem = (pageId: string) => document.querySelector<HTMLElement>(`.ub-nav__item[data-page-id="${pageId}"]`);
 const modeRadio = (label: string) => byText<HTMLButtonElement>('[role="radiogroup"][aria-label="决策召回用法"] [role="radio"]', label);
+const replaceSwitch = () => document.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="由决策召回执行 recall 任务"]');
 const visibleIds = (router: { visiblePages: Array<{ id: string }> }) => router.visiblePages.map(page => page.id);
 
 const twoTaskPlot = {
   plotTasks: [
-    { id: 'recall-task', name: '召回', extractTags: 'recall', extractInjectTags: '', decisionRecall: true, stage: 1, order: 0, promptGroup: [] },
+    { id: 'recall-task', name: '召回', extractTags: 'recall', extractInjectTags: '', stage: 1, order: 0, promptGroup: [] },
     { id: 'plan-task', name: '规划', extractTags: 'plot', extractInjectTags: '', stage: 2, order: 1, promptGroup: [] },
   ],
 };
@@ -82,7 +82,7 @@ describe('DecisionRecallPage', () => {
   });
 
   it('改为替换剧情推进的任务：剧情推进入口恢复、显示当前预设里由决策召回执行的任务；改回单独召回又灰显', async () => {
-    const { settings, saveSettings, errors } = await openPage('decision-recall', { enabled: true }, twoTaskPlot);
+    const { settings, saveSettings, errors } = await openPage('decision-recall', { enabled: true, replacePlotRecallTasks: true }, twoTaskPlot);
     expect(modeRadio('单独召回')!.getAttribute('aria-checked')).toBe('true');
     expect(navItem('plot')!.classList.contains('is-dimmed')).toBe(true);
 
@@ -104,9 +104,17 @@ describe('DecisionRecallPage', () => {
     expect(errors).toEqual([]);
   });
 
-  it('替换剧情推进的任务但预设只有一个任务时提示替换不了', async () => {
-    await openPage('decision-recall', { enabled: true, mode: 'plot_task' });
-    expect(document.body.textContent).toContain('只有一个任务，替换不了');
+  it('替换剧情推进的任务但剧情推进页的开关没开时，提示照常由剧情推进召回并可去剧情推进页', async () => {
+    const { router } = await openPage('decision-recall', { enabled: true, mode: 'plot_task' }, twoTaskPlot);
+    expect(document.body.textContent).toContain('「由决策召回执行 recall 任务」没开');
+    byText<HTMLButtonElement>('button', '去剧情推进页')!.click();
+    await flush();
+    expect(router.activePageId).toBe('plot');
+  });
+
+  it('替换剧情推进的任务但预设只有一个任务时提示不替换', async () => {
+    await openPage('decision-recall', { enabled: true, mode: 'plot_task', replacePlotRecallTasks: true });
+    expect(document.body.textContent).toContain('只有一个任务，不替换');
   });
 
   it('没填 Key 时提示只会带上最新 5 条；换服务商后显示对应的 Key 与模型', async () => {
@@ -160,75 +168,47 @@ describe('剧情推进页随决策召回用法', () => {
     expect(errors).toEqual([]);
   });
 
-  it('替换剧情推进的任务时剧情推进页恢复，世界书处提示由决策召回执行的任务不读这里选的世界书', async () => {
-    const { errors } = await openPage('plot', { enabled: true, mode: 'plot_task' });
+  it('替换剧情推进的任务时剧情推进页恢复；打开页内开关后自动匹配 recall 任务，并提示这些任务不读这里选的世界书', async () => {
+    const { settings, saveSettings, errors } = await openPage('plot', { enabled: true, mode: 'plot_task' }, twoTaskPlot);
     expect(document.body.textContent).not.toContain('剧情推进已暂停');
     document.querySelectorAll<HTMLElement>('.ub-plot__body').forEach(body => {
       expect(body.classList.contains('is-paused')).toBe(false);
       expect(body.hasAttribute('inert')).toBe(false);
     });
+    const toggle = replaceSwitch()!;
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(document.body.textContent).not.toContain('不读这里选的世界书');
+
+    toggle.click();
+    await flush();
+
+    expect(settings.decisionRecallSettings.replacePlotRecallTasks).toBe(true);
+    expect(saveSettings).toHaveBeenCalled();
+    expect(document.body.textContent).toContain('当前预设里由决策召回执行的任务：召回。');
     expect(document.body.textContent).toContain('由决策召回执行的任务不读这里选的世界书');
+
+    replaceSwitch()!.click();
+    await flush();
+    expect(settings.decisionRecallSettings.replacePlotRecallTasks).toBe(false);
+    expect(document.body.textContent).not.toContain('不读这里选的世界书');
     expect(errors).toEqual([]);
   });
 
-  it('决策召回关着时剧情推进页照常，也不提示世界书', async () => {
-    await openPage('plot', { enabled: false, mode: 'plot_task' });
-    expect(document.body.textContent).not.toContain('剧情推进已暂停');
+  it('页内开关开着但预设只有一个任务时提示不替换，也不提示世界书', async () => {
+    await openPage('plot', { enabled: true, mode: 'plot_task', replacePlotRecallTasks: true });
+    expect(document.body.textContent).toContain('只有一个任务，不替换');
     expect(document.body.textContent).not.toContain('不读这里选的世界书');
   });
-});
 
-describe('PlotTaskEditor 改由决策召回执行', () => {
-  const mounted: Array<{ app: App<Element>; el: HTMLElement }> = [];
-  afterEach(() => {
-    mounted.splice(0).forEach(({ app, el }) => { app.unmount(); el.remove(); });
-  });
+  it('决策召回关着或用法是单独召回时不显示页内开关', async () => {
+    await openPage('plot', { enabled: false, mode: 'plot_task', replacePlotRecallTasks: true }, twoTaskPlot);
+    expect(document.body.textContent).not.toContain('剧情推进已暂停');
+    expect(document.body.textContent).not.toContain('不读这里选的世界书');
+    expect(replaceSwitch()).toBeNull();
+    const mount = await import('../../src/presentation-v2/bootstrap/mount');
+    mount.__resetAcuV2MountForTests();
 
-  async function mountEditor(taskPatch: Record<string, unknown>, taskCount: number, decisionRecallTaskMode = true, onPatch = vi.fn()) {
-    vi.resetModules();
-    const { default: PlotTaskEditor } = await import('../../src/presentation-v3/parts/PlotTaskEditor.vue');
-    const task = {
-      id: 't1', name: '召回', enabled: true, promptGroup: [], extractTags: 'recall', extractInjectTags: '',
-      finalDirectiveTemplate: '', minLength: 0, maxRetries: 3, mergeStrategy: 'append', stage: 1, order: 0,
-      description: '', triggerWhen: '', decisionRecall: false,
-      agentControl: { enabled: false, selectable: true, defaultSelected: false, allowSequential: true, allowParallel: true, dependsOnTaskIds: [], blocksTaskIds: [] },
-      ...taskPatch,
-    };
-    const el = document.createElement('div');
-    document.body.appendChild(el);
-    const app = createApp({ render: () => h(PlotTaskEditor, { task, apiPresetOptions: [], taskApiOverride: '', taskCount, decisionRecallTaskMode, onPatch }) });
-    app.mount(el);
-    mounted.push({ app, el });
-    await nextTick();
-    return { el, onPatch };
-  }
-
-  const toggleOf = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('button[aria-label="改由决策召回执行"]')!;
-
-  it('用法是替换剧情推进的任务时，多任务预设里标签是 recall 的任务可以打开开关', async () => {
-    const { el, onPatch } = await mountEditor({}, 2);
-    expect(toggleOf(el).disabled).toBe(false);
-    toggleOf(el).click();
-    expect(onPatch).toHaveBeenCalledWith({ decisionRecall: true });
-  });
-
-  it('决策召回没开或用法不是替换剧情推进的任务时开关不可用、显示为关，并提示去哪里改', async () => {
-    const { el } = await mountEditor({ decisionRecall: true }, 2, false);
-    expect(toggleOf(el).disabled).toBe(true);
-    expect(toggleOf(el).getAttribute('aria-checked')).toBe('false');
-    expect(el.textContent).toContain('把用法选为「替换剧情推进的任务」');
-  });
-
-  it('单任务预设里开关不可用，并提示改用单独召回', async () => {
-    const { el } = await mountEditor({ decisionRecall: true }, 1);
-    expect(toggleOf(el).disabled).toBe(true);
-    expect(toggleOf(el).getAttribute('aria-checked')).toBe('false');
-    expect(el.textContent).toContain('改用「单独召回」');
-  });
-
-  it('标签不是恰好 recall 时开关不可用', async () => {
-    const { el } = await mountEditor({ extractTags: 'recall,plot' }, 3);
-    expect(toggleOf(el).disabled).toBe(true);
-    expect(el.textContent).toContain('恰好是 recall');
+    await openPage('plot', { enabled: true, mode: 'standalone', replacePlotRecallTasks: true }, twoTaskPlot);
+    expect(replaceSwitch()).toBeNull();
   });
 });

@@ -22,14 +22,6 @@
       <UbRow label="提取写入标签" hint="优先级高于标签摘取；留空不追加" stack>
         <UbInput :model-value="task.extractInjectTags" aria-label="提取写入标签" @change="patch({ extractInjectTags: String($event) })" />
       </UbRow>
-      <UbRow label="改由决策召回执行" :hint="decisionRecallHint">
-        <UbSwitch
-          :model-value="task.decisionRecall && decisionRecallAvailable"
-          :disabled="!decisionRecallAvailable"
-          aria-label="改由决策召回执行"
-          @update:model-value="patch({ decisionRecall: $event })"
-        />
-      </UbRow>
     </UbSection>
 
     <UbSection
@@ -156,26 +148,12 @@ import UbSection from '../ui/UbSection.vue';
 import UbSelect, { type UbSelectOption } from '../ui/UbSelect.vue';
 import UbSwitch from '../ui/UbSwitch.vue';
 import UbTextarea from '../ui/UbTextarea.vue';
-import { canPlotTaskUseDecisionRecall_ACU } from '../../service/decision-recall/decision-recall-plot-task';
 
 const props = defineProps<{
   task: PlotTaskDraft | null;
   apiPresetOptions: Array<{ name: string }>;
   taskApiOverride: string;
-  /** 当前预设的任务数：决策召回只能替换多任务预设里的任务。 */
-  taskCount?: number;
-  /** 决策召回已开启且用法是「替换剧情推进的任务」：否则开关不可用。 */
-  decisionRecallTaskMode?: boolean;
 }>();
-
-const decisionRecallAvailable = computed(() => props.decisionRecallTaskMode === true
-  && canPlotTaskUseDecisionRecall_ACU(props.task, props.taskCount ?? 0));
-const decisionRecallHint = computed(() => {
-  if (props.decisionRecallTaskMode !== true) return '需要先在仪表盘的进阶开关打开决策召回，并在「决策召回」页把用法选为「替换剧情推进的任务」。';
-  if ((props.taskCount ?? 0) < 2) return '只在有多个任务的预设里可用；只有一个任务时请在「决策召回」页改用「单独召回」。';
-  if (!decisionRecallAvailable.value) return '只有「标签摘取」恰好是 recall、且没有填「提取写入标签」的任务可以改由决策召回执行。';
-  return '开启后这个任务不调模型、不读剧情推进选的世界书，改由决策模型给纪要打分、挑出相关的写进 recall 标签；Key、模型与条数在「决策召回」页设置。';
-});
 
 const emit = defineEmits<{
   (e: 'patch', patch: Partial<PlotTaskDraft>): void;

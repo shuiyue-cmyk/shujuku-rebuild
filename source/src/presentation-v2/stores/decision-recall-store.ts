@@ -2,7 +2,8 @@
  * decision-recall-store — 「决策召回」页的状态：设置读写、模型列表、测试召回。
  *
  * 设置权威源是 settings_ACU.decisionRecallSettings。总开关在仪表盘进阶开关里（setDecisionRecallEnabled_ACU），
- * 这一页只选用法：「单独召回」时剧情推进暂停，「替换剧情推进的任务」时剧情推进照常运行。
+ * 这一页只选用法：「单独召回」时剧情推进暂停，「替换剧情推进的任务」时剧情推进照常运行；
+ * 是否真的替换由剧情推进页的「由决策召回执行 recall 任务」开关决定（replacePlotRecallTasks，也存在这里）。
  */
 import { defineStore } from 'pinia';
 import { settings_ACU } from '../../service/runtime/state-manager';
@@ -30,24 +31,22 @@ import { AIHUBMIX_DECISION_MODELS_ACU } from '../../shared/decision-recall-defau
 import { logError_ACU } from '../../shared/utils';
 import { useToastStore } from './toast-store';
 
-/** 当前剧情推进预设里与决策召回有关的任务（「替换剧情推进的任务」用法下给用户看）。 */
+/** 当前剧情推进预设里能交给决策召回的任务（给用户看替换会落在哪些任务上）。 */
 export interface DecisionRecallPlotTaskStatus_ACU {
   plotEnabled: boolean;
   taskCount: number;
-  /** 打开了「改由决策召回执行」且满足条件的任务名。 */
-  replacedTaskNames: string[];
-  /** 满足条件、但还没打开开关的任务名。 */
-  eligibleTaskNames: string[];
+  /** 自动匹配到的任务名：多任务预设里标签恰好是 recall 的任务；单任务预设为空。 */
+  matchedTaskNames: string[];
 }
 
 function readPlotTaskStatus_ACU(): DecisionRecallPlotTaskStatus_ACU {
   const tasks = normalizePlotTasks_ACU(settings_ACU?.plotSettings || {});
-  const eligible = tasks.filter((task: any) => canPlotTaskUseDecisionRecall_ACU(task, tasks.length));
   return {
     plotEnabled: settings_ACU?.plotSettings?.enabled === true,
     taskCount: tasks.length,
-    replacedTaskNames: eligible.filter((task: any) => task.decisionRecall === true).map((task: any) => String(task.name || task.id)),
-    eligibleTaskNames: eligible.filter((task: any) => task.decisionRecall !== true).map((task: any) => String(task.name || task.id)),
+    matchedTaskNames: tasks
+      .filter((task: any) => canPlotTaskUseDecisionRecall_ACU(task, tasks.length))
+      .map((task: any) => String(task.name || task.id)),
   };
 }
 
@@ -119,8 +118,21 @@ export const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
     endpoint: state => resolveDecisionRecallEndpoint_ACU(state.settings),
     /** 「单独召回」生效中：剧情推进暂停。 */
     standaloneActive: state => state.settings.enabled && state.settings.mode === 'standalone',
-    /** 「替换剧情推进的任务」生效中：剧情推进照常运行，打开了开关的 recall 任务改由决策召回执行。 */
+    /** 「替换剧情推进的任务」用法生效中：剧情推进照常运行，剧情推进页显示替换开关。 */
     taskModeActive: state => state.settings.enabled && state.settings.mode === 'plot_task',
+    /** 剧情推进页的替换开关也开着：标签只有 recall 的任务改由决策召回执行。 */
+    replacingPlotTasks: state => state.settings.enabled && state.settings.mode === 'plot_task' && state.settings.replacePlotRecallTasks,
+    /** 替换会不会生效、落在哪些任务上（决策召回页与剧情推进页共用）。 */
+    replaceStatus(state): { kind: 'success' | 'info' | 'warning'; text: string } {
+      const status = state.plotTaskStatus;
+      if (!status.plotEnabled) return { kind: 'warning', text: '剧情推进当前关着：在仪表盘打开剧情推进后才会替换。' };
+      if (!state.settings.replacePlotRecallTasks) {
+        return { kind: 'info', text: '剧情推进页的「由决策召回执行 recall 任务」没开：照常由剧情推进调模型召回。' };
+      }
+      if (status.taskCount < 2) return { kind: 'warning', text: '当前剧情推进预设只有一个任务，不替换：照常由剧情推进调模型召回。' };
+      if (status.matchedTaskNames.length) return { kind: 'success', text: `当前预设里由决策召回执行的任务：${status.matchedTaskNames.join('、')}。` };
+      return { kind: 'info', text: '当前预设里没有「标签摘取」只有 recall 的任务，不替换：照常由剧情推进调模型召回。' };
+    },
     activeModels(state): readonly DecisionModelOption_ACU[] {
       if (state.settings.provider === 'siliconflow') return SILICONFLOW_DECISION_MODELS_ACU;
       if (state.settings.provider === 'aihubmix') return AIHUBMIX_DECISION_MODELS_ACU;

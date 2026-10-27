@@ -41,8 +41,6 @@ export interface PlotTaskDraft {
   description: string;
   triggerWhen: string;
   agentControl: PlotTaskAgentControlDraft;
-  /** 改由决策召回执行（只在多任务预设、标签恰好是 recall 时生效）。 */
-  decisionRecall: boolean;
 }
 
 export interface PlotTaskAgentControlDraft {
@@ -141,7 +139,6 @@ function taskFromRaw(raw: any, index = 0): PlotTaskDraft {
     description: typeof normalized.description === 'string' ? normalized.description : '',
     triggerWhen: typeof normalized.triggerWhen === 'string' ? normalized.triggerWhen : '',
     agentControl: cloneAgentControl(normalized.agentControl),
-    decisionRecall: normalized.decisionRecall === true,
   };
 }
 
@@ -184,7 +181,6 @@ function makeDefaultTask(index: number, existing: readonly PlotTaskDraft[] = [])
       dependsOnTaskIds: [],
       blocksTaskIds: [],
     },
-    decisionRecall: false,
   };
 }
 
@@ -337,7 +333,6 @@ export function usePlotTaskEditing() {
         ...(Number.isFinite(t.agentControl?.preferredStage) ? { preferredStage: Math.trunc(Number(t.agentControl.preferredStage)) } : {}),
         ...(Number.isFinite(t.agentControl?.preferredOrder) ? { preferredOrder: Math.trunc(Number(t.agentControl.preferredOrder)) } : {}),
       },
-      decisionRecall: t.decisionRecall === true,
     }));
     out.finalSystemDirective = finalDirective.value;
     return out;

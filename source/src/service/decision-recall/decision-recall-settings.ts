@@ -23,6 +23,8 @@ export interface DecisionRecallSettings_ACU {
   /** 总开关（仪表盘进阶开关）；关着时两种用法都不生效。 */
   enabled: boolean;
   mode: DecisionRecallMode_ACU;
+  /** 剧情推进页的「由决策召回执行 recall 任务」开关；关着时剧情推进照常调模型召回。 */
+  replacePlotRecallTasks: boolean;
   provider: DecisionRecallProvider_ACU;
   openrouterApiKey: string;
   openrouterModel: string;
@@ -58,6 +60,7 @@ export function normalizeDecisionRecallSettings_ACU(raw: unknown): DecisionRecal
   return {
     enabled: source.enabled === true,
     mode: source.mode === 'plot_task' ? 'plot_task' : 'standalone',
+    replacePlotRecallTasks: source.replacePlotRecallTasks === true,
     provider: PROVIDERS_ACU.includes(source.provider) ? source.provider : 'siliconflow',
     openrouterApiKey: text(source.openrouterApiKey),
     openrouterModel: text(source.openrouterModel) || DEFAULT_DECISION_MODEL_ACU,
@@ -90,8 +93,14 @@ export function isDecisionRecallStandaloneActive_ACU(raw: unknown): boolean {
   return settings.enabled && settings.mode === 'standalone';
 }
 
-/** 替换剧情推进任务的用法生效中：剧情推进照常运行，打开了开关的 recall 任务改由决策召回执行。 */
+/** 替换剧情推进任务的用法生效中：剧情推进照常运行（是否真的替换还看剧情推进页的开关）。 */
 export function isDecisionRecallTaskModeActive_ACU(raw: unknown): boolean {
   const settings = normalizeDecisionRecallSettings_ACU(raw);
   return settings.enabled && settings.mode === 'plot_task';
+}
+
+/** 本轮剧情推进要把标签只有 recall 的任务交给决策召回：用法是替换剧情推进的任务，且剧情推进页的开关开着。 */
+export function isDecisionRecallReplacingPlotTasks_ACU(raw: unknown): boolean {
+  const settings = normalizeDecisionRecallSettings_ACU(raw);
+  return settings.enabled && settings.mode === 'plot_task' && settings.replacePlotRecallTasks;
 }

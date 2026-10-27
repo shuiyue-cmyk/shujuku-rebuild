@@ -10,6 +10,28 @@
     </div>
 
     <UbSection
+      v-if="decisionRecallStore.taskModeActive"
+      id="plot-decision-recall"
+      title="决策召回"
+      description="决策召回的用法是「替换剧情推进的任务」；Key、模型与召回条数在决策召回页设置。"
+      icon="fa-solid fa-ranking-star"
+    >
+      <UbRow
+        label="由决策召回执行 recall 任务"
+        hint="开启后自动匹配当前预设里「标签摘取」只有 recall 的任务，不调模型，改由决策召回给纪要打分挑选；只有一个任务的预设不替换。关着时照常由剧情推进调模型召回。"
+      >
+        <UbSwitch
+          :model-value="decisionRecallStore.settings.replacePlotRecallTasks"
+          aria-label="由决策召回执行 recall 任务"
+          @update:model-value="decisionRecallStore.patch({ replacePlotRecallTasks: $event })"
+        />
+      </UbRow>
+      <UbCallout v-if="decisionRecallStore.settings.replacePlotRecallTasks" :kind="decisionRecallStore.replaceStatus.kind">
+        {{ decisionRecallStore.replaceStatus.text }}
+      </UbCallout>
+    </UbSection>
+
+    <UbSection
       id="plot-experience"
       title="发送体验"
       description="控制剧情推进等待期间聊天区的占位反馈，纯展示开关，不改任何发送逻辑。"
@@ -35,7 +57,7 @@
         icon="fa-solid fa-book"
         padded
       >
-        <UbCallout v-if="decisionRecallTaskMode" kind="info">由决策召回执行的任务不读这里选的世界书，只从纪要表里挑选；其余任务照常使用。</UbCallout>
+        <UbCallout v-if="decisionRecallReplacing" kind="info">由决策召回执行的任务不读这里选的世界书，只从纪要表里挑选；其余任务照常使用。</UbCallout>
         <WorldbookSourcePicker
           :source="plotWorldbook.source.value"
           :selected-names="plotWorldbook.manualSelection.value"
@@ -66,7 +88,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
 import { usePlotWorldbookConfig } from '../../presentation-v2/composables/usePlotWorldbookConfig';
 import { usePlotWorldbookEntries } from '../../presentation-v2/composables/usePlotWorldbookEntries';
@@ -93,19 +115,21 @@ const routerStore = useRouterStore();
 const decisionRecallStore = useDecisionRecallStore();
 /** 决策召回「单独召回」生效中：剧情推进暂停，整页灰掉不可编辑。 */
 const paused = computed(() => routerStore.featureGates[FEATURE_FLAG_PLOT_PAUSED] === true);
-/** 「替换剧情推进的任务」生效中：提醒这里选的世界书不用于由决策召回执行的任务。 */
-const decisionRecallTaskMode = computed(() => decisionRecallStore.taskModeActive);
+/** 确实有任务交给决策召回：提醒这里选的世界书不用于这些任务。 */
+const decisionRecallReplacing = computed(() => decisionRecallStore.replacingPlotTasks
+  && decisionRecallStore.plotTaskStatus.matchedTaskNames.length > 0);
 const worldbook = useWorldbookSelector();
 const plotWorldbook = usePlotWorldbookConfig();
 const wbEntries = usePlotWorldbookEntries();
 const entryFilter = ref('');
 const entryEmptyText = ref(plotCopy.worldbook.emptyDefault);
 
-const sections = [
+const sections = computed(() => [
   { id: 'plot-preset', label: '预设' },
+  ...(decisionRecallStore.taskModeActive ? [{ id: 'plot-decision-recall', label: '决策召回' }] : []),
   { id: 'plot-experience', label: '发送体验' },
   { id: 'plot-worldbook', label: '世界书' },
-];
+]);
 
 const currentWorldbookLabel = computed(() => {
   if (plotWorldbook.source.value === 'character') {
@@ -156,6 +180,8 @@ async function refreshAll(): Promise<void> {
 }
 
 onMounted(() => void refreshAll());
+// 换预设或保存预设后，重新匹配交给决策召回的任务
+watch(() => [plotPresetStore.activePresetName, plotPresetStore.presets], () => decisionRecallStore.refreshFromSettings());
 watchChatChanged_ACU(() => void refreshAll());
 </script>
 

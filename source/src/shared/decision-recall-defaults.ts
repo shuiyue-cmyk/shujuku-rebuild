@@ -5,7 +5,7 @@
  * 取分数最高的若干条，连同固定带上的最新几条，按表号顺序写进本轮输入（走剧情推进的注入通道）。
  * 总开关在仪表盘进阶开关里（关着时侧栏不显示决策召回页），开启后在决策召回页选用法，两种用法共用这一份设置：
  * - 单独召回（默认）：发送前由决策召回占用剧情推进的规划位，剧情推进暂停（剧情推进页灰掉，它自己的开关不动）；
- * - 替换剧情推进的任务：剧情推进照常运行，多任务预设里、标签恰好是 recall 且打开了开关的任务改由决策召回执行。
+ * - 替换剧情推进的任务：剧情推进照常运行，剧情推进页的「由决策召回执行 recall 任务」开着时，多任务预设里标签恰好是 recall 的任务改由决策召回执行。
  * 交火开着时从交火筛过的纪要索引里选，否则从全部纪要里选。
  */
 import { DEFAULT_DECISION_MODEL_ACU, DEFAULT_SILICONFLOW_DECISION_MODEL_ACU } from './decision-gate-defaults';
@@ -74,6 +74,8 @@ export function buildDefaultDecisionRecallSettings_ACU() {
   return {
     enabled: false,
     mode: 'standalone' as DecisionRecallMode_ACU,
+    // 剧情推进页的开关：「替换剧情推进的任务」用法下，打开后才把多任务预设里标签只有 recall 的任务交给决策召回
+    replacePlotRecallTasks: false,
     // 硅基流动 SemIf 响应快、目前免费，一组 20 个问题也不至于拖慢发送
     provider: 'siliconflow' as DecisionRecallProvider_ACU,
     openrouterApiKey: '',

@@ -1,12 +1,12 @@
 /**
  * service/decision-recall/decision-recall-plot-task.ts — 剧情推进任务改由决策召回执行。
  *
- * 只在决策召回开着、用法选了「替换剧情推进的任务」时生效，且只在多任务预设上生效（单任务预设请用「单独召回」）；
- * 任务的标签必须恰好是一个 recall、没有注入专用标签，
+ * 只在决策召回开着、用法选了「替换剧情推进的任务」、剧情推进页的「由决策召回执行 recall 任务」开着时生效，
+ * 且只在多任务预设上生效（单任务预设不替换）；自动匹配标签恰好是一个 recall、没有注入专用标签的任务，
  * 因为决策召回只产出编码列表，产不出别的标签。产出是与模型回复同形的 recall 标签块，
  * 交给剧情推进照常摘取、传给后续任务、按预设自己的最终注入指令写进本轮输入。
  */
-import { isDecisionRecallTaskModeActive_ACU, normalizeDecisionRecallSettings_ACU } from './decision-recall-settings';
+import { isDecisionRecallReplacingPlotTasks_ACU, normalizeDecisionRecallSettings_ACU } from './decision-recall-settings';
 import {
   buildDecisionRecallTagBlock_ACU,
   logDecisionRecallResult_ACU,
@@ -32,13 +32,12 @@ export function canPlotTaskUseDecisionRecall_ACU(task: Record<string, any> | nul
 }
 
 /**
- * 本轮是否真的由决策召回执行：决策召回开着且用法是「替换剧情推进的任务」，任务开了开关且仍满足条件
- * （关掉决策召回、换成单独召回、改了标签或删到只剩一个任务后自动退回模型执行）。
+ * 本轮这个任务是否由决策召回执行：替换开着且任务满足条件
+ * （关掉剧情推进页的开关、关掉决策召回、换成单独召回、改了标签或删到只剩一个任务后照常由模型执行）。
  */
 export function isDecisionRecallPlotTask_ACU(task: Record<string, any> | null | undefined, presetTaskCount: number): boolean {
-  return task?.decisionRecall === true
-    && canPlotTaskUseDecisionRecall_ACU(task, presetTaskCount)
-    && isDecisionRecallTaskModeActive_ACU(settings_ACU?.decisionRecallSettings);
+  return canPlotTaskUseDecisionRecall_ACU(task, presetTaskCount)
+    && isDecisionRecallReplacingPlotTasks_ACU(settings_ACU?.decisionRecallSettings);
 }
 
 export type DecisionRecallPlotTaskOutcome_ACU =

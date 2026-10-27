@@ -12,7 +12,7 @@ import {
   isDecisionRecallPlotTask_ACU,
 } from '../../../src/service/decision-recall/decision-recall-plot-task';
 
-const task = (patch: Record<string, unknown> = {}) => ({ extractTags: 'recall', extractInjectTags: '', decisionRecall: true, ...patch });
+const task = (patch: Record<string, unknown> = {}) => ({ extractTags: 'recall', extractInjectTags: '', ...patch });
 
 describe('canPlotTaskUseDecisionRecall_ACU', () => {
   it('多任务预设里标签恰好是 recall 的任务可以替换（大小写、首尾空白不影响）', () => {
@@ -20,7 +20,7 @@ describe('canPlotTaskUseDecisionRecall_ACU', () => {
     expect(canPlotTaskUseDecisionRecall_ACU(task({ extractTags: ' Recall ' }), 3)).toBe(true);
   });
 
-  it('单任务预设不能替换（请直接单独开启决策召回）', () => {
+  it('单任务预设不替换', () => {
     expect(canPlotTaskUseDecisionRecall_ACU(task(), 1)).toBe(false);
   });
 
@@ -35,22 +35,23 @@ describe('canPlotTaskUseDecisionRecall_ACU', () => {
 
 describe('isDecisionRecallPlotTask_ACU', () => {
   beforeEach(() => {
-    stateMocks.settings_ACU.decisionRecallSettings = { enabled: true, mode: 'plot_task' };
+    stateMocks.settings_ACU.decisionRecallSettings = { enabled: true, mode: 'plot_task', replacePlotRecallTasks: true };
   });
 
-  it('开了开关且满足条件才由决策召回执行；条件不满足时开关自动失效', () => {
+  it('剧情推进页的开关开着时自动匹配标签只有 recall 的任务；单任务预设或标签不符时照常调模型', () => {
     expect(isDecisionRecallPlotTask_ACU(task(), 2)).toBe(true);
-    expect(isDecisionRecallPlotTask_ACU(task({ decisionRecall: false }), 2)).toBe(false);
     expect(isDecisionRecallPlotTask_ACU(task(), 1)).toBe(false);
     expect(isDecisionRecallPlotTask_ACU(task({ extractTags: 'plot' }), 2)).toBe(false);
   });
 
-  it('决策召回总开关关着、或用法是单独召回时，任务里的开关不生效、照常调模型', () => {
-    stateMocks.settings_ACU.decisionRecallSettings = { enabled: false, mode: 'plot_task' };
+  it('剧情推进页的开关没开、决策召回总开关关着、或用法是单独召回时不替换', () => {
+    stateMocks.settings_ACU.decisionRecallSettings = { enabled: true, mode: 'plot_task', replacePlotRecallTasks: false };
     expect(isDecisionRecallPlotTask_ACU(task(), 2)).toBe(false);
-    stateMocks.settings_ACU.decisionRecallSettings = { enabled: true, mode: 'standalone' };
+    stateMocks.settings_ACU.decisionRecallSettings = { enabled: false, mode: 'plot_task', replacePlotRecallTasks: true };
     expect(isDecisionRecallPlotTask_ACU(task(), 2)).toBe(false);
-    stateMocks.settings_ACU.decisionRecallSettings = { enabled: true };
+    stateMocks.settings_ACU.decisionRecallSettings = { enabled: true, mode: 'standalone', replacePlotRecallTasks: true };
+    expect(isDecisionRecallPlotTask_ACU(task(), 2)).toBe(false);
+    stateMocks.settings_ACU.decisionRecallSettings = { enabled: true, replacePlotRecallTasks: true };
     expect(isDecisionRecallPlotTask_ACU(task(), 2)).toBe(false);
   });
 });

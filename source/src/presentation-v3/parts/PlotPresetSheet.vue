@@ -113,8 +113,6 @@
         :task="taskEditing.currentTask.value"
         :api-preset-options="apiPresetOptions"
         :task-api-override="currentTaskApiOverride"
-        :task-count="tasks.length"
-        :decision-recall-task-mode="decisionRecallStore.taskModeActive"
         @patch="taskEditing.patchCurrent($event)"
         @task-api-override="emit('update-task-api-override', $event)"
         @segment-add="taskEditing.addSegment($event)"
@@ -163,7 +161,6 @@ import UbSection from '../ui/UbSection.vue';
 import UbSheet from '../ui/UbSheet.vue';
 import UbTextarea from '../ui/UbTextarea.vue';
 import PlotTaskEditor from './PlotTaskEditor.vue';
-import { useDecisionRecallStore } from '../../presentation-v2/stores/decision-recall-store';
 
 type Rates = Record<'rateMain' | 'ratePersonal' | 'rateErotic' | 'rateCuckold' | 'recallCount', number>;
 
@@ -199,9 +196,6 @@ const emit = defineEmits<{
   (e: 'update-task-api-override', value: string): void;
   (e: 'update-rate', field: PlotRateField, value: number): void;
 }>();
-
-// 任务编辑里的「改由决策召回执行」只在决策召回用法为「替换剧情推进的任务」时可用
-const decisionRecallStore = useDecisionRecallStore();
 
 const rateFields: Array<{ key: keyof Rates & PlotRateField; label: string; step: number; min?: number }> = [
   { key: 'rateMain', label: 'sulv1', step: 0.05 },
