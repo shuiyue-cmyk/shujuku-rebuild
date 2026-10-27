@@ -4970,6 +4970,8 @@ const DEFAULT_DECISION_RECALL_MAX_RETRIES_ACU = 2;
 const DECISION_RECALL_MAX_RETRIES_LIMIT_ACU = 5;
 /** 一组 20 个问题比替换前判定的单个问题慢得多，超时放宽到 60 秒。 */
 const DECISION_RECALL_TIMEOUT_MS_ACU = 60000;
+/** 整次召回（全部分组加重试等待）的总时限：到时还没打完分的组按失败处理，不让发送一直卡着。 */
+const DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU = 90000;
 /** AIHubMix 的决策接口（与硅基流动同格式，允许网页直连）。 */
 const AIHUBMIX_DECISION_API_URL_ACU = 'https://aihubmix.com/v1/systemone';
 const DEFAULT_AIHUBMIX_DECISION_MODEL_ACU = 'jev-latest';
@@ -91646,6 +91648,11 @@ function collectIndexedCodes_ACU(content, rows) {
 function retryDelayMs_ACU(attempt, rateLimited) {
     return (rateLimited ? 4000 : 1500) * (attempt + 1);
 }
+/** 重试也不会好的请求错误：这一组不再重试。 */
+const NON_RETRYABLE_STATUSES_ACU = new Set([400, 401, 402, 403, 404, 413, 422]);
+/** Key 无效、没余额、没权限或模型不存在：每一组都会一样失败，其余各组直接按失败处理。 */
+const FATAL_STATUSES_ACU = new Set([401, 402, 403, 404]);
+const TOTAL_TIMEOUT_ERROR_ACU = '决策召回总时长超过时限，未打完分的组已跳过';
 async function runDecisionRecall_ACU(options, deps = {}) {
     const sources = deps.sources ?? DEFAULT_DECISION_RECALL_SOURCES_ACU;
     const settings = options.settings ?? normalizeDecisionRecallSettings_ACU(settings_ACU?.decisionRecallSettings);
@@ -91686,8 +91693,21 @@ async function runDecisionRecall_ACU(options, deps = {}) {
     const state = buildDecisionRecallState_ACU({ aiFloors: collectDecisionRecallAiFloors_ACU(sources.loadChat()), userInput: options.userInput });
     const groups = chunkDecisionRecallRows_ACU(plan.pool, DECISION_RECALL_BATCH_SIZE_ACU);
     const fetchImpl = deps.fetch ?? globalThis.fetch;
+    // 总时限与鉴权类错误都要能停下其余各组的在途请求，但不算用户中止
+    const runController = new AbortController();
+    const stopRun = () => runController.abort();
+    if (signal?.aborted)
+        stopRun();
+    signal?.addEventListener('abort', stopRun, { once: true });
+    let stopError = '';
+    const stopWith = (error) => {
+        if (!stopError)
+            stopError = error;
+        stopRun();
+    };
+    const totalTimer = setTimeout(() => stopWith(`${TOTAL_TIMEOUT_ERROR_ACU}（${Math.round((deps.totalTimeoutMs ?? DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU) / 1000)} 秒）`), deps.totalTimeoutMs ?? DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU);
     const requestGroup = async (rows) => {
-        const outcome = await runWithDeadline_ACU({ timeoutMs: deps.timeoutMs ?? DECISION_RECALL_TIMEOUT_MS_ACU, signal }, async (requestSignal) => {
+        const outcome = await runWithDeadline_ACU({ timeoutMs: deps.timeoutMs ?? DECISION_RECALL_TIMEOUT_MS_ACU, signal: runController.signal }, async (requestSignal) => {
             const response = await fetchImpl(endpoint.url, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${endpoint.apiKey}`, 'Content-Type': 'application/json' },
@@ -91696,29 +91716,45 @@ async function runDecisionRecall_ACU(options, deps = {}) {
             });
             if (!response.ok) {
                 const reason = await readErrorMessage_ACU(response);
-                return { error: `HTTP ${response.status}${reason ? `：${reason}` : ''}`, rateLimited: response.status === 429 };
+                return {
+                    error: `HTTP ${response.status}${reason ? `：${reason}` : ''}`,
+                    rateLimited: response.status === 429,
+                    retryable: !NON_RETRYABLE_STATUSES_ACU.has(response.status),
+                    fatal: FATAL_STATUSES_ACU.has(response.status),
+                };
             }
-            return { scores: interpretDecisionRecallBatchResponse_ACU(await response.json(), rows) };
+            return { scores: interpretDecisionRecallBatchResponse_ACU(await response.json(), rows), retryable: true };
         });
         if (outcome.ok)
             return outcome.value;
+        // 超时再试一次又是一整段超时，不重试；被总时限或其它组的鉴权错误停下时由调用方按 stopError 处理
         if (outcome.failure)
-            return { error: `决策模型${outcome.failure}` };
-        return { error: `请求失败：${outcome.error?.message || outcome.error}` };
+            return { error: `决策模型${outcome.failure}`, retryable: false };
+        return { error: `请求失败：${outcome.error?.message || outcome.error}`, retryable: true };
     };
     const scoreGroup = async (rows) => {
         let lastError = '';
         for (let attempt = 0; attempt <= settings.maxRetries; attempt++) {
             if (isAborted())
                 return { kind: 'aborted' };
+            if (stopError)
+                return { kind: 'failed', error: stopError };
             const outcome = await requestGroup(rows);
             if (isAborted())
                 return { kind: 'aborted' };
             if (outcome.scores && outcome.scores.size > 0)
                 return { kind: 'scored', scores: outcome.scores };
+            if (stopError)
+                return { kind: 'failed', error: stopError };
             lastError = outcome.error || '决策模型没有给出任何打分';
+            if (outcome.fatal) {
+                stopWith(lastError);
+                break;
+            }
+            if (outcome.retryable === false)
+                break;
             if (attempt < settings.maxRetries)
-                await sleep(retryDelayMs_ACU(attempt, outcome.rateLimited === true), signal);
+                await sleep(retryDelayMs_ACU(attempt, outcome.rateLimited === true), runController.signal);
         }
         return { kind: 'failed', error: lastError };
     };
@@ -91730,7 +91766,13 @@ async function runDecisionRecall_ACU(options, deps = {}) {
             outcomes[index] = await scoreGroup(groups[index]);
         }
     };
-    await Promise.all(Array.from({ length: Math.min(DECISION_RECALL_CONCURRENCY_ACU, groups.length) }, worker));
+    try {
+        await Promise.all(Array.from({ length: Math.min(DECISION_RECALL_CONCURRENCY_ACU, groups.length) }, worker));
+    }
+    finally {
+        clearTimeout(totalTimer);
+        signal?.removeEventListener('abort', stopRun);
+    }
     if (isAborted() || outcomes.some(outcome => outcome?.kind === 'aborted'))
         return { status: 'aborted' };
     const scored = [];
@@ -91756,7 +91798,7 @@ async function runDecisionRecall_ACU(options, deps = {}) {
     });
     scored.sort((left, right) => (right.score - left.score) || (right.row.rowOrder - left.row.rowOrder));
     if (failedBatchCount > 0) {
-        logWarn_ACU(`[决策召回] ${failedBatchCount}/${groups.length} 组打分重试 ${settings.maxRetries} 次后仍失败，已跳过：${[...new Set(errors)].join('；')}`);
+        logWarn_ACU(`[决策召回] ${failedBatchCount}/${groups.length} 组打分失败，已跳过：${[...new Set(errors)].join('；')}`);
     }
     return {
         status: 'ok', ...base, selected: pickDecisionRecallRows_ACU(plan.fixed, scored, settings.recallCount),
@@ -91769,10 +91811,22 @@ function describeDecisionRecallWarning_ACU(result) {
         return '';
     if (result.missingKey)
         return `决策召回还没填 ${result.providerLabel} Key，本次只带上最新 ${result.fixed.length} 条纪要。`;
-    if (result.failedBatchCount > 0) {
-        return `决策召回有 ${result.failedBatchCount}/${result.batchCount} 组打分重试后仍失败，已跳过这些组，从其余纪要里选取。`;
+    if (result.batchCount > 0 && result.failedBatchCount >= result.batchCount) {
+        return `决策召回全部 ${result.batchCount} 组打分都失败了，本次只带上最新 ${result.fixed.length} 条纪要。`;
     }
+    if (result.failedBatchCount > 0) {
+        return `决策召回有 ${result.failedBatchCount}/${result.batchCount} 组打分失败，已跳过这些组，从其余纪要里选取。`;
+    }
+    const skipped = result.unscoredCount;
+    if (skipped > 0)
+        return `决策模型漏答了 ${skipped} 条纪要，这些纪要本次没参与挑选。`;
     return '';
+}
+/** 打分失败的原因（去重、脱敏），给测试召回等需要排查 Key 与模型问题的地方看；没有失败时返回空串。 */
+function describeDecisionRecallErrors_ACU(result) {
+    if (result.status !== 'ok' || result.errors.length === 0)
+        return '';
+    return [...new Set(result.errors)].map(error => maskSensitiveText_ACU(error)).join('；');
 }
 /** 运行日志里的一行摘要：候选来源、分组、失败与选中的编码（带分数）。 */
 function describeDecisionRecallResult_ACU(result) {
@@ -91822,7 +91876,11 @@ const DECISION_RECALL_PLOT_TASK_TAG_ACU = 'recall';
 function splitTags_ACU(value) {
     return String(value || '').split(',').map(tag => tag.trim()).filter(Boolean);
 }
-/** 这个任务能否改由决策召回执行：预设有多个任务，且任务标签恰好是 recall。 */
+/** 预设里实际会跑的任务数：停用的任务不算，「只启用一个任务的预设不替换」按这个数判断。 */
+function countEnabledPlotTasks_ACU(tasks) {
+    return (Array.isArray(tasks) ? tasks : []).filter(task => task && task.enabled !== false).length;
+}
+/** 这个任务能否改由决策召回执行：预设有多个启用的任务，且任务标签恰好是 recall。 */
 function canPlotTaskUseDecisionRecall_ACU(task, presetTaskCount) {
     if (!task || presetTaskCount < 2)
         return false;
@@ -91846,9 +91904,13 @@ async function runDecisionRecallForPlotTask_ACU(task, options, deps = {}) {
     logDecisionRecallResult_ACU(result);
     if (result.status === 'aborted')
         return { kind: 'aborted' };
-    const tagName = splitTags_ACU(task.extractTags)[0] || DECISION_RECALL_PLOT_TASK_TAG_ACU;
     const codes = result.status === 'ok' ? result.selected.map(row => row.indexCode) : [];
-    return { kind: 'done', rawResponse: buildDecisionRecallTagBlock_ACU(codes, tagName), result };
+    return { kind: 'done', rawResponse: buildDecisionRecallPlotTaskResponse_ACU(task, codes), result };
+}
+/** 任务回复：沿用任务自己的标签写法；没有编码时是空的 recall 块（不注入）。 */
+function buildDecisionRecallPlotTaskResponse_ACU(task, codes) {
+    const tagName = splitTags_ACU(task.extractTags)[0] || DECISION_RECALL_PLOT_TASK_TAG_ACU;
+    return buildDecisionRecallTagBlock_ACU(codes, tagName);
 }
 
 /**
@@ -93560,26 +93622,42 @@ function getPlotPromptGroupForWorldbookTrigger_ACU(promptGroup) {
 }
 /**
  * 改由决策召回执行的任务：不调模型、不读世界书，产出与模型回复同形的 recall 标签块。
- * 打分失败、没填 Key 只提示不算任务失败（按已有结果继续）；用户终止照常抛出。
+ * 打分失败、没填 Key、意外出错都只提示不算任务失败（出错时产出空的 recall 块，按已有结果继续，与单独召回一样不停发送）；
+ * 用户终止照常抛出。
  */
 async function executeDecisionRecallPlotTask_ACU(normalizedTask, sharedContext, taskLabel, taskStage) {
     checkPlotAbortRequested_ACU();
-    const outcome = await runDecisionRecallForPlotTask_ACU(normalizedTask, {
-        userInput: String(sharedContext.userMessage || ''),
-        signal: abortController_ACU?.signal || null,
-    });
-    if (outcome.kind === 'aborted')
-        throw new Error('TaskAbortedByUser');
-    const warning = describeDecisionRecallWarning_ACU(outcome.result);
-    if (warning)
-        sharedContext.reportWarning?.(warning);
-    const tagResult = extractPlotTagsFromResponse_ACU(outcome.rawResponse, normalizedTask.extractTags, normalizedTask.extractInjectTags);
-    logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 由决策召回执行：${outcome.result.status === 'ok' ? `带上 ${outcome.result.selected.length} 条纪要` : '纪要表为空或读不到，未带纪要'}。`);
+    let rawResponse;
+    let summary;
+    try {
+        const outcome = await runDecisionRecallForPlotTask_ACU(normalizedTask, {
+            userInput: String(sharedContext.userMessage || ''),
+            signal: abortController_ACU?.signal || null,
+        });
+        if (outcome.kind === 'aborted')
+            throw new Error('TaskAbortedByUser');
+        const warning = describeDecisionRecallWarning_ACU(outcome.result);
+        if (warning)
+            sharedContext.reportWarning?.(warning);
+        rawResponse = outcome.rawResponse;
+        summary = outcome.result.status === 'ok' ? `带上 ${outcome.result.selected.length} 条纪要` : '纪要表为空或读不到，未带纪要';
+    }
+    catch (error) {
+        if (isManualPlotAbort_ACU(error))
+            throw error;
+        const message = String(error?.message || error || '未知错误');
+        logWarn_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 决策召回出错，本任务不带纪要：${message}`);
+        sharedContext.reportWarning?.(`决策召回出错，本轮不带召回的纪要：${message}`);
+        rawResponse = buildDecisionRecallPlotTaskResponse_ACU(normalizedTask, []);
+        summary = '出错，未带纪要';
+    }
+    const tagResult = extractPlotTagsFromResponse_ACU(rawResponse, normalizedTask.extractTags, normalizedTask.extractInjectTags);
+    logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 由决策召回执行：${summary}。`);
     return {
         taskId: normalizedTask.id,
         taskName: taskLabel,
         success: true,
-        rawResponse: outcome.rawResponse,
+        rawResponse,
         extractedTags: tagResult.extractedTags,
         injectedFragments: tagResult.injectedFragments,
         injectOnlyTags: tagResult.injectOnlyTags,
@@ -93594,7 +93672,7 @@ async function executeSinglePlotTask_ACU(task, sharedContext, runtimeOptions = {
     const normalizedTask = normalizePlotTask_ACU(task, { index: task?.order ?? 0, fallbackTask: task || null });
     const taskLabel = normalizedTask.name || normalizedTask.id || '未命名任务';
     const taskStage = normalizePositiveInteger_ACU$2(normalizedTask.stage, 1);
-    if (isDecisionRecallPlotTask_ACU(normalizedTask, normalizePlotTasks_ACU(sharedContext?.plotSettings).length)) {
+    if (isDecisionRecallPlotTask_ACU(normalizedTask, countEnabledPlotTasks_ACU(normalizePlotTasks_ACU(sharedContext?.plotSettings)))) {
         return executeDecisionRecallPlotTask_ACU(normalizedTask, sharedContext, taskLabel, taskStage);
     }
     const maxRetries = normalizePositiveInteger_ACU$2(normalizedTask.maxRetries, sharedContext?.plotSettings?.loopSettings?.maxRetries ?? DEFAULT_PLOT_SETTINGS_ACU.loopSettings?.maxRetries ?? 3);
@@ -94530,7 +94608,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261027-1637"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261027-1708"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -94549,7 +94627,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1637";
+        const stamp = "20261027-1708";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -156193,7 +156271,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1637";
+        const stamp = "20261027-1708";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -205640,12 +205718,13 @@ function useDashboardPage() {
  * 是否真的替换由剧情推进页的「由决策召回执行 recall 任务」开关决定（replacePlotRecallTasks，也存在这里）。
  */
 function readPlotTaskStatus_ACU() {
-    const tasks = normalizePlotTasks_ACU(settings_ACU?.plotSettings || {});
+    const tasks = normalizePlotTasks_ACU(settings_ACU?.plotSettings || {}).filter((task) => task.enabled !== false);
+    const taskCount = countEnabledPlotTasks_ACU(tasks);
     return {
         plotEnabled: settings_ACU?.plotSettings?.enabled === true,
-        taskCount: tasks.length,
+        taskCount,
         matchedTaskNames: tasks
-            .filter((task) => canPlotTaskUseDecisionRecall_ACU(task, tasks.length))
+            .filter((task) => canPlotTaskUseDecisionRecall_ACU(task, taskCount))
             .map((task) => String(task.name || task.id)),
     };
 }
@@ -205676,6 +205755,9 @@ function formatDecisionRecallTestOutput_ACU(result) {
     const warning = describeDecisionRecallWarning_ACU(result);
     if (warning)
         lines.push(warning);
+    const reasons = describeDecisionRecallErrors_ACU(result);
+    if (reasons)
+        lines.push(`失败原因：${reasons}`);
     const scoreByKey = new Map(result.scored.map(entry => [entry.row.rowKey, entry]));
     const fixedKeys = new Set(result.fixed.map(row => row.rowKey));
     lines.push('', `带上 ${result.selected.length} 条（按表号顺序）：`);
@@ -205720,7 +205802,7 @@ const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
                 return { kind: 'info', text: '剧情推进页的「由决策召回执行 recall 任务」没开：照常由剧情推进调模型召回。' };
             }
             if (status.taskCount < 2)
-                return { kind: 'warning', text: '当前剧情推进预设只有一个任务，不替换：照常由剧情推进调模型召回。' };
+                return { kind: 'warning', text: '当前剧情推进预设只启用了一个任务，不替换：照常由剧情推进调模型召回。' };
             if (status.matchedTaskNames.length)
                 return { kind: 'success', text: `当前预设里由决策召回执行的任务：${status.matchedTaskNames.join('、')}。` };
             return { kind: 'info', text: '当前预设里没有「标签摘取」只有 recall 的任务，不替换：照常由剧情推进调模型召回。' };
@@ -208457,6 +208539,7 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         const maxCount = DECISION_RECALL_MAX_COUNT_ACU;
         const maxTotal = DECISION_RECALL_MAX_TOTAL_ACU;
         const maxRetries = DECISION_RECALL_MAX_RETRIES_LIMIT_ACU;
+        const totalSeconds = Math.round(DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU / 1000);
         const codesPlaceholder = DECISION_RECALL_CODES_PLACEHOLDER_ACU;
         const ruleDescription = `每组 ${DECISION_RECALL_BATCH_SIZE_ACU} 条纪要发一次请求、最多同时 ${DECISION_RECALL_CONCURRENCY_ACU} 组；`
             + '参考最近两楼 AI 回复和用户最新输入，不带世界书；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。';
@@ -208558,14 +208641,14 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 void store.loadModels();
         });
         watchChatChanged_ACU(() => refresh());
-        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, codesPlaceholder, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, scoringOptions, setProvider, setKey, setModel, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
+        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, totalSeconds, codesPlaceholder, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, scoringOptions, setProvider, setKey, setModel, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-dr__picker[data-v-d1d8633e] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-d1d8633e] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-d1d8633e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-d1d8633e] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-d1d8633e");
-var DecisionRecallPage_vue_vue_type_style_index_0_scoped_d1d8633e_lang = null;
+injectSfcStyle("\n.ub-dr__picker[data-v-9f2cd686] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-9f2cd686] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-9f2cd686] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-9f2cd686] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-9f2cd686");
+var DecisionRecallPage_vue_vue_type_style_index_0_scoped_9f2cd686_lang = null;
 
 const _hoisted_1$c = { class: "ub-dr__picker" };
 const _hoisted_2$b = { class: "ub-dr__meta" };
@@ -208731,7 +208814,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 					}),
 					createVNode($setup["UbRow"], {
 						label: "失败重试次数",
-						hint: `一组打分失败后再试几次（0–${$setup.maxRetries}）；用完仍失败就跳过这一组，从其余纪要里选，不会停掉发送。`
+						hint: `一组打分失败后再试几次（0–${$setup.maxRetries}）；Key 无效、没余额、超时这类重试也没用的错误不重试。整次召回最多 ${$setup.totalSeconds} 秒，仍失败或到时没打完的组跳过，从其余纪要里选，不会停掉发送。`
 					}, {
 						default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
 							key: `retry-${$setup.inputKey}`,
@@ -208853,7 +208936,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-d1d8633e"]]);
+var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-9f2cd686"]]);
 
 const developerCopy = {
     panels: {
@@ -210519,8 +210602,8 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-plot__body[data-v-8e07289f] {\r\n  display: contents;\n}\n.ub-plot__body.is-paused[data-v-8e07289f] {\r\n  display: block;\r\n  opacity: 0.45;\r\n  filter: grayscale(1);\r\n  pointer-events: none;\r\n  user-select: none;\n}\n.ub-plot__current[data-v-8e07289f] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-plot__current strong[data-v-8e07289f] {\r\n  color: var(--ub-text);\n}\r\n", "src/presentation-v3/pages/PlotPage.vue#style-0-8e07289f");
-var PlotPage_vue_vue_type_style_index_0_scoped_8e07289f_lang = null;
+injectSfcStyle("\n.ub-plot__body[data-v-8e22c815] {\r\n  display: contents;\n}\n.ub-plot__body.is-paused[data-v-8e22c815] {\r\n  display: block;\r\n  opacity: 0.45;\r\n  filter: grayscale(1);\r\n  pointer-events: none;\r\n  user-select: none;\n}\n.ub-plot__current[data-v-8e22c815] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-plot__current strong[data-v-8e22c815] {\r\n  color: var(--ub-text);\n}\r\n", "src/presentation-v3/pages/PlotPage.vue#style-0-8e22c815");
+var PlotPage_vue_vue_type_style_index_0_scoped_8e22c815_lang = null;
 
 const _hoisted_1$9 = ["inert"];
 const _hoisted_2$8 = ["inert"];
@@ -210563,7 +210646,7 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 			}, {
 				default: withCtx(() => [createVNode($setup["UbRow"], {
 					label: "由决策召回执行 recall 任务",
-					hint: "开启后自动匹配当前预设里「标签摘取」只有 recall 的任务，不调模型，改由决策召回给纪要打分挑选；只有一个任务的预设不替换。关着时照常由剧情推进调模型召回。"
+					hint: "开启后自动匹配当前预设里「标签摘取」只有 recall 的任务，不调模型，改由决策召回给纪要打分挑选；只启用了一个任务的预设不替换（停用的任务不算）。关着时照常由剧情推进调模型召回。"
 				}, {
 					default: withCtx(() => [createVNode($setup["UbSwitch"], {
 						"model-value": $setup.decisionRecallStore.settings.replacePlotRecallTasks,
@@ -210679,7 +210762,7 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["sections"]);
 }
-var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$a], ["__scopeId", "data-v-8e07289f"]]);
+var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$a], ["__scopeId", "data-v-8e22c815"]]);
 
 /**
  * useFormFillInjectionTarget — 填表"注入目标世界书"（Component A，§4.2）

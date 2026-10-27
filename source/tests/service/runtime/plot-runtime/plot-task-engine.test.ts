@@ -2400,6 +2400,27 @@ describe('runPlotTasksRuntime_ACU 由决策召回执行的任务', () => {
     expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(2);
   });
 
+  it('决策召回意外出错时不停掉剧情推进：这个任务产出空的 recall、提示出错，后面的任务照常', async () => {
+    decisionRecallTaskMocks.run.mockRejectedValue(new Error('读表炸了'));
+    const reportWarning = vi.fn();
+
+    const result = await runPlotTasksRuntime_ACU({ tasks: [recallTask, planTask] }, '当前输入', { reportWarning });
+
+    const recallResult = result.successfulResults.find((item: any) => item.taskId === 'recall-task');
+    expect(recallResult?.success).toBe(true);
+    expect(reportWarning).toHaveBeenCalledWith(expect.stringContaining('读表炸了'));
+    expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(1);
+  });
+
+  it('预设里只启用了一个任务时不替换（停用的任务不算数）', async () => {
+    mockCallApiWithPlotPreset.mockResolvedValue('<recall>模型召回</recall>');
+
+    await runPlotTasksRuntime_ACU({ tasks: [recallTask, { ...planTask, enabled: false }] }, '当前输入');
+
+    expect(decisionRecallTaskMocks.run).not.toHaveBeenCalled();
+    expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(1);
+  });
+
   it('打分有失败或没填 Key 时只提示，任务照常算成功', async () => {
     const outcome = okOutcome(['AM0001']);
     (outcome.result as any).missingKey = true;

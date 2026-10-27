@@ -114,7 +114,7 @@ describe('DecisionRecallPage', () => {
 
   it('替换剧情推进的任务但预设只有一个任务时提示不替换', async () => {
     await openPage('decision-recall', { enabled: true, mode: 'plot_task', replacePlotRecallTasks: true });
-    expect(document.body.textContent).toContain('只有一个任务，不替换');
+    expect(document.body.textContent).toContain('只启用了一个任务，不替换');
   });
 
   it('没填 Key 时提示只会带上最新 5 条；换服务商后显示对应的 Key 与模型', async () => {
@@ -196,8 +196,25 @@ describe('剧情推进页随决策召回用法', () => {
 
   it('页内开关开着但预设只有一个任务时提示不替换，也不提示世界书', async () => {
     await openPage('plot', { enabled: true, mode: 'plot_task', replacePlotRecallTasks: true });
-    expect(document.body.textContent).toContain('只有一个任务，不替换');
+    expect(document.body.textContent).toContain('只启用了一个任务，不替换');
     expect(document.body.textContent).not.toContain('不读这里选的世界书');
+  });
+
+  it('预设里另一个任务停用了也算只启用一个任务，不替换', async () => {
+    await openPage('plot', { enabled: true, mode: 'plot_task', replacePlotRecallTasks: true }, {
+      plotTasks: [twoTaskPlot.plotTasks[0], { ...twoTaskPlot.plotTasks[1], enabled: false }],
+    });
+    expect(document.body.textContent).toContain('只启用了一个任务，不替换');
+    expect(document.body.textContent).not.toContain('不读这里选的世界书');
+  });
+
+  it('停用的 recall 任务不算替换对象', async () => {
+    const third = { id: 'extra-task', name: '补充', extractTags: 'extra', extractInjectTags: '', stage: 2, order: 2, promptGroup: [] };
+    await openPage('plot', { enabled: true, mode: 'plot_task', replacePlotRecallTasks: true }, {
+      plotTasks: [{ ...twoTaskPlot.plotTasks[0], enabled: false }, twoTaskPlot.plotTasks[1], third],
+    });
+    expect(document.body.textContent).toContain('没有「标签摘取」只有 recall 的任务');
+    expect(document.body.textContent).not.toContain('由决策召回执行的任务：召回');
   });
 
   it('决策召回关着或用法是单独召回时不显示页内开关', async () => {

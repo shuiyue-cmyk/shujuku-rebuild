@@ -62,7 +62,7 @@
       <UbRow label="打分时看什么" hint="只看概要更省、更快；加上纪要正文判断更准，但每组输入多好几倍。">
         <UbSegmented :options="scoringOptions" :model-value="store.settings.scoringContent" aria-label="打分时看什么" @update:model-value="store.patch({ scoringContent: $event })" />
       </UbRow>
-      <UbRow label="失败重试次数" :hint="`一组打分失败后再试几次（0–${maxRetries}）；用完仍失败就跳过这一组，从其余纪要里选，不会停掉发送。`">
+      <UbRow label="失败重试次数" :hint="`一组打分失败后再试几次（0–${maxRetries}）；Key 无效、没余额、超时这类重试也没用的错误不重试。整次召回最多 ${totalSeconds} 秒，仍失败或到时没打完的组跳过，从其余纪要里选，不会停掉发送。`">
         <UbInput
           :key="`retry-${inputKey}`"
           :model-value="store.settings.maxRetries"
@@ -126,6 +126,7 @@ import {
   DECISION_RECALL_MAX_COUNT_ACU,
   DECISION_RECALL_MAX_RETRIES_LIMIT_ACU,
   DECISION_RECALL_MAX_TOTAL_ACU,
+  DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU,
   DEFAULT_DECISION_RECALL_DIRECTIVE_ACU,
   type DecisionRecallProvider_ACU,
 } from '../../shared/decision-recall-defaults';
@@ -158,6 +159,7 @@ const fixedCount = DECISION_RECALL_FIXED_RECENT_COUNT_ACU;
 const maxCount = DECISION_RECALL_MAX_COUNT_ACU;
 const maxTotal = DECISION_RECALL_MAX_TOTAL_ACU;
 const maxRetries = DECISION_RECALL_MAX_RETRIES_LIMIT_ACU;
+const totalSeconds = Math.round(DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU / 1000);
 const codesPlaceholder = DECISION_RECALL_CODES_PLACEHOLDER_ACU;
 const ruleDescription = `每组 ${DECISION_RECALL_BATCH_SIZE_ACU} 条纪要发一次请求、最多同时 ${DECISION_RECALL_CONCURRENCY_ACU} 组；`
   + '参考最近两楼 AI 回复和用户最新输入，不带世界书；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。';

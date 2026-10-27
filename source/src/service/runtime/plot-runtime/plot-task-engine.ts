@@ -74,6 +74,8 @@ import {
   normalizePlotTasks_ACU
 } from '../../plot/plot-logic';
 import {
+  buildDecisionRecallPlotTaskResponse_ACU,
+  countEnabledPlotTasks_ACU,
   isDecisionRecallPlotTask_ACU,
   runDecisionRecallForPlotTask_ACU
 } from '../../decision-recall/decision-recall-plot-task';
@@ -619,24 +621,38 @@ import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-s
 
   /**
    * 改由决策召回执行的任务：不调模型、不读世界书，产出与模型回复同形的 recall 标签块。
-   * 打分失败、没填 Key 只提示不算任务失败（按已有结果继续）；用户终止照常抛出。
+   * 打分失败、没填 Key、意外出错都只提示不算任务失败（出错时产出空的 recall 块，按已有结果继续，与单独召回一样不停发送）；
+   * 用户终止照常抛出。
    */
   async function executeDecisionRecallPlotTask_ACU(normalizedTask: Record<string, any>, sharedContext: Record<string, any>, taskLabel: string, taskStage: number) {
     checkPlotAbortRequested_ACU();
-    const outcome = await runDecisionRecallForPlotTask_ACU(normalizedTask, {
-      userInput: String(sharedContext.userMessage || ''),
-      signal: abortController_ACU?.signal || null,
-    });
-    if (outcome.kind === 'aborted') throw new Error('TaskAbortedByUser');
-    const warning = describeDecisionRecallWarning_ACU(outcome.result);
-    if (warning) sharedContext.reportWarning?.(warning);
-    const tagResult = extractPlotTagsFromResponse_ACU(outcome.rawResponse, normalizedTask.extractTags, normalizedTask.extractInjectTags);
-    logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 由决策召回执行：${outcome.result.status === 'ok' ? `带上 ${outcome.result.selected.length} 条纪要` : '纪要表为空或读不到，未带纪要'}。`);
+    let rawResponse: string;
+    let summary: string;
+    try {
+      const outcome = await runDecisionRecallForPlotTask_ACU(normalizedTask, {
+        userInput: String(sharedContext.userMessage || ''),
+        signal: abortController_ACU?.signal || null,
+      });
+      if (outcome.kind === 'aborted') throw new Error('TaskAbortedByUser');
+      const warning = describeDecisionRecallWarning_ACU(outcome.result);
+      if (warning) sharedContext.reportWarning?.(warning);
+      rawResponse = outcome.rawResponse;
+      summary = outcome.result.status === 'ok' ? `带上 ${outcome.result.selected.length} 条纪要` : '纪要表为空或读不到，未带纪要';
+    } catch (error: any) {
+      if (isManualPlotAbort_ACU(error)) throw error;
+      const message = String(error?.message || error || '未知错误');
+      logWarn_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 决策召回出错，本任务不带纪要：${message}`);
+      sharedContext.reportWarning?.(`决策召回出错，本轮不带召回的纪要：${message}`);
+      rawResponse = buildDecisionRecallPlotTaskResponse_ACU(normalizedTask, []);
+      summary = '出错，未带纪要';
+    }
+    const tagResult = extractPlotTagsFromResponse_ACU(rawResponse, normalizedTask.extractTags, normalizedTask.extractInjectTags);
+    logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 由决策召回执行：${summary}。`);
     return {
       taskId: normalizedTask.id,
       taskName: taskLabel,
       success: true,
-      rawResponse: outcome.rawResponse,
+      rawResponse,
       extractedTags: tagResult.extractedTags,
       injectedFragments: tagResult.injectedFragments,
       injectOnlyTags: tagResult.injectOnlyTags,
@@ -652,7 +668,7 @@ import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-s
     const normalizedTask = normalizePlotTask_ACU(task, { index: task?.order ?? 0, fallbackTask: task || null });
     const taskLabel = normalizedTask.name || normalizedTask.id || '未命名任务';
     const taskStage = normalizePositiveInteger_ACU(normalizedTask.stage, 1);
-    if (isDecisionRecallPlotTask_ACU(normalizedTask, normalizePlotTasks_ACU(sharedContext?.plotSettings).length)) {
+    if (isDecisionRecallPlotTask_ACU(normalizedTask, countEnabledPlotTasks_ACU(normalizePlotTasks_ACU(sharedContext?.plotSettings)))) {
       return executeDecisionRecallPlotTask_ACU(normalizedTask, sharedContext, taskLabel, taskStage);
     }
     const maxRetries = normalizePositiveInteger_ACU(

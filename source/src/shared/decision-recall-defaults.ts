@@ -28,6 +28,8 @@ export const DEFAULT_DECISION_RECALL_MAX_RETRIES_ACU = 2;
 export const DECISION_RECALL_MAX_RETRIES_LIMIT_ACU = 5;
 /** 一组 20 个问题比替换前判定的单个问题慢得多，超时放宽到 60 秒。 */
 export const DECISION_RECALL_TIMEOUT_MS_ACU = 60000;
+/** 整次召回（全部分组加重试等待）的总时限：到时还没打完分的组按失败处理，不让发送一直卡着。 */
+export const DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU = 90000;
 
 /** AIHubMix 的决策接口（与硅基流动同格式，允许网页直连）。 */
 export const AIHUBMIX_DECISION_API_URL_ACU = 'https://aihubmix.com/v1/systemone';

@@ -9,13 +9,14 @@ import { defineStore } from 'pinia';
 import { settings_ACU } from '../../service/runtime/state-manager';
 import { saveSettings_ACU } from '../../service/settings/settings-service';
 import { normalizePlotTasks_ACU } from '../../service/plot/plot-logic';
-import { canPlotTaskUseDecisionRecall_ACU } from '../../service/decision-recall/decision-recall-plot-task';
+import { canPlotTaskUseDecisionRecall_ACU, countEnabledPlotTasks_ACU } from '../../service/decision-recall/decision-recall-plot-task';
 import {
   normalizeDecisionRecallSettings_ACU,
   resolveDecisionRecallEndpoint_ACU,
   type DecisionRecallSettings_ACU,
 } from '../../service/decision-recall/decision-recall-settings';
 import {
+  describeDecisionRecallErrors_ACU,
   describeDecisionRecallResult_ACU,
   describeDecisionRecallWarning_ACU,
   runDecisionRecall_ACU,
@@ -34,18 +35,20 @@ import { useToastStore } from './toast-store';
 /** 当前剧情推进预设里能交给决策召回的任务（给用户看替换会落在哪些任务上）。 */
 export interface DecisionRecallPlotTaskStatus_ACU {
   plotEnabled: boolean;
+  /** 启用的任务数（停用的不算）。 */
   taskCount: number;
-  /** 自动匹配到的任务名：多任务预设里标签恰好是 recall 的任务；单任务预设为空。 */
+  /** 自动匹配到的任务名：启用了多个任务的预设里标签恰好是 recall 的启用任务；只启用一个任务时为空。 */
   matchedTaskNames: string[];
 }
 
 function readPlotTaskStatus_ACU(): DecisionRecallPlotTaskStatus_ACU {
-  const tasks = normalizePlotTasks_ACU(settings_ACU?.plotSettings || {});
+  const tasks = normalizePlotTasks_ACU(settings_ACU?.plotSettings || {}).filter((task: any) => task.enabled !== false);
+  const taskCount = countEnabledPlotTasks_ACU(tasks);
   return {
     plotEnabled: settings_ACU?.plotSettings?.enabled === true,
-    taskCount: tasks.length,
+    taskCount,
     matchedTaskNames: tasks
-      .filter((task: any) => canPlotTaskUseDecisionRecall_ACU(task, tasks.length))
+      .filter((task: any) => canPlotTaskUseDecisionRecall_ACU(task, taskCount))
       .map((task: any) => String(task.name || task.id)),
   };
 }
@@ -87,6 +90,8 @@ export function formatDecisionRecallTestOutput_ACU(result: DecisionRecallRunResu
   lines.push(`候选 ${result.candidateCount} 条（来自${source}），分 ${result.batchCount} 组打分，失败 ${result.failedBatchCount} 组。`);
   const warning = describeDecisionRecallWarning_ACU(result);
   if (warning) lines.push(warning);
+  const reasons = describeDecisionRecallErrors_ACU(result);
+  if (reasons) lines.push(`失败原因：${reasons}`);
   const scoreByKey = new Map(result.scored.map(entry => [entry.row.rowKey, entry]));
   const fixedKeys = new Set(result.fixed.map(row => row.rowKey));
   lines.push('', `带上 ${result.selected.length} 条（按表号顺序）：`);
@@ -129,7 +134,7 @@ export const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
       if (!state.settings.replacePlotRecallTasks) {
         return { kind: 'info', text: '剧情推进页的「由决策召回执行 recall 任务」没开：照常由剧情推进调模型召回。' };
       }
-      if (status.taskCount < 2) return { kind: 'warning', text: '当前剧情推进预设只有一个任务，不替换：照常由剧情推进调模型召回。' };
+      if (status.taskCount < 2) return { kind: 'warning', text: '当前剧情推进预设只启用了一个任务，不替换：照常由剧情推进调模型召回。' };
       if (status.matchedTaskNames.length) return { kind: 'success', text: `当前预设里由决策召回执行的任务：${status.matchedTaskNames.join('、')}。` };
       return { kind: 'info', text: '当前预设里没有「标签摘取」只有 recall 的任务，不替换：照常由剧情推进调模型召回。' };
     },

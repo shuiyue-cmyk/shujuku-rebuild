@@ -18,7 +18,7 @@
     >
       <UbRow
         label="由决策召回执行 recall 任务"
-        hint="开启后自动匹配当前预设里「标签摘取」只有 recall 的任务，不调模型，改由决策召回给纪要打分挑选；只有一个任务的预设不替换。关着时照常由剧情推进调模型召回。"
+        hint="开启后自动匹配当前预设里「标签摘取」只有 recall 的任务，不调模型，改由决策召回给纪要打分挑选；只启用了一个任务的预设不替换（停用的任务不算）。关着时照常由剧情推进调模型召回。"
       >
         <UbSwitch
           :model-value="decisionRecallStore.settings.replacePlotRecallTasks"

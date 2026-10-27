@@ -20,7 +20,9 @@ vi.mock('../../../src/service/decision-recall/decision-recall-sources', async ()
 import {
   buildDecisionRecallFinalMessage_ACU,
   buildDecisionRecallTagBlock_ACU,
+  describeDecisionRecallErrors_ACU,
   describeDecisionRecallResult_ACU,
+  describeDecisionRecallWarning_ACU,
   runDecisionRecall_ACU,
 } from '../../../src/service/decision-recall/decision-recall-runtime';
 import { collectIndexedCodes_ACU, type DecisionRecallSources_ACU } from '../../../src/service/decision-recall/decision-recall-sources';
@@ -213,6 +215,89 @@ describe('runDecisionRecall_ACU', () => {
     );
     expect(result.status).toBe('aborted');
     expect(fetch.mock.calls.length).toBeLessThanOrEqual(3);
+  });
+
+  it('Key 无效、没余额或没权限（401 / 402 / 403）时不重试，其余各组也直接按失败处理', async () => {
+    for (const status of [401, 402, 403]) {
+      const fetch = vi.fn(async () => ({ ok: false, status, json: async () => ({ message: 'invalid api key' }) }) as any);
+      const sleep = vi.fn(noSleep);
+      const result = await runDecisionRecall_ACU({ userInput: 'x', settings: settings({ maxRetries: 2 }) }, { sources: makeSources(makeRows(205)), fetch, sleep });
+      expect(result.status).toBe('ok');
+      if (result.status !== 'ok') return;
+      // 10 组：同时发出的前 3 组之外不再请求，也不等重试
+      expect(fetch.mock.calls.length).toBeLessThanOrEqual(3);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(result.failedBatchCount).toBe(10);
+      expect(result.errors.every(error => error.includes(String(status)))).toBe(true);
+      expect(result.selected).toHaveLength(5);
+    }
+  });
+
+  it('请求本身有问题（400）时这一组不重试，其余各组照常打分', async () => {
+    const fetch = vi.fn(async (url: string, init: any) => {
+      const firstQuestion = Object.values<any>(JSON.parse(init.body).questions)[0].instructions as string;
+      if (firstQuestion.includes('AM0001')) return { ok: false, status: 400, json: async () => ({ message: 'too long' }) } as any;
+      return scoringFetch(() => 2)(url, init);
+    });
+    const sleep = vi.fn(noSleep);
+    const result = await runDecisionRecall_ACU({ userInput: 'x', settings: settings({ maxRetries: 2 }) }, { sources: makeSources(makeRows(30)), fetch, sleep });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(result.status === 'ok' && result.failedBatchCount).toBe(1);
+  });
+
+  /** 一直不回，直到请求被中止。 */
+  const hangingFetch = () => vi.fn((_url: string, init: any) => new Promise<any>((_resolve, reject) => {
+    init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+  }));
+
+  it('单次请求超时不重试', async () => {
+    const fetch = hangingFetch();
+    const result = await runDecisionRecall_ACU(
+      { userInput: 'x', settings: settings({ maxRetries: 2 }) },
+      { sources: makeSources(makeRows(12)), fetch, sleep: noSleep, timeoutMs: 20 },
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(result.status === 'ok' && result.failedBatchCount).toBe(1);
+    expect(result.status === 'ok' && result.errors[0]).toContain('超时');
+  });
+
+  it('整次召回有总时限：到时还没打完分的组按失败处理，照常返回固定的最新 5 条', async () => {
+    const fetch = hangingFetch();
+    const result = await runDecisionRecall_ACU(
+      { userInput: 'x', settings: settings({ maxRetries: 2 }) },
+      { sources: makeSources(makeRows(205)), fetch, sleep: noSleep, timeoutMs: 10000, totalTimeoutMs: 30 },
+    );
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(fetch.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(result.failedBatchCount).toBe(10);
+    expect(result.errors.join('')).toContain('总时长');
+    expect(result.selected).toHaveLength(5);
+  });
+
+  it('全部组都失败时提示只带上固定的最新几条，而不是「从其余纪要里选取」', async () => {
+    const fetch = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) }) as any);
+    const result = await runDecisionRecall_ACU({ userInput: 'x', settings: settings({ maxRetries: 0 }) }, { sources: makeSources(makeRows(30)), fetch, sleep: noSleep });
+    const warning = describeDecisionRecallWarning_ACU(result);
+    expect(warning).toContain('全部');
+    expect(warning).toContain('只带上最新 5 条');
+    expect(warning).not.toContain('从其余纪要里选取');
+  });
+
+  it('模型漏答了部分纪要时提示这些纪要没参与挑选', async () => {
+    const fetch = scoringFetch(code => (code === 'AM0001' || code === 'AM0002' ? null : 3));
+    const result = await runDecisionRecall_ACU({ userInput: 'x', settings: settings() }, { sources: makeSources(makeRows(12)), fetch, sleep: noSleep });
+    expect(describeDecisionRecallWarning_ACU(result)).toContain('漏答了 2 条');
+  });
+
+  it('失败原因去重后列出，并去掉其中的 Key', async () => {
+    const fetch = vi.fn(async () => ({ ok: false, status: 401, json: async () => ({ message: 'invalid api key sk-abcdefghijklmnopqrstuvwxyz123456' }) }) as any);
+    const result = await runDecisionRecall_ACU({ userInput: 'x', settings: settings() }, { sources: makeSources(makeRows(65)), fetch, sleep: noSleep });
+    const text = describeDecisionRecallErrors_ACU(result);
+    expect(text).toContain('HTTP 401');
+    expect(text.match(/HTTP 401/g)).toHaveLength(1);
+    expect(text).not.toContain('abcdefghijklmnopqrstuvwxyz123456');
   });
 
   it('运行日志摘要写明候选来源、分组、失败与带上的编码', async () => {

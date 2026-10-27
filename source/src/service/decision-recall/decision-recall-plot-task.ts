@@ -22,7 +22,12 @@ function splitTags_ACU(value: unknown): string[] {
   return String(value || '').split(',').map(tag => tag.trim()).filter(Boolean);
 }
 
-/** 这个任务能否改由决策召回执行：预设有多个任务，且任务标签恰好是 recall。 */
+/** 预设里实际会跑的任务数：停用的任务不算，「只启用一个任务的预设不替换」按这个数判断。 */
+export function countEnabledPlotTasks_ACU(tasks: readonly any[] | null | undefined): number {
+  return (Array.isArray(tasks) ? tasks : []).filter(task => task && task.enabled !== false).length;
+}
+
+/** 这个任务能否改由决策召回执行：预设有多个启用的任务，且任务标签恰好是 recall。 */
 export function canPlotTaskUseDecisionRecall_ACU(task: Record<string, any> | null | undefined, presetTaskCount: number): boolean {
   if (!task || presetTaskCount < 2) return false;
   const tags = splitTags_ACU(task.extractTags);
@@ -54,7 +59,12 @@ export async function runDecisionRecallForPlotTask_ACU(
   const result = await runDecisionRecall_ACU({ userInput: options.userInput, settings, signal: options.signal }, deps);
   logDecisionRecallResult_ACU(result);
   if (result.status === 'aborted') return { kind: 'aborted' };
-  const tagName = splitTags_ACU(task.extractTags)[0] || DECISION_RECALL_PLOT_TASK_TAG_ACU;
   const codes = result.status === 'ok' ? result.selected.map(row => row.indexCode) : [];
-  return { kind: 'done', rawResponse: buildDecisionRecallTagBlock_ACU(codes, tagName), result };
+  return { kind: 'done', rawResponse: buildDecisionRecallPlotTaskResponse_ACU(task, codes), result };
+}
+
+/** 任务回复：沿用任务自己的标签写法；没有编码时是空的 recall 块（不注入）。 */
+export function buildDecisionRecallPlotTaskResponse_ACU(task: Record<string, any>, codes: readonly string[]): string {
+  const tagName = splitTags_ACU(task.extractTags)[0] || DECISION_RECALL_PLOT_TASK_TAG_ACU;
+  return buildDecisionRecallTagBlock_ACU(codes, tagName);
 }

@@ -10,12 +10,14 @@ import { settings_ACU } from '../runtime/state-manager';
 import { readErrorMessage_ACU, runWithDeadline_ACU } from '../optimization/decision-gate';
 import { abortableDelay } from '../../shared/abortable-delay';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { maskSensitiveText_ACU } from '../../shared/log-buffer';
 import {
   DECISION_RECALL_BATCH_SIZE_ACU,
   DECISION_RECALL_CODES_PLACEHOLDER_ACU,
   DECISION_RECALL_CONCURRENCY_ACU,
   DECISION_RECALL_INPUT_PLACEHOLDER_ACU,
   DECISION_RECALL_TIMEOUT_MS_ACU,
+  DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU,
 } from '../../shared/decision-recall-defaults';
 import {
   normalizeDecisionRecallSettings_ACU,
@@ -46,6 +48,7 @@ export interface DecisionRecallRunDeps_ACU {
   fetch?: typeof fetch;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   timeoutMs?: number;
+  totalTimeoutMs?: number;
 }
 
 export interface DecisionRecallRunOptions_ACU {
@@ -88,6 +91,20 @@ type GroupOutcome_ACU =
 
 function retryDelayMs_ACU(attempt: number, rateLimited: boolean): number {
   return (rateLimited ? 4000 : 1500) * (attempt + 1);
+}
+
+/** 重试也不会好的请求错误：这一组不再重试。 */
+const NON_RETRYABLE_STATUSES_ACU = new Set([400, 401, 402, 403, 404, 413, 422]);
+/** Key 无效、没余额、没权限或模型不存在：每一组都会一样失败，其余各组直接按失败处理。 */
+const FATAL_STATUSES_ACU = new Set([401, 402, 403, 404]);
+const TOTAL_TIMEOUT_ERROR_ACU = '决策召回总时长超过时限，未打完分的组已跳过';
+
+interface GroupRequestOutcome_ACU {
+  scores?: Map<string, DecisionRecallScore_ACU>;
+  error?: string;
+  rateLimited?: boolean;
+  retryable?: boolean;
+  fatal?: boolean;
 }
 
 export async function runDecisionRecall_ACU(
@@ -134,9 +151,24 @@ export async function runDecisionRecall_ACU(
   const groups = chunkDecisionRecallRows_ACU(plan.pool, DECISION_RECALL_BATCH_SIZE_ACU);
   const fetchImpl = deps.fetch ?? globalThis.fetch;
 
-  const requestGroup = async (rows: DecisionRecallRow_ACU[]) => {
-    const outcome = await runWithDeadline_ACU<{ scores?: Map<string, DecisionRecallScore_ACU>; error?: string; rateLimited?: boolean }>(
-      { timeoutMs: deps.timeoutMs ?? DECISION_RECALL_TIMEOUT_MS_ACU, signal },
+  // 总时限与鉴权类错误都要能停下其余各组的在途请求，但不算用户中止
+  const runController = new AbortController();
+  const stopRun = () => runController.abort();
+  if (signal?.aborted) stopRun();
+  signal?.addEventListener('abort', stopRun, { once: true });
+  let stopError = '';
+  const stopWith = (error: string) => {
+    if (!stopError) stopError = error;
+    stopRun();
+  };
+  const totalTimer = setTimeout(
+    () => stopWith(`${TOTAL_TIMEOUT_ERROR_ACU}（${Math.round((deps.totalTimeoutMs ?? DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU) / 1000)} 秒）`),
+    deps.totalTimeoutMs ?? DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU,
+  );
+
+  const requestGroup = async (rows: DecisionRecallRow_ACU[]): Promise<GroupRequestOutcome_ACU> => {
+    const outcome = await runWithDeadline_ACU<GroupRequestOutcome_ACU>(
+      { timeoutMs: deps.timeoutMs ?? DECISION_RECALL_TIMEOUT_MS_ACU, signal: runController.signal },
       async requestSignal => {
         const response = await fetchImpl(endpoint.url, {
           method: 'POST',
@@ -146,25 +178,38 @@ export async function runDecisionRecall_ACU(
         });
         if (!response.ok) {
           const reason = await readErrorMessage_ACU(response);
-          return { error: `HTTP ${response.status}${reason ? `：${reason}` : ''}`, rateLimited: response.status === 429 };
+          return {
+            error: `HTTP ${response.status}${reason ? `：${reason}` : ''}`,
+            rateLimited: response.status === 429,
+            retryable: !NON_RETRYABLE_STATUSES_ACU.has(response.status),
+            fatal: FATAL_STATUSES_ACU.has(response.status),
+          };
         }
-        return { scores: interpretDecisionRecallBatchResponse_ACU(await response.json(), rows) };
+        return { scores: interpretDecisionRecallBatchResponse_ACU(await response.json(), rows), retryable: true };
       },
     );
     if (outcome.ok) return outcome.value!;
-    if (outcome.failure) return { error: `决策模型${outcome.failure}` };
-    return { error: `请求失败：${(outcome.error as any)?.message || outcome.error}` };
+    // 超时再试一次又是一整段超时，不重试；被总时限或其它组的鉴权错误停下时由调用方按 stopError 处理
+    if (outcome.failure) return { error: `决策模型${outcome.failure}`, retryable: false };
+    return { error: `请求失败：${(outcome.error as any)?.message || outcome.error}`, retryable: true };
   };
 
   const scoreGroup = async (rows: DecisionRecallRow_ACU[]): Promise<GroupOutcome_ACU> => {
     let lastError = '';
     for (let attempt = 0; attempt <= settings.maxRetries; attempt++) {
       if (isAborted()) return { kind: 'aborted' };
+      if (stopError) return { kind: 'failed', error: stopError };
       const outcome = await requestGroup(rows);
       if (isAborted()) return { kind: 'aborted' };
       if (outcome.scores && outcome.scores.size > 0) return { kind: 'scored', scores: outcome.scores };
+      if (stopError) return { kind: 'failed', error: stopError };
       lastError = outcome.error || '决策模型没有给出任何打分';
-      if (attempt < settings.maxRetries) await sleep(retryDelayMs_ACU(attempt, outcome.rateLimited === true), signal);
+      if (outcome.fatal) {
+        stopWith(lastError);
+        break;
+      }
+      if (outcome.retryable === false) break;
+      if (attempt < settings.maxRetries) await sleep(retryDelayMs_ACU(attempt, outcome.rateLimited === true), runController.signal);
     }
     return { kind: 'failed', error: lastError };
   };
@@ -177,7 +222,12 @@ export async function runDecisionRecall_ACU(
       outcomes[index] = await scoreGroup(groups[index]);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(DECISION_RECALL_CONCURRENCY_ACU, groups.length) }, worker));
+  try {
+    await Promise.all(Array.from({ length: Math.min(DECISION_RECALL_CONCURRENCY_ACU, groups.length) }, worker));
+  } finally {
+    clearTimeout(totalTimer);
+    signal?.removeEventListener('abort', stopRun);
+  }
   if (isAborted() || outcomes.some(outcome => outcome?.kind === 'aborted')) return { status: 'aborted' };
 
   const scored: DecisionRecallScoredEntry_ACU[] = [];
@@ -200,7 +250,7 @@ export async function runDecisionRecall_ACU(
   });
   scored.sort((left, right) => (right.score - left.score) || (right.row.rowOrder - left.row.rowOrder));
   if (failedBatchCount > 0) {
-    logWarn_ACU(`[决策召回] ${failedBatchCount}/${groups.length} 组打分重试 ${settings.maxRetries} 次后仍失败，已跳过：${[...new Set(errors)].join('；')}`);
+    logWarn_ACU(`[决策召回] ${failedBatchCount}/${groups.length} 组打分失败，已跳过：${[...new Set(errors)].join('；')}`);
   }
 
   return {
@@ -213,10 +263,21 @@ export async function runDecisionRecall_ACU(
 export function describeDecisionRecallWarning_ACU(result: DecisionRecallRunResult_ACU): string {
   if (result.status !== 'ok') return '';
   if (result.missingKey) return `决策召回还没填 ${result.providerLabel} Key，本次只带上最新 ${result.fixed.length} 条纪要。`;
-  if (result.failedBatchCount > 0) {
-    return `决策召回有 ${result.failedBatchCount}/${result.batchCount} 组打分重试后仍失败，已跳过这些组，从其余纪要里选取。`;
+  if (result.batchCount > 0 && result.failedBatchCount >= result.batchCount) {
+    return `决策召回全部 ${result.batchCount} 组打分都失败了，本次只带上最新 ${result.fixed.length} 条纪要。`;
   }
+  if (result.failedBatchCount > 0) {
+    return `决策召回有 ${result.failedBatchCount}/${result.batchCount} 组打分失败，已跳过这些组，从其余纪要里选取。`;
+  }
+  const skipped = result.unscoredCount;
+  if (skipped > 0) return `决策模型漏答了 ${skipped} 条纪要，这些纪要本次没参与挑选。`;
   return '';
+}
+
+/** 打分失败的原因（去重、脱敏），给测试召回等需要排查 Key 与模型问题的地方看；没有失败时返回空串。 */
+export function describeDecisionRecallErrors_ACU(result: DecisionRecallRunResult_ACU): string {
+  if (result.status !== 'ok' || result.errors.length === 0) return '';
+  return [...new Set(result.errors)].map(error => maskSensitiveText_ACU(error)).join('；');
 }
 
 /** 运行日志里的一行摘要：候选来源、分组、失败与选中的编码（带分数）。 */
