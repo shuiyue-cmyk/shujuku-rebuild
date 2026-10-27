@@ -10,6 +10,8 @@ function allFeaturesSettings(): any {
   const settings = createV3Settings();
   settings.summaryVectorIndexModeDefault = true;
   settings.contentOptimizationSettings = { apiPreset: '', enabled: true };
+  // 决策召回页只在总开关开着时出现在侧栏
+  settings.decisionRecallSettings = { ...(settings.decisionRecallSettings || {}), enabled: true };
   return settings;
 }
 

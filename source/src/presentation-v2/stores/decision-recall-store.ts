@@ -1,11 +1,14 @@
 /**
  * decision-recall-store — 「决策召回」页的状态：设置读写、模型列表、测试召回。
  *
- * 设置权威源是 settings_ACU.decisionRecallSettings；单独开启的开关走 setDecisionRecallEnabled_ACU（与剧情推进互斥）。
+ * 设置权威源是 settings_ACU.decisionRecallSettings。总开关在仪表盘进阶开关里（setDecisionRecallEnabled_ACU），
+ * 这一页只选用法：「单独召回」时剧情推进暂停，「替换剧情推进的任务」时剧情推进照常运行。
  */
 import { defineStore } from 'pinia';
 import { settings_ACU } from '../../service/runtime/state-manager';
-import { saveSettings_ACU, setDecisionRecallEnabled_ACU, setGlobalPlotEnabled_ACU } from '../../service/settings/settings-service';
+import { saveSettings_ACU } from '../../service/settings/settings-service';
+import { normalizePlotTasks_ACU } from '../../service/plot/plot-logic';
+import { canPlotTaskUseDecisionRecall_ACU } from '../../service/decision-recall/decision-recall-plot-task';
 import {
   normalizeDecisionRecallSettings_ACU,
   resolveDecisionRecallEndpoint_ACU,
@@ -27,8 +30,30 @@ import { AIHUBMIX_DECISION_MODELS_ACU } from '../../shared/decision-recall-defau
 import { logError_ACU } from '../../shared/utils';
 import { useToastStore } from './toast-store';
 
+/** 当前剧情推进预设里与决策召回有关的任务（「替换剧情推进的任务」用法下给用户看）。 */
+export interface DecisionRecallPlotTaskStatus_ACU {
+  plotEnabled: boolean;
+  taskCount: number;
+  /** 打开了「改由决策召回执行」且满足条件的任务名。 */
+  replacedTaskNames: string[];
+  /** 满足条件、但还没打开开关的任务名。 */
+  eligibleTaskNames: string[];
+}
+
+function readPlotTaskStatus_ACU(): DecisionRecallPlotTaskStatus_ACU {
+  const tasks = normalizePlotTasks_ACU(settings_ACU?.plotSettings || {});
+  const eligible = tasks.filter((task: any) => canPlotTaskUseDecisionRecall_ACU(task, tasks.length));
+  return {
+    plotEnabled: settings_ACU?.plotSettings?.enabled === true,
+    taskCount: tasks.length,
+    replacedTaskNames: eligible.filter((task: any) => task.decisionRecall === true).map((task: any) => String(task.name || task.id)),
+    eligibleTaskNames: eligible.filter((task: any) => task.decisionRecall !== true).map((task: any) => String(task.name || task.id)),
+  };
+}
+
 interface DecisionRecallState {
   settings: DecisionRecallSettings_ACU;
+  plotTaskStatus: DecisionRecallPlotTaskStatus_ACU;
   openrouterModels: DecisionModelOption_ACU[];
   modelsLoading: boolean;
   testInput: string;
@@ -83,6 +108,7 @@ export function formatDecisionRecallTestOutput_ACU(result: DecisionRecallRunResu
 export const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
   state: (): DecisionRecallState => ({
     settings: readSettings_ACU(),
+    plotTaskStatus: readPlotTaskStatus_ACU(),
     openrouterModels: [],
     modelsLoading: false,
     testInput: '',
@@ -91,6 +117,10 @@ export const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
   }),
   getters: {
     endpoint: state => resolveDecisionRecallEndpoint_ACU(state.settings),
+    /** 「单独召回」生效中：剧情推进暂停。 */
+    standaloneActive: state => state.settings.enabled && state.settings.mode === 'standalone',
+    /** 「替换剧情推进的任务」生效中：剧情推进照常运行，打开了开关的 recall 任务改由决策召回执行。 */
+    taskModeActive: state => state.settings.enabled && state.settings.mode === 'plot_task',
     activeModels(state): readonly DecisionModelOption_ACU[] {
       if (state.settings.provider === 'siliconflow') return SILICONFLOW_DECISION_MODELS_ACU;
       if (state.settings.provider === 'aihubmix') return AIHUBMIX_DECISION_MODELS_ACU;
@@ -100,6 +130,7 @@ export const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
   actions: {
     refreshFromSettings(): void {
       this.settings = readSettings_ACU();
+      this.plotTaskStatus = readPlotTaskStatus_ACU();
     },
     /** 规整后写回并保存；返回是否保存成功。 */
     patch(patch: Partial<Record<keyof DecisionRecallSettings_ACU, unknown>>): boolean {
@@ -109,16 +140,6 @@ export const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
       const saved = persistOrRollback_ACU(snapshot);
       this.refreshFromSettings();
       return saved;
-    },
-    /** 单独开启 / 关闭；开启时会关掉剧情推进，返回是否因此关掉了剧情推进。 */
-    setEnabled(enabled: boolean): { saved: boolean; plotDisabled: boolean } {
-      const snapshot = settings_ACU.decisionRecallSettings;
-      const plotWasEnabled = settings_ACU.plotSettings?.enabled === true;
-      const { plotDisabled } = setDecisionRecallEnabled_ACU(enabled);
-      // 保存失败时连同被互斥关掉的剧情推进一起恢复
-      const saved = persistOrRollback_ACU(snapshot, plotDisabled ? () => setGlobalPlotEnabled_ACU(true) : undefined);
-      this.refreshFromSettings();
-      return { saved, plotDisabled: saved && plotDisabled && plotWasEnabled };
     },
     /** OpenRouter 的决策模型列表（公开接口）；硅基流动与 AIHubMix 用内置列表。 */
     async loadModels(): Promise<void> {

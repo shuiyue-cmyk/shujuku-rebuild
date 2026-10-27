@@ -14,13 +14,15 @@ import {
   DEFAULT_DECISION_RECALL_COUNT_ACU,
   DEFAULT_DECISION_RECALL_DIRECTIVE_ACU,
   DEFAULT_DECISION_RECALL_MAX_RETRIES_ACU,
+  type DecisionRecallMode_ACU,
   type DecisionRecallProvider_ACU,
   type DecisionRecallScoringContent_ACU,
 } from '../../shared/decision-recall-defaults';
 
 export interface DecisionRecallSettings_ACU {
-  /** 单独开启（与剧情推进互斥）。替换剧情推进任务不看这个开关。 */
+  /** 总开关（仪表盘进阶开关）；关着时两种用法都不生效。 */
   enabled: boolean;
+  mode: DecisionRecallMode_ACU;
   provider: DecisionRecallProvider_ACU;
   openrouterApiKey: string;
   openrouterModel: string;
@@ -33,7 +35,7 @@ export interface DecisionRecallSettings_ACU {
   scoringContent: DecisionRecallScoringContent_ACU;
   /** 一组打分失败后再试几次，用完仍失败就跳过这一组。 */
   maxRetries: number;
-  /** 单独开启时写进本轮输入的注入指令。 */
+  /** 单独召回时写进本轮输入的注入指令。 */
   directive: string;
 }
 
@@ -55,6 +57,7 @@ export function normalizeDecisionRecallSettings_ACU(raw: unknown): DecisionRecal
   const directive = typeof source.directive === 'string' && source.directive.trim() ? source.directive : DEFAULT_DECISION_RECALL_DIRECTIVE_ACU;
   return {
     enabled: source.enabled === true,
+    mode: source.mode === 'plot_task' ? 'plot_task' : 'standalone',
     provider: PROVIDERS_ACU.includes(source.provider) ? source.provider : 'siliconflow',
     openrouterApiKey: text(source.openrouterApiKey),
     openrouterModel: text(source.openrouterModel) || DEFAULT_DECISION_MODEL_ACU,
@@ -79,4 +82,16 @@ export function resolveDecisionRecallEndpoint_ACU(settings: DecisionRecallSettin
     return { label, url: AIHUBMIX_DECISION_API_URL_ACU, apiKey: settings.aihubmixApiKey, model: settings.aihubmixModel };
   }
   return { label, url: SILICONFLOW_DECISION_API_URL_ACU, apiKey: settings.siliconflowApiKey, model: settings.siliconflowModel };
+}
+
+/** 单独召回生效中：发送前由决策召回占用剧情推进的规划位，剧情推进暂停。 */
+export function isDecisionRecallStandaloneActive_ACU(raw: unknown): boolean {
+  const settings = normalizeDecisionRecallSettings_ACU(raw);
+  return settings.enabled && settings.mode === 'standalone';
+}
+
+/** 替换剧情推进任务的用法生效中：剧情推进照常运行，打开了开关的 recall 任务改由决策召回执行。 */
+export function isDecisionRecallTaskModeActive_ACU(raw: unknown): boolean {
+  const settings = normalizeDecisionRecallSettings_ACU(raw);
+  return settings.enabled && settings.mode === 'plot_task';
 }

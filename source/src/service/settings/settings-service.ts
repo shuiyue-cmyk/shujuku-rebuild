@@ -1221,7 +1221,7 @@ export   function buildDefaultSettings_ACU() {
             promptGroup: buildDefaultContentOptimizationPromptGroup_ACU(), // 提示词组（段落编辑器）
             promptPresets: [] as any[],                 // 提示词组预设列表
           },
-          // 决策召回：决策模型给纪要打分挑相关的带进本轮输入；单独开启时与剧情推进互斥
+          // 决策召回：决策模型给纪要打分挑相关的带进本轮输入；「单独召回」时剧情推进暂停
           decisionRecallSettings: buildDefaultDecisionRecallSettings_ACU(),
           // [向量记忆] 全局配置，跟随数据库设置而非角色/对话
           vectorMemoryConfig: null as any,
@@ -1318,26 +1318,20 @@ export function setGlobalPlotEnabled_ACU(modeEnabled: boolean): boolean {
     settings_ACU.plotSettings.enabled = enabled;
     globalMeta_ACU.plotEnabledGlobal = enabled;
     saveGlobalMeta_ACU();
-    // 单独开启的决策召回与剧情推进互斥：开剧情推进即关决策召回（由调用方随后保存设置）
-    if (enabled && settings_ACU.decisionRecallSettings?.enabled === true) {
-        settings_ACU.decisionRecallSettings = { ...settings_ACU.decisionRecallSettings, enabled: false };
-    }
     return enabled;
 }
 
 /**
- * 单独开启 / 关闭决策召回。开启时关掉剧情推进（互斥），返回是否因此关掉了剧情推进；由调用方随后保存设置。
- * 剧情推进里由决策召回执行的任务不看这个开关。
+ * 决策召回总开关（仪表盘进阶开关）；由调用方随后保存设置。
+ * 不动剧情推进自己的开关：「单独召回」时剧情推进只是暂停，换成「替换剧情推进的任务」或关掉决策召回就恢复。
  */
-export function setDecisionRecallEnabled_ACU(modeEnabled: boolean): { enabled: boolean; plotDisabled: boolean } {
+export function setDecisionRecallEnabled_ACU(modeEnabled: boolean): boolean {
     const enabled = !!modeEnabled;
     const current = settings_ACU.decisionRecallSettings && typeof settings_ACU.decisionRecallSettings === 'object'
         ? settings_ACU.decisionRecallSettings
         : buildDefaultDecisionRecallSettings_ACU();
     settings_ACU.decisionRecallSettings = { ...current, enabled };
-    const plotDisabled = enabled && settings_ACU.plotSettings?.enabled === true;
-    if (plotDisabled) setGlobalPlotEnabled_ACU(false);
-    return { enabled, plotDisabled };
+    return enabled;
 }
 
 export function setSummaryVectorIndexMode_ACU(modeEnabled: boolean) {

@@ -1,6 +1,13 @@
 <template>
   <UbPage :sections="sections">
-    <PlotPresetSection id="plot-preset" />
+    <UbCallout v-if="paused" kind="warning">
+      决策召回正在「单独召回」，剧情推进已暂停：发送前由决策召回挑选纪要，这一页的设置暂不生效。
+      到决策召回页把用法换成「替换剧情推进的任务」，或在仪表盘关掉决策召回，即可恢复。
+      <UbButton size="sm" icon="fa-solid fa-ranking-star" @click="routerStore.setActivePage('decision-recall')">去决策召回页</UbButton>
+    </UbCallout>
+    <div class="ub-plot__body" :class="{ 'is-paused': paused }" :inert="paused || undefined">
+      <PlotPresetSection id="plot-preset" />
+    </div>
 
     <UbSection
       id="plot-experience"
@@ -10,7 +17,7 @@
     >
       <UbRow
         label="伪装发送楼层"
-        hint="开启后，剧情推进与纪要召回等待期间在聊天区显示伪装的用户楼层与“思考中”楼层，并拦截重复发送；关闭则消息停在输入框直到规划完成。"
+        hint="开启后，剧情推进、纪要召回与决策召回等待期间在聊天区显示伪装的用户楼层与“思考中”楼层，并拦截重复发送；关闭则消息停在输入框直到规划完成。剧情推进暂停时这一项照样生效。"
       >
         <UbSwitch
           :model-value="plotPresetStore.pendingDisguiseEnabled"
@@ -20,38 +27,41 @@
       </UbRow>
     </UbSection>
 
-    <UbSection
-      id="plot-worldbook"
-      :title="plotCopy.panels.worldbook.title"
-      :description="plotCopy.panels.worldbook.description"
-      icon="fa-solid fa-book"
-      padded
-    >
-      <WorldbookSourcePicker
-        :source="plotWorldbook.source.value"
-        :selected-names="plotWorldbook.manualSelection.value"
-        :names="worldbook.names.value"
-        :status="worldbook.status.value"
-        :error="worldbook.error.value"
-        @update:source="onWorldbookSourceChange($event as WorldbookSource)"
-        @toggle-book="onManualWorldbookToggle"
-      />
-      <p class="ub-plot__current">目前已选：<strong>{{ currentWorldbookLabel }}</strong></p>
-      <WorldbookEntries
-        id-prefix="plot"
-        :groups="wbEntries.groups.value"
-        :filter="entryFilter"
-        :loading="wbEntries.status.value === 'loading'"
-        :status="wbEntries.status.value"
-        :error="wbEntries.error.value"
-        :empty-text="entryEmptyText"
-        @update:filter="entryFilter = $event"
-        @select-all="wbEntries.selectAll($event)"
-        @deselect-all="wbEntries.deselectAll($event)"
-        @toggle="(bookName, uid, checked) => wbEntries.toggleEntry(bookName, uid, checked)"
-        @toggle-group="wbEntries.toggleGroupExpanded($event)"
-      />
-    </UbSection>
+    <div class="ub-plot__body" :class="{ 'is-paused': paused }" :inert="paused || undefined">
+      <UbSection
+        id="plot-worldbook"
+        :title="plotCopy.panels.worldbook.title"
+        :description="plotCopy.panels.worldbook.description"
+        icon="fa-solid fa-book"
+        padded
+      >
+        <UbCallout v-if="decisionRecallTaskMode" kind="info">由决策召回执行的任务不读这里选的世界书，只从纪要表里挑选；其余任务照常使用。</UbCallout>
+        <WorldbookSourcePicker
+          :source="plotWorldbook.source.value"
+          :selected-names="plotWorldbook.manualSelection.value"
+          :names="worldbook.names.value"
+          :status="worldbook.status.value"
+          :error="worldbook.error.value"
+          @update:source="onWorldbookSourceChange($event as WorldbookSource)"
+          @toggle-book="onManualWorldbookToggle"
+        />
+        <p class="ub-plot__current">目前已选：<strong>{{ currentWorldbookLabel }}</strong></p>
+        <WorldbookEntries
+          id-prefix="plot"
+          :groups="wbEntries.groups.value"
+          :filter="entryFilter"
+          :loading="wbEntries.status.value === 'loading'"
+          :status="wbEntries.status.value"
+          :error="wbEntries.error.value"
+          :empty-text="entryEmptyText"
+          @update:filter="entryFilter = $event"
+          @select-all="wbEntries.selectAll($event)"
+          @deselect-all="wbEntries.deselectAll($event)"
+          @toggle="(bookName, uid, checked) => wbEntries.toggleEntry(bookName, uid, checked)"
+          @toggle-group="wbEntries.toggleGroupExpanded($event)"
+        />
+      </UbSection>
+    </div>
   </UbPage>
 </template>
 
@@ -63,9 +73,14 @@ import { usePlotWorldbookEntries } from '../../presentation-v2/composables/usePl
 import { useWorldbookSelector } from '../../presentation-v2/composables/useWorldbookSelector';
 import { plotCopy } from '../../presentation-v2/copy/plot-copy';
 import { usePlotPresetStore } from '../../presentation-v2/stores/plot-preset-store';
+import { useRouterStore } from '../../presentation-v2/stores/router-store';
+import { useDecisionRecallStore } from '../../presentation-v2/stores/decision-recall-store';
+import { FEATURE_FLAG_PLOT_PAUSED } from '../../presentation-v2/router/page-registry';
 import PlotPresetSection from '../parts/PlotPresetSection.vue';
 import WorldbookEntries from '../parts/WorldbookEntries.vue';
 import WorldbookSourcePicker from '../parts/WorldbookSourcePicker.vue';
+import UbButton from '../ui/UbButton.vue';
+import UbCallout from '../ui/UbCallout.vue';
 import UbPage from '../ui/UbPage.vue';
 import UbRow from '../ui/UbRow.vue';
 import UbSection from '../ui/UbSection.vue';
@@ -74,6 +89,12 @@ import UbSwitch from '../ui/UbSwitch.vue';
 type WorldbookSource = 'character' | 'manual';
 
 const plotPresetStore = usePlotPresetStore();
+const routerStore = useRouterStore();
+const decisionRecallStore = useDecisionRecallStore();
+/** 决策召回「单独召回」生效中：剧情推进暂停，整页灰掉不可编辑。 */
+const paused = computed(() => routerStore.featureGates[FEATURE_FLAG_PLOT_PAUSED] === true);
+/** 「替换剧情推进的任务」生效中：提醒这里选的世界书不用于由决策召回执行的任务。 */
+const decisionRecallTaskMode = computed(() => decisionRecallStore.taskModeActive);
 const worldbook = useWorldbookSelector();
 const plotWorldbook = usePlotWorldbookConfig();
 const wbEntries = usePlotWorldbookEntries();
@@ -128,6 +149,7 @@ function onManualWorldbookToggle(name: string, checked: boolean): void {
 
 async function refreshAll(): Promise<void> {
   plotPresetStore.refreshFromSettings();
+  decisionRecallStore.refreshFromSettings();
   plotWorldbook.refreshFromSettings();
   await worldbook.refresh();
   await refreshWorldbookEntries();
@@ -138,6 +160,18 @@ watchChatChanged_ACU(() => void refreshAll());
 </script>
 
 <style scoped>
+.ub-plot__body {
+  display: contents;
+}
+
+.ub-plot__body.is-paused {
+  display: block;
+  opacity: 0.45;
+  filter: grayscale(1);
+  pointer-events: none;
+  user-select: none;
+}
+
 .ub-plot__current {
   color: var(--ub-text-3);
   font-size: var(--ub-fs-xs);

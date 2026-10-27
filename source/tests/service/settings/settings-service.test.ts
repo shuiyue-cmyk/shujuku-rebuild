@@ -550,48 +550,36 @@ describe('buildDefaultSettings_ACU', () => {
   });
 });
 
-describe('决策召回与剧情推进互斥', () => {
+describe('决策召回总开关与剧情推进开关互不影响', () => {
   beforeEach(() => {
     mockSettings.plotSettings = { plotWorldbookConfig: null, enabled: true };
-    mockSettings.decisionRecallSettings = { enabled: false, recallCount: 12 };
+    mockSettings.decisionRecallSettings = { enabled: false, mode: 'standalone', recallCount: 12 };
     mockGlobalMeta.plotEnabledGlobal = true;
   });
 
-  it('开决策召回时关掉剧情推进（含全局开关），其它决策召回设置不动', () => {
-    expect(setDecisionRecallEnabled_ACU(true)).toEqual({ enabled: true, plotDisabled: true });
-    expect(mockSettings.decisionRecallSettings).toEqual({ enabled: true, recallCount: 12 });
-    expect(mockSettings.plotSettings.enabled).toBe(false);
-    expect(mockGlobalMeta.plotEnabledGlobal).toBe(false);
-  });
+  it('开关决策召回只改它自己，剧情推进开关（含全局开关）不动，其它决策召回设置不动', () => {
+    expect(setDecisionRecallEnabled_ACU(true)).toBe(true);
+    expect(mockSettings.decisionRecallSettings).toEqual({ enabled: true, mode: 'standalone', recallCount: 12 });
+    expect(mockSettings.plotSettings.enabled).toBe(true);
+    expect(mockGlobalMeta.plotEnabledGlobal).toBe(true);
 
-  it('剧情推进本来就关着时只开决策召回', () => {
-    mockSettings.plotSettings.enabled = false;
-    mockGlobalMeta.plotEnabledGlobal = false;
-    expect(setDecisionRecallEnabled_ACU(true)).toEqual({ enabled: true, plotDisabled: false });
-  });
-
-  it('关决策召回不会把剧情推进打开', () => {
-    setDecisionRecallEnabled_ACU(true);
-    setDecisionRecallEnabled_ACU(false);
+    expect(setDecisionRecallEnabled_ACU(false)).toBe(false);
     expect(mockSettings.decisionRecallSettings.enabled).toBe(false);
-    expect(mockSettings.plotSettings.enabled).toBe(false);
+    expect(mockSettings.plotSettings.enabled).toBe(true);
   });
 
-  it('开剧情推进时关掉决策召回；关剧情推进不动决策召回', () => {
+  it('开关剧情推进不动决策召回', () => {
     setDecisionRecallEnabled_ACU(true);
-    setGlobalPlotEnabled_ACU(true);
-    expect(mockSettings.decisionRecallSettings.enabled).toBe(false);
-    expect(mockSettings.decisionRecallSettings.recallCount).toBe(12);
-
-    mockSettings.decisionRecallSettings.enabled = true;
     setGlobalPlotEnabled_ACU(false);
     expect(mockSettings.decisionRecallSettings.enabled).toBe(true);
+    setGlobalPlotEnabled_ACU(true);
+    expect(mockSettings.decisionRecallSettings).toEqual({ enabled: true, mode: 'standalone', recallCount: 12 });
   });
 
-  it('设置里还没有决策召回字段时按默认值补齐', () => {
+  it('设置里还没有决策召回字段时按默认值补齐（默认单独召回）', () => {
     delete mockSettings.decisionRecallSettings;
     setDecisionRecallEnabled_ACU(true);
-    expect(mockSettings.decisionRecallSettings).toMatchObject({ enabled: true, recallCount: 20, provider: 'siliconflow' });
+    expect(mockSettings.decisionRecallSettings).toMatchObject({ enabled: true, mode: 'standalone', recallCount: 20, provider: 'siliconflow' });
   });
 });
 

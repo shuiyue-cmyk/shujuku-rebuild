@@ -12,6 +12,8 @@
  * - visibleWhen：兜底自定义函数，true 才可见；不写视为 true
  *
  * 两档串接顺序：featureGate -> visibleWhen，任一不通过就隐藏（存储模式恒为 SQLite，已无按模式隐藏的页）。
+ *
+ * 灰显（仍可见、可进入）：dimmedByGate 对应的 featureGates 为 true 时侧栏入口灰显，悬停显示 dimmedHint。
  */
 export type AcuV2PageGroup = 'overview' | 'config' | 'feature' | 'tool' | 'developer';
 
@@ -21,6 +23,8 @@ export interface AcuV2Page {
   group: AcuV2PageGroup;
   featureGate?: string;
   visibleWhen?: () => boolean;
+  dimmedByGate?: string;
+  dimmedHint?: string;
 }
 
 export interface AcuV2PageGroupMeta {

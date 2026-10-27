@@ -4,6 +4,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  isDecisionRecallStandaloneActive_ACU,
+  isDecisionRecallTaskModeActive_ACU,
   normalizeDecisionRecallSettings_ACU,
   resolveDecisionRecallEndpoint_ACU,
 } from '../../../src/service/decision-recall/decision-recall-settings';
@@ -15,9 +17,10 @@ import {
 import { DEFAULT_DECISION_MODEL_ACU, DEFAULT_SILICONFLOW_DECISION_MODEL_ACU } from '../../../src/shared/decision-gate-defaults';
 
 describe('normalizeDecisionRecallSettings_ACU', () => {
-  it('缺省时关闭、硅基流动、召回 20 条、看概要加正文、重试 2 次、默认注入指令', () => {
+  it('缺省时关闭、单独召回、硅基流动、召回 20 条、看概要加正文、重试 2 次、默认注入指令', () => {
     expect(normalizeDecisionRecallSettings_ACU(undefined)).toEqual({
       enabled: false,
+      mode: 'standalone',
       provider: 'siliconflow',
       openrouterApiKey: '',
       openrouterModel: DEFAULT_DECISION_MODEL_ACU,
@@ -76,6 +79,25 @@ describe('normalizeDecisionRecallSettings_ACU', () => {
 
   it('自定义注入指令原样保留（不去掉首尾换行以外的内容）', () => {
     expect(normalizeDecisionRecallSettings_ACU({ directive: '记忆：{{recall}}\n输入：$8' }).directive).toBe('记忆：{{recall}}\n输入：$8');
+  });
+});
+
+describe('决策召回用法', () => {
+  it('只认「替换剧情推进的任务」，其它值都按单独召回', () => {
+    expect(normalizeDecisionRecallSettings_ACU({ mode: 'plot_task' }).mode).toBe('plot_task');
+    expect(normalizeDecisionRecallSettings_ACU({ mode: 'other' }).mode).toBe('standalone');
+    expect(normalizeDecisionRecallSettings_ACU({}).mode).toBe('standalone');
+  });
+
+  it('总开关关着时两种用法都不生效；开着时只有所选用法生效', () => {
+    expect(isDecisionRecallStandaloneActive_ACU({ enabled: false, mode: 'standalone' })).toBe(false);
+    expect(isDecisionRecallTaskModeActive_ACU({ enabled: false, mode: 'plot_task' })).toBe(false);
+    expect(isDecisionRecallStandaloneActive_ACU({ enabled: true, mode: 'standalone' })).toBe(true);
+    expect(isDecisionRecallTaskModeActive_ACU({ enabled: true, mode: 'standalone' })).toBe(false);
+    expect(isDecisionRecallStandaloneActive_ACU({ enabled: true, mode: 'plot_task' })).toBe(false);
+    expect(isDecisionRecallTaskModeActive_ACU({ enabled: true, mode: 'plot_task' })).toBe(true);
+    // 旧设置没有用法字段：按单独召回
+    expect(isDecisionRecallStandaloneActive_ACU({ enabled: true })).toBe(true);
   });
 });
 

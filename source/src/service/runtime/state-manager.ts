@@ -275,10 +275,11 @@ export function shouldProcessPlotForGeneration_ACU(type: any, params: any, dryRu
   return fresh.result;
 }
 
-/** 决策召回单独开启时（与剧情推进互斥）发送前是否要跑；口径同剧情推进。 */
+/** 决策召回「单独召回」时发送前是否要跑（占用剧情推进的规划位，剧情推进暂停）；口径同剧情推进。 */
 export function shouldProcessDecisionRecallForGeneration_ACU(type: any, params: any, dryRun: any) {
   if (dryRun) return false;
-  if (settings_ACU?.decisionRecallSettings?.enabled !== true) return false;
+  const decisionRecall = settings_ACU?.decisionRecallSettings;
+  if (decisionRecall?.enabled !== true || decisionRecall?.mode === 'plot_task') return false;
   if (isQuietLikeGeneration_ACU(type, params)) return false;
   if (params?.automatic_trigger) return false;
   if (isRetryOfStoppedSend_ACU(type)) return true;

@@ -86,7 +86,6 @@ import { useDecisionRecallStore } from '../../presentation-v2/stores/decision-re
 import { usePlotPresetStore } from '../../presentation-v2/stores/plot-preset-store';
 import { useRouterStore } from '../../presentation-v2/stores/router-store';
 import { useToastStore } from '../../presentation-v2/stores/toast-store';
-import { settings_ACU } from '../../service/runtime/state-manager';
 import { logError_ACU } from '../../shared/utils';
 import { syncFeaturePageGates_UB } from '../composables/feature-gates';
 import UbBadge from '../ui/UbBadge.vue';
@@ -176,16 +175,12 @@ async function handleToggleChange(key: string, value: boolean): Promise<void> {
     await toggleFlightMode(value);
     return;
   }
-  const plotWasOn = settings_ACU.plotSettings?.enabled === true;
-  const recallWasOn = settings_ACU.decisionRecallSettings?.enabled === true;
   dashboard.setToggle(key, value);
   if (key === 'plotEnabled' || key === 'decisionRecallEnabled') {
     plotStore.refreshFromSettings();
     useDecisionRecallStore().refreshFromSettings();
-    // 单独开启的决策召回与剧情推进互斥：开一个时另一个被关掉要告诉用户
-    if (key === 'decisionRecallEnabled' && value && plotWasOn) toastStore.info('已关闭剧情推进：单独开启决策召回时与剧情推进互斥。');
-    if (key === 'plotEnabled' && value && recallWasOn) toastStore.info('已关闭决策召回：开启剧情推进时与单独开启的决策召回互斥。');
   }
+  // 决策召回页的显隐与剧情推进入口的灰显都随这里的开关
   syncGates();
 }
 

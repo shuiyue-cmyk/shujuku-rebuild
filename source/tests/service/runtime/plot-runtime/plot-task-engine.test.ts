@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const {
   mockSettings,
@@ -2332,6 +2332,7 @@ describe('runPlotTasksRuntime_ACU 由决策召回执行的任务', () => {
 
   beforeEach(() => {
     decisionRecallTaskMocks.run.mockReset();
+    (mockSettings as any).decisionRecallSettings = { enabled: true, mode: 'plot_task' };
     mockCallApiWithPlotPreset.mockResolvedValue('<plot>规划结果</plot>');
     mockExtractPlotTagsFromResponse.mockImplementation((rawText: string) => {
       const recall = /<recall>([\s\S]*?)<\/recall>/.exec(String(rawText))?.[1];
@@ -2371,6 +2372,22 @@ describe('runPlotTasksRuntime_ACU 由决策召回执行的任务', () => {
 
     expect(decisionRecallTaskMocks.run).not.toHaveBeenCalled();
     expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(2);
+  });
+
+  afterEach(() => {
+    delete (mockSettings as any).decisionRecallSettings;
+  });
+
+  it('决策召回用法是单独召回或总开关关着时，任务里的开关不生效：照常调模型', async () => {
+    mockCallApiWithPlotPreset.mockResolvedValue('<recall>模型召回</recall>');
+
+    (mockSettings as any).decisionRecallSettings = { enabled: true, mode: 'standalone' };
+    await runPlotTasksRuntime_ACU({ tasks: [recallTask, planTask] }, '当前输入');
+    (mockSettings as any).decisionRecallSettings = { enabled: false, mode: 'plot_task' };
+    await runPlotTasksRuntime_ACU({ tasks: [recallTask, planTask] }, '当前输入');
+
+    expect(decisionRecallTaskMocks.run).not.toHaveBeenCalled();
+    expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(4);
   });
 
   it('没开开关的 recall 任务照常调模型', async () => {

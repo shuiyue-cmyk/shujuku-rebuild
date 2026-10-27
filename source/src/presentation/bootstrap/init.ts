@@ -1044,8 +1044,8 @@ export   function mainInitialize_ACU() {
             // 租约在任何 await 之前捕获：等待期间的停止 / 切聊天也要算进来
             const sendLease = captureSendLease_ACU();
             const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
-            // 单独开启的决策召回与剧情推进互斥，占用剧情推进的发送前规划位（写回本轮输入、伪装、中止恢复同一套）；
-            // 两个开关同时为真（如导入旧设置）时以决策召回为准。
+            // 决策召回「单独召回」占用剧情推进的发送前规划位（写回本轮输入、伪装、中止恢复同一套），
+            // 此时剧情推进暂停、开关不动；「替换剧情推进的任务」时这里不接管，由剧情推进照常运行。
             const shouldProcessDecisionRecall = shouldProcessDecisionRecallForGeneration_ACU(type, params, dryRun);
             const shouldProcessPlot = shouldProcessDecisionRecall || shouldProcessPlotForGeneration_ACU(type, params, dryRun);
             const runPlanning_ACU = shouldProcessDecisionRecall ? runDecisionRecallWithUI_ACU : runOptimizationLogicWithUI_ACU;

@@ -3,9 +3,9 @@
  *
  * 决策召回：发送前把候选纪要分组交给决策模型，按「与接下来剧情发展的相关性」五档打分，
  * 取分数最高的若干条，连同固定带上的最新几条，按表号顺序写进本轮输入（走剧情推进的注入通道）。
- * 两种用法共用这一份设置：
- * - 单独开启（默认用法）：与剧情推进互斥，开一个就关另一个；
- * - 替换剧情推进任务：多任务剧情推进预设里、标签恰好是 recall 的任务可改由决策召回执行，剧情推进照常开着。
+ * 总开关在仪表盘进阶开关里（关着时侧栏不显示决策召回页），开启后在决策召回页选用法，两种用法共用这一份设置：
+ * - 单独召回（默认）：发送前由决策召回占用剧情推进的规划位，剧情推进暂停（剧情推进页灰掉，它自己的开关不动）；
+ * - 替换剧情推进的任务：剧情推进照常运行，多任务预设里、标签恰好是 recall 且打开了开关的任务改由决策召回执行。
  * 交火开着时从交火筛过的纪要索引里选，否则从全部纪要里选。
  */
 import { DEFAULT_DECISION_MODEL_ACU, DEFAULT_SILICONFLOW_DECISION_MODEL_ACU } from './decision-gate-defaults';
@@ -42,6 +42,9 @@ export const AIHUBMIX_DECISION_MODELS_ACU: readonly { id: string; name: string; 
 
 export type DecisionRecallProvider_ACU = 'siliconflow' | 'openrouter' | 'aihubmix';
 
+/** 用法：单独召回（剧情推进暂停）/ 替换剧情推进的任务（剧情推进照常运行）。 */
+export type DecisionRecallMode_ACU = 'standalone' | 'plot_task';
+
 /** 服务商名称。放在叶子模块里：设置模块在加载时就要用它，不能依赖可能处在循环引用中的判定模块。 */
 export const DECISION_RECALL_PROVIDER_LABELS_ACU: Record<DecisionRecallProvider_ACU, string> = {
   siliconflow: '硅基流动（中国）',
@@ -52,7 +55,7 @@ export const DECISION_RECALL_PROVIDER_LABELS_ACU: Record<DecisionRecallProvider_
 /** 打分时每条纪要给模型看的内容：只看概要，或概要加纪要正文。 */
 export type DecisionRecallScoringContent_ACU = 'summary' | 'full';
 
-/** 单独开启时注入指令里用户本轮输入的占位符（与剧情推进最终注入指令一致）。替换剧情推进任务时用预设自己的最终注入指令。 */
+/** 单独召回时注入指令里用户本轮输入的占位符（与剧情推进最终注入指令一致）。替换剧情推进任务时用预设自己的最终注入指令。 */
 export const DECISION_RECALL_INPUT_PLACEHOLDER_ACU = '$8';
 /** 注入指令里召回编码块的占位符；指令里没有它时编码块追加在末尾。 */
 export const DECISION_RECALL_CODES_PLACEHOLDER_ACU = '{{recall}}';
@@ -70,6 +73,7 @@ export const DEFAULT_DECISION_RECALL_DIRECTIVE_ACU = [
 export function buildDefaultDecisionRecallSettings_ACU() {
   return {
     enabled: false,
+    mode: 'standalone' as DecisionRecallMode_ACU,
     // 硅基流动 SemIf 响应快、目前免费，一组 20 个问题也不至于拖慢发送
     provider: 'siliconflow' as DecisionRecallProvider_ACU,
     openrouterApiKey: '',

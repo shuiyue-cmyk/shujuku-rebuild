@@ -15,6 +15,11 @@ export const FEATURE_GATE_CONTENT_REPLACE = 'content-replace';
 export const FEATURE_GATE_PLOT = 'plot';
 export const FEATURE_GATE_CONTINUATION = 'continuation';
 export const FEATURE_GATE_VECTOR_INDEX = 'vector-index';
+/** 决策召回总开关：关着时侧栏不显示决策召回页。 */
+export const FEATURE_GATE_DECISION_RECALL = 'decision-recall';
+/** 决策召回「单独召回」生效中：剧情推进暂停，侧栏的剧情推进入口灰显。 */
+export const FEATURE_FLAG_PLOT_PAUSED = 'plot-paused-by-decision-recall';
+export const PLOT_PAUSED_HINT = '决策召回正在单独召回，剧情推进已暂停';
 export const ACU_V2_BASIC_PAGE_ID = 'basic-config';
 
 export const ACU_V2_PAGE_REGISTRY: readonly AcuV2Page[] = Object.freeze([
@@ -27,9 +32,8 @@ export const ACU_V2_PAGE_REGISTRY: readonly AcuV2Page[] = Object.freeze([
   // 配置
   { id: 'form-fill', title: '填表工作台', group: 'config' },
   { id: 'table', title: '填表规则', group: 'config' },
-  { id: 'plot', title: '剧情推进', group: 'config', featureGate: FEATURE_GATE_PLOT },
-  // 不设功能开关：替换剧情推进任务时剧情推进开着、单独开启却关着，两种用法都要能进这一页
-  { id: 'decision-recall', title: '决策召回', group: 'config' },
+  { id: 'plot', title: '剧情推进', group: 'config', featureGate: FEATURE_GATE_PLOT, dimmedByGate: FEATURE_FLAG_PLOT_PAUSED, dimmedHint: PLOT_PAUSED_HINT },
+  { id: 'decision-recall', title: '决策召回', group: 'config', featureGate: FEATURE_GATE_DECISION_RECALL },
   { id: 'agent', title: 'Agent', group: 'config' },
   { id: 'api', title: 'API', group: 'config' },
 

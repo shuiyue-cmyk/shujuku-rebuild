@@ -1,5 +1,5 @@
 /**
- * presentation/components/decision-recall-ui.ts — 单独开启的决策召回在发送前的 UI 封装。
+ * presentation/components/decision-recall-ui.ts — 决策召回「单独召回」在发送前的 UI 封装。
  *
  * 与剧情推进共用发送层编排（策略 1 / 策略 2、写回本轮输入、伪装楼层、中止恢复），
  * 返回值与 runOptimizationLogicWithUI_ACU 同口径：

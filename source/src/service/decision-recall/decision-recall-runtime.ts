@@ -1,5 +1,5 @@
 /**
- * service/decision-recall/decision-recall-runtime.ts — 决策召回一次完整的选取（单独开启与替换剧情推进任务共用）。
+ * service/decision-recall/decision-recall-runtime.ts — 决策召回一次完整的选取（单独召回与替换剧情推进任务共用）。
  *
  * 流程：读纪要表 → 最新 5 条固定 → 其余（交火开着时只看它筛过的纪要索引）超过召回条数才打分 →
  * 每组 20 条、最多同时 3 组发给决策模型 → 一组失败按重试上限重试，仍失败就跳过这一组 →
@@ -209,7 +209,7 @@ export async function runDecisionRecall_ACU(
   };
 }
 
-/** 打分有失败或没填 Key 时的提示；全部正常时返回空串。单独开启与替换剧情推进任务共用。 */
+/** 打分有失败或没填 Key 时的提示；全部正常时返回空串。单独召回与替换剧情推进任务共用。 */
 export function describeDecisionRecallWarning_ACU(result: DecisionRecallRunResult_ACU): string {
   if (result.status !== 'ok') return '';
   if (result.missingKey) return `决策召回还没填 ${result.providerLabel} Key，本次只带上最新 ${result.fixed.length} 条纪要。`;
@@ -242,7 +242,7 @@ export function buildDecisionRecallTagBlock_ACU(codes: readonly string[], tagNam
 }
 
 /**
- * 单独开启时写进本轮输入的内容：先替换召回编码块占位符，再替换用户输入占位符（输入里碰巧有占位符字样也不会被二次替换）。
+ * 单独召回时写进本轮输入的内容：先替换召回编码块占位符，再替换用户输入占位符（输入里碰巧有占位符字样也不会被二次替换）。
  * 指令里没有编码块占位符时追加在末尾；没有用户输入占位符时把输入放在最前面，免得原话丢失。
  */
 export function buildDecisionRecallFinalMessage_ACU(directive: string, userInput: string, codes: readonly string[]): string {

@@ -105,6 +105,34 @@ describe('router-store · 高手模式可见性', () => {
     expect(r.activePageId).not.toBe('plot');
   });
 
+  it('决策召回页随总开关显隐；单独召回时剧情推进入口灰显、替换剧情推进的任务时恢复', async () => {
+    persistAdvancedMode('dashboard');
+    const m = await freshImport();
+    const state = await import('../../../src/service/runtime/state-manager');
+    state._set_settings_ACU({
+      ...state.settings_ACU,
+      plotSettings: { ...(state.settings_ACU.plotSettings || {}), enabled: true },
+      decisionRecallSettings: { enabled: false, mode: 'standalone' },
+    });
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    const r = m.router.useRouterStore();
+    const pausedFlag = m.registry.FEATURE_FLAG_PLOT_PAUSED;
+    expect(r.visiblePages.map(p => p.id)).not.toContain('decision-recall');
+    expect(r.featureGates[pausedFlag]).toBe(false);
+
+    state.settings_ACU.decisionRecallSettings.enabled = true;
+    r.syncFeatureGatesFromSettings();
+    expect(r.visiblePages.map(p => p.id)).toContain('decision-recall');
+    // 剧情推进入口仍在，只是灰显
+    expect(r.visiblePages.map(p => p.id)).toContain('plot');
+    expect(r.featureGates[pausedFlag]).toBe(true);
+
+    state.settings_ACU.decisionRecallSettings.mode = 'plot_task';
+    r.syncFeatureGatesFromSettings();
+    expect(r.visiblePages.map(p => p.id)).toContain('decision-recall');
+    expect(r.featureGates[pausedFlag]).toBe(false);
+  });
+
   it('初始化时正文替换用户偏好为开，显示正文替换页', async () => {
     persistAdvancedMode();
     const m = await freshImport();

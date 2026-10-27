@@ -164,13 +164,17 @@ const props = defineProps<{
   taskApiOverride: string;
   /** 当前预设的任务数：决策召回只能替换多任务预设里的任务。 */
   taskCount?: number;
+  /** 决策召回已开启且用法是「替换剧情推进的任务」：否则开关不可用。 */
+  decisionRecallTaskMode?: boolean;
 }>();
 
-const decisionRecallAvailable = computed(() => canPlotTaskUseDecisionRecall_ACU(props.task, props.taskCount ?? 0));
+const decisionRecallAvailable = computed(() => props.decisionRecallTaskMode === true
+  && canPlotTaskUseDecisionRecall_ACU(props.task, props.taskCount ?? 0));
 const decisionRecallHint = computed(() => {
-  if ((props.taskCount ?? 0) < 2) return '只在有多个任务的预设里可用；只有一个任务时请在「决策召回」页单独开启。';
+  if (props.decisionRecallTaskMode !== true) return '需要先在仪表盘的进阶开关打开决策召回，并在「决策召回」页把用法选为「替换剧情推进的任务」。';
+  if ((props.taskCount ?? 0) < 2) return '只在有多个任务的预设里可用；只有一个任务时请在「决策召回」页改用「单独召回」。';
   if (!decisionRecallAvailable.value) return '只有「标签摘取」恰好是 recall、且没有填「提取写入标签」的任务可以改由决策召回执行。';
-  return '开启后这个任务不调模型，改由决策模型给纪要打分、挑出相关的写进 recall 标签；Key、模型与条数在「决策召回」页设置。';
+  return '开启后这个任务不调模型、不读剧情推进选的世界书，改由决策模型给纪要打分、挑出相关的写进 recall 标签；Key、模型与条数在「决策召回」页设置。';
 });
 
 const emit = defineEmits<{

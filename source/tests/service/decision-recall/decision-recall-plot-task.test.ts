@@ -2,9 +2,10 @@
  * tests/service/decision-recall/decision-recall-plot-task.test.ts
  * 剧情推进任务改由决策召回执行的条件：多任务预设，且任务标签恰好是一个 recall、没有注入专用标签。
  */
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../../src/service/runtime/state-manager', () => ({ settings_ACU: { decisionRecallSettings: {} } }));
+const stateMocks = vi.hoisted(() => ({ settings_ACU: { decisionRecallSettings: {} as Record<string, unknown> } }));
+vi.mock('../../../src/service/runtime/state-manager', () => stateMocks);
 
 import {
   canPlotTaskUseDecisionRecall_ACU,
@@ -33,10 +34,23 @@ describe('canPlotTaskUseDecisionRecall_ACU', () => {
 });
 
 describe('isDecisionRecallPlotTask_ACU', () => {
+  beforeEach(() => {
+    stateMocks.settings_ACU.decisionRecallSettings = { enabled: true, mode: 'plot_task' };
+  });
+
   it('开了开关且满足条件才由决策召回执行；条件不满足时开关自动失效', () => {
     expect(isDecisionRecallPlotTask_ACU(task(), 2)).toBe(true);
     expect(isDecisionRecallPlotTask_ACU(task({ decisionRecall: false }), 2)).toBe(false);
     expect(isDecisionRecallPlotTask_ACU(task(), 1)).toBe(false);
     expect(isDecisionRecallPlotTask_ACU(task({ extractTags: 'plot' }), 2)).toBe(false);
+  });
+
+  it('决策召回总开关关着、或用法是单独召回时，任务里的开关不生效、照常调模型', () => {
+    stateMocks.settings_ACU.decisionRecallSettings = { enabled: false, mode: 'plot_task' };
+    expect(isDecisionRecallPlotTask_ACU(task(), 2)).toBe(false);
+    stateMocks.settings_ACU.decisionRecallSettings = { enabled: true, mode: 'standalone' };
+    expect(isDecisionRecallPlotTask_ACU(task(), 2)).toBe(false);
+    stateMocks.settings_ACU.decisionRecallSettings = { enabled: true };
+    expect(isDecisionRecallPlotTask_ACU(task(), 2)).toBe(false);
   });
 });

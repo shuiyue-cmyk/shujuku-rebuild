@@ -1,12 +1,19 @@
 <template>
   <UbPage lead="发送前让决策模型给纪要打分，挑出与接下来剧情最相关的几条，连同最新几条按表号顺序带进本轮输入。" :sections="sections">
-    <UbSection id="dr-mode" title="使用方式" description="两种用法共用下面的模型与召回设置。" icon="fa-solid fa-toggle-on">
-      <UbRow label="单独开启" :hint="enableHint">
-        <UbSwitch :model-value="store.settings.enabled" aria-label="单独开启决策召回" @update:model-value="setEnabled" />
+    <UbSection id="dr-mode" title="用法" description="总开关在仪表盘的进阶开关里；两种用法共用下面的模型与召回设置。" icon="fa-solid fa-toggle-on">
+      <UbRow label="用法" :hint="modeHint">
+        <UbSegmented :options="modeOptions" :model-value="store.settings.mode" aria-label="决策召回用法" @update:model-value="setMode" />
       </UbRow>
-      <UbCallout kind="info">
-        也可以不单独开启：在剧情推进的多任务预设里，把「标签摘取」恰好是 recall 的任务设为「改由决策召回执行」，其余任务照常由模型执行。
-      </UbCallout>
+      <template v-if="store.settings.mode === 'plot_task'">
+        <UbCallout v-if="!store.plotTaskStatus.plotEnabled" kind="warning">剧情推进当前关着：在仪表盘打开剧情推进后，替换的任务才会运行。</UbCallout>
+        <UbCallout v-else-if="store.plotTaskStatus.taskCount < 2" kind="warning">
+          当前剧情推进预设只有一个任务，替换不了：请换成有多个任务的预设，或改用「单独召回」。
+        </UbCallout>
+        <UbCallout v-else-if="store.plotTaskStatus.replacedTaskNames.length" kind="success">
+          当前预设里由决策召回执行的任务：{{ store.plotTaskStatus.replacedTaskNames.join('、') }}。
+        </UbCallout>
+        <UbCallout v-else kind="info">{{ noReplacedTaskText }}</UbCallout>
+      </template>
     </UbSection>
 
     <UbSection id="dr-model" title="决策模型" description="与正文替换的「替换前判定」各自独立；三家的 Key 与模型各存各的，切换服务商不会丢掉另一家的设置。" icon="fa-solid fa-scale-balanced">
@@ -70,7 +77,7 @@
       </UbRow>
     </UbSection>
 
-    <UbSection id="dr-directive" title="注入指令" description="只用于单独开启：选中的编码写进本轮输入时用这段文字包裹。替换剧情推进任务时用预设自己的最终注入指令。" icon="fa-solid fa-quote-left" padded>
+    <UbSection id="dr-directive" title="注入指令" description="只用于单独召回：选中的编码写进本轮输入时用这段文字包裹。替换剧情推进任务时用预设自己的最终注入指令。" icon="fa-solid fa-quote-left" padded>
       <template #actions>
         <UbBadge v-if="directiveDirty" variant="accent">未保存</UbBadge>
       </template>
@@ -109,7 +116,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useDecisionRecallStore } from '../../presentation-v2/stores/decision-recall-store';
-import { usePlotPresetStore } from '../../presentation-v2/stores/plot-preset-store';
 import { useRouterStore } from '../../presentation-v2/stores/router-store';
 import { useToastStore } from '../../presentation-v2/stores/toast-store';
 import { DECISION_RECALL_PROVIDER_LABELS_ACU } from '../../service/decision-recall/decision-recall-settings';
@@ -135,16 +141,14 @@ import UbRow from '../ui/UbRow.vue';
 import UbSection from '../ui/UbSection.vue';
 import UbSegmented from '../ui/UbSegmented.vue';
 import UbSelect from '../ui/UbSelect.vue';
-import UbSwitch from '../ui/UbSwitch.vue';
 import UbTextarea from '../ui/UbTextarea.vue';
 
 const store = useDecisionRecallStore();
-const plotStore = usePlotPresetStore();
 const routerStore = useRouterStore();
 const toastStore = useToastStore();
 
 const sections = [
-  { id: 'dr-mode', label: '使用方式' },
+  { id: 'dr-mode', label: '用法' },
   { id: 'dr-model', label: '决策模型' },
   { id: 'dr-rule', label: '召回规则' },
   { id: 'dr-directive', label: '注入指令' },
@@ -159,9 +163,16 @@ const codesPlaceholder = DECISION_RECALL_CODES_PLACEHOLDER_ACU;
 const ruleDescription = `每组 ${DECISION_RECALL_BATCH_SIZE_ACU} 条纪要发一次请求、最多同时 ${DECISION_RECALL_CONCURRENCY_ACU} 组；`
   + '参考最近两楼 AI 回复和用户最新输入，不带世界书；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。';
 
-const enableHint = computed(() => (plotStore.enabled
-  ? '与剧情推进互斥：开启后会关闭剧情推进。'
-  : '与剧情推进互斥：开启后，剧情推进的开关会被关闭；之后再开剧情推进会关闭这里。'));
+const modeOptions = [
+  { value: 'standalone', label: '单独召回' },
+  { value: 'plot_task', label: '替换剧情推进的任务' },
+];
+const modeHint = computed(() => (store.settings.mode === 'standalone'
+  ? '发送前由决策召回挑选纪要写进本轮输入，剧情推进暂停（剧情推进页灰掉，它自己的开关不变）。'
+  : '剧情推进照常运行；多任务预设里「标签摘取」恰好是 recall 的任务，在剧情推进的任务编辑里打开「改由决策召回执行」后由这里执行。'));
+const noReplacedTaskText = computed(() => (store.plotTaskStatus.eligibleTaskNames.length
+  ? `当前预设里可以替换的任务：${store.plotTaskStatus.eligibleTaskNames.join('、')}。到剧情推进页编辑预设，在任务里打开「改由决策召回执行」。`
+  : '当前预设里没有「标签摘取」恰好是 recall 的任务。到剧情推进页编辑预设，把召回任务的标签设为 recall 后再打开「改由决策召回执行」。'));
 
 const providerOptions = (Object.keys(DECISION_RECALL_PROVIDER_LABELS_ACU) as DecisionRecallProvider_ACU[])
   .map(value => ({ value, label: DECISION_RECALL_PROVIDER_LABELS_ACU[value] }));
@@ -231,12 +242,11 @@ function setNumber(key: 'recallCount' | 'maxRetries', value: string | number): v
   inputKey.value += 1;
 }
 
-function setEnabled(value: boolean): void {
-  const { saved, plotDisabled } = store.setEnabled(value);
-  plotStore.refreshFromSettings();
-  // 剧情推进被互斥关掉时，侧栏的剧情推进入口要跟着收起
+function setMode(value: string): void {
+  if (!store.patch({ mode: value })) return;
+  // 剧情推进入口随用法灰显 / 恢复
   routerStore.syncFeatureGatesFromSettings();
-  if (saved && plotDisabled) toastStore.info('已关闭剧情推进：单独开启决策召回时与剧情推进互斥。');
+  toastStore.info(value === 'standalone' ? '已改为单独召回：剧情推进暂停。' : '已改为替换剧情推进的任务：剧情推进恢复运行。');
 }
 
 const directiveDraft = ref(store.settings.directive);
@@ -251,7 +261,6 @@ function resetDirective(): void {
 
 function refresh(): void {
   store.refreshFromSettings();
-  plotStore.refreshFromSettings();
   directiveDraft.value = store.settings.directive;
 }
 

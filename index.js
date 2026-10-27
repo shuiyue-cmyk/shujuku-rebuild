@@ -4947,9 +4947,9 @@ function buildDefaultDecisionGateSettings_ACU() {
  *
  * 决策召回：发送前把候选纪要分组交给决策模型，按「与接下来剧情发展的相关性」五档打分，
  * 取分数最高的若干条，连同固定带上的最新几条，按表号顺序写进本轮输入（走剧情推进的注入通道）。
- * 两种用法共用这一份设置：
- * - 单独开启（默认用法）：与剧情推进互斥，开一个就关另一个；
- * - 替换剧情推进任务：多任务剧情推进预设里、标签恰好是 recall 的任务可改由决策召回执行，剧情推进照常开着。
+ * 总开关在仪表盘进阶开关里（关着时侧栏不显示决策召回页），开启后在决策召回页选用法，两种用法共用这一份设置：
+ * - 单独召回（默认）：发送前由决策召回占用剧情推进的规划位，剧情推进暂停（剧情推进页灰掉，它自己的开关不动）；
+ * - 替换剧情推进的任务：剧情推进照常运行，多任务预设里、标签恰好是 recall 且打开了开关的任务改由决策召回执行。
  * 交火开着时从交火筛过的纪要索引里选，否则从全部纪要里选。
  */
 /** 最新几条纪要固定带上，不参与打分。 */
@@ -4986,7 +4986,7 @@ const DECISION_RECALL_PROVIDER_LABELS_ACU = {
     openrouter: 'OpenRouter',
     aihubmix: 'AIHubMix',
 };
-/** 单独开启时注入指令里用户本轮输入的占位符（与剧情推进最终注入指令一致）。替换剧情推进任务时用预设自己的最终注入指令。 */
+/** 单独召回时注入指令里用户本轮输入的占位符（与剧情推进最终注入指令一致）。替换剧情推进任务时用预设自己的最终注入指令。 */
 const DECISION_RECALL_INPUT_PLACEHOLDER_ACU = '$8';
 /** 注入指令里召回编码块的占位符；指令里没有它时编码块追加在末尾。 */
 const DECISION_RECALL_CODES_PLACEHOLDER_ACU = '{{recall}}';
@@ -5002,6 +5002,7 @@ const DEFAULT_DECISION_RECALL_DIRECTIVE_ACU = [
 function buildDefaultDecisionRecallSettings_ACU() {
     return {
         enabled: false,
+        mode: 'standalone',
         // 硅基流动 SemIf 响应快、目前免费，一组 20 个问题也不至于拖慢发送
         provider: 'siliconflow',
         openrouterApiKey: '',
@@ -91235,6 +91236,7 @@ function normalizeDecisionRecallSettings_ACU(raw) {
     const directive = typeof source.directive === 'string' && source.directive.trim() ? source.directive : DEFAULT_DECISION_RECALL_DIRECTIVE_ACU;
     return {
         enabled: source.enabled === true,
+        mode: source.mode === 'plot_task' ? 'plot_task' : 'standalone',
         provider: PROVIDERS_ACU.includes(source.provider) ? source.provider : 'siliconflow',
         openrouterApiKey: text(source.openrouterApiKey),
         openrouterModel: text(source.openrouterModel) || DEFAULT_DECISION_MODEL_ACU,
@@ -91258,6 +91260,16 @@ function resolveDecisionRecallEndpoint_ACU(settings) {
         return { label, url: AIHUBMIX_DECISION_API_URL_ACU, apiKey: settings.aihubmixApiKey, model: settings.aihubmixModel };
     }
     return { label, url: SILICONFLOW_DECISION_API_URL_ACU, apiKey: settings.siliconflowApiKey, model: settings.siliconflowModel };
+}
+/** 单独召回生效中：发送前由决策召回占用剧情推进的规划位，剧情推进暂停。 */
+function isDecisionRecallStandaloneActive_ACU(raw) {
+    const settings = normalizeDecisionRecallSettings_ACU(raw);
+    return settings.enabled && settings.mode === 'standalone';
+}
+/** 替换剧情推进任务的用法生效中：剧情推进照常运行，打开了开关的 recall 任务改由决策召回执行。 */
+function isDecisionRecallTaskModeActive_ACU(raw) {
+    const settings = normalizeDecisionRecallSettings_ACU(raw);
+    return settings.enabled && settings.mode === 'plot_task';
 }
 
 /**
@@ -91618,7 +91630,7 @@ function collectIndexedCodes_ACU(content, rows) {
 }
 
 /**
- * service/decision-recall/decision-recall-runtime.ts — 决策召回一次完整的选取（单独开启与替换剧情推进任务共用）。
+ * service/decision-recall/decision-recall-runtime.ts — 决策召回一次完整的选取（单独召回与替换剧情推进任务共用）。
  *
  * 流程：读纪要表 → 最新 5 条固定 → 其余（交火开着时只看它筛过的纪要索引）超过召回条数才打分 →
  * 每组 20 条、最多同时 3 组发给决策模型 → 一组失败按重试上限重试，仍失败就跳过这一组 →
@@ -91745,7 +91757,7 @@ async function runDecisionRecall_ACU(options, deps = {}) {
         scored, batchCount: groups.length, failedBatchCount, unscoredCount, missingKey: false, errors,
     };
 }
-/** 打分有失败或没填 Key 时的提示；全部正常时返回空串。单独开启与替换剧情推进任务共用。 */
+/** 打分有失败或没填 Key 时的提示；全部正常时返回空串。单独召回与替换剧情推进任务共用。 */
 function describeDecisionRecallWarning_ACU(result) {
     if (result.status !== 'ok')
         return '';
@@ -91778,7 +91790,7 @@ function buildDecisionRecallTagBlock_ACU(codes, tagName = 'recall') {
     return `<${tagName}>\n${codes.join('\n')}\n</${tagName}>`;
 }
 /**
- * 单独开启时写进本轮输入的内容：先替换召回编码块占位符，再替换用户输入占位符（输入里碰巧有占位符字样也不会被二次替换）。
+ * 单独召回时写进本轮输入的内容：先替换召回编码块占位符，再替换用户输入占位符（输入里碰巧有占位符字样也不会被二次替换）。
  * 指令里没有编码块占位符时追加在末尾；没有用户输入占位符时把输入放在最前面，免得原话丢失。
  */
 function buildDecisionRecallFinalMessage_ACU(directive, userInput, codes) {
@@ -91795,7 +91807,8 @@ function buildDecisionRecallFinalMessage_ACU(directive, userInput, codes) {
 /**
  * service/decision-recall/decision-recall-plot-task.ts — 剧情推进任务改由决策召回执行。
  *
- * 只在多任务预设上生效（单任务预设请直接单独开启决策召回）；任务的标签必须恰好是一个 recall、没有注入专用标签，
+ * 只在决策召回开着、用法选了「替换剧情推进的任务」时生效，且只在多任务预设上生效（单任务预设请用「单独召回」）；
+ * 任务的标签必须恰好是一个 recall、没有注入专用标签，
  * 因为决策召回只产出编码列表，产不出别的标签。产出是与模型回复同形的 recall 标签块，
  * 交给剧情推进照常摘取、传给后续任务、按预设自己的最终注入指令写进本轮输入。
  */
@@ -91812,9 +91825,14 @@ function canPlotTaskUseDecisionRecall_ACU(task, presetTaskCount) {
         && tags[0].toLowerCase() === DECISION_RECALL_PLOT_TASK_TAG_ACU
         && splitTags_ACU(task.extractInjectTags).length === 0;
 }
-/** 本轮是否真的由决策召回执行：开了开关且仍满足条件（改了标签或删到只剩一个任务后自动退回模型执行）。 */
+/**
+ * 本轮是否真的由决策召回执行：决策召回开着且用法是「替换剧情推进的任务」，任务开了开关且仍满足条件
+ * （关掉决策召回、换成单独召回、改了标签或删到只剩一个任务后自动退回模型执行）。
+ */
 function isDecisionRecallPlotTask_ACU(task, presetTaskCount) {
-    return task?.decisionRecall === true && canPlotTaskUseDecisionRecall_ACU(task, presetTaskCount);
+    return task?.decisionRecall === true
+        && canPlotTaskUseDecisionRecall_ACU(task, presetTaskCount)
+        && isDecisionRecallTaskModeActive_ACU(settings_ACU?.decisionRecallSettings);
 }
 /** 跑一次决策召回并产出任务回复；纪要表为空或读不到时产出空的 recall 块（不算任务失败，也不注入）。 */
 async function runDecisionRecallForPlotTask_ACU(task, options, deps = {}) {
@@ -94507,7 +94525,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261027-1517"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261027-1620"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -94526,7 +94544,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1517";
+        const stamp = "20261027-1620";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -103960,11 +103978,12 @@ function shouldProcessPlotForGeneration_ACU(type, params, dryRun) {
     logDebug_ACU(`[状态管理] shouldProcessPlot: type=${type}, dryRun=${dryRun}, freshMsg=${fresh.hasFreshUserMessage}, freshIntent=${fresh.hasFreshIntent}, result=${fresh.result}`);
     return fresh.result;
 }
-/** 决策召回单独开启时（与剧情推进互斥）发送前是否要跑；口径同剧情推进。 */
+/** 决策召回「单独召回」时发送前是否要跑（占用剧情推进的规划位，剧情推进暂停）；口径同剧情推进。 */
 function shouldProcessDecisionRecallForGeneration_ACU(type, params, dryRun) {
     if (dryRun)
         return false;
-    if (settings_ACU?.decisionRecallSettings?.enabled !== true)
+    const decisionRecall = settings_ACU?.decisionRecallSettings;
+    if (decisionRecall?.enabled !== true || decisionRecall?.mode === 'plot_task')
         return false;
     if (isQuietLikeGeneration_ACU(type, params))
         return false;
@@ -105993,7 +106012,7 @@ function buildDefaultSettings_ACU() {
             promptGroup: buildDefaultContentOptimizationPromptGroup_ACU(), // 提示词组（段落编辑器）
             promptPresets: [], // 提示词组预设列表
         },
-        // 决策召回：决策模型给纪要打分挑相关的带进本轮输入；单独开启时与剧情推进互斥
+        // 决策召回：决策模型给纪要打分挑相关的带进本轮输入；「单独召回」时剧情推进暂停
         decisionRecallSettings: buildDefaultDecisionRecallSettings_ACU(),
         // [向量记忆] 全局配置，跟随数据库设置而非角色/对话
         vectorMemoryConfig: null,
@@ -106083,15 +106102,11 @@ function setGlobalPlotEnabled_ACU(modeEnabled) {
     settings_ACU.plotSettings.enabled = enabled;
     globalMeta_ACU.plotEnabledGlobal = enabled;
     saveGlobalMeta_ACU();
-    // 单独开启的决策召回与剧情推进互斥：开剧情推进即关决策召回（由调用方随后保存设置）
-    if (enabled && settings_ACU.decisionRecallSettings?.enabled === true) {
-        settings_ACU.decisionRecallSettings = { ...settings_ACU.decisionRecallSettings, enabled: false };
-    }
     return enabled;
 }
 /**
- * 单独开启 / 关闭决策召回。开启时关掉剧情推进（互斥），返回是否因此关掉了剧情推进；由调用方随后保存设置。
- * 剧情推进里由决策召回执行的任务不看这个开关。
+ * 决策召回总开关（仪表盘进阶开关）；由调用方随后保存设置。
+ * 不动剧情推进自己的开关：「单独召回」时剧情推进只是暂停，换成「替换剧情推进的任务」或关掉决策召回就恢复。
  */
 function setDecisionRecallEnabled_ACU(modeEnabled) {
     const enabled = !!modeEnabled;
@@ -106099,10 +106114,7 @@ function setDecisionRecallEnabled_ACU(modeEnabled) {
         ? settings_ACU.decisionRecallSettings
         : buildDefaultDecisionRecallSettings_ACU();
     settings_ACU.decisionRecallSettings = { ...current, enabled };
-    const plotDisabled = enabled && settings_ACU.plotSettings?.enabled === true;
-    if (plotDisabled)
-        setGlobalPlotEnabled_ACU(false);
-    return { enabled, plotDisabled };
+    return enabled;
 }
 function setSummaryVectorIndexMode_ACU(modeEnabled) {
     const enabled = !!modeEnabled;
@@ -131072,7 +131084,7 @@ async function runOptimizationLogicWithUI_ACU(userMessage, options = {}) {
 }
 
 /**
- * presentation/components/decision-recall-ui.ts — 单独开启的决策召回在发送前的 UI 封装。
+ * presentation/components/decision-recall-ui.ts — 决策召回「单独召回」在发送前的 UI 封装。
  *
  * 与剧情推进共用发送层编排（策略 1 / 策略 2、写回本轮输入、伪装楼层、中止恢复），
  * 返回值与 runOptimizationLogicWithUI_ACU 同口径：
@@ -150437,8 +150449,8 @@ function mainInitialize_ACU() {
                         // 租约在任何 await 之前捕获：等待期间的停止 / 切聊天也要算进来
                         const sendLease = captureSendLease_ACU();
                         const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
-                        // 单独开启的决策召回与剧情推进互斥，占用剧情推进的发送前规划位（写回本轮输入、伪装、中止恢复同一套）；
-                        // 两个开关同时为真（如导入旧设置）时以决策召回为准。
+                        // 决策召回「单独召回」占用剧情推进的发送前规划位（写回本轮输入、伪装、中止恢复同一套），
+                        // 此时剧情推进暂停、开关不动；「替换剧情推进的任务」时这里不接管，由剧情推进照常运行。
                         const shouldProcessDecisionRecall = shouldProcessDecisionRecallForGeneration_ACU(type, params, dryRun);
                         const shouldProcessPlot = shouldProcessDecisionRecall || shouldProcessPlotForGeneration_ACU(type, params, dryRun);
                         const runPlanning_ACU = shouldProcessDecisionRecall ? runDecisionRecallWithUI_ACU : runOptimizationLogicWithUI_ACU;
@@ -156176,7 +156188,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261027-1517";
+        const stamp = "20261027-1620";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -174657,7 +174669,7 @@ const dashboardCopy = {
         },
         decisionRecall: {
             label: "决策召回",
-            description: "默认关闭。发送前让决策模型给纪要打分，挑出相关的带进本轮输入。与剧情推进互斥：开启会关闭剧情推进，反之亦然。",
+            description: "默认关闭。发送前让决策模型给纪要打分，挑出相关的带进本轮输入。开启后侧栏出现决策召回页：选「单独召回」时剧情推进暂停（它的开关不变），选「替换剧情推进的任务」时剧情推进照常运行。",
         },
         contentReplace: {
             label: "正文替换",
@@ -174680,6 +174692,11 @@ const FEATURE_GATE_CONTENT_REPLACE = 'content-replace';
 const FEATURE_GATE_PLOT = 'plot';
 const FEATURE_GATE_CONTINUATION = 'continuation';
 const FEATURE_GATE_VECTOR_INDEX = 'vector-index';
+/** 决策召回总开关：关着时侧栏不显示决策召回页。 */
+const FEATURE_GATE_DECISION_RECALL = 'decision-recall';
+/** 决策召回「单独召回」生效中：剧情推进暂停，侧栏的剧情推进入口灰显。 */
+const FEATURE_FLAG_PLOT_PAUSED = 'plot-paused-by-decision-recall';
+const PLOT_PAUSED_HINT = '决策召回正在单独召回，剧情推进已暂停';
 const ACU_V2_BASIC_PAGE_ID = 'basic-config';
 const ACU_V2_PAGE_REGISTRY = Object.freeze([
     // 基础模式
@@ -174689,9 +174706,8 @@ const ACU_V2_PAGE_REGISTRY = Object.freeze([
     // 配置
     { id: 'form-fill', title: '填表工作台', group: 'config' },
     { id: 'table', title: '填表规则', group: 'config' },
-    { id: 'plot', title: '剧情推进', group: 'config', featureGate: FEATURE_GATE_PLOT },
-    // 不设功能开关：替换剧情推进任务时剧情推进开着、单独开启却关着，两种用法都要能进这一页
-    { id: 'decision-recall', title: '决策召回', group: 'config' },
+    { id: 'plot', title: '剧情推进', group: 'config', featureGate: FEATURE_GATE_PLOT, dimmedByGate: FEATURE_FLAG_PLOT_PAUSED, dimmedHint: PLOT_PAUSED_HINT },
+    { id: 'decision-recall', title: '决策召回', group: 'config', featureGate: FEATURE_GATE_DECISION_RECALL },
     { id: 'agent', title: 'Agent', group: 'config' },
     { id: 'api', title: 'API', group: 'config' },
     // 功能
@@ -174833,6 +174849,8 @@ function readInitialFeatureGates() {
         [FEATURE_GATE_CONTINUATION]: settings_ACU?.continuationPageEnabled !== false,
         [FEATURE_GATE_PLOT]: settings_ACU?.plotSettings?.enabled === true,
         [FEATURE_GATE_VECTOR_INDEX]: settings_ACU?.summaryVectorIndexModeDefault === true,
+        [FEATURE_GATE_DECISION_RECALL]: normalizeDecisionRecallSettings_ACU(settings_ACU?.decisionRecallSettings).enabled,
+        [FEATURE_FLAG_PLOT_PAUSED]: isDecisionRecallStandaloneActive_ACU(settings_ACU?.decisionRecallSettings),
     };
 }
 function readInitialActiveId(featureGates) {
@@ -178183,11 +178201,11 @@ injectSfcStyle("\n.ub-btn[data-v-3521ab51] {\r\n  display: inline-flex;\r\n  ali
 var UbButton_vue_vue_type_style_index_0_scoped_3521ab51_lang = null;
 
 const _hoisted_1$W = ["href", "title"];
-const _hoisted_2$O = {
+const _hoisted_2$P = {
 	key: 1,
 	class: "ub-btn__label"
 };
-const _hoisted_3$J = [
+const _hoisted_3$K = [
 	"type",
 	"disabled",
 	"title",
@@ -178224,7 +178242,7 @@ function _sfc_render$$(_ctx, _cache, $props, $setup, $data, $options) {
 		null,
 		2
 		/* CLASS */
-	)) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_2$O, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_1$W)) : (openBlock(), createElementBlock("button", {
+	)) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_2$P, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_1$W)) : (openBlock(), createElementBlock("button", {
 		key: 1,
 		type: $props.nativeType,
 		class: normalizeClass(["ub-btn", [
@@ -178248,7 +178266,7 @@ function _sfc_render$$(_ctx, _cache, $props, $setup, $data, $options) {
 		null,
 		2
 		/* CLASS */
-	)) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_5$y, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_3$J));
+	)) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_5$y, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_3$K));
 }
 var UbButton = /* @__PURE__ */ _export_sfc(_sfc_main$10, [["render", _sfc_render$$], ["__scopeId", "data-v-3521ab51"]]);
 
@@ -178276,7 +178294,7 @@ injectSfcStyle("\n.ub-callout[data-v-a3348fcd] {\r\n  display: flex;\r\n  align-
 var UbCallout_vue_vue_type_style_index_0_scoped_a3348fcd_lang = null;
 
 const _hoisted_1$V = ["role"];
-const _hoisted_2$N = { class: "ub-callout__body" };
+const _hoisted_2$O = { class: "ub-callout__body" };
 function _sfc_render$_(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", {
 		class: normalizeClass(["ub-callout", `ub-callout--${$props.kind}`]),
@@ -178290,7 +178308,7 @@ function _sfc_render$_(_ctx, _cache, $props, $setup, $data, $options) {
 		null,
 		2
 		/* CLASS */
-	), createBaseVNode("div", _hoisted_2$N, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])], 10, _hoisted_1$V);
+	), createBaseVNode("div", _hoisted_2$O, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])], 10, _hoisted_1$V);
 }
 var UbCallout = /* @__PURE__ */ _export_sfc(_sfc_main$$, [["render", _sfc_render$_], ["__scopeId", "data-v-a3348fcd"]]);
 
@@ -178370,7 +178388,7 @@ injectSfcStyle("\n.ub-seg[data-v-a4a2b8e5] {\r\n  display: inline-flex;\r\n  ali
 var UbSegmented_vue_vue_type_style_index_0_scoped_a4a2b8e5_lang = null;
 
 const _hoisted_1$T = ["aria-label"];
-const _hoisted_2$M = [
+const _hoisted_2$N = [
 	"aria-checked",
 	"disabled",
 	"onClick"
@@ -178409,7 +178427,7 @@ function _sfc_render$Y(_ctx, _cache, $props, $setup, $data, $options) {
 				" " + toDisplayString(opt.label),
 				1
 				/* TEXT */
-			)], 10, _hoisted_2$M);
+			)], 10, _hoisted_2$N);
 		}),
 		128
 		/* KEYED_FRAGMENT */
@@ -178496,8 +178514,8 @@ injectSfcStyle("\n.ub-sheet-layer[data-v-34c6aa88] {\r\n  --ub-safe-bottom: max(
 var UbSheet_vue_vue_type_style_index_0_scoped_34c6aa88_lang = null;
 
 const _hoisted_1$S = ["onKeydown"];
-const _hoisted_2$L = ["aria-label"];
-const _hoisted_3$I = { class: "ub-sheet__head" };
+const _hoisted_2$M = ["aria-label"];
+const _hoisted_3$J = { class: "ub-sheet__head" };
 const _hoisted_4$E = { class: "ub-sheet__titles" };
 const _hoisted_5$x = { class: "ub-sheet__title" };
 const _hoisted_6$s = {
@@ -178527,7 +178545,7 @@ function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
 		style: normalizeStyle({ "--ub-sheet-width": $props.width }),
 		onClick: _cache[0] || (_cache[0] = withModifiers(() => {}, ["stop"]))
 	}, [
-		createBaseVNode("header", _hoisted_3$I, [
+		createBaseVNode("header", _hoisted_3$J, [
 			$props.showBack ? (openBlock(), createBlock($setup["UbIconButton"], {
 				key: 0,
 				icon: "fa-solid fa-arrow-left",
@@ -178556,7 +178574,7 @@ function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
 		]),
 		createBaseVNode("div", _hoisted_7$r, [renderSlot(_ctx.$slots, "default", {}, undefined, true)]),
 		_ctx.$slots.footer ? (openBlock(), createElementBlock("footer", _hoisted_8$m, [renderSlot(_ctx.$slots, "footer", {}, undefined, true)])) : createCommentVNode("v-if", true)
-	], 12, _hoisted_2$L)], 42, _hoisted_1$S)) : createCommentVNode("v-if", true)]);
+	], 12, _hoisted_2$M)], 42, _hoisted_1$S)) : createCommentVNode("v-if", true)]);
 }
 var UbSheet = /* @__PURE__ */ _export_sfc(_sfc_main$Y, [["render", _sfc_render$X], ["__scopeId", "data-v-34c6aa88"]]);
 
@@ -182620,8 +182638,8 @@ const _hoisted_1$Q = [
 	"aria-label",
 	"title"
 ];
-const _hoisted_2$K = ["label"];
-const _hoisted_3$H = ["value"];
+const _hoisted_2$L = ["label"];
+const _hoisted_3$I = ["value"];
 const _hoisted_4$D = ["value"];
 function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
@@ -182665,11 +182683,11 @@ function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
 							return openBlock(), createElementBlock("option", {
 								key: opt.value,
 								value: opt.value
-							}, toDisplayString(opt.label), 9, _hoisted_3$H);
+							}, toDisplayString(opt.label), 9, _hoisted_3$I);
 						}),
 						128
 						/* KEYED_FRAGMENT */
-					))], 8, _hoisted_2$K)) : (openBlock(true), createElementBlock(
+					))], 8, _hoisted_2$L)) : (openBlock(true), createElementBlock(
 						Fragment,
 						{ key: 1 },
 						renderList(block.options, (opt) => {
@@ -182810,7 +182828,7 @@ const _hoisted_1$O = {
 	key: 0,
 	class: "ub-textarea__label"
 };
-const _hoisted_2$J = [
+const _hoisted_2$K = [
 	"value",
 	"placeholder",
 	"rows",
@@ -182839,7 +182857,7 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 			"aria-label": $props.ariaLabel || $props.label,
 			onInput: $setup.onInput,
 			onFocus: $setup.resize
-		}, null, 40, _hoisted_2$J)],
+		}, null, 40, _hoisted_2$K)],
 		2
 		/* CLASS */
 	);
@@ -182893,8 +182911,8 @@ injectSfcStyle("\n.ub-segs[data-v-f68c779d] {\r\n  display: flex;\r\n  flex-dire
 var UbPromptSegments_vue_vue_type_style_index_0_scoped_f68c779d_lang = null;
 
 const _hoisted_1$N = { class: "ub-segs" };
-const _hoisted_2$I = { class: "ub-segs__list" };
-const _hoisted_3$G = { class: "ub-segs__head" };
+const _hoisted_2$J = { class: "ub-segs__list" };
+const _hoisted_3$H = { class: "ub-segs__head" };
 const _hoisted_4$C = { class: "ub-segs__index" };
 const _hoisted_5$w = { class: "ub-segs__role" };
 const _hoisted_6$r = {
@@ -182922,7 +182940,7 @@ function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
 			)])]),
 			_: 1
 		}),
-		createBaseVNode("ol", _hoisted_2$I, [(openBlock(true), createElementBlock(
+		createBaseVNode("ol", _hoisted_2$J, [(openBlock(true), createElementBlock(
 			Fragment,
 			null,
 			renderList($props.segments, (seg, index) => {
@@ -182932,7 +182950,7 @@ function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
 						key: index,
 						class: normalizeClass(["ub-segs__item", [`ub-segs__item--${$setup.roleTone(seg.role)}`, { "is-disabled": $props.showEnabled && seg.enabled === false }]])
 					},
-					[createBaseVNode("header", _hoisted_3$G, [
+					[createBaseVNode("header", _hoisted_3$H, [
 						createBaseVNode(
 							"span",
 							_hoisted_4$C,
@@ -183246,8 +183264,8 @@ injectSfcStyle("\n.ub-check[data-v-58a3daf7] {\r\n  display: inline-flex;\r\n  a
 var UbCheck_vue_vue_type_style_index_0_scoped_58a3daf7_lang = null;
 
 const _hoisted_1$M = ["title"];
-const _hoisted_2$H = ["checked", "disabled"];
-const _hoisted_3$F = {
+const _hoisted_2$I = ["checked", "disabled"];
+const _hoisted_3$G = {
 	key: 0,
 	class: "ub-check__label"
 };
@@ -183265,7 +183283,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 			checked: $props.modelValue,
 			disabled: $props.disabled,
 			onChange: _cache[0] || (_cache[0] = ($event) => $setup.emit("update:modelValue", $event.target.checked))
-		}, null, 40, _hoisted_2$H),
+		}, null, 40, _hoisted_2$I),
 		_cache[1] || (_cache[1] = createBaseVNode(
 			"span",
 			{
@@ -183276,7 +183294,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 			-1
 			/* CACHED */
 		)),
-		$props.label || _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_3$F, [renderSlot(_ctx.$slots, "default", {}, () => [createTextVNode(
+		$props.label || _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_3$G, [renderSlot(_ctx.$slots, "default", {}, () => [createTextVNode(
 			toDisplayString($props.label),
 			1
 			/* TEXT */
@@ -183309,8 +183327,8 @@ injectSfcStyle("\n.ub-disc[data-v-8841c368] {\r\n  min-width: 0;\r\n  border: 1p
 var UbDisclosure_vue_vue_type_style_index_0_scoped_8841c368_lang = null;
 
 const _hoisted_1$L = ["aria-expanded", "aria-controls"];
-const _hoisted_2$G = { class: "ub-disc__label" };
-const _hoisted_3$E = {
+const _hoisted_2$H = { class: "ub-disc__label" };
+const _hoisted_3$F = {
 	key: 0,
 	class: "ub-disc__meta"
 };
@@ -183341,14 +183359,14 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 			)),
 			createBaseVNode(
 				"span",
-				_hoisted_2$G,
+				_hoisted_2$H,
 				toDisplayString($props.label),
 				1
 				/* TEXT */
 			),
 			$props.meta ? (openBlock(), createElementBlock(
 				"span",
-				_hoisted_3$E,
+				_hoisted_3$F,
 				toDisplayString($props.meta),
 				1
 				/* TEXT */
@@ -183421,8 +183439,8 @@ const _hoisted_1$K = {
 	class: "ub-vai",
 	"data-ub-viz-assistant": ""
 };
-const _hoisted_2$F = { class: "ub-vai__intro" };
-const _hoisted_3$D = { class: "ub-vai__controls" };
+const _hoisted_2$G = { class: "ub-vai__intro" };
+const _hoisted_3$E = { class: "ub-vai__controls" };
 const _hoisted_4$A = { class: "ub-vai__preset" };
 const _hoisted_5$v = { class: "ub-vai__feed" };
 const _hoisted_6$q = {
@@ -183467,7 +183485,7 @@ function _sfc_render$O(_ctx, _cache, $props, $setup, $data, $options) {
 		"div",
 		_hoisted_1$K,
 		[
-			createBaseVNode("div", _hoisted_2$F, [
+			createBaseVNode("div", _hoisted_2$G, [
 				_cache[11] || (_cache[11] = createBaseVNode(
 					"p",
 					{ class: "ub-vai__lead" },
@@ -183475,7 +183493,7 @@ function _sfc_render$O(_ctx, _cache, $props, $setup, $data, $options) {
 					-1
 					/* CACHED */
 				)),
-				createBaseVNode("div", _hoisted_3$D, [createBaseVNode("label", _hoisted_4$A, [_cache[9] || (_cache[9] = createBaseVNode(
+				createBaseVNode("div", _hoisted_3$E, [createBaseVNode("label", _hoisted_4$A, [_cache[9] || (_cache[9] = createBaseVNode(
 					"span",
 					{ class: "ub-vai__cap" },
 					"API 预设",
@@ -184054,11 +184072,11 @@ injectSfcStyle("\n.ub-row[data-v-085151b3] {\r\n  display: flex;\r\n  align-item
 var UbRow_vue_vue_type_style_index_0_scoped_085151b3_lang = null;
 
 const _hoisted_1$I = ["data-ub-row"];
-const _hoisted_2$E = {
+const _hoisted_2$F = {
 	key: 0,
 	class: "ub-row__text"
 };
-const _hoisted_3$C = {
+const _hoisted_3$D = {
 	key: 0,
 	class: "ub-row__label"
 };
@@ -184077,7 +184095,7 @@ function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
 			"ub-row--flag": $props.flagged
 		}]),
 		"data-ub-row": $props.label
-	}, [$props.label || _ctx.$slots.label || $props.hint || _ctx.$slots.hint ? (openBlock(), createElementBlock("div", _hoisted_2$E, [$props.label || _ctx.$slots.label ? (openBlock(), createElementBlock("div", _hoisted_3$C, [renderSlot(_ctx.$slots, "label", {}, () => [createTextVNode(
+	}, [$props.label || _ctx.$slots.label || $props.hint || _ctx.$slots.hint ? (openBlock(), createElementBlock("div", _hoisted_2$F, [$props.label || _ctx.$slots.label ? (openBlock(), createElementBlock("div", _hoisted_3$D, [renderSlot(_ctx.$slots, "label", {}, () => [createTextVNode(
 		toDisplayString($props.label),
 		1
 		/* TEXT */
@@ -184115,11 +184133,11 @@ injectSfcStyle("\n.ub-section[data-v-ce2a775d] {\r\n  min-width: 0;\r\n  scroll-
 var UbSection_vue_vue_type_style_index_0_scoped_ce2a775d_lang = null;
 
 const _hoisted_1$H = ["id", "data-ub-section"];
-const _hoisted_2$D = {
+const _hoisted_2$E = {
 	key: 0,
 	class: "ub-section__head"
 };
-const _hoisted_3$B = { class: "ub-section__titles" };
+const _hoisted_3$C = { class: "ub-section__titles" };
 const _hoisted_4$y = {
 	key: 0,
 	class: "ub-section__title"
@@ -184142,7 +184160,7 @@ function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
 		class: "ub-section",
 		"data-ub-section": $props.id
 	}, [
-		$props.title || _ctx.$slots.actions ? (openBlock(), createElementBlock("header", _hoisted_2$D, [createBaseVNode("div", _hoisted_3$B, [$props.title ? (openBlock(), createElementBlock("h2", _hoisted_4$y, [$props.icon ? (openBlock(), createElementBlock(
+		$props.title || _ctx.$slots.actions ? (openBlock(), createElementBlock("header", _hoisted_2$E, [createBaseVNode("div", _hoisted_3$C, [$props.title ? (openBlock(), createElementBlock("h2", _hoisted_4$y, [$props.icon ? (openBlock(), createElementBlock(
 			"i",
 			{
 				key: 0,
@@ -184200,8 +184218,8 @@ injectSfcStyle("\n.ub-vplace[data-v-989a4ff8] {\r\n  display: grid;\r\n  grid-te
 var VizPlacement_vue_vue_type_style_index_0_scoped_989a4ff8_lang = null;
 
 const _hoisted_1$G = { class: "ub-vplace" };
-const _hoisted_2$C = { class: "ub-vplace__cell ub-vplace__cell--pos" };
-const _hoisted_3$A = { class: "ub-vplace__cell" };
+const _hoisted_2$D = { class: "ub-vplace__cell ub-vplace__cell--pos" };
+const _hoisted_3$B = { class: "ub-vplace__cell" };
 const _hoisted_4$x = { class: "ub-vplace__cell" };
 function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbRow"], {
@@ -184210,7 +184228,7 @@ function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 		stack: ""
 	}, {
 		default: withCtx(() => [createBaseVNode("div", _hoisted_1$G, [
-			createBaseVNode("label", _hoisted_2$C, [_cache[3] || (_cache[3] = createBaseVNode(
+			createBaseVNode("label", _hoisted_2$D, [_cache[3] || (_cache[3] = createBaseVNode(
 				"span",
 				{ class: "ub-vplace__cap" },
 				"位置",
@@ -184226,7 +184244,7 @@ function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 				"options",
 				"aria-label"
 			])]),
-			createBaseVNode("label", _hoisted_3$A, [_cache[4] || (_cache[4] = createBaseVNode(
+			createBaseVNode("label", _hoisted_3$B, [_cache[4] || (_cache[4] = createBaseVNode(
 				"span",
 				{ class: "ub-vplace__cap" },
 				"深度 Depth",
@@ -184346,11 +184364,11 @@ const _hoisted_1$F = {
 	class: "ub-vconf",
 	"data-ub-viz-config": ""
 };
-const _hoisted_2$B = {
+const _hoisted_2$C = {
 	key: 0,
 	class: "ub-vconf__cols"
 };
-const _hoisted_3$z = { class: "ub-vconf__col-no" };
+const _hoisted_3$A = { class: "ub-vconf__col-no" };
 const _hoisted_4$w = {
 	key: 1,
 	class: "ub-vconf__empty"
@@ -184409,7 +184427,7 @@ function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
 				)])]),
 				_: 1
 			})]),
-			default: withCtx(() => [$setup.config.visibleColumnEntries.value.length ? (openBlock(), createElementBlock("ol", _hoisted_2$B, [(openBlock(true), createElementBlock(
+			default: withCtx(() => [$setup.config.visibleColumnEntries.value.length ? (openBlock(), createElementBlock("ol", _hoisted_2$C, [(openBlock(true), createElementBlock(
 				Fragment,
 				null,
 				renderList($setup.config.visibleColumnEntries.value, (column) => {
@@ -184419,7 +184437,7 @@ function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
 					}, [
 						createBaseVNode(
 							"span",
-							_hoisted_3$z,
+							_hoisted_3$A,
 							toDisplayString(column.columnIndex + 1),
 							1
 							/* TEXT */
@@ -185118,8 +185136,8 @@ injectSfcStyle("\n.ub-vdata[data-v-2b80fc88] {\n  display: flex;\n  flex-directi
 var VizDataView_vue_vue_type_style_index_0_scoped_2b80fc88_lang = null;
 
 const _hoisted_1$E = { class: "ub-vdata__bar" };
-const _hoisted_2$A = { class: "ub-vdata__range" };
-const _hoisted_3$y = {
+const _hoisted_2$B = { class: "ub-vdata__range" };
+const _hoisted_3$z = {
 	key: 0,
 	class: "ub-vdata__pager",
 	"aria-label": "数据分页"
@@ -185168,11 +185186,11 @@ function _sfc_render$I(_ctx, _cache, $props, $setup, $data, $options) {
 		[
 			createBaseVNode("div", _hoisted_1$E, [createBaseVNode(
 				"span",
-				_hoisted_2$A,
+				_hoisted_2$B,
 				toDisplayString($setup.rangeText),
 				1
 				/* TEXT */
-			), $setup.win.pageCount > 1 ? (openBlock(), createElementBlock("div", _hoisted_3$y, [
+			), $setup.win.pageCount > 1 ? (openBlock(), createElementBlock("div", _hoisted_3$z, [
 				createVNode($setup["UbIconButton"], {
 					icon: "fa-solid fa-chevron-left",
 					size: "sm",
@@ -185441,11 +185459,11 @@ const _hoisted_1$D = {
 	class: "ub-vmanage",
 	"data-ub-viz-manage": ""
 };
-const _hoisted_2$z = {
+const _hoisted_2$A = {
 	key: 0,
 	class: "ub-vmanage__list"
 };
-const _hoisted_3$x = { class: "ub-vmanage__no" };
+const _hoisted_3$y = { class: "ub-vmanage__no" };
 const _hoisted_4$u = ["onClick"];
 const _hoisted_5$q = { class: "ub-vmanage__title" };
 const _hoisted_6$m = { class: "ub-vmanage__meta" };
@@ -185472,7 +185490,7 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 			)])]),
 			_: 1
 		})]),
-		default: withCtx(() => [$props.sheetItems.length ? (openBlock(), createElementBlock("ol", _hoisted_2$z, [(openBlock(true), createElementBlock(
+		default: withCtx(() => [$props.sheetItems.length ? (openBlock(), createElementBlock("ol", _hoisted_2$A, [(openBlock(true), createElementBlock(
 			Fragment,
 			null,
 			renderList($props.sheetItems, (item, index) => {
@@ -185483,7 +185501,7 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 				}, [
 					createBaseVNode(
 						"span",
-						_hoisted_3$x,
+						_hoisted_3$y,
 						toDisplayString(index + 1),
 						1
 						/* TEXT */
@@ -185605,8 +185623,8 @@ const _hoisted_1$C = {
 	"data-ub-viz-nav": "",
 	"aria-label": "表格列表"
 };
-const _hoisted_2$y = { class: "ub-vnav__label" };
-const _hoisted_3$w = { class: "ub-vnav__list" };
+const _hoisted_2$z = { class: "ub-vnav__label" };
+const _hoisted_3$x = { class: "ub-vnav__list" };
 const _hoisted_4$t = [
 	"aria-current",
 	"data-ub-viz-sheet",
@@ -185623,12 +185641,12 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("nav", _hoisted_1$C, [
 		createBaseVNode(
 			"p",
-			_hoisted_2$y,
+			_hoisted_2$z,
 			"表格 · " + toDisplayString($props.sheetItems.length),
 			1
 			/* TEXT */
 		),
-		createBaseVNode("ul", _hoisted_3$w, [(openBlock(true), createElementBlock(
+		createBaseVNode("ul", _hoisted_3$x, [(openBlock(true), createElementBlock(
 			Fragment,
 			null,
 			renderList($props.sheetItems, (item) => {
@@ -185912,8 +185930,8 @@ const _hoisted_1$B = {
 	class: "ub-viz",
 	"data-ub-viz": ""
 };
-const _hoisted_2$x = { class: "ub-viz__rail" };
-const _hoisted_3$v = { class: "ub-viz__brand" };
+const _hoisted_2$y = { class: "ub-viz__rail" };
+const _hoisted_3$w = { class: "ub-viz__brand" };
 const _hoisted_4$s = { class: "ub-viz__brand-text" };
 const _hoisted_5$o = { class: "ub-viz__brand-tag" };
 const _hoisted_6$k = { class: "ub-viz__rail-nav" };
@@ -185957,7 +185975,7 @@ const _hoisted_21$4 = {
 const _hoisted_22$4 = { class: "ub-viz__save" };
 function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$B, [
-		createBaseVNode("aside", _hoisted_2$x, [createBaseVNode("div", _hoisted_3$v, [_cache[5] || (_cache[5] = createBaseVNode(
+		createBaseVNode("aside", _hoisted_2$y, [createBaseVNode("div", _hoisted_3$w, [_cache[5] || (_cache[5] = createBaseVNode(
 			"span",
 			{
 				class: "ub-viz__mark",
@@ -187758,12 +187776,12 @@ const _hoisted_1$A = {
 	key: 0,
 	class: "ub-page__lead"
 };
-const _hoisted_2$w = {
+const _hoisted_2$x = {
 	key: 1,
 	class: "ub-page__jump",
 	"aria-label": "页内跳转"
 };
-const _hoisted_3$u = ["onClick"];
+const _hoisted_3$v = ["onClick"];
 const _hoisted_4$r = { class: "ub-page__body" };
 function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
@@ -187780,7 +187798,7 @@ function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 				1
 				/* TEXT */
 			)) : createCommentVNode("v-if", true),
-			$props.sections && $props.sections.length > 1 ? (openBlock(), createElementBlock("nav", _hoisted_2$w, [(openBlock(true), createElementBlock(
+			$props.sections && $props.sections.length > 1 ? (openBlock(), createElementBlock("nav", _hoisted_2$x, [(openBlock(true), createElementBlock(
 				Fragment,
 				null,
 				renderList($props.sections, (item) => {
@@ -187789,7 +187807,7 @@ function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 						type: "button",
 						class: "ub-page__chip",
 						onClick: ($event) => $setup.jumpTo(item.id)
-					}, toDisplayString(item.label), 9, _hoisted_3$u);
+					}, toDisplayString(item.label), 9, _hoisted_3$v);
 				}),
 				128
 				/* KEYED_FRAGMENT */
@@ -187880,8 +187898,8 @@ injectSfcStyle("\n.ub-at__sql[data-v-1f0a7747],\n.ub-at__logs[data-v-1f0a7747] {
 var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_1f0a7747_lang = null;
 
 const _hoisted_1$z = { class: "ub-at__sql" };
-const _hoisted_2$v = { class: "ub-at__row" };
-const _hoisted_3$t = { class: "ub-at__row" };
+const _hoisted_2$w = { class: "ub-at__row" };
+const _hoisted_3$u = { class: "ub-at__row" };
 const _hoisted_4$q = {
 	class: "ub-at__result",
 	"aria-label": "SQL 执行结果"
@@ -187946,7 +187964,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 					_: 1
 				}, 8, ["variant"])]),
 				default: withCtx(() => [createBaseVNode("div", _hoisted_1$z, [
-					createBaseVNode("div", _hoisted_2$v, [createVNode($setup["UbButton"], {
+					createBaseVNode("div", _hoisted_2$w, [createVNode($setup["UbButton"], {
 						size: "sm",
 						variant: "ghost",
 						icon: "fa-solid fa-list",
@@ -187990,7 +188008,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 						32
 						/* NEED_HYDRATION */
 					),
-					createBaseVNode("div", _hoisted_3$t, [
+					createBaseVNode("div", _hoisted_3$u, [
 						createVNode($setup["UbButton"], {
 							variant: "primary",
 							icon: "fa-solid fa-play",
@@ -190820,8 +190838,8 @@ injectSfcStyle("\n.ub-wbe[data-v-63ba3c51] {\n  display: flex;\n  flex-direction
 var WorldbookEntries_vue_vue_type_style_index_0_scoped_63ba3c51_lang = null;
 
 const _hoisted_1$x = { class: "ub-wbe" };
-const _hoisted_2$u = { class: "ub-wbe__toolbar" };
-const _hoisted_3$s = { class: "ub-wbe__actions" };
+const _hoisted_2$v = { class: "ub-wbe__toolbar" };
+const _hoisted_3$t = { class: "ub-wbe__actions" };
 const _hoisted_4$p = {
 	key: 0,
 	class: "ub-wbe__status"
@@ -190852,14 +190870,14 @@ const _hoisted_12$7 = {
 };
 const _hoisted_13$6 = { class: "ub-wbe__skill-actions" };
 function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("div", _hoisted_1$x, [createBaseVNode("div", _hoisted_2$u, [createVNode($setup["UbInput"], {
+	return openBlock(), createElementBlock("div", _hoisted_1$x, [createBaseVNode("div", _hoisted_2$v, [createVNode($setup["UbInput"], {
 		class: "ub-wbe__search",
 		"model-value": $props.filter,
 		icon: "fa-solid fa-magnifying-glass",
 		placeholder: "搜索条目...",
 		"aria-label": "搜索条目",
 		"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.emit("update:filter", String($event)))
-	}, null, 8, ["model-value"]), createBaseVNode("div", _hoisted_3$s, [$props.showEntryToggle ? (openBlock(), createElementBlock(
+	}, null, 8, ["model-value"]), createBaseVNode("div", _hoisted_3$t, [$props.showEntryToggle ? (openBlock(), createElementBlock(
 		Fragment,
 		{ key: 0 },
 		[createVNode($setup["UbButton"], {
@@ -191158,11 +191176,11 @@ injectSfcStyle("\n.ub-wbsrc[data-v-fa1a6bea] {\r\n  display: flex;\r\n  flex-dir
 var WorldbookSourcePicker_vue_vue_type_style_index_0_scoped_fa1a6bea_lang = null;
 
 const _hoisted_1$w = { class: "ub-wbsrc" };
-const _hoisted_2$t = {
+const _hoisted_2$u = {
 	key: 0,
 	class: "ub-wbsrc__manual"
 };
-const _hoisted_3$r = [
+const _hoisted_3$s = [
 	"aria-checked",
 	"disabled",
 	"onClick"
@@ -191184,7 +191202,7 @@ function _sfc_render$A(_ctx, _cache, $props, $setup, $data, $options) {
 			block: "",
 			"onUpdate:modelValue": $setup.onSourceChange
 		}, null, 8, ["options", "model-value"]),
-		$props.source === "manual" ? (openBlock(), createElementBlock("div", _hoisted_2$t, [$props.filterable ? (openBlock(), createBlock($setup["UbInput"], {
+		$props.source === "manual" ? (openBlock(), createElementBlock("div", _hoisted_2$u, [$props.filterable ? (openBlock(), createBlock($setup["UbInput"], {
 			key: 0,
 			modelValue: $setup.filter,
 			"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.filter = $event),
@@ -191221,7 +191239,7 @@ function _sfc_render$A(_ctx, _cache, $props, $setup, $data, $options) {
 						toDisplayString(name),
 						1
 						/* TEXT */
-					)], 10, _hoisted_3$r);
+					)], 10, _hoisted_3$s);
 				}),
 				128
 				/* KEYED_FRAGMENT */
@@ -191478,8 +191496,8 @@ injectSfcStyle("\n.ub-agent__mode[data-v-f0fd1638] {\r\n  display: flex;\r\n  fl
 var AgentPage_vue_vue_type_style_index_0_scoped_f0fd1638_lang = null;
 
 const _hoisted_1$v = { class: "ub-agent__mode" };
-const _hoisted_2$s = { class: "ub-agent__config" };
-const _hoisted_3$q = { class: "ub-agent__actions" };
+const _hoisted_2$t = { class: "ub-agent__config" };
+const _hoisted_3$r = { class: "ub-agent__actions" };
 const _hoisted_4$n = { class: "ub-agent__current" };
 const _hoisted_5$k = { class: "ub-agent-fav" };
 const _hoisted_6$h = {
@@ -191522,7 +191540,7 @@ function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 				default: withCtx(() => [
 					createBaseVNode("div", _hoisted_1$v, [createBaseVNode(
 						"p",
-						_hoisted_2$s,
+						_hoisted_2$t,
 						toDisplayString($setup.agentControl.configStatusText.value),
 						1
 						/* TEXT */
@@ -191579,7 +191597,7 @@ function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 						"hint",
 						"flagged"
 					]),
-					createBaseVNode("div", _hoisted_3$q, [
+					createBaseVNode("div", _hoisted_3$r, [
 						createVNode($setup["UbButton"], {
 							size: "sm",
 							icon: "fa-solid fa-sliders",
@@ -192326,13 +192344,13 @@ injectSfcStyle("\n.ub-picker[data-v-2ea232e6] {\r\n  display: flex;\r\n  flex: 1
 var UbPresetPicker_vue_vue_type_style_index_0_scoped_2ea232e6_lang = null;
 
 const _hoisted_1$u = ["disabled", "aria-expanded"];
-const _hoisted_2$r = {
+const _hoisted_2$s = {
 	key: 0,
 	class: "fa-solid fa-star ub-picker__star-mark",
 	"aria-hidden": "true",
 	title: "全局默认"
 };
-const _hoisted_3$p = ["aria-label"];
+const _hoisted_3$q = ["aria-label"];
 const _hoisted_4$m = { class: "ub-picker-panel__head" };
 const _hoisted_5$j = { class: "ub-picker-panel__title" };
 const _hoisted_6$g = {
@@ -192379,7 +192397,7 @@ function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
 			"aria-expanded": $setup.open ? "true" : "false",
 			onClick: _cache[0] || (_cache[0] = ($event) => $setup.open = true)
 		}, [
-			$props.modelValue && $props.modelValue === $props.defaultName && $props.showDefaultAction ? (openBlock(), createElementBlock("i", _hoisted_2$r)) : createCommentVNode("v-if", true),
+			$props.modelValue && $props.modelValue === $props.defaultName && $props.showDefaultAction ? (openBlock(), createElementBlock("i", _hoisted_2$s)) : createCommentVNode("v-if", true),
 			createBaseVNode(
 				"span",
 				{ class: normalizeClass(["ub-picker__value", { "is-placeholder": !$setup.selectedItem }]) },
@@ -192474,7 +192492,7 @@ function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
 				1
 				/* TEXT */
 			)) : createCommentVNode("v-if", true)])
-		], 8, _hoisted_3$p)])) : createCommentVNode("v-if", true)]))],
+		], 8, _hoisted_3$q)])) : createCommentVNode("v-if", true)]))],
 		2
 		/* CLASS */
 	);
@@ -192716,8 +192734,8 @@ injectSfcStyle("\n.ub-api[data-v-5d1d6955],\r\n.ub-api__form[data-v-5d1d6955] {\
 var ApiPresetEditor_vue_vue_type_style_index_0_scoped_5d1d6955_lang = null;
 
 const _hoisted_1$t = { class: "ub-api" };
-const _hoisted_2$q = { class: "ub-api__picker" };
-const _hoisted_3$o = {
+const _hoisted_2$r = { class: "ub-api__picker" };
+const _hoisted_3$p = {
 	key: 0,
 	class: "ub-api__empty"
 };
@@ -192741,7 +192759,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 		description: "数据库各功能默认用这里选中的预设。星标 = 新聊天默认使用的预设。",
 		icon: "fa-solid fa-plug"
 	}, {
-		default: withCtx(() => [createBaseVNode("div", _hoisted_2$q, [
+		default: withCtx(() => [createBaseVNode("div", _hoisted_2$r, [
 			createVNode($setup["UbPresetPicker"], {
 				title: "选择 API 预设",
 				items: $setup.presetItems,
@@ -192771,7 +192789,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 				disabled: !$setup.store.activePreset,
 				onClick: _cache[1] || (_cache[1] = ($event) => $setup.store.activePreset && $setup.deletePreset($setup.store.activePreset.name))
 			}, null, 8, ["disabled"])
-		]), $setup.formMode === "empty" ? (openBlock(), createElementBlock("div", _hoisted_3$o, [createVNode($setup["UbCallout"], { kind: "warning" }, {
+		]), $setup.formMode === "empty" ? (openBlock(), createElementBlock("div", _hoisted_3$p, [createVNode($setup["UbCallout"], { kind: "warning" }, {
 			default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 				"暂无可用 API 预设，请新建并设为当前或全局默认。",
 				-1
@@ -193993,14 +194011,14 @@ injectSfcStyle("\n.ub-rules[data-v-17445fad] {\r\n  display: flex;\r\n  flex-dir
 var UbRulePairs_vue_vue_type_style_index_0_scoped_17445fad_lang = null;
 
 const _hoisted_1$s = { class: "ub-rules" };
-const _hoisted_2$p = { class: "ub-rules__head" };
-const _hoisted_3$n = { class: "ub-rules__label" };
+const _hoisted_2$q = { class: "ub-rules__head" };
+const _hoisted_3$o = { class: "ub-rules__label" };
 const _hoisted_4$k = { class: "ub-rules__count" };
 function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$s, [
-		createBaseVNode("div", _hoisted_2$p, [createBaseVNode(
+		createBaseVNode("div", _hoisted_2$q, [createBaseVNode(
 			"span",
-			_hoisted_3$n,
+			_hoisted_3$o,
 			toDisplayString($props.label),
 			1
 			/* TEXT */
@@ -194086,19 +194104,23 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
         task: {},
         apiPresetOptions: {},
         taskApiOverride: {},
-        taskCount: {}
+        taskCount: {},
+        decisionRecallTaskMode: { type: Boolean }
     },
     emits: ["patch", "task-api-override", "segment-add", "segment-delete", "segment-move", "segment-update"],
     setup(__props, { expose: __expose, emit: __emit }) {
         __expose();
         const props = __props;
-        const decisionRecallAvailable = computed(() => canPlotTaskUseDecisionRecall_ACU(props.task, props.taskCount ?? 0));
+        const decisionRecallAvailable = computed(() => props.decisionRecallTaskMode === true
+            && canPlotTaskUseDecisionRecall_ACU(props.task, props.taskCount ?? 0));
         const decisionRecallHint = computed(() => {
+            if (props.decisionRecallTaskMode !== true)
+                return '需要先在仪表盘的进阶开关打开决策召回，并在「决策召回」页把用法选为「替换剧情推进的任务」。';
             if ((props.taskCount ?? 0) < 2)
-                return '只在有多个任务的预设里可用；只有一个任务时请在「决策召回」页单独开启。';
+                return '只在有多个任务的预设里可用；只有一个任务时请在「决策召回」页改用「单独召回」。';
             if (!decisionRecallAvailable.value)
                 return '只有「标签摘取」恰好是 recall、且没有填「提取写入标签」的任务可以改由决策召回执行。';
-            return '开启后这个任务不调模型，改由决策模型给纪要打分、挑出相关的写进 recall 标签；Key、模型与条数在「决策召回」页设置。';
+            return '开启后这个任务不调模型、不读剧情推进选的世界书，改由决策模型给纪要打分、挑出相关的写进 recall 标签；Key、模型与条数在「决策召回」页设置。';
         });
         const emit = __emit;
         const taskApiSelectOptions = computed(() => [
@@ -194138,15 +194160,15 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-pte[data-v-d8972d6a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s5);\n}\n.ub-pte__segs[data-v-d8972d6a] {\r\n  padding: var(--ub-s3);\n}\n.ub-pte__empty[data-v-d8972d6a] {\r\n  padding: var(--ub-s5);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-card);\r\n  color: var(--ub-text-3);\r\n  text-align: center;\n}\r\n", "src/presentation-v3/parts/PlotTaskEditor.vue#style-0-d8972d6a");
-var PlotTaskEditor_vue_vue_type_style_index_0_scoped_d8972d6a_lang = null;
+injectSfcStyle("\n.ub-pte[data-v-5e2f0861] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s5);\n}\n.ub-pte__segs[data-v-5e2f0861] {\r\n  padding: var(--ub-s3);\n}\n.ub-pte__empty[data-v-5e2f0861] {\r\n  padding: var(--ub-s5);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-card);\r\n  color: var(--ub-text-3);\r\n  text-align: center;\n}\r\n", "src/presentation-v3/parts/PlotTaskEditor.vue#style-0-5e2f0861");
+var PlotTaskEditor_vue_vue_type_style_index_0_scoped_5e2f0861_lang = null;
 
 const _hoisted_1$r = {
 	key: 0,
 	class: "ub-pte"
 };
-const _hoisted_2$o = { class: "ub-pte__segs" };
-const _hoisted_3$m = {
+const _hoisted_2$p = { class: "ub-pte__segs" };
+const _hoisted_3$n = {
 	key: 1,
 	class: "ub-pte__empty"
 };
@@ -194410,7 +194432,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 			title: "提示词段",
 			description: "promptGroup：按顺序发送给规划 AI。"
 		}, {
-			default: withCtx(() => [createBaseVNode("div", _hoisted_2$o, [createVNode($setup["UbPromptSegments"], {
+			default: withCtx(() => [createBaseVNode("div", _hoisted_2$p, [createVNode($setup["UbPromptSegments"], {
 				segments: $props.task.promptGroup,
 				"show-slot": true,
 				"allow-move": true,
@@ -194423,9 +194445,152 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 			}, null, 8, ["segments"])])]),
 			_: 1
 		})
-	])) : (openBlock(), createElementBlock("p", _hoisted_3$m, "请先在上方选择一个任务。"));
+	])) : (openBlock(), createElementBlock("p", _hoisted_3$n, "请先在上方选择一个任务。"));
 }
-var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$u], ["__scopeId", "data-v-d8972d6a"]]);
+var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$u], ["__scopeId", "data-v-5e2f0861"]]);
+
+/**
+ * decision-recall-store — 「决策召回」页的状态：设置读写、模型列表、测试召回。
+ *
+ * 设置权威源是 settings_ACU.decisionRecallSettings。总开关在仪表盘进阶开关里（setDecisionRecallEnabled_ACU），
+ * 这一页只选用法：「单独召回」时剧情推进暂停，「替换剧情推进的任务」时剧情推进照常运行。
+ */
+function readPlotTaskStatus_ACU() {
+    const tasks = normalizePlotTasks_ACU(settings_ACU?.plotSettings || {});
+    const eligible = tasks.filter((task) => canPlotTaskUseDecisionRecall_ACU(task, tasks.length));
+    return {
+        plotEnabled: settings_ACU?.plotSettings?.enabled === true,
+        taskCount: tasks.length,
+        replacedTaskNames: eligible.filter((task) => task.decisionRecall === true).map((task) => String(task.name || task.id)),
+        eligibleTaskNames: eligible.filter((task) => task.decisionRecall !== true).map((task) => String(task.name || task.id)),
+    };
+}
+function readSettings_ACU() {
+    return normalizeDecisionRecallSettings_ACU(settings_ACU?.decisionRecallSettings);
+}
+/** 保存失败时撤销到修改前的设置并提示。 */
+function persistOrRollback_ACU(snapshot, rollback) {
+    const result = saveSettings_ACU();
+    if (!result || result.saved !== false)
+        return true;
+    settings_ACU.decisionRecallSettings = snapshot;
+    rollback?.();
+    useToastStore().error(`决策召回设置保存失败，已撤销本次修改：${result.error || result.warning || '未知错误'}`, { muteable: false });
+    return false;
+}
+function levelLabel_ACU(score) {
+    const nearest = DECISION_RECALL_LEVELS_ACU.reduce((best, level) => (Math.abs(level.score - score) < Math.abs(best.score - score) ? level : best));
+    return nearest.label;
+}
+/** 测试结果的可读文本：摘要一行，然后列出带上的纪要（固定 / 分数），再列分数最高的几条落选纪要。 */
+function formatDecisionRecallTestOutput_ACU(result) {
+    if (result.status !== 'ok')
+        return describeDecisionRecallResult_ACU(result).replace(/^\[决策召回\] /, '');
+    const lines = [];
+    const source = result.candidateSource === 'crossfire_index' ? '交火筛过的纪要索引' : '全部纪要';
+    lines.push(`候选 ${result.candidateCount} 条（来自${source}），分 ${result.batchCount} 组打分，失败 ${result.failedBatchCount} 组。`);
+    const warning = describeDecisionRecallWarning_ACU(result);
+    if (warning)
+        lines.push(warning);
+    const scoreByKey = new Map(result.scored.map(entry => [entry.row.rowKey, entry]));
+    const fixedKeys = new Set(result.fixed.map(row => row.rowKey));
+    lines.push('', `带上 ${result.selected.length} 条（按表号顺序）：`);
+    for (const row of result.selected) {
+        const entry = scoreByKey.get(row.rowKey);
+        const tag = fixedKeys.has(row.rowKey) ? '固定' : entry ? `${entry.score.toFixed(2)} 分 · ${levelLabel_ACU(entry.score)}` : '未打分';
+        lines.push(`· ${row.indexCode}［${tag}］${row.summary}`);
+    }
+    const selectedKeys = new Set(result.selected.map(row => row.rowKey));
+    const runnersUp = result.scored.filter(entry => !selectedKeys.has(entry.row.rowKey)).slice(0, 10);
+    if (runnersUp.length > 0) {
+        lines.push('', '落选里分数最高的几条：');
+        for (const entry of runnersUp)
+            lines.push(`· ${entry.row.indexCode}［${entry.score.toFixed(2)} 分 · ${levelLabel_ACU(entry.score)}］${entry.row.summary}`);
+    }
+    return lines.join('\n');
+}
+const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
+    state: () => ({
+        settings: readSettings_ACU(),
+        plotTaskStatus: readPlotTaskStatus_ACU(),
+        openrouterModels: [],
+        modelsLoading: false,
+        testInput: '',
+        testOutput: '',
+        testBusy: false,
+    }),
+    getters: {
+        endpoint: state => resolveDecisionRecallEndpoint_ACU(state.settings),
+        /** 「单独召回」生效中：剧情推进暂停。 */
+        standaloneActive: state => state.settings.enabled && state.settings.mode === 'standalone',
+        /** 「替换剧情推进的任务」生效中：剧情推进照常运行，打开了开关的 recall 任务改由决策召回执行。 */
+        taskModeActive: state => state.settings.enabled && state.settings.mode === 'plot_task',
+        activeModels(state) {
+            if (state.settings.provider === 'siliconflow')
+                return SILICONFLOW_DECISION_MODELS_ACU;
+            if (state.settings.provider === 'aihubmix')
+                return AIHUBMIX_DECISION_MODELS_ACU;
+            return state.openrouterModels;
+        },
+    },
+    actions: {
+        refreshFromSettings() {
+            this.settings = readSettings_ACU();
+            this.plotTaskStatus = readPlotTaskStatus_ACU();
+        },
+        /** 规整后写回并保存；返回是否保存成功。 */
+        patch(patch) {
+            const snapshot = settings_ACU.decisionRecallSettings;
+            const next = normalizeDecisionRecallSettings_ACU({ ...this.settings, ...patch });
+            settings_ACU.decisionRecallSettings = { ...next };
+            const saved = persistOrRollback_ACU(snapshot);
+            this.refreshFromSettings();
+            return saved;
+        },
+        /** OpenRouter 的决策模型列表（公开接口）；硅基流动与 AIHubMix 用内置列表。 */
+        async loadModels() {
+            if (this.settings.provider !== 'openrouter' || this.modelsLoading)
+                return;
+            this.modelsLoading = true;
+            try {
+                this.openrouterModels = await fetchDecisionModels_ACU();
+            }
+            catch (error) {
+                logError_ACU('[ACU-V2] load decision recall models failed', error);
+                useToastStore().warning(`读取决策模型列表失败（${error?.message || '未知错误'}），可稍后重试；当前所选模型不受影响。`);
+            }
+            finally {
+                this.modelsLoading = false;
+            }
+        },
+        setTestInput(value) {
+            this.testInput = String(value ?? '');
+        },
+        /** 用测试输入和当前聊天的前文跑一次完整选取，只显示结果，不写进聊天。 */
+        async runTest() {
+            if (this.testBusy)
+                return;
+            const userInput = this.testInput.trim();
+            if (!userInput) {
+                this.testOutput = '请先填一句模拟的用户输入。';
+                return;
+            }
+            this.testBusy = true;
+            this.testOutput = '正在打分…';
+            try {
+                const result = await runDecisionRecall_ACU({ userInput, settings: this.settings });
+                this.testOutput = formatDecisionRecallTestOutput_ACU(result);
+            }
+            catch (error) {
+                logError_ACU('[ACU-V2] decision recall test failed', error);
+                this.testOutput = `测试失败：${error?.message || error}`;
+            }
+            finally {
+                this.testBusy = false;
+            }
+        },
+    },
+});
 
 var _sfc_main$u = /*@__PURE__*/ defineComponent({
     __name: 'PlotPresetSheet',
@@ -194450,6 +194615,8 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
         __expose();
         const props = __props;
         const emit = __emit;
+        // 任务编辑里的「改由决策召回执行」只在决策召回用法为「替换剧情推进的任务」时可用
+        const decisionRecallStore = useDecisionRecallStore();
         const rateFields = [
             { key: 'rateMain', label: 'sulv1', step: 0.05 },
             { key: 'ratePersonal', label: 'sulv2', step: 0.05 },
@@ -194465,21 +194632,21 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
             const target = idx + delta;
             return target >= 0 && target < tasks.value.length;
         }
-        const __returned__ = { props, emit, rateFields, tasks, canMove, UbButton, UbCallout, UbIconButton, UbInput, UbRow, UbRulePairs, UbSection, UbSheet, UbTextarea, PlotTaskEditor };
+        const __returned__ = { props, emit, decisionRecallStore, rateFields, tasks, canMove, UbButton, UbCallout, UbIconButton, UbInput, UbRow, UbRulePairs, UbSection, UbSheet, UbTextarea, PlotTaskEditor };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-pps-form[data-v-fc21cecf] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s5);\n}\n.ub-pps-list[data-v-fc21cecf] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-pps-list__item[data-v-fc21cecf] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-pps-list__item + .ub-pps-list__item[data-v-fc21cecf] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-pps-list__info[data-v-fc21cecf] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-pps-list__name[data-v-fc21cecf] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-pps-list__star[data-v-fc21cecf] {\r\n  color: var(--ub-warn);\r\n  font-size: 0.85em;\n}\n.ub-pps-list__meta[data-v-fc21cecf] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-pps-list__actions[data-v-fc21cecf] {\r\n  display: flex;\r\n  gap: 2px;\n}\n.ub-pps-empty[data-v-fc21cecf] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-pps-tasks[data-v-fc21cecf] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3);\r\n  overflow-x: auto;\n}\n.ub-pps-task[data-v-fc21cecf] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: 2px;\r\n  flex: 0 0 auto;\r\n  min-width: calc(var(--ub-u) * 130);\r\n  max-width: calc(var(--ub-u) * 220);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border: 1.5px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-pps-task.is-active[data-v-fc21cecf] {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\n}\n.ub-pps-task.is-off[data-v-fc21cecf] {\r\n  opacity: 0.55;\n}\n.ub-pps-task__name[data-v-fc21cecf] {\r\n  max-width: 100%;\r\n  overflow: hidden;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 700;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-pps-task__meta[data-v-fc21cecf] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\r\n", "src/presentation-v3/parts/PlotPresetSheet.vue#style-0-fc21cecf");
-var PlotPresetSheet_vue_vue_type_style_index_0_scoped_fc21cecf_lang = null;
+injectSfcStyle("\n.ub-pps-form[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s5);\n}\n.ub-pps-list[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-pps-list__item[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-pps-list__item + .ub-pps-list__item[data-v-0ad2c5d5] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-pps-list__info[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-pps-list__name[data-v-0ad2c5d5] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-pps-list__star[data-v-0ad2c5d5] {\r\n  color: var(--ub-warn);\r\n  font-size: 0.85em;\n}\n.ub-pps-list__meta[data-v-0ad2c5d5] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-pps-list__actions[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  gap: 2px;\n}\n.ub-pps-empty[data-v-0ad2c5d5] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-pps-tasks[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3);\r\n  overflow-x: auto;\n}\n.ub-pps-task[data-v-0ad2c5d5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: 2px;\r\n  flex: 0 0 auto;\r\n  min-width: calc(var(--ub-u) * 130);\r\n  max-width: calc(var(--ub-u) * 220);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border: 1.5px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-pps-task.is-active[data-v-0ad2c5d5] {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\n}\n.ub-pps-task.is-off[data-v-0ad2c5d5] {\r\n  opacity: 0.55;\n}\n.ub-pps-task__name[data-v-0ad2c5d5] {\r\n  max-width: 100%;\r\n  overflow: hidden;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 700;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-pps-task__meta[data-v-0ad2c5d5] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\r\n", "src/presentation-v3/parts/PlotPresetSheet.vue#style-0-0ad2c5d5");
+var PlotPresetSheet_vue_vue_type_style_index_0_scoped_0ad2c5d5_lang = null;
 
 const _hoisted_1$q = {
 	key: 0,
 	class: "ub-pps-list"
 };
-const _hoisted_2$n = { class: "ub-pps-list__info" };
-const _hoisted_3$l = { class: "ub-pps-list__name" };
+const _hoisted_2$o = { class: "ub-pps-list__info" };
+const _hoisted_3$m = { class: "ub-pps-list__name" };
 const _hoisted_4$j = {
 	key: 0,
 	class: "fa-solid fa-star ub-pps-list__star",
@@ -194531,7 +194698,7 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 					return openBlock(), createElementBlock("li", {
 						key: meta.name,
 						class: "ub-pps-list__item"
-					}, [createBaseVNode("div", _hoisted_2$n, [createBaseVNode("span", _hoisted_3$l, [meta.name === $props.defaultPresetName ? (openBlock(), createElementBlock("i", _hoisted_4$j)) : createCommentVNode("v-if", true), createTextVNode(
+					}, [createBaseVNode("div", _hoisted_2$o, [createBaseVNode("span", _hoisted_3$m, [meta.name === $props.defaultPresetName ? (openBlock(), createElementBlock("i", _hoisted_4$j)) : createCommentVNode("v-if", true), createTextVNode(
 						" " + toDisplayString(meta.name),
 						1
 						/* TEXT */
@@ -194751,6 +194918,7 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 					"api-preset-options": $props.apiPresetOptions,
 					"task-api-override": $props.currentTaskApiOverride,
 					"task-count": $setup.tasks.length,
+					"decision-recall-task-mode": $setup.decisionRecallStore.taskModeActive,
 					onPatch: _cache[6] || (_cache[6] = ($event) => $props.taskEditing.patchCurrent($event)),
 					onTaskApiOverride: _cache[7] || (_cache[7] = ($event) => $setup.emit("update-task-api-override", $event)),
 					onSegmentAdd: _cache[8] || (_cache[8] = ($event) => $props.taskEditing.addSegment($event)),
@@ -194761,7 +194929,8 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 					"task",
 					"api-preset-options",
 					"task-api-override",
-					"task-count"
+					"task-count",
+					"decision-recall-task-mode"
 				]),
 				createVNode($setup["UbSection"], {
 					title: "最终注入指令",
@@ -194828,7 +194997,7 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 		"before-close"
 	]);
 }
-var PlotPresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$t], ["__scopeId", "data-v-fc21cecf"]]);
+var PlotPresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$t], ["__scopeId", "data-v-0ad2c5d5"]]);
 
 var _sfc_main$t = /*@__PURE__*/ defineComponent({
     __name: 'PlotPresetSection',
@@ -194916,7 +195085,7 @@ injectSfcStyle("\n.ub-plotp[data-v-0c48a73a] {\r\n  display: flex;\r\n  flex-dir
 var PlotPresetSection_vue_vue_type_style_index_0_scoped_0c48a73a_lang = null;
 
 const _hoisted_1$p = { class: "ub-plotp__facts" };
-const _hoisted_2$m = { class: "ub-plotp__picker" };
+const _hoisted_2$n = { class: "ub-plotp__picker" };
 function _sfc_render$s(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSection"], {
 		id: $props.id,
@@ -194967,7 +195136,7 @@ function _sfc_render$s(_ctx, _cache, $props, $setup, $data, $options) {
 					toDisplayString($setup.store.defaultPresetName || "默认预设"),
 					1
 					/* TEXT */
-				)])]), createBaseVNode("div", _hoisted_2$m, [
+				)])]), createBaseVNode("div", _hoisted_2$n, [
 					createVNode($setup["UbPresetPicker"], {
 						title: "选择剧情推进预设",
 						items: $setup.presetItems,
@@ -196160,8 +196329,8 @@ const _hoisted_1$o = {
 	key: 1,
 	class: "ub-plist"
 };
-const _hoisted_2$l = { class: "ub-plist__info" };
-const _hoisted_3$k = { class: "ub-plist__name" };
+const _hoisted_2$m = { class: "ub-plist__info" };
+const _hoisted_3$l = { class: "ub-plist__name" };
 const _hoisted_4$i = {
 	key: 0,
 	class: "fa-solid fa-star ub-plist__star",
@@ -196213,7 +196382,7 @@ function _sfc_render$r(_ctx, _cache, $props, $setup, $data, $options) {
 					return openBlock(), createElementBlock("li", {
 						key: meta.name,
 						class: "ub-plist__item"
-					}, [createBaseVNode("div", _hoisted_2$l, [createBaseVNode("span", _hoisted_3$k, [meta.kind !== "runtime" && meta.name === $props.defaultPresetName ? (openBlock(), createElementBlock("i", _hoisted_4$i)) : createCommentVNode("v-if", true), createTextVNode(
+					}, [createBaseVNode("div", _hoisted_2$m, [createBaseVNode("span", _hoisted_3$l, [meta.kind !== "runtime" && meta.name === $props.defaultPresetName ? (openBlock(), createElementBlock("i", _hoisted_4$i)) : createCommentVNode("v-if", true), createTextVNode(
 						" " + toDisplayString(meta.label ?? meta.name),
 						1
 						/* TEXT */
@@ -196335,8 +196504,8 @@ injectSfcStyle("\n.ub-tpl[data-v-4bb4a8a2] {\r\n  display: flex;\r\n  flex-direc
 var TableTemplateSection_vue_vue_type_style_index_0_scoped_4bb4a8a2_lang = null;
 
 const _hoisted_1$n = { class: "ub-tpl" };
-const _hoisted_2$k = { class: "ub-tpl__facts" };
-const _hoisted_3$j = { class: "ub-tpl__tools" };
+const _hoisted_2$l = { class: "ub-tpl__facts" };
+const _hoisted_3$k = { class: "ub-tpl__tools" };
 function _sfc_render$q(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSection"], {
 		id: $props.id,
@@ -196375,7 +196544,7 @@ function _sfc_render$q(_ctx, _cache, $props, $setup, $data, $options) {
 				)]),
 				_: 1
 			}, 8, ["kind"])) : createCommentVNode("v-if", true),
-			createBaseVNode("dl", _hoisted_2$k, [createBaseVNode("div", null, [_cache[9] || (_cache[9] = createBaseVNode(
+			createBaseVNode("dl", _hoisted_2$l, [createBaseVNode("div", null, [_cache[9] || (_cache[9] = createBaseVNode(
 				"dt",
 				null,
 				"当前聊天",
@@ -196415,7 +196584,7 @@ function _sfc_render$q(_ctx, _cache, $props, $setup, $data, $options) {
 				"default-name",
 				"disabled"
 			]),
-			createBaseVNode("div", _hoisted_3$j, [
+			createBaseVNode("div", _hoisted_3$k, [
 				createVNode($setup["UbFileButton"], {
 					size: "sm",
 					variant: "ghost",
@@ -198399,8 +198568,8 @@ injectSfcStyle("\n.ub-cr__preset[data-v-5e9dccf5] {\n  display: flex;\n  flex-di
 var ContentReplacePage_vue_vue_type_style_index_0_scoped_5e9dccf5_lang = null;
 
 const _hoisted_1$l = { class: "ub-cr__picker" };
-const _hoisted_2$j = { class: "ub-cr__preset" };
-const _hoisted_3$i = { class: "ub-cr__meta" };
+const _hoisted_2$k = { class: "ub-cr__preset" };
+const _hoisted_3$j = { class: "ub-cr__meta" };
 const _hoisted_4$h = { class: "ub-cr__picker" };
 const _hoisted_5$f = { class: "ub-cr__test-actions" };
 const _hoisted_6$c = {
@@ -198712,8 +198881,8 @@ function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
 					)]),
 					_: 1
 				}, 8, ["variant"])]),
-				default: withCtx(() => [createBaseVNode("div", _hoisted_2$j, [
-					createBaseVNode("p", _hoisted_3$i, [
+				default: withCtx(() => [createBaseVNode("div", _hoisted_2$k, [
+					createBaseVNode("p", _hoisted_3$j, [
 						_cache[14] || (_cache[14] = createTextVNode(
 							"当前提示词：",
 							-1
@@ -199739,11 +199908,11 @@ const _hoisted_1$k = {
 	ref: "feedElement",
 	class: "ub-feed"
 };
-const _hoisted_2$i = {
+const _hoisted_2$j = {
 	key: 0,
 	class: "ub-feed__empty"
 };
-const _hoisted_3$h = {
+const _hoisted_3$i = {
 	key: 0,
 	class: "ub-feed__divider"
 };
@@ -199795,7 +199964,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 		"div",
 		_hoisted_1$k,
 		[
-			!$props.entries.length ? (openBlock(), createElementBlock("p", _hoisted_2$i, " 还没有运行记录。发送一条指令后，主 Agent 的思考、派工、大纲操作与交付过程会实时显示在这里。 ")) : createCommentVNode("v-if", true),
+			!$props.entries.length ? (openBlock(), createElementBlock("p", _hoisted_2$j, " 还没有运行记录。发送一条指令后，主 Agent 的思考、派工、大纲操作与交付过程会实时显示在这里。 ")) : createCommentVNode("v-if", true),
 			$setup.hiddenCount > 0 ? (openBlock(), createElementBlock(
 				"button",
 				{
@@ -199815,7 +199984,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					return openBlock(), createElementBlock(
 						Fragment,
 						{ key: entry.id },
-						[entry.kind === "run_started" || entry.kind === "run_resumed" ? (openBlock(), createElementBlock("div", _hoisted_3$h, [
+						[entry.kind === "run_started" || entry.kind === "run_resumed" ? (openBlock(), createElementBlock("div", _hoisted_3$i, [
 							createBaseVNode(
 								"span",
 								_hoisted_4$g,
@@ -200040,8 +200209,8 @@ injectSfcStyle("\n.ub-cchat[data-v-acb581a2] {\r\n  display: flex;\r\n  flex-dir
 var ContinuationChat_vue_vue_type_style_index_0_scoped_acb581a2_lang = null;
 
 const _hoisted_1$j = { class: "ub-cchat" };
-const _hoisted_2$h = { class: "ub-cchat__status" };
-const _hoisted_3$g = { key: 0 };
+const _hoisted_2$i = { class: "ub-cchat__status" };
+const _hoisted_3$h = { key: 0 };
 const _hoisted_4$f = {
 	key: 0,
 	class: "ub-cchat__notice"
@@ -200052,7 +200221,7 @@ const _hoisted_7$9 = { class: "ub-cchat__actions" };
 const _hoisted_8$8 = { class: "ub-cchat__hint" };
 function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$j, [
-		createBaseVNode("div", _hoisted_2$h, [
+		createBaseVNode("div", _hoisted_2$i, [
 			createBaseVNode(
 				"span",
 				{ class: normalizeClass(["ub-cchat__state", `is-${$setup.statusTone}`]) },
@@ -200089,7 +200258,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 			),
 			$props.revisionText ? (openBlock(), createElementBlock(
 				"span",
-				_hoisted_3$g,
+				_hoisted_3$h,
 				"大纲 " + toDisplayString($props.revisionText),
 				1
 				/* TEXT */
@@ -200383,11 +200552,11 @@ injectSfcStyle("\n.ub-jde[data-v-c21c1478] {\r\n  border: 1px dashed var(--ub-li
 var JsonDraftEditor_vue_vue_type_style_index_0_scoped_c21c1478_lang = null;
 
 const _hoisted_1$i = ["aria-expanded"];
-const _hoisted_2$g = {
+const _hoisted_2$h = {
 	key: 0,
 	class: "ub-jde__body"
 };
-const _hoisted_3$f = {
+const _hoisted_3$g = {
 	key: 0,
 	class: "ub-jde__hint"
 };
@@ -200443,10 +200612,10 @@ function _sfc_render$k(_ctx, _cache, $props, $setup, $data, $options) {
 				-1
 				/* CACHED */
 			))
-		], 8, _hoisted_1$i), $setup.open ? (openBlock(), createElementBlock("div", _hoisted_2$g, [
+		], 8, _hoisted_1$i), $setup.open ? (openBlock(), createElementBlock("div", _hoisted_2$h, [
 			$props.hint ? (openBlock(), createElementBlock(
 				"p",
-				_hoisted_3$f,
+				_hoisted_3$g,
 				toDisplayString($props.hint),
 				1
 				/* TEXT */
@@ -200766,8 +200935,8 @@ injectSfcStyle("\n.ub-cm[data-v-72041ca5] {\n  display: flex;\n  flex-direction:
 var ContinuationMaterials_vue_vue_type_style_index_0_scoped_72041ca5_lang = null;
 
 const _hoisted_1$h = { class: "ub-cm" };
-const _hoisted_2$f = { class: "ub-cm__bar" };
-const _hoisted_3$e = {
+const _hoisted_2$g = { class: "ub-cm__bar" };
+const _hoisted_3$f = {
 	key: 0,
 	class: "ub-cm__confirm",
 	role: "alert"
@@ -200983,7 +201152,7 @@ const _hoisted_109 = {
 };
 function _sfc_render$j(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$h, [
-		createBaseVNode("div", _hoisted_2$f, [
+		createBaseVNode("div", _hoisted_2$g, [
 			createVNode($setup["UbSegmented"], {
 				modelValue: $setup.activeTab,
 				"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.activeTab = $event),
@@ -201027,7 +201196,7 @@ function _sfc_render$j(_ctx, _cache, $props, $setup, $data, $options) {
 				_: 1
 			}, 8, ["busy"])
 		]),
-		$setup.clearPending ? (openBlock(), createElementBlock("div", _hoisted_3$e, [_cache[29] || (_cache[29] = createBaseVNode(
+		$setup.clearPending ? (openBlock(), createElementBlock("div", _hoisted_3$f, [_cache[29] || (_cache[29] = createBaseVNode(
 			"p",
 			null,
 			" 清空会删除当前续写任务、主 Agent 的会话记录与本地资料快照（伏笔、信息差、长期约束、故事总纲、年代学、百科资料库、用户要求）。 小说正文楼层不受影响，清空后可以从当前剧情重新开始规划。 ",
@@ -203403,8 +203572,8 @@ const _hoisted_1$g = {
 	key: 0,
 	class: "ub-cont__error"
 };
-const _hoisted_2$e = { class: "ub-cont__actions" };
-const _hoisted_3$d = {
+const _hoisted_2$f = { class: "ub-cont__actions" };
+const _hoisted_3$e = {
 	key: 0,
 	class: "ub-cont__notice"
 };
@@ -203492,7 +203661,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 						1
 						/* TEXT */
 					)) : createCommentVNode("v-if", true),
-					createBaseVNode("div", _hoisted_2$e, [createVNode($setup["UbButton"], {
+					createBaseVNode("div", _hoisted_2$f, [createVNode($setup["UbButton"], {
 						variant: "primary",
 						icon: "fa-solid fa-check",
 						busy: $setup.runtime.busy.value,
@@ -203540,7 +203709,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 			}, {
 				actions: withCtx(() => [$setup.settingsNotice ? (openBlock(), createElementBlock(
 					"span",
-					_hoisted_3$d,
+					_hoisted_3$e,
 					toDisplayString($setup.settingsNotice),
 					1
 					/* TEXT */
@@ -205636,143 +205805,7 @@ function useDashboardPage() {
 }
 
 /**
- * decision-recall-store — 「决策召回」页的状态：设置读写、模型列表、测试召回。
- *
- * 设置权威源是 settings_ACU.decisionRecallSettings；单独开启的开关走 setDecisionRecallEnabled_ACU（与剧情推进互斥）。
- */
-function readSettings_ACU() {
-    return normalizeDecisionRecallSettings_ACU(settings_ACU?.decisionRecallSettings);
-}
-/** 保存失败时撤销到修改前的设置并提示。 */
-function persistOrRollback_ACU(snapshot, rollback) {
-    const result = saveSettings_ACU();
-    if (!result || result.saved !== false)
-        return true;
-    settings_ACU.decisionRecallSettings = snapshot;
-    rollback?.();
-    useToastStore().error(`决策召回设置保存失败，已撤销本次修改：${result.error || result.warning || '未知错误'}`, { muteable: false });
-    return false;
-}
-function levelLabel_ACU(score) {
-    const nearest = DECISION_RECALL_LEVELS_ACU.reduce((best, level) => (Math.abs(level.score - score) < Math.abs(best.score - score) ? level : best));
-    return nearest.label;
-}
-/** 测试结果的可读文本：摘要一行，然后列出带上的纪要（固定 / 分数），再列分数最高的几条落选纪要。 */
-function formatDecisionRecallTestOutput_ACU(result) {
-    if (result.status !== 'ok')
-        return describeDecisionRecallResult_ACU(result).replace(/^\[决策召回\] /, '');
-    const lines = [];
-    const source = result.candidateSource === 'crossfire_index' ? '交火筛过的纪要索引' : '全部纪要';
-    lines.push(`候选 ${result.candidateCount} 条（来自${source}），分 ${result.batchCount} 组打分，失败 ${result.failedBatchCount} 组。`);
-    const warning = describeDecisionRecallWarning_ACU(result);
-    if (warning)
-        lines.push(warning);
-    const scoreByKey = new Map(result.scored.map(entry => [entry.row.rowKey, entry]));
-    const fixedKeys = new Set(result.fixed.map(row => row.rowKey));
-    lines.push('', `带上 ${result.selected.length} 条（按表号顺序）：`);
-    for (const row of result.selected) {
-        const entry = scoreByKey.get(row.rowKey);
-        const tag = fixedKeys.has(row.rowKey) ? '固定' : entry ? `${entry.score.toFixed(2)} 分 · ${levelLabel_ACU(entry.score)}` : '未打分';
-        lines.push(`· ${row.indexCode}［${tag}］${row.summary}`);
-    }
-    const selectedKeys = new Set(result.selected.map(row => row.rowKey));
-    const runnersUp = result.scored.filter(entry => !selectedKeys.has(entry.row.rowKey)).slice(0, 10);
-    if (runnersUp.length > 0) {
-        lines.push('', '落选里分数最高的几条：');
-        for (const entry of runnersUp)
-            lines.push(`· ${entry.row.indexCode}［${entry.score.toFixed(2)} 分 · ${levelLabel_ACU(entry.score)}］${entry.row.summary}`);
-    }
-    return lines.join('\n');
-}
-const useDecisionRecallStore = defineStore('acu-v2-decision-recall', {
-    state: () => ({
-        settings: readSettings_ACU(),
-        openrouterModels: [],
-        modelsLoading: false,
-        testInput: '',
-        testOutput: '',
-        testBusy: false,
-    }),
-    getters: {
-        endpoint: state => resolveDecisionRecallEndpoint_ACU(state.settings),
-        activeModels(state) {
-            if (state.settings.provider === 'siliconflow')
-                return SILICONFLOW_DECISION_MODELS_ACU;
-            if (state.settings.provider === 'aihubmix')
-                return AIHUBMIX_DECISION_MODELS_ACU;
-            return state.openrouterModels;
-        },
-    },
-    actions: {
-        refreshFromSettings() {
-            this.settings = readSettings_ACU();
-        },
-        /** 规整后写回并保存；返回是否保存成功。 */
-        patch(patch) {
-            const snapshot = settings_ACU.decisionRecallSettings;
-            const next = normalizeDecisionRecallSettings_ACU({ ...this.settings, ...patch });
-            settings_ACU.decisionRecallSettings = { ...next };
-            const saved = persistOrRollback_ACU(snapshot);
-            this.refreshFromSettings();
-            return saved;
-        },
-        /** 单独开启 / 关闭；开启时会关掉剧情推进，返回是否因此关掉了剧情推进。 */
-        setEnabled(enabled) {
-            const snapshot = settings_ACU.decisionRecallSettings;
-            const plotWasEnabled = settings_ACU.plotSettings?.enabled === true;
-            const { plotDisabled } = setDecisionRecallEnabled_ACU(enabled);
-            // 保存失败时连同被互斥关掉的剧情推进一起恢复
-            const saved = persistOrRollback_ACU(snapshot, plotDisabled ? () => setGlobalPlotEnabled_ACU(true) : undefined);
-            this.refreshFromSettings();
-            return { saved, plotDisabled: saved && plotDisabled && plotWasEnabled };
-        },
-        /** OpenRouter 的决策模型列表（公开接口）；硅基流动与 AIHubMix 用内置列表。 */
-        async loadModels() {
-            if (this.settings.provider !== 'openrouter' || this.modelsLoading)
-                return;
-            this.modelsLoading = true;
-            try {
-                this.openrouterModels = await fetchDecisionModels_ACU();
-            }
-            catch (error) {
-                logError_ACU('[ACU-V2] load decision recall models failed', error);
-                useToastStore().warning(`读取决策模型列表失败（${error?.message || '未知错误'}），可稍后重试；当前所选模型不受影响。`);
-            }
-            finally {
-                this.modelsLoading = false;
-            }
-        },
-        setTestInput(value) {
-            this.testInput = String(value ?? '');
-        },
-        /** 用测试输入和当前聊天的前文跑一次完整选取，只显示结果，不写进聊天。 */
-        async runTest() {
-            if (this.testBusy)
-                return;
-            const userInput = this.testInput.trim();
-            if (!userInput) {
-                this.testOutput = '请先填一句模拟的用户输入。';
-                return;
-            }
-            this.testBusy = true;
-            this.testOutput = '正在打分…';
-            try {
-                const result = await runDecisionRecall_ACU({ userInput, settings: this.settings });
-                this.testOutput = formatDecisionRecallTestOutput_ACU(result);
-            }
-            catch (error) {
-                logError_ACU('[ACU-V2] decision recall test failed', error);
-                this.testOutput = `测试失败：${error?.message || error}`;
-            }
-            finally {
-                this.testBusy = false;
-            }
-        },
-    },
-});
-
-/**
- * 功能页入口（剧情推进 / 智能续写 / 交火模式 / 正文替换）的显隐同步。
+ * 功能页入口（剧情推进 / 决策召回 / 智能续写 / 交火模式 / 正文替换）的显隐同步，以及剧情推进入口的灰显。
  * gate 必须读 settings 权威源：开关列表带渲染降级（读失败返回空表），
  * 从它派生会把"读不到"误判成"关了"而隐藏入口。
  */
@@ -205781,6 +205814,8 @@ function syncFeaturePageGates_UB(router, contentReplaceEnabled, plotEnabled) {
     router.syncFeatureGate(FEATURE_GATE_PLOT, plotEnabled);
     router.syncFeatureGate(FEATURE_GATE_CONTINUATION, settings_ACU.continuationPageEnabled !== false);
     router.syncFeatureGate(FEATURE_GATE_VECTOR_INDEX, settings_ACU.summaryVectorIndexModeDefault === true);
+    router.syncFeatureGate(FEATURE_GATE_DECISION_RECALL, normalizeDecisionRecallSettings_ACU(settings_ACU.decisionRecallSettings).enabled);
+    router.syncFeatureGate(FEATURE_FLAG_PLOT_PAUSED, isDecisionRecallStandaloneActive_ACU(settings_ACU.decisionRecallSettings));
 }
 
 var _sfc_main$i = /*@__PURE__*/ defineComponent({
@@ -205868,18 +205903,12 @@ var _sfc_main$i = /*@__PURE__*/ defineComponent({
                 await toggleFlightMode(value);
                 return;
             }
-            const plotWasOn = settings_ACU.plotSettings?.enabled === true;
-            const recallWasOn = settings_ACU.decisionRecallSettings?.enabled === true;
             dashboard.setToggle(key, value);
             if (key === 'plotEnabled' || key === 'decisionRecallEnabled') {
                 plotStore.refreshFromSettings();
                 useDecisionRecallStore().refreshFromSettings();
-                // 单独开启的决策召回与剧情推进互斥：开一个时另一个被关掉要告诉用户
-                if (key === 'decisionRecallEnabled' && value && plotWasOn)
-                    toastStore.info('已关闭剧情推进：单独开启决策召回时与剧情推进互斥。');
-                if (key === 'plotEnabled' && value && recallWasOn)
-                    toastStore.info('已关闭决策召回：开启剧情推进时与单独开启的决策召回互斥。');
             }
+            // 决策召回页的显隐与剧情推进入口的灰显都随这里的开关
             syncGates();
         }
         onMounted(() => void refreshAll());
@@ -205891,15 +205920,15 @@ var _sfc_main$i = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-dash-health[data-v-34b8cb17] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--ub-u) * 340)), 1fr));\r\n  gap: var(--ub-s3);\n}\n.ub-health[data-v-34b8cb17] {\r\n  --ub-health-tone: var(--ub-text-3);\r\n  display: flex;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\r\n  padding: var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  box-shadow: var(--ub-card-shadow);\n}\n.ub-health.is-ok[data-v-34b8cb17] {\r\n  --ub-health-tone: var(--ub-ok);\n}\n.ub-health.is-info[data-v-34b8cb17] {\r\n  --ub-health-tone: var(--ub-accent-ink);\n}\n.ub-health.is-warning[data-v-34b8cb17] {\r\n  --ub-health-tone: var(--ub-warn);\n}\n.ub-health.is-error[data-v-34b8cb17] {\r\n  --ub-health-tone: var(--ub-danger);\r\n  border-color: color-mix(in srgb, var(--ub-danger) 40%, var(--ub-line-soft));\n}\n.ub-health__icon[data-v-34b8cb17] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 36);\r\n  height: calc(var(--ub-u) * 36);\r\n  border-radius: 11px;\r\n  background: color-mix(in srgb, var(--ub-health-tone) 15%, transparent);\r\n  color: var(--ub-health-tone);\n}\n.ub-health__body[data-v-34b8cb17] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-health__head[data-v-34b8cb17] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2);\n}\n.ub-health__title[data-v-34b8cb17] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\n}\n.ub-health__summary[data-v-34b8cb17] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-health__action[data-v-34b8cb17] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  align-self: flex-start;\r\n  margin-top: var(--ub-s1);\r\n  padding: 0;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--ub-accent-ink);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\r\n  cursor: pointer;\n}\n.ub-health__action[data-v-34b8cb17]:hover {\r\n  text-decoration: underline;\n}\r\n", "src/presentation-v3/pages/DashboardPage.vue#style-0-34b8cb17");
-var DashboardPage_vue_vue_type_style_index_0_scoped_34b8cb17_lang = null;
+injectSfcStyle("\n.ub-dash-health[data-v-1ee4f1f2] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--ub-u) * 340)), 1fr));\r\n  gap: var(--ub-s3);\n}\n.ub-health[data-v-1ee4f1f2] {\r\n  --ub-health-tone: var(--ub-text-3);\r\n  display: flex;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\r\n  padding: var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  box-shadow: var(--ub-card-shadow);\n}\n.ub-health.is-ok[data-v-1ee4f1f2] {\r\n  --ub-health-tone: var(--ub-ok);\n}\n.ub-health.is-info[data-v-1ee4f1f2] {\r\n  --ub-health-tone: var(--ub-accent-ink);\n}\n.ub-health.is-warning[data-v-1ee4f1f2] {\r\n  --ub-health-tone: var(--ub-warn);\n}\n.ub-health.is-error[data-v-1ee4f1f2] {\r\n  --ub-health-tone: var(--ub-danger);\r\n  border-color: color-mix(in srgb, var(--ub-danger) 40%, var(--ub-line-soft));\n}\n.ub-health__icon[data-v-1ee4f1f2] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 36);\r\n  height: calc(var(--ub-u) * 36);\r\n  border-radius: 11px;\r\n  background: color-mix(in srgb, var(--ub-health-tone) 15%, transparent);\r\n  color: var(--ub-health-tone);\n}\n.ub-health__body[data-v-1ee4f1f2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-health__head[data-v-1ee4f1f2] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2);\n}\n.ub-health__title[data-v-1ee4f1f2] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\n}\n.ub-health__summary[data-v-1ee4f1f2] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-health__action[data-v-1ee4f1f2] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  align-self: flex-start;\r\n  margin-top: var(--ub-s1);\r\n  padding: 0;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--ub-accent-ink);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\r\n  cursor: pointer;\n}\n.ub-health__action[data-v-1ee4f1f2]:hover {\r\n  text-decoration: underline;\n}\r\n", "src/presentation-v3/pages/DashboardPage.vue#style-0-1ee4f1f2");
+var DashboardPage_vue_vue_type_style_index_0_scoped_1ee4f1f2_lang = null;
 
 const _hoisted_1$f = {
 	class: "ub-dash-health",
 	"aria-label": "运行概览"
 };
-const _hoisted_2$d = ["data-health-key"];
-const _hoisted_3$c = {
+const _hoisted_2$e = ["data-health-key"];
+const _hoisted_3$d = {
 	class: "ub-health__icon",
 	"aria-hidden": "true"
 };
@@ -205919,7 +205948,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 						key: item.key,
 						class: normalizeClass(["ub-health", `is-${item.kind}`]),
 						"data-health-key": item.key
-					}, [createBaseVNode("span", _hoisted_3$c, [createBaseVNode(
+					}, [createBaseVNode("span", _hoisted_3$d, [createBaseVNode(
 						"i",
 						{ class: normalizeClass(item.iconClass) },
 						null,
@@ -205966,7 +205995,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 							-1
 							/* CACHED */
 						))], 8, _hoisted_8$5)) : createCommentVNode("v-if", true)
-					])], 10, _hoisted_2$d);
+					])], 10, _hoisted_2$e);
 				}),
 				128
 				/* KEYED_FRAGMENT */
@@ -206047,7 +206076,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["lead"]);
 }
-var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$h], ["__scopeId", "data-v-34b8cb17"]]);
+var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$h], ["__scopeId", "data-v-1ee4f1f2"]]);
 
 /**
  * service/worldbook/worldbook-cleanup.ts — 世界书条目清理（service 层：纯业务逻辑）
@@ -207560,8 +207589,8 @@ const _hoisted_1$e = {
 	key: 0,
 	class: "ub-dormant__notes"
 };
-const _hoisted_2$c = { class: "ub-dormant__issues" };
-const _hoisted_3$b = {
+const _hoisted_2$d = { class: "ub-dormant__issues" };
+const _hoisted_3$c = {
 	key: 1,
 	class: "ub-dormant__empty"
 };
@@ -207611,7 +207640,7 @@ function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 					" 休眠完整性自检发现 " + toDisplayString($setup.dormant.integrityIssues.value.length) + " 项问题： ",
 					1
 					/* TEXT */
-				), createBaseVNode("ul", _hoisted_2$c, [(openBlock(true), createElementBlock(
+				), createBaseVNode("ul", _hoisted_2$d, [(openBlock(true), createElementBlock(
 					Fragment,
 					null,
 					renderList($setup.dormant.integrityIssues.value, (issue) => {
@@ -207628,7 +207657,7 @@ function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 				))])]),
 				_: 1
 			})) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true),
-			$setup.dormant.loaded.value && !$setup.dormant.listError.value && $setup.dormant.isEmpty.value ? (openBlock(), createElementBlock("p", _hoisted_3$b, [..._cache[1] || (_cache[1] = [createBaseVNode(
+			$setup.dormant.loaded.value && !$setup.dormant.listError.value && $setup.dormant.isEmpty.value ? (openBlock(), createElementBlock("p", _hoisted_3$c, [..._cache[1] || (_cache[1] = [createBaseVNode(
 				"i",
 				{
 					class: "fa-regular fa-face-smile",
@@ -207994,8 +208023,8 @@ injectSfcStyle("\n.ub-dm__text[data-v-847ff87c] {\n  color: var(--ub-text-2);\n 
 var DataMgmtPage_vue_vue_type_style_index_0_scoped_847ff87c_lang = null;
 
 const _hoisted_1$d = { class: "ub-dm__text" };
-const _hoisted_2$b = { class: "ub-dm__buttons" };
-const _hoisted_3$a = { class: "ub-dm__text" };
+const _hoisted_2$c = { class: "ub-dm__buttons" };
+const _hoisted_3$b = { class: "ub-dm__text" };
 const _hoisted_4$9 = { class: "ub-dm__buttons" };
 const _hoisted_5$7 = {
 	key: 0,
@@ -208146,7 +208175,7 @@ function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
 						-1
 						/* CACHED */
 					))
-				]), createBaseVNode("div", _hoisted_2$b, [
+				]), createBaseVNode("div", _hoisted_2$c, [
 					createVNode($setup["UbButton"], {
 						disabled: $setup.busy,
 						busy: $setup.flow.busyAction.value === "export-mixed-storage-snapshots",
@@ -208201,7 +208230,7 @@ function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
 			}, {
 				default: withCtx(() => [createBaseVNode(
 					"p",
-					_hoisted_3$a,
+					_hoisted_3$b,
 					toDisplayString($setup.flow.v2RecoverySummary.value.message) + " 恢复只使用服务端冻结候选，不会从页面读取或提交可编辑表格数据。",
 					1
 					/* TEXT */
@@ -208427,11 +208456,10 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
     setup(__props, { expose: __expose }) {
         __expose();
         const store = useDecisionRecallStore();
-        const plotStore = usePlotPresetStore();
         const routerStore = useRouterStore();
         const toastStore = useToastStore();
         const sections = [
-            { id: 'dr-mode', label: '使用方式' },
+            { id: 'dr-mode', label: '用法' },
             { id: 'dr-model', label: '决策模型' },
             { id: 'dr-rule', label: '召回规则' },
             { id: 'dr-directive', label: '注入指令' },
@@ -208444,9 +208472,16 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         const codesPlaceholder = DECISION_RECALL_CODES_PLACEHOLDER_ACU;
         const ruleDescription = `每组 ${DECISION_RECALL_BATCH_SIZE_ACU} 条纪要发一次请求、最多同时 ${DECISION_RECALL_CONCURRENCY_ACU} 组；`
             + '参考最近两楼 AI 回复和用户最新输入，不带世界书；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。';
-        const enableHint = computed(() => (plotStore.enabled
-            ? '与剧情推进互斥：开启后会关闭剧情推进。'
-            : '与剧情推进互斥：开启后，剧情推进的开关会被关闭；之后再开剧情推进会关闭这里。'));
+        const modeOptions = [
+            { value: 'standalone', label: '单独召回' },
+            { value: 'plot_task', label: '替换剧情推进的任务' },
+        ];
+        const modeHint = computed(() => (store.settings.mode === 'standalone'
+            ? '发送前由决策召回挑选纪要写进本轮输入，剧情推进暂停（剧情推进页灰掉，它自己的开关不变）。'
+            : '剧情推进照常运行；多任务预设里「标签摘取」恰好是 recall 的任务，在剧情推进的任务编辑里打开「改由决策召回执行」后由这里执行。'));
+        const noReplacedTaskText = computed(() => (store.plotTaskStatus.eligibleTaskNames.length
+            ? `当前预设里可以替换的任务：${store.plotTaskStatus.eligibleTaskNames.join('、')}。到剧情推进页编辑预设，在任务里打开「改由决策召回执行」。`
+            : '当前预设里没有「标签摘取」恰好是 recall 的任务。到剧情推进页编辑预设，把召回任务的标签设为 recall 后再打开「改由决策召回执行」。'));
         const providerOptions = Object.keys(DECISION_RECALL_PROVIDER_LABELS_ACU)
             .map(value => ({ value, label: DECISION_RECALL_PROVIDER_LABELS_ACU[value] }));
         const PROVIDER_VIEW_ACU = {
@@ -208509,13 +208544,12 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
             store.patch({ [key]: value });
             inputKey.value += 1;
         }
-        function setEnabled(value) {
-            const { saved, plotDisabled } = store.setEnabled(value);
-            plotStore.refreshFromSettings();
-            // 剧情推进被互斥关掉时，侧栏的剧情推进入口要跟着收起
+        function setMode(value) {
+            if (!store.patch({ mode: value }))
+                return;
+            // 剧情推进入口随用法灰显 / 恢复
             routerStore.syncFeatureGatesFromSettings();
-            if (saved && plotDisabled)
-                toastStore.info('已关闭剧情推进：单独开启决策召回时与剧情推进互斥。');
+            toastStore.info(value === 'standalone' ? '已改为单独召回：剧情推进暂停。' : '已改为替换剧情推进的任务：剧情推进恢复运行。');
         }
         const directiveDraft = ref(store.settings.directive);
         const directiveDirty = computed(() => directiveDraft.value !== store.settings.directive);
@@ -208529,7 +208563,6 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         }
         function refresh() {
             store.refreshFromSettings();
-            plotStore.refreshFromSettings();
             directiveDraft.value = store.settings.directive;
         }
         onMounted(() => {
@@ -208538,18 +208571,18 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 void store.loadModels();
         });
         watchChatChanged_ACU(() => refresh());
-        const __returned__ = { store, plotStore, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, codesPlaceholder, ruleDescription, enableHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, scoringOptions, setProvider, setKey, setModel, inputKey, setNumber, setEnabled, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbSwitch, UbTextarea };
+        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, codesPlaceholder, ruleDescription, modeOptions, modeHint, noReplacedTaskText, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, scoringOptions, setProvider, setKey, setModel, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-dr__picker[data-v-3df2bd5d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-3df2bd5d] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-3df2bd5d] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-3df2bd5d] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-3df2bd5d");
-var DecisionRecallPage_vue_vue_type_style_index_0_scoped_3df2bd5d_lang = null;
+injectSfcStyle("\n.ub-dr__picker[data-v-d14153b1] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-d14153b1] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-d14153b1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-d14153b1] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-d14153b1");
+var DecisionRecallPage_vue_vue_type_style_index_0_scoped_d14153b1_lang = null;
 
 const _hoisted_1$c = { class: "ub-dr__picker" };
-const _hoisted_2$a = { class: "ub-dr__meta" };
-const _hoisted_3$9 = { class: "ub-dr__actions" };
+const _hoisted_2$b = { class: "ub-dr__meta" };
+const _hoisted_3$a = { class: "ub-dr__actions" };
 const _hoisted_4$8 = { class: "ub-dr__actions" };
 const _hoisted_5$6 = {
 	key: 0,
@@ -208563,28 +208596,68 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 		default: withCtx(() => [
 			createVNode($setup["UbSection"], {
 				id: "dr-mode",
-				title: "使用方式",
-				description: "两种用法共用下面的模型与召回设置。",
+				title: "用法",
+				description: "总开关在仪表盘的进阶开关里；两种用法共用下面的模型与召回设置。",
 				icon: "fa-solid fa-toggle-on"
 			}, {
 				default: withCtx(() => [createVNode($setup["UbRow"], {
-					label: "单独开启",
-					hint: $setup.enableHint
+					label: "用法",
+					hint: $setup.modeHint
 				}, {
-					default: withCtx(() => [createVNode($setup["UbSwitch"], {
-						"model-value": $setup.store.settings.enabled,
-						"aria-label": "单独开启决策召回",
-						"onUpdate:modelValue": $setup.setEnabled
+					default: withCtx(() => [createVNode($setup["UbSegmented"], {
+						options: $setup.modeOptions,
+						"model-value": $setup.store.settings.mode,
+						"aria-label": "决策召回用法",
+						"onUpdate:modelValue": $setup.setMode
 					}, null, 8, ["model-value"])]),
 					_: 1
-				}, 8, ["hint"]), createVNode($setup["UbCallout"], { kind: "info" }, {
-					default: withCtx(() => [..._cache[4] || (_cache[4] = [createTextVNode(
-						" 也可以不单独开启：在剧情推进的多任务预设里，把「标签摘取」恰好是 recall 的任务设为「改由决策召回执行」，其余任务照常由模型执行。 ",
-						-1
-						/* CACHED */
-					)])]),
-					_: 1
-				})]),
+				}, 8, ["hint"]), $setup.store.settings.mode === "plot_task" ? (openBlock(), createElementBlock(
+					Fragment,
+					{ key: 0 },
+					[!$setup.store.plotTaskStatus.plotEnabled ? (openBlock(), createBlock($setup["UbCallout"], {
+						key: 0,
+						kind: "warning"
+					}, {
+						default: withCtx(() => [..._cache[4] || (_cache[4] = [createTextVNode(
+							"剧情推进当前关着：在仪表盘打开剧情推进后，替换的任务才会运行。",
+							-1
+							/* CACHED */
+						)])]),
+						_: 1
+					})) : $setup.store.plotTaskStatus.taskCount < 2 ? (openBlock(), createBlock($setup["UbCallout"], {
+						key: 1,
+						kind: "warning"
+					}, {
+						default: withCtx(() => [..._cache[5] || (_cache[5] = [createTextVNode(
+							" 当前剧情推进预设只有一个任务，替换不了：请换成有多个任务的预设，或改用「单独召回」。 ",
+							-1
+							/* CACHED */
+						)])]),
+						_: 1
+					})) : $setup.store.plotTaskStatus.replacedTaskNames.length ? (openBlock(), createBlock($setup["UbCallout"], {
+						key: 2,
+						kind: "success"
+					}, {
+						default: withCtx(() => [createTextVNode(
+							" 当前预设里由决策召回执行的任务：" + toDisplayString($setup.store.plotTaskStatus.replacedTaskNames.join("、")) + "。 ",
+							1
+							/* TEXT */
+						)]),
+						_: 1
+					})) : (openBlock(), createBlock($setup["UbCallout"], {
+						key: 3,
+						kind: "info"
+					}, {
+						default: withCtx(() => [createTextVNode(
+							toDisplayString($setup.noReplacedTaskText),
+							1
+							/* TEXT */
+						)]),
+						_: 1
+					}))],
+					64
+					/* STABLE_FRAGMENT */
+				)) : createCommentVNode("v-if", true)]),
 				_: 1
 			}),
 			createVNode($setup["UbSection"], {
@@ -208715,7 +208788,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 			createVNode($setup["UbSection"], {
 				id: "dr-directive",
 				title: "注入指令",
-				description: "只用于单独开启：选中的编码写进本轮输入时用这段文字包裹。替换剧情推进任务时用预设自己的最终注入指令。",
+				description: "只用于单独召回：选中的编码写进本轮输入时用这段文字包裹。替换剧情推进任务时用预设自己的最终注入指令。",
 				icon: "fa-solid fa-quote-left",
 				padded: ""
 			}, {
@@ -208723,7 +208796,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 					key: 0,
 					variant: "accent"
 				}, {
-					default: withCtx(() => [..._cache[5] || (_cache[5] = [createTextVNode(
+					default: withCtx(() => [..._cache[6] || (_cache[6] = [createTextVNode(
 						"未保存",
 						-1
 						/* CACHED */
@@ -208742,17 +208815,17 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 					}, null, 8, ["model-value"]),
 					createBaseVNode(
 						"p",
-						_hoisted_2$a,
+						_hoisted_2$b,
 						"$8 换成用户本轮输入；" + toDisplayString($setup.codesPlaceholder) + " 换成召回编码块（没写就追加在末尾）。",
 						1
 						/* TEXT */
 					),
-					createBaseVNode("div", _hoisted_3$9, [createVNode($setup["UbButton"], {
+					createBaseVNode("div", _hoisted_3$a, [createVNode($setup["UbButton"], {
 						size: "sm",
 						icon: "fa-solid fa-rotate-left",
 						onClick: $setup.resetDirective
 					}, {
-						default: withCtx(() => [..._cache[6] || (_cache[6] = [createTextVNode(
+						default: withCtx(() => [..._cache[7] || (_cache[7] = [createTextVNode(
 							"恢复默认",
 							-1
 							/* CACHED */
@@ -208765,7 +208838,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.directiveDirty,
 						onClick: $setup.saveDirective
 					}, {
-						default: withCtx(() => [..._cache[7] || (_cache[7] = [createTextVNode(
+						default: withCtx(() => [..._cache[8] || (_cache[8] = [createTextVNode(
 							"保存指令",
 							-1
 							/* CACHED */
@@ -208796,7 +208869,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						busy: $setup.store.testBusy,
 						onClick: $setup.store.runTest
 					}, {
-						default: withCtx(() => [..._cache[8] || (_cache[8] = [createTextVNode(
+						default: withCtx(() => [..._cache[9] || (_cache[9] = [createTextVNode(
 							"测试召回",
 							-1
 							/* CACHED */
@@ -208817,7 +208890,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-3df2bd5d"]]);
+var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-d14153b1"]]);
 
 const developerCopy = {
     panels: {
@@ -209627,11 +209700,11 @@ injectSfcStyle("\n.ub-tpick[data-v-2e8b677d] {\r\n  display: flex;\r\n  flex-dir
 var TablePicker_vue_vue_type_style_index_0_scoped_2e8b677d_lang = null;
 
 const _hoisted_1$b = { class: "ub-tpick" };
-const _hoisted_2$9 = {
+const _hoisted_2$a = {
 	key: 0,
 	class: "ub-tpick__empty"
 };
-const _hoisted_3$8 = { class: "ub-tpick__bar" };
+const _hoisted_3$9 = { class: "ub-tpick__bar" };
 const _hoisted_4$7 = { class: "ub-tpick__count" };
 const _hoisted_5$5 = {
 	key: 0,
@@ -209646,7 +209719,7 @@ const _hoisted_7$4 = [
 function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$b, [!$props.sheetKeys.length ? (openBlock(), createElementBlock(
 		"p",
-		_hoisted_2$9,
+		_hoisted_2$a,
 		toDisplayString($props.emptyText || "尚无可选表格。"),
 		1
 		/* TEXT */
@@ -209654,7 +209727,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 		Fragment,
 		{ key: 1 },
 		[
-			createBaseVNode("div", _hoisted_3$8, [
+			createBaseVNode("div", _hoisted_3$9, [
 				createBaseVNode("span", _hoisted_4$7, [
 					_cache[2] || (_cache[2] = createTextVNode(
 						"已选 ",
@@ -209778,8 +209851,8 @@ const _hoisted_1$a = {
 	class: "ub-ff-facts",
 	"aria-label": "表格状态概览"
 };
-const _hoisted_2$8 = { class: "ub-ff-fact ub-ff-fact--wide" };
-const _hoisted_3$7 = ["title"];
+const _hoisted_2$9 = { class: "ub-ff-fact ub-ff-fact--wide" };
+const _hoisted_3$8 = ["title"];
 const _hoisted_4$6 = { class: "ub-ff-fact" };
 const _hoisted_5$4 = { class: "ub-ff-fact" };
 const _hoisted_6$3 = { class: "ub-ff-notes" };
@@ -209826,13 +209899,13 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 			}, {
 				default: withCtx(() => [
 					createBaseVNode("div", _hoisted_1$a, [
-						createBaseVNode("div", _hoisted_2$8, [_cache[4] || (_cache[4] = createBaseVNode(
+						createBaseVNode("div", _hoisted_2$9, [_cache[4] || (_cache[4] = createBaseVNode(
 							"span",
 							null,
 							"当前聊天",
 							-1
 							/* CACHED */
-						)), createBaseVNode("strong", { title: $setup.dashboard.chatFileIdentifier.value || "未初始化" }, toDisplayString($setup.dashboard.chatFileIdentifier.value || "未初始化"), 9, _hoisted_3$7)]),
+						)), createBaseVNode("strong", { title: $setup.dashboard.chatFileIdentifier.value || "未初始化" }, toDisplayString($setup.dashboard.chatFileIdentifier.value || "未初始化"), 9, _hoisted_3$8)]),
 						createBaseVNode("div", _hoisted_4$6, [_cache[5] || (_cache[5] = createBaseVNode(
 							"span",
 							null,
@@ -210408,6 +210481,12 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
     setup(__props, { expose: __expose }) {
         __expose();
         const plotPresetStore = usePlotPresetStore();
+        const routerStore = useRouterStore();
+        const decisionRecallStore = useDecisionRecallStore();
+        /** 决策召回「单独召回」生效中：剧情推进暂停，整页灰掉不可编辑。 */
+        const paused = computed(() => routerStore.featureGates[FEATURE_FLAG_PLOT_PAUSED] === true);
+        /** 「替换剧情推进的任务」生效中：提醒这里选的世界书不用于由决策召回执行的任务。 */
+        const decisionRecallTaskMode = computed(() => decisionRecallStore.taskModeActive);
         const worldbook = useWorldbookSelector();
         const plotWorldbook = usePlotWorldbookConfig();
         const wbEntries = usePlotWorldbookEntries();
@@ -210460,26 +210539,54 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
         }
         async function refreshAll() {
             plotPresetStore.refreshFromSettings();
+            decisionRecallStore.refreshFromSettings();
             plotWorldbook.refreshFromSettings();
             await worldbook.refresh();
             await refreshWorldbookEntries();
         }
         onMounted(() => void refreshAll());
         watchChatChanged_ACU(() => void refreshAll());
-        const __returned__ = { plotPresetStore, worldbook, plotWorldbook, wbEntries, entryFilter, entryEmptyText, sections, currentWorldbookLabel, resolveEntryEmptyText, get entriesRefreshSeq() { return entriesRefreshSeq; }, set entriesRefreshSeq(v) { entriesRefreshSeq = v; }, refreshWorldbookEntries, onWorldbookSourceChange, onManualWorldbookToggle, refreshAll, get plotCopy() { return plotCopy; }, PlotPresetSection, WorldbookEntries, WorldbookSourcePicker, UbPage, UbRow, UbSection, UbSwitch };
+        const __returned__ = { plotPresetStore, routerStore, decisionRecallStore, paused, decisionRecallTaskMode, worldbook, plotWorldbook, wbEntries, entryFilter, entryEmptyText, sections, currentWorldbookLabel, resolveEntryEmptyText, get entriesRefreshSeq() { return entriesRefreshSeq; }, set entriesRefreshSeq(v) { entriesRefreshSeq = v; }, refreshWorldbookEntries, onWorldbookSourceChange, onManualWorldbookToggle, refreshAll, get plotCopy() { return plotCopy; }, PlotPresetSection, WorldbookEntries, WorldbookSourcePicker, UbButton, UbCallout, UbPage, UbRow, UbSection, UbSwitch };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-plot__current[data-v-273ced2e] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-plot__current strong[data-v-273ced2e] {\r\n  color: var(--ub-text);\n}\r\n", "src/presentation-v3/pages/PlotPage.vue#style-0-273ced2e");
-var PlotPage_vue_vue_type_style_index_0_scoped_273ced2e_lang = null;
+injectSfcStyle("\n.ub-plot__body[data-v-4d00d0ae] {\r\n  display: contents;\n}\n.ub-plot__body.is-paused[data-v-4d00d0ae] {\r\n  display: block;\r\n  opacity: 0.45;\r\n  filter: grayscale(1);\r\n  pointer-events: none;\r\n  user-select: none;\n}\n.ub-plot__current[data-v-4d00d0ae] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-plot__current strong[data-v-4d00d0ae] {\r\n  color: var(--ub-text);\n}\r\n", "src/presentation-v3/pages/PlotPage.vue#style-0-4d00d0ae");
+var PlotPage_vue_vue_type_style_index_0_scoped_4d00d0ae_lang = null;
 
-const _hoisted_1$9 = { class: "ub-plot__current" };
+const _hoisted_1$9 = ["inert"];
+const _hoisted_2$8 = ["inert"];
+const _hoisted_3$7 = { class: "ub-plot__current" };
 function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], { sections: $setup.sections }, {
 		default: withCtx(() => [
-			createVNode($setup["PlotPresetSection"], { id: "plot-preset" }),
+			$setup.paused ? (openBlock(), createBlock($setup["UbCallout"], {
+				key: 0,
+				kind: "warning"
+			}, {
+				default: withCtx(() => [_cache[9] || (_cache[9] = createTextVNode(
+					" 决策召回正在「单独召回」，剧情推进已暂停：发送前由决策召回挑选纪要，这一页的设置暂不生效。 到决策召回页把用法换成「替换剧情推进的任务」，或在仪表盘关掉决策召回，即可恢复。 ",
+					-1
+					/* CACHED */
+				)), createVNode($setup["UbButton"], {
+					size: "sm",
+					icon: "fa-solid fa-ranking-star",
+					onClick: _cache[0] || (_cache[0] = ($event) => $setup.routerStore.setActivePage("decision-recall"))
+				}, {
+					default: withCtx(() => [..._cache[8] || (_cache[8] = [createTextVNode(
+						"去决策召回页",
+						-1
+						/* CACHED */
+					)])]),
+					_: 1
+				})]),
+				_: 1
+			})) : createCommentVNode("v-if", true),
+			createBaseVNode("div", {
+				class: normalizeClass(["ub-plot__body", { "is-paused": $setup.paused }]),
+				inert: $setup.paused || undefined
+			}, [createVNode($setup["PlotPresetSection"], { id: "plot-preset" })], 10, _hoisted_1$9),
 			createVNode($setup["UbSection"], {
 				id: "plot-experience",
 				title: "发送体验",
@@ -210488,18 +210595,21 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 			}, {
 				default: withCtx(() => [createVNode($setup["UbRow"], {
 					label: "伪装发送楼层",
-					hint: "开启后，剧情推进与纪要召回等待期间在聊天区显示伪装的用户楼层与“思考中”楼层，并拦截重复发送；关闭则消息停在输入框直到规划完成。"
+					hint: "开启后，剧情推进、纪要召回与决策召回等待期间在聊天区显示伪装的用户楼层与“思考中”楼层，并拦截重复发送；关闭则消息停在输入框直到规划完成。剧情推进暂停时这一项照样生效。"
 				}, {
 					default: withCtx(() => [createVNode($setup["UbSwitch"], {
 						"model-value": $setup.plotPresetStore.pendingDisguiseEnabled,
 						"aria-label": "等待期间显示伪装发送楼层",
-						"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.plotPresetStore.setPendingDisguiseEnabled($event))
+						"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.plotPresetStore.setPendingDisguiseEnabled($event))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				})]),
 				_: 1
 			}),
-			createVNode($setup["UbSection"], {
+			createBaseVNode("div", {
+				class: normalizeClass(["ub-plot__body", { "is-paused": $setup.paused }]),
+				inert: $setup.paused || undefined
+			}, [createVNode($setup["UbSection"], {
 				id: "plot-worldbook",
 				title: $setup.plotCopy.panels.worldbook.title,
 				description: $setup.plotCopy.panels.worldbook.description,
@@ -210507,13 +210617,24 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 				padded: ""
 			}, {
 				default: withCtx(() => [
+					$setup.decisionRecallTaskMode ? (openBlock(), createBlock($setup["UbCallout"], {
+						key: 0,
+						kind: "info"
+					}, {
+						default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
+							"由决策召回执行的任务不读这里选的世界书，只从纪要表里挑选；其余任务照常使用。",
+							-1
+							/* CACHED */
+						)])]),
+						_: 1
+					})) : createCommentVNode("v-if", true),
 					createVNode($setup["WorldbookSourcePicker"], {
 						source: $setup.plotWorldbook.source.value,
 						"selected-names": $setup.plotWorldbook.manualSelection.value,
 						names: $setup.worldbook.names.value,
 						status: $setup.worldbook.status.value,
 						error: $setup.worldbook.error.value,
-						"onUpdate:source": _cache[1] || (_cache[1] = ($event) => $setup.onWorldbookSourceChange($event)),
+						"onUpdate:source": _cache[2] || (_cache[2] = ($event) => $setup.onWorldbookSourceChange($event)),
 						onToggleBook: $setup.onManualWorldbookToggle
 					}, null, 8, [
 						"source",
@@ -210522,7 +210643,7 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 						"status",
 						"error"
 					]),
-					createBaseVNode("p", _hoisted_1$9, [_cache[7] || (_cache[7] = createTextVNode(
+					createBaseVNode("p", _hoisted_3$7, [_cache[11] || (_cache[11] = createTextVNode(
 						"目前已选：",
 						-1
 						/* CACHED */
@@ -210541,11 +210662,11 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 						status: $setup.wbEntries.status.value,
 						error: $setup.wbEntries.error.value,
 						"empty-text": $setup.entryEmptyText,
-						"onUpdate:filter": _cache[2] || (_cache[2] = ($event) => $setup.entryFilter = $event),
-						onSelectAll: _cache[3] || (_cache[3] = ($event) => $setup.wbEntries.selectAll($event)),
-						onDeselectAll: _cache[4] || (_cache[4] = ($event) => $setup.wbEntries.deselectAll($event)),
-						onToggle: _cache[5] || (_cache[5] = (bookName, uid, checked) => $setup.wbEntries.toggleEntry(bookName, uid, checked)),
-						onToggleGroup: _cache[6] || (_cache[6] = ($event) => $setup.wbEntries.toggleGroupExpanded($event))
+						"onUpdate:filter": _cache[3] || (_cache[3] = ($event) => $setup.entryFilter = $event),
+						onSelectAll: _cache[4] || (_cache[4] = ($event) => $setup.wbEntries.selectAll($event)),
+						onDeselectAll: _cache[5] || (_cache[5] = ($event) => $setup.wbEntries.deselectAll($event)),
+						onToggle: _cache[6] || (_cache[6] = (bookName, uid, checked) => $setup.wbEntries.toggleEntry(bookName, uid, checked)),
+						onToggleGroup: _cache[7] || (_cache[7] = ($event) => $setup.wbEntries.toggleGroupExpanded($event))
 					}, null, 8, [
 						"groups",
 						"filter",
@@ -210556,12 +210677,12 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 					])
 				]),
 				_: 1
-			}, 8, ["title", "description"])
+			}, 8, ["title", "description"])], 10, _hoisted_2$8)
 		]),
 		_: 1
 	});
 }
-var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$a], ["__scopeId", "data-v-273ced2e"]]);
+var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$a], ["__scopeId", "data-v-4d00d0ae"]]);
 
 /**
  * useFormFillInjectionTarget — 填表"注入目标世界书"（Component A，§4.2）
@@ -213237,20 +213358,29 @@ var _sfc_main$5 = /*@__PURE__*/ defineComponent({
         function blurbOf(id) {
             return ubPageEntry(id)?.blurb ?? '';
         }
+        /** 灰显的入口照样能点进去（页内会说明为什么暂停）。 */
+        function isDimmed(page) {
+            return Boolean(page.dimmedByGate && router.featureGates[page.dimmedByGate]);
+        }
+        function navTitle(page) {
+            if (isDimmed(page))
+                return `${page.title}（${page.dimmedHint || '已暂停'}）`;
+            return props.iconOnly ? page.title : undefined;
+        }
         async function go(id) {
             if (id !== router.activePageId && !(await canLeaveCurrentPage()))
                 return;
             router.setActivePage(id);
             emit('navigate', id);
         }
-        const __returned__ = { props, emit, router, uiMode, showGroupTitles, iconOf, blurbOf, go };
+        const __returned__ = { props, emit, router, uiMode, showGroupTitles, iconOf, blurbOf, isDimmed, navTitle, go };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-nav[data-v-851cb600] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s4);\n}\n.ub-nav__group-title.is-collapsed[data-v-851cb600] {\r\n  display: none;\n}\n.ub-nav__group-title[data-v-851cb600] {\r\n  margin: 0 var(--ub-s3) var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\r\n  letter-spacing: 0.08em;\n}\n.ub-nav__items[data-v-851cb600] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\n}\n.ub-nav__item[data-v-851cb600] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  width: 100%;\r\n  min-height: calc(var(--ub-u) * 38);\r\n  padding: var(--ub-s1) var(--ub-s3);\r\n  border: 0;\r\n  border-radius: var(--ub-r-control);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.14s ease, color 0.14s ease;\n}\n.ub-nav__item[data-v-851cb600]:hover:not(.is-active) {\r\n  background: var(--ub-hover);\r\n  color: var(--ub-text);\n}\n.ub-nav__item.is-active[data-v-851cb600] {\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-nav__icon[data-v-851cb600] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 20);\r\n  font-size: var(--ub-fs-sm);\r\n  opacity: 0.9;\n}\n.ub-nav__text[data-v-851cb600] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\n}\n.ub-nav__title[data-v-851cb600] {\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\r\n\r\n/* 平铺（手机目录）：两列卡片，带一句话说明 */\n.ub-nav--tiles .ub-nav__items[data-v-851cb600] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-nav--tiles .ub-nav__item[data-v-851cb600] {\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s2);\r\n  min-height: calc(var(--ub-u) * 96);\r\n  padding: var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\n}\n.ub-nav--tiles .ub-nav__item.is-active[data-v-851cb600] {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\n}\n.ub-nav--tiles .ub-nav__icon[data-v-851cb600] {\r\n  width: calc(var(--ub-u) * 32);\r\n  height: calc(var(--ub-u) * 32);\r\n  border-radius: 10px;\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-nav--tiles .ub-nav__title[data-v-851cb600] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  white-space: normal;\n}\n.ub-nav--tiles .ub-nav__blurb[data-v-851cb600] {\r\n  display: -webkit-box;\r\n  margin-top: 2px;\r\n  overflow: hidden;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 500;\r\n  line-height: 1.45;\r\n  -webkit-line-clamp: 2;\r\n  -webkit-box-orient: vertical;\n}\r\n", "src/presentation-v3/shell/NavList.vue#style-0-851cb600");
-var NavList_vue_vue_type_style_index_0_scoped_851cb600_lang = null;
+injectSfcStyle("\n.ub-nav[data-v-4c829bcf] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s4);\n}\n.ub-nav__group-title.is-collapsed[data-v-4c829bcf] {\r\n  display: none;\n}\n.ub-nav__group-title[data-v-4c829bcf] {\r\n  margin: 0 var(--ub-s3) var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\r\n  letter-spacing: 0.08em;\n}\n.ub-nav__items[data-v-4c829bcf] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\n}\n.ub-nav__item[data-v-4c829bcf] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  width: 100%;\r\n  min-height: calc(var(--ub-u) * 38);\r\n  padding: var(--ub-s1) var(--ub-s3);\r\n  border: 0;\r\n  border-radius: var(--ub-r-control);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.14s ease, color 0.14s ease;\n}\n.ub-nav__item[data-v-4c829bcf]:hover:not(.is-active) {\r\n  background: var(--ub-hover);\r\n  color: var(--ub-text);\n}\n.ub-nav__item.is-active[data-v-4c829bcf] {\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-nav__icon[data-v-4c829bcf] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 20);\r\n  font-size: var(--ub-fs-sm);\r\n  opacity: 0.9;\n}\n.ub-nav__text[data-v-4c829bcf] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\n}\n.ub-nav__title[data-v-4c829bcf] {\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\r\n\r\n/* 平铺（手机目录）：两列卡片，带一句话说明 */\n.ub-nav--tiles .ub-nav__items[data-v-4c829bcf] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-nav--tiles .ub-nav__item[data-v-4c829bcf] {\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s2);\r\n  min-height: calc(var(--ub-u) * 96);\r\n  padding: var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\n}\n.ub-nav--tiles .ub-nav__item.is-active[data-v-4c829bcf] {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\n}\n.ub-nav--tiles .ub-nav__icon[data-v-4c829bcf] {\r\n  width: calc(var(--ub-u) * 32);\r\n  height: calc(var(--ub-u) * 32);\r\n  border-radius: 10px;\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-nav--tiles .ub-nav__title[data-v-4c829bcf] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  white-space: normal;\n}\n.ub-nav--tiles .ub-nav__blurb[data-v-4c829bcf] {\r\n  display: -webkit-box;\r\n  margin-top: 2px;\r\n  overflow: hidden;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 500;\r\n  line-height: 1.45;\r\n  -webkit-line-clamp: 2;\r\n  -webkit-box-orient: vertical;\n}\n.ub-nav__item.is-dimmed[data-v-4c829bcf]:not(.is-active) {\r\n  opacity: 0.45;\n}\r\n", "src/presentation-v3/shell/NavList.vue#style-0-4c829bcf");
+var NavList_vue_vue_type_style_index_0_scoped_4c829bcf_lang = null;
 
 const _hoisted_1$4 = {
 	key: 0,
@@ -213302,10 +213432,13 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 								return openBlock(), createElementBlock("button", {
 									key: page.id,
 									type: "button",
-									class: normalizeClass(["ub-nav__item", { "is-active": page.id === $setup.router.activePageId }]),
+									class: normalizeClass(["ub-nav__item", {
+										"is-active": page.id === $setup.router.activePageId,
+										"is-dimmed": $setup.isDimmed(page)
+									}]),
 									"aria-current": page.id === $setup.router.activePageId ? "page" : undefined,
 									"data-page-id": page.id,
-									title: $props.iconOnly ? page.title : undefined,
+									title: $setup.navTitle(page),
 									onClick: ($event) => $setup.go(page.id)
 								}, [createBaseVNode("span", _hoisted_5$2, [createBaseVNode(
 									"i",
@@ -213342,7 +213475,7 @@ function _sfc_render$4(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var NavList = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$4], ["__scopeId", "data-v-851cb600"]]);
+var NavList = /* @__PURE__ */ _export_sfc(_sfc_main$5, [["render", _sfc_render$4], ["__scopeId", "data-v-4c829bcf"]]);
 
 injectSfcStyle("\n.ub-brand__mark[data-v-77aa8dab] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 36);\r\n  height: calc(var(--ub-u) * 36);\r\n  border-radius: 11px;\r\n  background: #1b2340;\n}\n.ub-mark[data-v-77aa8dab] {\r\n  display: block;\r\n  width: 78%;\r\n  height: 78%;\r\n  overflow: visible;\n}\n.ub-mark__line[data-v-77aa8dab],\r\n.ub-mark__orbit[data-v-77aa8dab] {\r\n  fill: none;\r\n  stroke-width: var(--ub-mark-stroke, calc(var(--ub-u) * 1.5));\r\n  vector-effect: non-scaling-stroke;\n}\n.ub-mark__line[data-v-77aa8dab] {\r\n  stroke: var(--ub-mark-line, #dfe6ff);\n}\n.ub-mark__layer[data-v-77aa8dab] {\r\n  stroke-opacity: 0.6;\n}\n.ub-mark__orbit[data-v-77aa8dab] {\r\n  stroke: var(--ub-mark-orbit, #e8c372);\n}\n.ub-mark__planet[data-v-77aa8dab] {\r\n  fill: var(--ub-mark-orbit, #e8c372);\n}\n.ub-mark__star[data-v-77aa8dab] {\r\n  fill: var(--ub-mark-star, #f6f1e2);\n}\r\n", "src/presentation-v3/shell/UbBrandMark.vue#style-0-77aa8dab");
 var UbBrandMark_vue_vue_type_style_index_0_scoped_77aa8dab_lang = null;

@@ -10,10 +10,10 @@
             :key="page.id"
             type="button"
             class="ub-nav__item"
-            :class="{ 'is-active': page.id === router.activePageId }"
+            :class="{ 'is-active': page.id === router.activePageId, 'is-dimmed': isDimmed(page) }"
             :aria-current="page.id === router.activePageId ? 'page' : undefined"
             :data-page-id="page.id"
-            :title="iconOnly ? page.title : undefined"
+            :title="navTitle(page)"
             @click="go(page.id)"
           >
             <span class="ub-nav__icon" aria-hidden="true"><i :class="iconOf(page.id)"></i></span>
@@ -34,6 +34,7 @@ import { canLeaveCurrentPage } from '../../presentation-v2/composables/useUiClos
 import { useRouterStore } from '../../presentation-v2/stores/router-store';
 import { useUiModeStore } from '../../presentation-v2/stores/ui-mode-store';
 import { ubPageEntry } from '../router/page-catalog';
+import type { AcuV2Page } from '../../presentation-v2/router/page-types';
 
 /** iconOnly：侧栏收起时只显示图标，标题改放悬停提示。 */
 const props = withDefaults(defineProps<{ variant?: 'rail' | 'tiles'; iconOnly?: boolean }>(), { variant: 'rail', iconOnly: false });
@@ -49,6 +50,16 @@ function iconOf(id: string): string {
 
 function blurbOf(id: string): string {
   return ubPageEntry(id)?.blurb ?? '';
+}
+
+/** 灰显的入口照样能点进去（页内会说明为什么暂停）。 */
+function isDimmed(page: AcuV2Page): boolean {
+  return Boolean(page.dimmedByGate && router.featureGates[page.dimmedByGate]);
+}
+
+function navTitle(page: AcuV2Page): string | undefined {
+  if (isDimmed(page)) return `${page.title}（${page.dimmedHint || '已暂停'}）`;
+  return props.iconOnly ? page.title : undefined;
 }
 
 async function go(id: string): Promise<void> {
@@ -181,5 +192,9 @@ async function go(id: string): Promise<void> {
   line-height: 1.45;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+}
+
+.ub-nav__item.is-dimmed:not(.is-active) {
+  opacity: 0.45;
 }
 </style>

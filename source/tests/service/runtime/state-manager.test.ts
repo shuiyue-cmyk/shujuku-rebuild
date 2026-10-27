@@ -50,6 +50,7 @@ import {
   isQuietLikeGeneration_ACU,
   isRecentUserSend_ACU,
   shouldProcessPlotForGeneration_ACU,
+  shouldProcessDecisionRecallForGeneration_ACU,
   shouldProcessAutoTableUpdateForGenerationEnded_ACU,
   markChatChangedForEndedGate_ACU,
   requestTableFillStop_ACU,
@@ -363,6 +364,30 @@ describe('shouldProcessPlotForGeneration_ACU', () => {
     generationGate_ACU.lastUserMessageAt = 0;
     generationGate_ACU.lastUserSendIntentAt = 0;
     expect(shouldProcessPlotForGeneration_ACU('normal', {}, false)).toBe(false);
+  });
+});
+
+// ═══ shouldProcessDecisionRecallForGeneration_ACU ═══
+describe('shouldProcessDecisionRecallForGeneration_ACU', () => {
+  it('总开关开着且用法是单独召回时才在发送前接管；替换剧情推进的任务时交给剧情推进', () => {
+    mockGetChatArray.mockReturnValue([]);
+    generationGate_ACU.lastUserMessageAt = 0;
+    generationGate_ACU.lastUserSendIntentAt = 0;
+    _set_currentChatFileIdentifier_ACU('chat-a');
+    markStoppedSendForRetry_ACU();
+    try {
+      _set_settings_ACU({ decisionRecallSettings: { enabled: true, mode: 'standalone' } });
+      expect(shouldProcessDecisionRecallForGeneration_ACU('regenerate', {}, false)).toBe(true);
+      // 旧设置没有用法字段：按单独召回
+      _set_settings_ACU({ decisionRecallSettings: { enabled: true } });
+      expect(shouldProcessDecisionRecallForGeneration_ACU('regenerate', {}, false)).toBe(true);
+      _set_settings_ACU({ decisionRecallSettings: { enabled: true, mode: 'plot_task' } });
+      expect(shouldProcessDecisionRecallForGeneration_ACU('regenerate', {}, false)).toBe(false);
+      _set_settings_ACU({ decisionRecallSettings: { enabled: false, mode: 'standalone' } });
+      expect(shouldProcessDecisionRecallForGeneration_ACU('regenerate', {}, false)).toBe(false);
+    } finally {
+      clearStoppedSendRetry_ACU();
+    }
   });
 });
 

@@ -13,7 +13,9 @@ import {
   ACU_V2_DEFAULT_PAGE_ID,
   ACU_V2_PAGE_REGISTRY,
   FEATURE_GATE_CONTENT_REPLACE,
+  FEATURE_FLAG_PLOT_PAUSED,
   FEATURE_GATE_CONTINUATION,
+  FEATURE_GATE_DECISION_RECALL,
   FEATURE_GATE_PLOT,
   FEATURE_GATE_VECTOR_INDEX,
 } from '../router/page-registry';
@@ -23,6 +25,7 @@ import { readSection, writeSection } from './persistence';
 import { settings_ACU } from '../../service/runtime/state-manager';
 import { useUiModeStore } from './ui-mode-store';
 import { setContentReplaceEnabledBySettings, syncContentReplaceAvailability } from './content-replace-gate';
+import { isDecisionRecallStandaloneActive_ACU, normalizeDecisionRecallSettings_ACU } from '../../service/decision-recall/decision-recall-settings';
 
 const SECTION_KEY = 'router';
 const LEGACY_PAGE_ID_ALIASES: Record<string, string> = {
@@ -56,6 +59,8 @@ function readInitialFeatureGates(): Record<string, boolean> {
     [FEATURE_GATE_CONTINUATION]: settings_ACU?.continuationPageEnabled !== false,
     [FEATURE_GATE_PLOT]: settings_ACU?.plotSettings?.enabled === true,
     [FEATURE_GATE_VECTOR_INDEX]: settings_ACU?.summaryVectorIndexModeDefault === true,
+    [FEATURE_GATE_DECISION_RECALL]: normalizeDecisionRecallSettings_ACU(settings_ACU?.decisionRecallSettings).enabled,
+    [FEATURE_FLAG_PLOT_PAUSED]: isDecisionRecallStandaloneActive_ACU(settings_ACU?.decisionRecallSettings),
   };
 }
 
