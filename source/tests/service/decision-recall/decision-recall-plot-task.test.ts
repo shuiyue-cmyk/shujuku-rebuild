@@ -10,6 +10,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => stateMocks);
 import {
   canPlotTaskUseDecisionRecall_ACU,
   isDecisionRecallPlotTask_ACU,
+  runDecisionRecallForPlotTask_ACU,
 } from '../../../src/service/decision-recall/decision-recall-plot-task';
 
 const task = (patch: Record<string, unknown> = {}) => ({ extractTags: 'recall', extractInjectTags: '', ...patch });
@@ -53,5 +54,17 @@ describe('isDecisionRecallPlotTask_ACU', () => {
     expect(isDecisionRecallPlotTask_ACU(task(), 2)).toBe(false);
     stateMocks.settings_ACU.decisionRecallSettings = { enabled: true, replacePlotRecallTasks: true };
     expect(isDecisionRecallPlotTask_ACU(task(), 2)).toBe(false);
+  });
+});
+
+describe('runDecisionRecallForPlotTask_ACU', () => {
+  it('纪要表一条纪要都没有时不发请求，产出空的 recall 块，任务照常完成', async () => {
+    const fetch = vi.fn();
+    const outcome = await runDecisionRecallForPlotTask_ACU(task(), { userInput: '你好' }, {
+      fetch: fetch as any,
+      sources: { loadRows: async () => ({ rows: [], error: '' }), loadChat: () => [], loadCrossfireIndexContent: async () => null },
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ kind: 'done', rawResponse: '<recall>\n\n</recall>', result: { status: 'skipped', reason: 'no_rows' } });
   });
 });
