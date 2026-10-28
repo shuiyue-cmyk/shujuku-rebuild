@@ -94676,7 +94676,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261028-1326"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261028-1332"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -94695,7 +94695,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261028-1326";
+        const stamp = "20261028-1332";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -156339,7 +156339,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261028-1326";
+        const stamp = "20261028-1332";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -178669,7 +178669,7 @@ const _hoisted_2$M = ["aria-label"];
 const _hoisted_3$J = { class: "ub-sheet__head" };
 const _hoisted_4$E = { class: "ub-sheet__titles" };
 const _hoisted_5$x = { class: "ub-sheet__title" };
-const _hoisted_6$s = {
+const _hoisted_6$t = {
 	key: 0,
 	class: "ub-sheet__subtitle"
 };
@@ -178711,7 +178711,7 @@ function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
 				/* TEXT */
 			), $props.subtitle ? (openBlock(), createElementBlock(
 				"p",
-				_hoisted_6$s,
+				_hoisted_6$t,
 				toDisplayString($props.subtitle),
 				1
 				/* TEXT */
@@ -183066,7 +183066,7 @@ const _hoisted_2$J = { class: "ub-segs__list" };
 const _hoisted_3$H = { class: "ub-segs__head" };
 const _hoisted_4$C = { class: "ub-segs__index" };
 const _hoisted_5$w = { class: "ub-segs__role" };
-const _hoisted_6$r = {
+const _hoisted_6$s = {
 	key: 0,
 	class: "ub-segs__slot"
 };
@@ -183121,7 +183121,7 @@ function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
 							"aria-label",
 							"onUpdate:modelValue"
 						])]),
-						$props.showSlot ? (openBlock(), createElementBlock("div", _hoisted_6$r, [createVNode($setup["UbSelect"], {
+						$props.showSlot ? (openBlock(), createElementBlock("div", _hoisted_6$s, [createVNode($setup["UbSelect"], {
 							size: "sm",
 							options: $props.slotOptions,
 							"model-value": seg.mainSlot || "",
@@ -183594,7 +183594,7 @@ const _hoisted_2$G = { class: "ub-vai__intro" };
 const _hoisted_3$E = { class: "ub-vai__controls" };
 const _hoisted_4$A = { class: "ub-vai__preset" };
 const _hoisted_5$v = { class: "ub-vai__feed" };
-const _hoisted_6$q = {
+const _hoisted_6$r = {
 	key: 0,
 	class: "ub-vai__empty"
 };
@@ -183685,7 +183685,7 @@ function _sfc_render$O(_ctx, _cache, $props, $setup, $data, $options) {
 				})) : createCommentVNode("v-if", true)
 			]),
 			createBaseVNode("div", _hoisted_5$v, [
-				!$setup.assistant.turns.value.length && !$setup.assistant.isRunning.value ? (openBlock(), createElementBlock("p", _hoisted_6$q, [..._cache[12] || (_cache[12] = [createBaseVNode(
+				!$setup.assistant.turns.value.length && !$setup.assistant.isRunning.value ? (openBlock(), createElementBlock("p", _hoisted_6$r, [..._cache[12] || (_cache[12] = [createBaseVNode(
 					"i",
 					{
 						class: "fa-regular fa-comments",
@@ -184297,7 +184297,7 @@ const _hoisted_5$t = {
 	key: 1,
 	class: "ub-section__desc"
 };
-const _hoisted_6$p = {
+const _hoisted_6$q = {
 	key: 0,
 	class: "ub-section__actions"
 };
@@ -184331,7 +184331,7 @@ function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
 			toDisplayString($props.description),
 			1
 			/* TEXT */
-		)) : createCommentVNode("v-if", true)]), _ctx.$slots.actions ? (openBlock(), createElementBlock("div", _hoisted_6$p, [renderSlot(_ctx.$slots, "actions", {}, undefined, true)])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true),
+		)) : createCommentVNode("v-if", true)]), _ctx.$slots.actions ? (openBlock(), createElementBlock("div", _hoisted_6$q, [renderSlot(_ctx.$slots, "actions", {}, undefined, true)])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true),
 		_ctx.$slots.lead ? (openBlock(), createElementBlock("div", _hoisted_7$o, [renderSlot(_ctx.$slots, "lead", {}, undefined, true)])) : createCommentVNode("v-if", true),
 		createBaseVNode(
 			"div",
@@ -184525,7 +184525,7 @@ const _hoisted_4$w = {
 	class: "ub-vconf__empty"
 };
 const _hoisted_5$s = { class: "ub-vconf__num" };
-const _hoisted_6$o = {
+const _hoisted_6$p = {
 	key: 1,
 	class: "ub-vconf__muted"
 };
@@ -184724,7 +184724,7 @@ function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
 						/* TEXT */
 					)]),
 					_: 1
-				}, 8, ["variant"])) : (openBlock(), createElementBlock("span", _hoisted_6$o, "修改后建议校验一次"))]),
+				}, 8, ["variant"])) : (openBlock(), createElementBlock("span", _hoisted_6$p, "修改后建议校验一次"))]),
 				default: withCtx(() => [createVNode($setup["UbButton"], {
 					size: "sm",
 					icon: "fa-solid fa-circle-check",
@@ -185295,7 +185295,7 @@ const _hoisted_3$z = {
 };
 const _hoisted_4$v = { class: "ub-vdata__pager-input" };
 const _hoisted_5$r = { class: "ub-vdata__pager-text" };
-const _hoisted_6$n = {
+const _hoisted_6$o = {
 	key: 0,
 	class: "ub-vdata__empty"
 };
@@ -185381,7 +185381,7 @@ function _sfc_render$I(_ctx, _cache, $props, $setup, $data, $options) {
 					onClick: _cache[2] || (_cache[2] = ($event) => $setup.setPage($setup.win.page + 1))
 				}, null, 8, ["disabled"])
 			])) : createCommentVNode("v-if", true)]),
-			$setup.rowCount === 0 ? (openBlock(), createElementBlock("p", _hoisted_6$n, [..._cache[4] || (_cache[4] = [createBaseVNode(
+			$setup.rowCount === 0 ? (openBlock(), createElementBlock("p", _hoisted_6$o, [..._cache[4] || (_cache[4] = [createBaseVNode(
 				"i",
 				{
 					class: "fa-regular fa-folder-open",
@@ -185617,7 +185617,7 @@ const _hoisted_2$A = {
 const _hoisted_3$y = { class: "ub-vmanage__no" };
 const _hoisted_4$u = ["onClick"];
 const _hoisted_5$q = { class: "ub-vmanage__title" };
-const _hoisted_6$m = { class: "ub-vmanage__meta" };
+const _hoisted_6$n = { class: "ub-vmanage__meta" };
 const _hoisted_7$l = { class: "ub-vmanage__ops" };
 const _hoisted_8$i = {
 	key: 1,
@@ -185670,7 +185670,7 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 						/* TEXT */
 					), createBaseVNode(
 						"span",
-						_hoisted_6$m,
+						_hoisted_6$n,
 						toDisplayString(item.rowCount) + " 行 · " + toDisplayString(item.columnCount) + " 列",
 						1
 						/* TEXT */
@@ -185782,7 +185782,7 @@ const _hoisted_4$t = [
 	"onClick"
 ];
 const _hoisted_5$p = { class: "ub-vnav__text" };
-const _hoisted_6$l = { class: "ub-vnav__name" };
+const _hoisted_6$m = { class: "ub-vnav__name" };
 const _hoisted_7$k = { class: "ub-vnav__meta" };
 const _hoisted_8$h = {
 	key: 0,
@@ -185820,7 +185820,7 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 					/* CACHED */
 				)), createBaseVNode("span", _hoisted_5$p, [createBaseVNode(
 					"span",
-					_hoisted_6$l,
+					_hoisted_6$m,
 					toDisplayString(item.name),
 					1
 					/* TEXT */
@@ -186085,7 +186085,7 @@ const _hoisted_2$y = { class: "ub-viz__rail" };
 const _hoisted_3$w = { class: "ub-viz__brand" };
 const _hoisted_4$s = { class: "ub-viz__brand-text" };
 const _hoisted_5$o = { class: "ub-viz__brand-tag" };
-const _hoisted_6$k = { class: "ub-viz__rail-nav" };
+const _hoisted_6$l = { class: "ub-viz__rail-nav" };
 const _hoisted_7$j = { class: "ub-viz__main" };
 const _hoisted_8$g = {
 	class: "ub-viz__head",
@@ -186147,7 +186147,7 @@ function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 			toDisplayString($setup.visualizer.sheetItems.length) + " 张表 · " + toDisplayString($setup.visualizer.dirty ? "有未保存修改" : "已同步"),
 			1
 			/* TEXT */
-		)])]), createBaseVNode("div", _hoisted_6$k, [createVNode($setup["VizTableNav"], {
+		)])]), createBaseVNode("div", _hoisted_6$l, [createVNode($setup["VizTableNav"], {
 			"sheet-items": $setup.visualizer.sheetItems,
 			"current-sheet-key": $setup.visualizer.currentSheetKey,
 			"sheet-mode": $setup.sheetMode,
@@ -188059,7 +188059,7 @@ const _hoisted_5$n = {
 	key: 0,
 	class: "ub-at__empty"
 };
-const _hoisted_6$j = {
+const _hoisted_6$k = {
 	key: 2,
 	class: "ub-at__error"
 };
@@ -188218,7 +188218,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					})) : $setup.sqlFlow.result.value.kind === "error" ? (openBlock(), createElementBlock(
 						"pre",
-						_hoisted_6$j,
+						_hoisted_6$k,
 						toDisplayString($setup.sqlFlow.result.value.error),
 						1
 						/* TEXT */
@@ -191000,7 +191000,7 @@ const _hoisted_5$m = {
 	class: "ub-wbe__status is-error",
 	role: "alert"
 };
-const _hoisted_6$i = {
+const _hoisted_6$j = {
 	key: 2,
 	class: "ub-wbe__status"
 };
@@ -191108,7 +191108,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 		/* TEXT */
 	)) : $props.groups.length === 0 ? (openBlock(), createElementBlock(
 		"p",
-		_hoisted_6$i,
+		_hoisted_6$j,
 		toDisplayString($props.emptyText),
 		1
 		/* TEXT */
@@ -191651,7 +191651,7 @@ const _hoisted_2$t = { class: "ub-agent__config" };
 const _hoisted_3$r = { class: "ub-agent__actions" };
 const _hoisted_4$n = { class: "ub-agent__current" };
 const _hoisted_5$k = { class: "ub-agent-fav" };
-const _hoisted_6$h = {
+const _hoisted_6$i = {
 	key: 0,
 	class: "ub-agent__current"
 };
@@ -191888,7 +191888,7 @@ function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 				padded: ""
 			}, {
 				default: withCtx(() => [createBaseVNode("div", _hoisted_5$k, [
-					$setup.favorites.favorites.value.length === 0 ? (openBlock(), createElementBlock("p", _hoisted_6$h, "还没有常用世界书，从下面选一本加入。")) : (openBlock(), createElementBlock("div", _hoisted_7$g, [(openBlock(true), createElementBlock(
+					$setup.favorites.favorites.value.length === 0 ? (openBlock(), createElementBlock("p", _hoisted_6$i, "还没有常用世界书，从下面选一本加入。")) : (openBlock(), createElementBlock("div", _hoisted_7$g, [(openBlock(true), createElementBlock(
 						Fragment,
 						null,
 						renderList($setup.favorites.favorites.value, (name) => {
@@ -192504,7 +192504,7 @@ const _hoisted_2$s = {
 const _hoisted_3$q = ["aria-label"];
 const _hoisted_4$m = { class: "ub-picker-panel__head" };
 const _hoisted_5$j = { class: "ub-picker-panel__title" };
-const _hoisted_6$g = {
+const _hoisted_6$h = {
 	key: 0,
 	class: "ub-picker-panel__hint"
 };
@@ -192592,7 +192592,7 @@ function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
 				title: "关闭",
 				onClick: _cache[1] || (_cache[1] = ($event) => $setup.open = false)
 			})]),
-			$props.showDefaultAction ? (openBlock(), createElementBlock("p", _hoisted_6$g, "点选切换；点星标设为全局默认（新聊天使用）。")) : createCommentVNode("v-if", true),
+			$props.showDefaultAction ? (openBlock(), createElementBlock("p", _hoisted_6$h, "点选切换；点星标设为全局默认（新聊天使用）。")) : createCommentVNode("v-if", true),
 			createBaseVNode("ul", _hoisted_7$f, [(openBlock(true), createElementBlock(
 				Fragment,
 				null,
@@ -192895,7 +192895,7 @@ const _hoisted_4$l = {
 	class: "ub-api__empty"
 };
 const _hoisted_5$i = { class: "ub-api__model" };
-const _hoisted_6$f = {
+const _hoisted_6$g = {
 	key: 1,
 	class: "ub-api__error"
 };
@@ -193079,7 +193079,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 							}, null, 8, ["options", "model-value"])) : createCommentVNode("v-if", true),
 							$setup.store.modelLoadStatus === "error" ? (openBlock(), createElementBlock(
 								"p",
-								_hoisted_6$f,
+								_hoisted_6$g,
 								toDisplayString($setup.store.modelLoadError),
 								1
 								/* TEXT */
@@ -194631,7 +194631,7 @@ const _hoisted_4$j = {
 	"aria-hidden": "true"
 };
 const _hoisted_5$h = { class: "ub-pps-list__meta" };
-const _hoisted_6$e = { class: "ub-pps-list__actions" };
+const _hoisted_6$f = { class: "ub-pps-list__actions" };
 const _hoisted_7$d = {
 	key: 1,
 	class: "ub-pps-empty"
@@ -194690,7 +194690,7 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 						[createTextVNode(" · 全局默认")],
 						64
 						/* STABLE_FRAGMENT */
-					)) : createCommentVNode("v-if", true)])]), createBaseVNode("div", _hoisted_6$e, [
+					)) : createCommentVNode("v-if", true)])]), createBaseVNode("div", _hoisted_6$f, [
 						createVNode($setup["UbIconButton"], {
 							icon: meta.name === $props.defaultPresetName ? "fa-solid fa-star" : "fa-regular fa-star",
 							title: "设为全局默认",
@@ -196311,7 +196311,7 @@ const _hoisted_4$i = {
 	"aria-hidden": "true"
 };
 const _hoisted_5$g = { class: "ub-plist__meta" };
-const _hoisted_6$d = { class: "ub-plist__actions" };
+const _hoisted_6$e = { class: "ub-plist__actions" };
 const _hoisted_7$c = {
 	key: 2,
 	class: "ub-plist__empty"
@@ -196382,7 +196382,7 @@ function _sfc_render$r(_ctx, _cache, $props, $setup, $data, $options) {
 						[createTextVNode("全局预设")],
 						64
 						/* STABLE_FRAGMENT */
-					))])]), createBaseVNode("div", _hoisted_6$d, [meta.kind === "runtime" ? (openBlock(), createBlock($setup["UbIconButton"], {
+					))])]), createBaseVNode("div", _hoisted_6$e, [meta.kind === "runtime" ? (openBlock(), createBlock($setup["UbIconButton"], {
 						key: 0,
 						icon: "fa-solid fa-upload",
 						title: "导出当前生效模板",
@@ -198547,7 +198547,7 @@ const _hoisted_2$k = { class: "ub-cr__preset" };
 const _hoisted_3$j = { class: "ub-cr__meta" };
 const _hoisted_4$h = { class: "ub-cr__picker" };
 const _hoisted_5$f = { class: "ub-cr__test-actions" };
-const _hoisted_6$c = {
+const _hoisted_6$d = {
 	key: 0,
 	class: "ub-cr__output"
 };
@@ -199020,7 +199020,7 @@ function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
 					}, 8, ["busy", "onClick"])]),
 					$setup.store.testOutput ? (openBlock(), createElementBlock(
 						"pre",
-						_hoisted_6$c,
+						_hoisted_6$d,
 						toDisplayString($setup.store.testOutput),
 						1
 						/* TEXT */
@@ -199893,7 +199893,7 @@ const _hoisted_3$i = {
 };
 const _hoisted_4$g = { class: "ub-feed__divider-badge" };
 const _hoisted_5$e = { class: "ub-feed__divider-title" };
-const _hoisted_6$b = { class: "ub-feed__time" };
+const _hoisted_6$c = { class: "ub-feed__time" };
 const _hoisted_7$a = {
 	key: 1,
 	class: "ub-feed__user"
@@ -199976,7 +199976,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 							),
 							createBaseVNode(
 								"span",
-								_hoisted_6$b,
+								_hoisted_6$c,
 								toDisplayString($setup.formatTime(entry.at)),
 								1
 								/* TEXT */
@@ -200191,7 +200191,7 @@ const _hoisted_4$f = {
 	class: "ub-cchat__notice"
 };
 const _hoisted_5$d = { class: "ub-cchat__composer" };
-const _hoisted_6$a = ["value", "placeholder"];
+const _hoisted_6$b = ["value", "placeholder"];
 const _hoisted_7$9 = { class: "ub-cchat__actions" };
 const _hoisted_8$8 = { class: "ub-cchat__hint" };
 function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
@@ -200272,7 +200272,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 			"aria-label": "给主 Agent 的消息",
 			onInput: _cache[0] || (_cache[0] = ($event) => $setup.emit("update:draft", $event.target.value)),
 			onKeydown: $setup.onKeydown
-		}, null, 40, _hoisted_6$a), createBaseVNode("div", _hoisted_7$9, [createBaseVNode(
+		}, null, 40, _hoisted_6$b), createBaseVNode("div", _hoisted_7$9, [createBaseVNode(
 			"span",
 			_hoisted_8$8,
 			toDisplayString($setup.inFlight ? "进行中可点停止" : "Ctrl / ⌘ + Enter 发送"),
@@ -200921,7 +200921,7 @@ const _hoisted_5$b = {
 	key: 1,
 	class: "ub-cm__pane"
 };
-const _hoisted_6$9 = {
+const _hoisted_6$a = {
 	key: 0,
 	class: "ub-cm__empty"
 };
@@ -201202,7 +201202,7 @@ function _sfc_render$j(_ctx, _cache, $props, $setup, $data, $options) {
 			_: 1
 		}, 8, ["busy"])])])) : createCommentVNode("v-if", true),
 		createCommentVNode(" 阶段大纲 "),
-		$setup.activeTab === "outline" ? (openBlock(), createElementBlock("div", _hoisted_5$b, [!$props.task ? (openBlock(), createElementBlock("p", _hoisted_6$9, "还没有续写任务，也就没有阶段大纲。")) : (openBlock(), createElementBlock(
+		$setup.activeTab === "outline" ? (openBlock(), createElementBlock("div", _hoisted_5$b, [!$props.task ? (openBlock(), createElementBlock("p", _hoisted_6$a, "还没有续写任务，也就没有阶段大纲。")) : (openBlock(), createElementBlock(
 			Fragment,
 			{ key: 1 },
 			[$props.activeRevision && $props.activeStage ? (openBlock(), createElementBlock(
@@ -203557,7 +203557,7 @@ const _hoisted_4$c = {
 	class: "ub-cont__pad"
 };
 const _hoisted_5$a = { class: "ub-cont__groups" };
-const _hoisted_6$8 = { class: "ub-cont__checks" };
+const _hoisted_6$9 = { class: "ub-cont__checks" };
 const _hoisted_7$7 = {
 	key: 0,
 	class: "ub-cont__pad"
@@ -204249,7 +204249,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 									-1
 									/* CACHED */
 								)),
-								createBaseVNode("div", _hoisted_6$8, [
+								createBaseVNode("div", _hoisted_6$9, [
 									createVNode($setup["UbCheck"], {
 										modelValue: $setup.settingsDraft.webResearch.sources.moegirl,
 										"onUpdate:modelValue": _cache[42] || (_cache[42] = ($event) => $setup.settingsDraft.webResearch.sources.moegirl = $event),
@@ -206076,7 +206076,7 @@ const _hoisted_3$d = {
 };
 const _hoisted_4$b = { class: "ub-health__body" };
 const _hoisted_5$9 = { class: "ub-health__head" };
-const _hoisted_6$7 = { class: "ub-health__title" };
+const _hoisted_6$8 = { class: "ub-health__title" };
 const _hoisted_7$6 = { class: "ub-health__summary" };
 const _hoisted_8$5 = ["onClick"];
 function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
@@ -206099,7 +206099,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 					)]), createBaseVNode("div", _hoisted_4$b, [
 						createBaseVNode("div", _hoisted_5$9, [createBaseVNode(
 							"strong",
-							_hoisted_6$7,
+							_hoisted_6$8,
 							toDisplayString(item.title),
 							1
 							/* TEXT */
@@ -207741,7 +207741,7 @@ const _hoisted_5$8 = {
 	key: 0,
 	class: "ub-dormant__blocked"
 };
-const _hoisted_6$6 = { class: "ub-dormant__group" };
+const _hoisted_6$7 = { class: "ub-dormant__group" };
 function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSection"], {
 		id: $props.id,
@@ -207873,7 +207873,7 @@ function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 				{ key: 3 },
 				[createBaseVNode(
 					"div",
-					_hoisted_6$6,
+					_hoisted_6$7,
 					"休眠列（" + toDisplayString($setup.dormant.dormantColumns.value.length) + "）",
 					1
 					/* TEXT */
@@ -208172,7 +208172,7 @@ const _hoisted_5$7 = {
 	key: 0,
 	class: "ub-dm__block"
 };
-const _hoisted_6$5 = {
+const _hoisted_6$6 = {
 	key: 1,
 	class: "ub-dm__block"
 };
@@ -208437,7 +208437,7 @@ function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
 								toDisplayString(diagnostic.message) + " ",
 								1
 								/* TEXT */
-							), !diagnostic.isCurrentIsolation ? (openBlock(), createElementBlock("span", _hoisted_5$7, "请切换到该隔离域后重新诊断；当前恢复提交不会跨隔离域执行。")) : diagnostic.status.startsWith("recoverable_") ? (openBlock(), createElementBlock("span", _hoisted_6$5, "当前隔离域存在可恢复候选，请诊断 V2 数据恢复生成可提交计划。")) : createCommentVNode("v-if", true)]),
+							), !diagnostic.isCurrentIsolation ? (openBlock(), createElementBlock("span", _hoisted_5$7, "请切换到该隔离域后重新诊断；当前恢复提交不会跨隔离域执行。")) : diagnostic.status.startsWith("recoverable_") ? (openBlock(), createElementBlock("span", _hoisted_6$6, "当前隔离域存在可恢复候选，请诊断 V2 数据恢复生成可提交计划。")) : createCommentVNode("v-if", true)]),
 							_: 2
 						}, 1032, ["label"]);
 					}),
@@ -208613,11 +208613,15 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         const maxRetries = DECISION_RECALL_MAX_RETRIES_LIMIT_ACU;
         const maxBatchSize = DECISION_RECALL_MAX_BATCH_SIZE_ACU;
         const maxContextFloors = DECISION_RECALL_MAX_CONTEXT_AI_FLOORS_ACU;
-        /** 召回规则里不常改的几项收起；标题旁显示当前取值，收起时也能看到。 */
+        /** 召回规则里不常改的几项收起（同填表工作台的高级参数）；改过任何一项就标为自定义。 */
         const advancedOpen = ref(false);
-        const advancedMeta = computed(() => {
+        const advancedCustomized = computed(() => {
             const value = store.settings;
-            return `召回 ${value.recallCount} 条 · 前文 ${value.contextAiFloors} 楼 · 每组 ${value.batchSize} 条 · 判定 ${value.judgeRuns} 次 · 并发 ${value.concurrency}`;
+            return value.recallCount !== DEFAULT_DECISION_RECALL_COUNT_ACU
+                || value.contextAiFloors !== DECISION_RECALL_CONTEXT_AI_FLOORS_ACU
+                || value.batchSize !== DECISION_RECALL_BATCH_SIZE_ACU
+                || value.judgeRuns !== DEFAULT_DECISION_RECALL_JUDGE_RUNS_ACU
+                || value.concurrency !== DECISION_RECALL_CONCURRENCY_ACU;
         });
         const maxJudgeRuns = DECISION_RECALL_MAX_JUDGE_RUNS_ACU;
         const maxConcurrency = DECISION_RECALL_MAX_CONCURRENCY_ACU;
@@ -208745,23 +208749,24 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 void store.loadModels();
         });
         watchChatChanged_ACU(() => refresh());
-        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, maxBatchSize, maxContextFloors, advancedOpen, advancedMeta, maxJudgeRuns, maxConcurrency, totalSeconds, codesPlaceholder, contextLabel, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, DEFAULT_MODEL_ACU, defaultModel, modelPlaceholder, modelHint, scoringOptions, setProvider, setKey, setModel, setModelText, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbDisclosure, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
+        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, maxBatchSize, maxContextFloors, advancedOpen, advancedCustomized, maxJudgeRuns, maxConcurrency, totalSeconds, codesPlaceholder, contextLabel, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, DEFAULT_MODEL_ACU, defaultModel, modelPlaceholder, modelHint, scoringOptions, setProvider, setKey, setModel, setModelText, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-dr__picker[data-v-50e3923d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-50e3923d] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-50e3923d] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-50e3923d] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-50e3923d");
-var DecisionRecallPage_vue_vue_type_style_index_0_scoped_50e3923d_lang = null;
+injectSfcStyle("\n.ub-dr__more[data-v-5ba6a7f4] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border: 0;\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-dr__more[data-v-5ba6a7f4]:hover {\r\n  color: var(--ub-text);\n}\n.ub-dr__chevron[data-v-5ba6a7f4] {\r\n  font-size: 0.75em;\r\n  transition: transform 0.16s ease;\n}\n.ub-dr__chevron.is-open[data-v-5ba6a7f4] {\r\n  transform: rotate(90deg);\n}\n.ub-dr__more ~ .ub-row[data-v-5ba6a7f4] {\r\n  background: color-mix(in srgb, var(--ub-sunken) 50%, transparent);\n}\n.ub-dr__picker[data-v-5ba6a7f4] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-5ba6a7f4] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-5ba6a7f4] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-5ba6a7f4] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-5ba6a7f4");
+var DecisionRecallPage_vue_vue_type_style_index_0_scoped_5ba6a7f4_lang = null;
 
 const _hoisted_1$c = {
 	key: 0,
 	class: "ub-dr__picker"
 };
-const _hoisted_2$b = { class: "ub-dr__meta" };
-const _hoisted_3$a = { class: "ub-dr__actions" };
+const _hoisted_2$b = ["aria-expanded"];
+const _hoisted_3$a = { class: "ub-dr__meta" };
 const _hoisted_4$8 = { class: "ub-dr__actions" };
-const _hoisted_5$6 = {
+const _hoisted_5$6 = { class: "ub-dr__actions" };
+const _hoisted_6$5 = {
 	key: 0,
 	class: "ub-dr__output"
 };
@@ -208943,13 +208948,40 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["model-value", "max"]))]),
 						_: 1
 					}, 8, ["hint"]),
-					createVNode($setup["UbDisclosure"], {
-						label: "高级设置",
-						meta: $setup.advancedMeta,
-						expanded: $setup.advancedOpen,
-						onToggle: _cache[9] || (_cache[9] = ($event) => $setup.advancedOpen = !$setup.advancedOpen)
-					}, {
-						default: withCtx(() => [
+					createBaseVNode("button", {
+						type: "button",
+						class: "ub-dr__more",
+						"aria-expanded": $setup.advancedOpen ? "true" : "false",
+						onClick: _cache[4] || (_cache[4] = ($event) => $setup.advancedOpen = !$setup.advancedOpen)
+					}, [
+						createBaseVNode(
+							"i",
+							{
+								class: normalizeClass(["fa-solid fa-chevron-right ub-dr__chevron", { "is-open": $setup.advancedOpen }]),
+								"aria-hidden": "true"
+							},
+							null,
+							2
+							/* CLASS */
+						),
+						_cache[12] || (_cache[12] = createTextVNode(
+							" 高级设置 ",
+							-1
+							/* CACHED */
+						)),
+						createVNode($setup["UbBadge"], { variant: $setup.advancedCustomized ? "accent" : "neutral" }, {
+							default: withCtx(() => [createTextVNode(
+								toDisplayString($setup.advancedCustomized ? "自定义" : "默认"),
+								1
+								/* TEXT */
+							)]),
+							_: 1
+						}, 8, ["variant"])
+					], 8, _hoisted_2$b),
+					$setup.advancedOpen ? (openBlock(), createElementBlock(
+						Fragment,
+						{ key: 0 },
+						[
 							createVNode($setup["UbRow"], {
 								label: "召回条数",
 								hint: `打分后挑选几条（1–${$setup.maxCount}），另外固定带上最新 ${$setup.fixedCount} 条，合计最多 ${$setup.maxTotal} 条。相关的不够时用分数低的补满。`
@@ -208962,7 +208994,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 									max: $setup.maxCount,
 									step: 1,
 									"aria-label": "召回条数",
-									onChange: _cache[4] || (_cache[4] = ($event) => $setup.setNumber("recallCount", $event))
+									onChange: _cache[5] || (_cache[5] = ($event) => $setup.setNumber("recallCount", $event))
 								}, null, 8, ["model-value", "max"]))]),
 								_: 1
 							}, 8, ["hint"]),
@@ -208978,7 +209010,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 									max: $setup.maxContextFloors,
 									step: 1,
 									"aria-label": "参考最近 AI 回复",
-									onChange: _cache[5] || (_cache[5] = ($event) => $setup.setNumber("contextAiFloors", $event))
+									onChange: _cache[6] || (_cache[6] = ($event) => $setup.setNumber("contextAiFloors", $event))
 								}, null, 8, ["model-value", "max"]))]),
 								_: 1
 							}, 8, ["hint"]),
@@ -208994,7 +209026,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 									max: $setup.maxBatchSize,
 									step: 1,
 									"aria-label": "每组条数",
-									onChange: _cache[6] || (_cache[6] = ($event) => $setup.setNumber("batchSize", $event))
+									onChange: _cache[7] || (_cache[7] = ($event) => $setup.setNumber("batchSize", $event))
 								}, null, 8, ["model-value", "max"]))]),
 								_: 1
 							}, 8, ["hint"]),
@@ -209010,7 +209042,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 									max: $setup.maxJudgeRuns,
 									step: 1,
 									"aria-label": "判定次数",
-									onChange: _cache[7] || (_cache[7] = ($event) => $setup.setNumber("judgeRuns", $event))
+									onChange: _cache[8] || (_cache[8] = ($event) => $setup.setNumber("judgeRuns", $event))
 								}, null, 8, ["model-value", "max"]))]),
 								_: 1
 							}, 8, ["hint"]),
@@ -209026,13 +209058,14 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 									max: $setup.maxConcurrency,
 									step: 1,
 									"aria-label": "并发数",
-									onChange: _cache[8] || (_cache[8] = ($event) => $setup.setNumber("concurrency", $event))
+									onChange: _cache[9] || (_cache[9] = ($event) => $setup.setNumber("concurrency", $event))
 								}, null, 8, ["model-value", "max"]))]),
 								_: 1
 							}, 8, ["hint"])
-						]),
-						_: 1
-					}, 8, ["meta", "expanded"])
+						],
+						64
+						/* STABLE_FRAGMENT */
+					)) : createCommentVNode("v-if", true)
 				]),
 				_: 1
 			}, 8, ["description"]),
@@ -209047,7 +209080,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 					key: 0,
 					variant: "accent"
 				}, {
-					default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
+					default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
 						"未保存",
 						-1
 						/* CACHED */
@@ -209066,17 +209099,17 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 					}, null, 8, ["model-value"]),
 					createBaseVNode(
 						"p",
-						_hoisted_2$b,
+						_hoisted_3$a,
 						"$8 换成用户本轮输入；" + toDisplayString($setup.codesPlaceholder) + " 换成召回编码块（没写就追加在末尾）。",
 						1
 						/* TEXT */
 					),
-					createBaseVNode("div", _hoisted_3$a, [createVNode($setup["UbButton"], {
+					createBaseVNode("div", _hoisted_4$8, [createVNode($setup["UbButton"], {
 						size: "sm",
 						icon: "fa-solid fa-rotate-left",
 						onClick: $setup.resetDirective
 					}, {
-						default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
+						default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
 							"恢复默认",
 							-1
 							/* CACHED */
@@ -209089,7 +209122,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.directiveDirty,
 						onClick: $setup.saveDirective
 					}, {
-						default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
+						default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 							"保存指令",
 							-1
 							/* CACHED */
@@ -209114,13 +209147,13 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						placeholder: "例如：我回到旧宅，想起那天的约定。",
 						"onUpdate:modelValue": $setup.store.setTestInput
 					}, null, 8, ["model-value", "onUpdate:modelValue"]),
-					createBaseVNode("div", _hoisted_4$8, [createVNode($setup["UbButton"], {
+					createBaseVNode("div", _hoisted_5$6, [createVNode($setup["UbButton"], {
 						variant: "primary",
 						icon: "fa-solid fa-play",
 						busy: $setup.store.testBusy,
 						onClick: $setup.store.runTest
 					}, {
-						default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+						default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
 							"测试召回",
 							-1
 							/* CACHED */
@@ -209129,7 +209162,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 					}, 8, ["busy", "onClick"])]),
 					$setup.store.testOutput ? (openBlock(), createElementBlock(
 						"pre",
-						_hoisted_5$6,
+						_hoisted_6$5,
 						toDisplayString($setup.store.testOutput),
 						1
 						/* TEXT */
@@ -209141,7 +209174,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-50e3923d"]]);
+var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-5ba6a7f4"]]);
 
 const developerCopy = {
     panels: {

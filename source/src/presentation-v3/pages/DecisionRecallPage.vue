@@ -90,7 +90,17 @@
           @change="setNumber('maxRetries', $event)"
         />
       </UbRow>
-      <UbDisclosure label="高级设置" :meta="advancedMeta" :expanded="advancedOpen" @toggle="advancedOpen = !advancedOpen">
+      <button
+        type="button"
+        class="ub-dr__more"
+        :aria-expanded="advancedOpen ? 'true' : 'false'"
+        @click="advancedOpen = !advancedOpen"
+      >
+        <i class="fa-solid fa-chevron-right ub-dr__chevron" :class="{ 'is-open': advancedOpen }" aria-hidden="true"></i>
+        高级设置
+        <UbBadge :variant="advancedCustomized ? 'accent' : 'neutral'">{{ advancedCustomized ? '自定义' : '默认' }}</UbBadge>
+      </button>
+      <template v-if="advancedOpen">
         <UbRow label="召回条数" :hint="`打分后挑选几条（1–${maxCount}），另外固定带上最新 ${fixedCount} 条，合计最多 ${maxTotal} 条。相关的不够时用分数低的补满。`">
           <UbInput
             :key="`count-${inputKey}`"
@@ -151,7 +161,7 @@
             @change="setNumber('concurrency', $event)"
           />
         </UbRow>
-      </UbDisclosure>
+      </template>
     </UbSection>
 
     <UbSection id="dr-directive" title="注入指令" description="只用于单独召回：选中的编码写进本轮输入时用这段文字包裹。替换剧情推进任务时用预设自己的最终注入指令。" icon="fa-solid fa-quote-left" padded>
@@ -199,6 +209,9 @@ import { DECISION_RECALL_PROVIDER_LABELS_ACU } from '../../service/decision-reca
 import { resolveDecisionRecallTotalTimeoutMs_ACU } from '../../service/decision-recall/decision-recall-runtime';
 import {
   DECISION_RECALL_CODES_PLACEHOLDER_ACU,
+  DECISION_RECALL_BATCH_SIZE_ACU,
+  DECISION_RECALL_CONCURRENCY_ACU,
+  DECISION_RECALL_CONTEXT_AI_FLOORS_ACU,
   DECISION_RECALL_MAX_BATCH_SIZE_ACU,
   DECISION_RECALL_MAX_CONTEXT_AI_FLOORS_ACU,
   DECISION_RECALL_MAX_CONCURRENCY_ACU,
@@ -208,6 +221,8 @@ import {
   DECISION_RECALL_MAX_RETRIES_LIMIT_ACU,
   DECISION_RECALL_MAX_TOTAL_ACU,
   DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
+  DEFAULT_DECISION_RECALL_COUNT_ACU,
+  DEFAULT_DECISION_RECALL_JUDGE_RUNS_ACU,
   DEFAULT_DECISION_RECALL_DIRECTIVE_ACU,
   type DecisionRecallProvider_ACU,
 } from '../../shared/decision-recall-defaults';
@@ -216,7 +231,6 @@ import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatC
 import UbBadge from '../ui/UbBadge.vue';
 import UbButton from '../ui/UbButton.vue';
 import UbCallout from '../ui/UbCallout.vue';
-import UbDisclosure from '../ui/UbDisclosure.vue';
 import UbIconButton from '../ui/UbIconButton.vue';
 import UbInput from '../ui/UbInput.vue';
 import UbPage from '../ui/UbPage.vue';
@@ -244,11 +258,15 @@ const maxTotal = DECISION_RECALL_MAX_TOTAL_ACU;
 const maxRetries = DECISION_RECALL_MAX_RETRIES_LIMIT_ACU;
 const maxBatchSize = DECISION_RECALL_MAX_BATCH_SIZE_ACU;
 const maxContextFloors = DECISION_RECALL_MAX_CONTEXT_AI_FLOORS_ACU;
-/** 召回规则里不常改的几项收起；标题旁显示当前取值，收起时也能看到。 */
+/** 召回规则里不常改的几项收起（同填表工作台的高级参数）；改过任何一项就标为自定义。 */
 const advancedOpen = ref(false);
-const advancedMeta = computed(() => {
+const advancedCustomized = computed(() => {
   const value = store.settings;
-  return `召回 ${value.recallCount} 条 · 前文 ${value.contextAiFloors} 楼 · 每组 ${value.batchSize} 条 · 判定 ${value.judgeRuns} 次 · 并发 ${value.concurrency}`;
+  return value.recallCount !== DEFAULT_DECISION_RECALL_COUNT_ACU
+    || value.contextAiFloors !== DECISION_RECALL_CONTEXT_AI_FLOORS_ACU
+    || value.batchSize !== DECISION_RECALL_BATCH_SIZE_ACU
+    || value.judgeRuns !== DEFAULT_DECISION_RECALL_JUDGE_RUNS_ACU
+    || value.concurrency !== DECISION_RECALL_CONCURRENCY_ACU;
 });
 const maxJudgeRuns = DECISION_RECALL_MAX_JUDGE_RUNS_ACU;
 const maxConcurrency = DECISION_RECALL_MAX_CONCURRENCY_ACU;
@@ -387,6 +405,40 @@ watchChatChanged_ACU(() => refresh());
 </script>
 
 <style scoped>
+.ub-dr__more {
+  display: flex;
+  align-items: center;
+  gap: var(--ub-s2);
+  width: 100%;
+  padding: var(--ub-s3) var(--ub-s4);
+  border: 0;
+  border-top: 1px solid var(--ub-line-soft);
+  background: var(--ub-sunken);
+  color: var(--ub-text-2);
+  font: inherit;
+  font-size: var(--ub-fs-sm);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ub-dr__more:hover {
+  color: var(--ub-text);
+}
+
+.ub-dr__chevron {
+  font-size: 0.75em;
+  transition: transform 0.16s ease;
+}
+
+.ub-dr__chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.ub-dr__more ~ .ub-row {
+  background: color-mix(in srgb, var(--ub-sunken) 50%, transparent);
+}
+
 .ub-dr__picker {
   display: flex;
   align-items: center;

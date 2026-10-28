@@ -199,7 +199,7 @@ describe('DecisionRecallPage', () => {
     expect(modelInput().value).toBe('SemIf');
   });
 
-  it('召回规则只露出打分时看什么与失败重试次数，其余收在高级设置里，标题旁显示当前取值', async () => {
+  it('召回规则只露出打分时看什么与失败重试次数，其余收在高级设置里（同填表工作台），改过就标为自定义', async () => {
     await openPage('decision-recall');
     const rule = document.getElementById('dr-rule')!;
     expect(rule.querySelector('[aria-label="打分时看什么"]')).not.toBeNull();
@@ -207,12 +207,22 @@ describe('DecisionRecallPage', () => {
     for (const label of ['召回条数', '参考最近 AI 回复', '每组条数', '判定次数', '并发数']) {
       expect(rule.querySelector(`input[aria-label="${label}"]`)).toBeNull();
     }
-    expect(rule.textContent).toContain('召回 20 条 · 前文 2 楼 · 每组 20 条 · 判定 1 次 · 并发 3');
+    const toggle = () => byText<HTMLButtonElement>('#dr-rule button[aria-expanded]', '高级设置')!;
+    expect(toggle().textContent).toContain('默认');
 
     await openAdvancedRules();
     for (const label of ['召回条数', '参考最近 AI 回复', '每组条数', '判定次数', '并发数']) {
       expect(rule.querySelector(`input[aria-label="${label}"]`)).not.toBeNull();
     }
+    // 不再套带边框的折叠框，各项直接铺在这一节里
+    expect(rule.querySelector('.ub-disc')).toBeNull();
+
+    const input = rule.querySelector<HTMLInputElement>('input[aria-label="判定次数"]')!;
+    input.value = '3';
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new Event('change'));
+    await flush();
+    expect(toggle().textContent).toContain('自定义');
   });
 
   it('参考最近 AI 回复可填 0–10，说明文字随之变化', async () => {
