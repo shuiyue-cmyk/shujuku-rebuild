@@ -25,6 +25,11 @@ const switchByToggleKey = (key: string) => document.querySelector<HTMLButtonElem
 const navItem = (pageId: string) => document.querySelector<HTMLElement>(`.ub-nav__item[data-page-id="${pageId}"]`);
 const modeRadio = (label: string) => byText<HTMLButtonElement>('[role="radiogroup"][aria-label="决策召回用法"] [role="radio"]', label);
 const replaceSwitch = () => document.querySelector<HTMLButtonElement>('button[role="switch"][aria-label="由决策召回执行 recall 任务"]');
+/** 召回规则里的「高级设置」默认收起。 */
+async function openAdvancedRules() {
+  byText<HTMLButtonElement>('#dr-rule button[aria-expanded]', '高级设置')!.click();
+  await flush();
+}
 const visibleIds = (router: { visiblePages: Array<{ id: string }> }) => router.visiblePages.map(page => page.id);
 
 const twoTaskPlot = {
@@ -194,8 +199,45 @@ describe('DecisionRecallPage', () => {
     expect(modelInput().value).toBe('SemIf');
   });
 
+  it('召回规则只露出打分时看什么与失败重试次数，其余收在高级设置里，标题旁显示当前取值', async () => {
+    await openPage('decision-recall');
+    const rule = document.getElementById('dr-rule')!;
+    expect(rule.querySelector('[aria-label="打分时看什么"]')).not.toBeNull();
+    expect(rule.querySelector('input[aria-label="失败重试次数"]')).not.toBeNull();
+    for (const label of ['召回条数', '参考最近 AI 回复', '每组条数', '判定次数', '并发数']) {
+      expect(rule.querySelector(`input[aria-label="${label}"]`)).toBeNull();
+    }
+    expect(rule.textContent).toContain('召回 20 条 · 前文 2 楼 · 每组 20 条 · 判定 1 次 · 并发 3');
+
+    await openAdvancedRules();
+    for (const label of ['召回条数', '参考最近 AI 回复', '每组条数', '判定次数', '并发数']) {
+      expect(rule.querySelector(`input[aria-label="${label}"]`)).not.toBeNull();
+    }
+  });
+
+  it('参考最近 AI 回复可填 0–10，说明文字随之变化', async () => {
+    const { settings } = await openPage('decision-recall');
+    await openAdvancedRules();
+    const input = () => document.querySelector<HTMLInputElement>('input[aria-label="参考最近 AI 回复"]')!;
+    input().value = '0';
+    input().dispatchEvent(new Event('input'));
+    input().dispatchEvent(new Event('change'));
+    await flush();
+    expect(settings.decisionRecallSettings.contextAiFloors).toBe(0);
+    expect(document.getElementById('dr-rule')!.textContent).toContain('参考用户最新输入（不带 AI 回复）');
+
+    input().value = '99';
+    input().dispatchEvent(new Event('input'));
+    input().dispatchEvent(new Event('change'));
+    await flush();
+    expect(settings.decisionRecallSettings.contextAiFloors).toBe(10);
+    expect(input().value).toBe('10');
+    expect(document.getElementById('dr-test')!.textContent).toContain('最近 10 楼 AI 回复');
+  });
+
   it('每组条数、判定次数、并发数可填，超范围时规整后保存', async () => {
     const { settings } = await openPage('decision-recall');
+    await openAdvancedRules();
     const fill = (label: string, value: string) => {
       const input = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
       input.value = value;
@@ -214,6 +256,7 @@ describe('DecisionRecallPage', () => {
 
   it('召回条数填超范围时规整到 45 再保存', async () => {
     const { settings } = await openPage('decision-recall');
+    await openAdvancedRules();
     const input = document.querySelector<HTMLInputElement>('input[aria-label="召回条数"]')!;
     input.value = '99';
     input.dispatchEvent(new Event('input'));

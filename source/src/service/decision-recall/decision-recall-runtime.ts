@@ -165,7 +165,7 @@ export async function runDecisionRecall_ACU(
     };
   }
 
-  const state = buildDecisionRecallState_ACU({ aiFloors: collectDecisionRecallAiFloors_ACU(sources.loadChat()), userInput: options.userInput });
+  const state = buildDecisionRecallState_ACU({ aiFloors: collectDecisionRecallAiFloors_ACU(sources.loadChat(), settings.contextAiFloors), userInput: options.userInput });
   const groups = chunkDecisionRecallRows_ACU(plan.pool, settings.batchSize);
   const fetchImpl = deps.fetch ?? globalThis.fetch;
 

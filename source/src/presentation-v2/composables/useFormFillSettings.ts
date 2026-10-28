@@ -133,10 +133,10 @@ const NUMBER_FIELD_META: Array<Omit<FormFillNumberField, "value">> = [
   },
   {
     key: "maxConcurrentGroups",
-    label: "最大并发数",
+    label: "最大并发更新组数",
     min: 1,
     step: 1,
-    hint: "同时处理的表格组数，默认为1。",
+    hint: "同时填表的表格分组数，默认 1。大于 1 时多个分组会同时调用填表 API，越大越快，但 API 压力和排查难度也越高。",
   },
   {
     key: "skipUpdateFloors",

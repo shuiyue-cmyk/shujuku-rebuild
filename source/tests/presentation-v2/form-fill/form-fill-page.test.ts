@@ -383,6 +383,31 @@ describe('FormFillPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('最大并发更新组数在填表工作台的高级参数里，修改后保存', async () => {
+    const { mount, settings, saveSettings } = await mountFormFillPage({ ...createSettings(), maxConcurrentGroups: 1 });
+
+    const updatePanel = document.getElementById('ff-update')!;
+    expect(updatePanel.querySelector('input[aria-label="最大并发更新组数"]')).toBeNull();
+    Array.from(updatePanel.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'))
+      .find(button => (button.textContent || '').includes('高级参数'))!.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const input = updatePanel.querySelector<HTMLInputElement>('input[aria-label="最大并发更新组数"]')!;
+    expect(input).not.toBeNull();
+    input.value = '4';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    await Promise.resolve();
+
+    expect(settings.maxConcurrentGroups).toBe(4);
+    expect(saveSettings).toHaveBeenCalled();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    // 并发数改大也算自定义
+    expect(Array.from(updatePanel.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'))
+      .find(button => (button.textContent || '').includes('高级参数'))!.textContent).toContain('自定义');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('添加排除规则会写入结构化规则', async () => {
     const { mount, settings, saveSettings } = await mountFormFillPage(createSettings(), 'table');
 

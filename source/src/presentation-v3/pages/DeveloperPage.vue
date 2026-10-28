@@ -14,39 +14,16 @@
         <UbSwitch :model-value="devOptions.warnLogEnabled.value" aria-label="WARN 日志" @update:model-value="devOptions.setWarnLogEnabled($event)" />
       </UbRow>
     </UbSection>
-
-    <UbSection :title="copy.panels.formFillRuntime.title" :description="copy.panels.formFillRuntime.description" icon="fa-solid fa-gauge-high">
-      <UbRow label="最大并发更新组数" hint="大于 1 时多个表格分组可能同时调用填表 API。越大越快，但 API 压力和排查难度也越高。">
-        <UbInput
-          type="number"
-          :min="1"
-          :step="1"
-          :model-value="maxConcurrentGroups"
-          aria-label="最大并发更新组数"
-          @change="settings.setNumber('maxConcurrentGroups', $event)"
-        />
-      </UbRow>
-    </UbSection>
   </UbPage>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue';
 import { useDevOptions } from '../../presentation-v2/composables/useDevOptions';
-import { useFormFillSettings } from '../../presentation-v2/composables/useFormFillSettings';
 import { developerCopy as copy } from '../../presentation-v2/copy/developer-copy';
-import UbInput from '../ui/UbInput.vue';
 import UbPage from '../ui/UbPage.vue';
 import UbRow from '../ui/UbRow.vue';
 import UbSection from '../ui/UbSection.vue';
 import UbSwitch from '../ui/UbSwitch.vue';
 
 const devOptions = useDevOptions();
-const settings = useFormFillSettings();
-
-const maxConcurrentGroups = computed(
-  () => settings.numberFields.value.find(field => field.key === 'maxConcurrentGroups')?.value ?? 1,
-);
-
-onMounted(() => settings.refresh());
 </script>

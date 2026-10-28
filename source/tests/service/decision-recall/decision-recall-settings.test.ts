@@ -34,6 +34,7 @@ describe('normalizeDecisionRecallSettings_ACU', () => {
       aihubmixApiKey: '',
       aihubmixModel: 'jev-latest',
       recallCount: 20,
+      contextAiFloors: 2,
       batchSize: 20,
       judgeRuns: 1,
       concurrency: 3,
@@ -67,6 +68,15 @@ describe('normalizeDecisionRecallSettings_ACU', () => {
     expect(n({ concurrency: 500 }).concurrency).toBe(100);
     expect(n({ concurrency: 0 }).concurrency).toBe(1);
     expect(n({ concurrency: '' }).concurrency).toBe(3);
+  });
+
+  it('参考最近几楼 AI 回复夹到 0–10，0 表示只看用户输入，清空回到默认 2', () => {
+    const n = normalizeDecisionRecallSettings_ACU;
+    expect(n({ contextAiFloors: 0 }).contextAiFloors).toBe(0);
+    expect(n({ contextAiFloors: 30 }).contextAiFloors).toBe(10);
+    expect(n({ contextAiFloors: -1 }).contextAiFloors).toBe(0);
+    expect(n({ contextAiFloors: '' }).contextAiFloors).toBe(2);
+    expect(n({ contextAiFloors: '5' }).contextAiFloors).toBe(5);
   });
 
   it('重试次数夹到 0–5，0 表示不重试', () => {

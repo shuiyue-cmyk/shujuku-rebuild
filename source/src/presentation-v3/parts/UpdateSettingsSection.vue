@@ -101,6 +101,7 @@ const ADVANCED_KEYS = new Set<NumberSettingKey>([
   'autoUpdateThreshold',
   'autoUpdateFrequency',
   'updateBatchSize',
+  'maxConcurrentGroups',
   'skipUpdateFloors',
   'autoUpdateTokenThreshold',
   'tableFillMinResponseLength',
@@ -137,7 +138,9 @@ const selectedUpdateEvery = computed<UpdateEveryId>(() => {
 });
 
 const isCustomSkip = computed(() => numberValue('skipUpdateFloors') > 1);
-const advancedMetaLabel = computed(() => (selectedUpdateEvery.value === 'custom' || isCustomSkip.value ? '自定义' : '默认'));
+const advancedMetaLabel = computed(() => (
+  selectedUpdateEvery.value === 'custom' || isCustomSkip.value || numberValue('maxConcurrentGroups') > 1 ? '自定义' : '默认'
+));
 const skipLatestLayer = computed(() => numberValue('skipUpdateFloors') >= 1);
 const skipLatestLayerLabel = computed(() => (isCustomSkip.value ? '最新层不填表：自定义' : '最新层不填表'));
 const skipLatestLayerHint = computed(() => {

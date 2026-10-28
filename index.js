@@ -4962,8 +4962,9 @@ const DECISION_RECALL_MAX_TOTAL_ACU = 50;
 const DECISION_RECALL_MAX_COUNT_ACU = DECISION_RECALL_MAX_TOTAL_ACU - DECISION_RECALL_FIXED_RECENT_COUNT_ACU;
 /** 默认召回 20 条，加固定 5 条合计 25 条，与时间召回的默认条数一致。 */
 const DEFAULT_DECISION_RECALL_COUNT_ACU = 20;
-/** 打分时参考最近几楼 AI 回复（另带最新的用户输入）。 */
+/** 打分时默认参考最近几楼 AI 回复（另带最新的用户输入）；用户可调到 0–10，0 表示只看用户输入。 */
 const DECISION_RECALL_CONTEXT_AI_FLOORS_ACU = 2;
+const DECISION_RECALL_MAX_CONTEXT_AI_FLOORS_ACU = 10;
 /** 默认同时在途的打分请求数：硅基流动按每分钟 token 数限流，一次全发容易撞 429；用户可调到 1–100。 */
 const DECISION_RECALL_CONCURRENCY_ACU = 3;
 const DECISION_RECALL_MAX_CONCURRENCY_ACU = 100;
@@ -5032,6 +5033,7 @@ function buildDefaultDecisionRecallSettings_ACU() {
         aihubmixApiKey: '',
         aihubmixModel: DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
         recallCount: DEFAULT_DECISION_RECALL_COUNT_ACU,
+        contextAiFloors: DECISION_RECALL_CONTEXT_AI_FLOORS_ACU,
         batchSize: DECISION_RECALL_BATCH_SIZE_ACU,
         judgeRuns: DEFAULT_DECISION_RECALL_JUDGE_RUNS_ACU,
         concurrency: DECISION_RECALL_CONCURRENCY_ACU,
@@ -91270,6 +91272,7 @@ function normalizeDecisionRecallSettings_ACU(raw) {
         aihubmixApiKey: text(source.aihubmixApiKey),
         aihubmixModel: text(source.aihubmixModel) || DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
         recallCount: readInteger_ACU(source.recallCount, DEFAULT_DECISION_RECALL_COUNT_ACU, 1, DECISION_RECALL_MAX_COUNT_ACU),
+        contextAiFloors: readInteger_ACU(source.contextAiFloors, DECISION_RECALL_CONTEXT_AI_FLOORS_ACU, 0, DECISION_RECALL_MAX_CONTEXT_AI_FLOORS_ACU),
         batchSize: readInteger_ACU(source.batchSize, DECISION_RECALL_BATCH_SIZE_ACU, 1, DECISION_RECALL_MAX_BATCH_SIZE_ACU),
         judgeRuns: readInteger_ACU(source.judgeRuns, DEFAULT_DECISION_RECALL_JUDGE_RUNS_ACU, 1, DECISION_RECALL_MAX_JUDGE_RUNS_ACU),
         concurrency: readInteger_ACU(source.concurrency, DECISION_RECALL_CONCURRENCY_ACU, 1, DECISION_RECALL_MAX_CONCURRENCY_ACU),
@@ -91727,7 +91730,7 @@ async function runDecisionRecall_ACU(options, deps = {}) {
             unscoredCount: plan.pool.length, missingKey: true, missingField: endpoint.missing, errors: [],
         };
     }
-    const state = buildDecisionRecallState_ACU({ aiFloors: collectDecisionRecallAiFloors_ACU(sources.loadChat()), userInput: options.userInput });
+    const state = buildDecisionRecallState_ACU({ aiFloors: collectDecisionRecallAiFloors_ACU(sources.loadChat(), settings.contextAiFloors), userInput: options.userInput });
     const groups = chunkDecisionRecallRows_ACU(plan.pool, settings.batchSize);
     const fetchImpl = deps.fetch ?? globalThis.fetch;
     // 总时限与鉴权类错误都要能停下其余各组的在途请求，但不算用户中止
@@ -94673,7 +94676,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261028-0959"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261028-1326"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -94692,7 +94695,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261028-0959";
+        const stamp = "20261028-1326";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -156336,7 +156339,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261028-0959";
+        const stamp = "20261028-1326";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -196702,10 +196705,10 @@ const NUMBER_FIELD_META = [
     },
     {
         key: "maxConcurrentGroups",
-        label: "最大并发数",
+        label: "最大并发更新组数",
         min: 1,
         step: 1,
-        hint: "同时处理的表格组数，默认为1。",
+        hint: "同时填表的表格分组数，默认 1。大于 1 时多个分组会同时调用填表 API，越大越快，但 API 压力和排查难度也越高。",
     },
     {
         key: "skipUpdateFloors",
@@ -197264,6 +197267,7 @@ var _sfc_main$q = /*@__PURE__*/ defineComponent({
             'autoUpdateThreshold',
             'autoUpdateFrequency',
             'updateBatchSize',
+            'maxConcurrentGroups',
             'skipUpdateFloors',
             'autoUpdateTokenThreshold',
             'tableFillMinResponseLength',
@@ -197292,7 +197296,7 @@ var _sfc_main$q = /*@__PURE__*/ defineComponent({
             return 'custom';
         });
         const isCustomSkip = computed(() => numberValue('skipUpdateFloors') > 1);
-        const advancedMetaLabel = computed(() => (selectedUpdateEvery.value === 'custom' || isCustomSkip.value ? '自定义' : '默认'));
+        const advancedMetaLabel = computed(() => (selectedUpdateEvery.value === 'custom' || isCustomSkip.value || numberValue('maxConcurrentGroups') > 1 ? '自定义' : '默认'));
         const skipLatestLayer = computed(() => numberValue('skipUpdateFloors') >= 1);
         const skipLatestLayerLabel = computed(() => (isCustomSkip.value ? '最新层不填表：自定义' : '最新层不填表'));
         const skipLatestLayerHint = computed(() => {
@@ -197331,8 +197335,8 @@ var _sfc_main$q = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-upd__more[data-v-efd558d2] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  width: 100%;\n  padding: var(--ub-s3) var(--ub-s4);\n  border: 0;\n  border-top: 1px solid var(--ub-line-soft);\n  background: var(--ub-sunken);\n  color: var(--ub-text-2);\n  font: inherit;\n  font-size: var(--ub-fs-sm);\n  font-weight: 600;\n  text-align: left;\n  cursor: pointer;\n}\n.ub-upd__more[data-v-efd558d2]:hover {\n  color: var(--ub-text);\n}\n.ub-upd__chevron[data-v-efd558d2] {\n  font-size: 0.75em;\n  transition: transform 0.16s ease;\n}\n.ub-upd__chevron.is-open[data-v-efd558d2] {\n  transform: rotate(90deg);\n}\n.ub-upd__more + .ub-row[data-v-efd558d2],\n.ub-upd__more ~ .ub-row[data-v-efd558d2] {\n  background: color-mix(in srgb, var(--ub-sunken) 50%, transparent);\n}\n", "src/presentation-v3/parts/UpdateSettingsSection.vue#style-0-efd558d2");
-var UpdateSettingsSection_vue_vue_type_style_index_0_scoped_efd558d2_lang = null;
+injectSfcStyle("\n.ub-upd__more[data-v-83281c06] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border: 0;\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-upd__more[data-v-83281c06]:hover {\r\n  color: var(--ub-text);\n}\n.ub-upd__chevron[data-v-83281c06] {\r\n  font-size: 0.75em;\r\n  transition: transform 0.16s ease;\n}\n.ub-upd__chevron.is-open[data-v-83281c06] {\r\n  transform: rotate(90deg);\n}\n.ub-upd__more + .ub-row[data-v-83281c06],\r\n.ub-upd__more ~ .ub-row[data-v-83281c06] {\r\n  background: color-mix(in srgb, var(--ub-sunken) 50%, transparent);\n}\r\n", "src/presentation-v3/parts/UpdateSettingsSection.vue#style-0-83281c06");
+var UpdateSettingsSection_vue_vue_type_style_index_0_scoped_83281c06_lang = null;
 
 const _hoisted_1$m = ["aria-expanded"];
 function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
@@ -197469,7 +197473,7 @@ function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
 		"description"
 	]);
 }
-var UpdateSettingsSection = /* @__PURE__ */ _export_sfc(_sfc_main$q, [["render", _sfc_render$p], ["__scopeId", "data-v-efd558d2"]]);
+var UpdateSettingsSection = /* @__PURE__ */ _export_sfc(_sfc_main$q, [["render", _sfc_render$p], ["__scopeId", "data-v-83281c06"]]);
 
 var _sfc_main$p = /*@__PURE__*/ defineComponent({
     __name: 'BasicConfigPage',
@@ -208608,13 +208612,23 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
         const maxTotal = DECISION_RECALL_MAX_TOTAL_ACU;
         const maxRetries = DECISION_RECALL_MAX_RETRIES_LIMIT_ACU;
         const maxBatchSize = DECISION_RECALL_MAX_BATCH_SIZE_ACU;
+        const maxContextFloors = DECISION_RECALL_MAX_CONTEXT_AI_FLOORS_ACU;
+        /** 召回规则里不常改的几项收起；标题旁显示当前取值，收起时也能看到。 */
+        const advancedOpen = ref(false);
+        const advancedMeta = computed(() => {
+            const value = store.settings;
+            return `召回 ${value.recallCount} 条 · 前文 ${value.contextAiFloors} 楼 · 每组 ${value.batchSize} 条 · 判定 ${value.judgeRuns} 次 · 并发 ${value.concurrency}`;
+        });
         const maxJudgeRuns = DECISION_RECALL_MAX_JUDGE_RUNS_ACU;
         const maxConcurrency = DECISION_RECALL_MAX_CONCURRENCY_ACU;
         /** 总时限按判定次数放宽。 */
         const totalSeconds = computed(() => Math.round(resolveDecisionRecallTotalTimeoutMs_ACU(store.settings.judgeRuns) / 1000));
         const codesPlaceholder = DECISION_RECALL_CODES_PLACEHOLDER_ACU;
+        const contextLabel = computed(() => (store.settings.contextAiFloors > 0
+            ? `最近 ${store.settings.contextAiFloors} 楼 AI 回复和用户最新输入`
+            : '用户最新输入（不带 AI 回复）'));
         const ruleDescription = computed(() => `每组 ${store.settings.batchSize} 条纪要发一次请求、每组判定 ${store.settings.judgeRuns} 次取平均、最多同时 ${store.settings.concurrency} 个请求；`
-            + '参考最近两楼 AI 回复和用户最新输入，不带世界书；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。');
+            + `参考${contextLabel.value}，不带世界书；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。`);
         const modeOptions = [
             { value: 'standalone', label: '单独召回' },
             { value: 'plot_task', label: '替换剧情推进的任务' },
@@ -208731,14 +208745,14 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
                 void store.loadModels();
         });
         watchChatChanged_ACU(() => refresh());
-        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, maxBatchSize, maxJudgeRuns, maxConcurrency, totalSeconds, codesPlaceholder, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, DEFAULT_MODEL_ACU, defaultModel, modelPlaceholder, modelHint, scoringOptions, setProvider, setKey, setModel, setModelText, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
+        const __returned__ = { store, routerStore, toastStore, sections, fixedCount, maxCount, maxTotal, maxRetries, maxBatchSize, maxContextFloors, advancedOpen, advancedMeta, maxJudgeRuns, maxConcurrency, totalSeconds, codesPlaceholder, contextLabel, ruleDescription, modeOptions, modeHint, providerOptions, PROVIDER_VIEW_ACU, providerView, KEY_FIELD_ACU, MODEL_FIELD_ACU, modelOptions, DEFAULT_MODEL_ACU, defaultModel, modelPlaceholder, modelHint, scoringOptions, setProvider, setKey, setModel, setModelText, inputKey, setNumber, setMode, directiveDraft, directiveDirty, saveDirective, resetDirective, refresh, UbBadge, UbButton, UbCallout, UbDisclosure, UbIconButton, UbInput, UbPage, UbRow, UbSection, UbSegmented, UbSelect, UbTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-dr__picker[data-v-77b3bf06] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-77b3bf06] {\n  margin: 0;\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-77b3bf06] {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-77b3bf06] {\n  max-height: calc(var(--ub-u) * 360);\n  margin: 0;\n  padding: var(--ub-s3);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-sunken);\n  color: var(--ub-text);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  line-height: 1.6;\n  white-space: pre-wrap;\n  overflow: auto;\n}\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-77b3bf06");
-var DecisionRecallPage_vue_vue_type_style_index_0_scoped_77b3bf06_lang = null;
+injectSfcStyle("\n.ub-dr__picker[data-v-50e3923d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-50e3923d] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-50e3923d] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-50e3923d] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-50e3923d");
+var DecisionRecallPage_vue_vue_type_style_index_0_scoped_50e3923d_lang = null;
 
 const _hoisted_1$c = {
 	key: 0,
@@ -208788,7 +208802,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						icon: "fa-solid fa-route",
 						onClick: _cache[0] || (_cache[0] = ($event) => $setup.routerStore.setActivePage("plot"))
 					}, {
-						default: withCtx(() => [..._cache[9] || (_cache[9] = [createTextVNode(
+						default: withCtx(() => [..._cache[11] || (_cache[11] = [createTextVNode(
 							"去剧情推进页",
 							-1
 							/* CACHED */
@@ -208902,70 +208916,6 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 			}, {
 				default: withCtx(() => [
 					createVNode($setup["UbRow"], {
-						label: "召回条数",
-						hint: `打分后挑选几条（1–${$setup.maxCount}），另外固定带上最新 ${$setup.fixedCount} 条，合计最多 ${$setup.maxTotal} 条。相关的不够时用分数低的补满。`
-					}, {
-						default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
-							key: `count-${$setup.inputKey}`,
-							"model-value": $setup.store.settings.recallCount,
-							type: "number",
-							min: 1,
-							max: $setup.maxCount,
-							step: 1,
-							"aria-label": "召回条数",
-							onChange: _cache[2] || (_cache[2] = ($event) => $setup.setNumber("recallCount", $event))
-						}, null, 8, ["model-value", "max"]))]),
-						_: 1
-					}, 8, ["hint"]),
-					createVNode($setup["UbRow"], {
-						label: "每组条数",
-						hint: `每次请求里放几条纪要（1–${$setup.maxBatchSize}）。条数少，模型看得更仔细，但请求更多，前文每次都要重发一遍。`
-					}, {
-						default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
-							key: `batchSize-${$setup.inputKey}`,
-							"model-value": $setup.store.settings.batchSize,
-							type: "number",
-							min: 1,
-							max: $setup.maxBatchSize,
-							step: 1,
-							"aria-label": "每组条数",
-							onChange: _cache[3] || (_cache[3] = ($event) => $setup.setNumber("batchSize", $event))
-						}, null, 8, ["model-value", "max"]))]),
-						_: 1
-					}, 8, ["hint"]),
-					createVNode($setup["UbRow"], {
-						label: "判定次数",
-						hint: `同一组让决策模型判定几次，每条纪要取平均分（1–${$setup.maxJudgeRuns}）。次数越多越稳，请求数也成倍增加；失败的那几次不计入平均。`
-					}, {
-						default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
-							key: `judgeRuns-${$setup.inputKey}`,
-							"model-value": $setup.store.settings.judgeRuns,
-							type: "number",
-							min: 1,
-							max: $setup.maxJudgeRuns,
-							step: 1,
-							"aria-label": "判定次数",
-							onChange: _cache[4] || (_cache[4] = ($event) => $setup.setNumber("judgeRuns", $event))
-						}, null, 8, ["model-value", "max"]))]),
-						_: 1
-					}, 8, ["hint"]),
-					createVNode($setup["UbRow"], {
-						label: "并发数",
-						hint: `决策召回自己同时发出几个请求（1–${$setup.maxConcurrency}），与其它功能无关。硅基流动等按每分钟 token 数限流的服务商并发太高会被限流。`
-					}, {
-						default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
-							key: `concurrency-${$setup.inputKey}`,
-							"model-value": $setup.store.settings.concurrency,
-							type: "number",
-							min: 1,
-							max: $setup.maxConcurrency,
-							step: 1,
-							"aria-label": "并发数",
-							onChange: _cache[5] || (_cache[5] = ($event) => $setup.setNumber("concurrency", $event))
-						}, null, 8, ["model-value", "max"]))]),
-						_: 1
-					}, 8, ["hint"]),
-					createVNode($setup["UbRow"], {
 						label: "打分时看什么",
 						hint: "只看概要更省、更快；加上纪要正文判断更准，但每组输入多好几倍。"
 					}, {
@@ -208973,7 +208923,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							options: $setup.scoringOptions,
 							"model-value": $setup.store.settings.scoringContent,
 							"aria-label": "打分时看什么",
-							"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.store.patch({ scoringContent: $event }))
+							"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.store.patch({ scoringContent: $event }))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -208989,10 +208939,100 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							max: $setup.maxRetries,
 							step: 1,
 							"aria-label": "失败重试次数",
-							onChange: _cache[7] || (_cache[7] = ($event) => $setup.setNumber("maxRetries", $event))
+							onChange: _cache[3] || (_cache[3] = ($event) => $setup.setNumber("maxRetries", $event))
 						}, null, 8, ["model-value", "max"]))]),
 						_: 1
-					}, 8, ["hint"])
+					}, 8, ["hint"]),
+					createVNode($setup["UbDisclosure"], {
+						label: "高级设置",
+						meta: $setup.advancedMeta,
+						expanded: $setup.advancedOpen,
+						onToggle: _cache[9] || (_cache[9] = ($event) => $setup.advancedOpen = !$setup.advancedOpen)
+					}, {
+						default: withCtx(() => [
+							createVNode($setup["UbRow"], {
+								label: "召回条数",
+								hint: `打分后挑选几条（1–${$setup.maxCount}），另外固定带上最新 ${$setup.fixedCount} 条，合计最多 ${$setup.maxTotal} 条。相关的不够时用分数低的补满。`
+							}, {
+								default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
+									key: `count-${$setup.inputKey}`,
+									"model-value": $setup.store.settings.recallCount,
+									type: "number",
+									min: 1,
+									max: $setup.maxCount,
+									step: 1,
+									"aria-label": "召回条数",
+									onChange: _cache[4] || (_cache[4] = ($event) => $setup.setNumber("recallCount", $event))
+								}, null, 8, ["model-value", "max"]))]),
+								_: 1
+							}, 8, ["hint"]),
+							createVNode($setup["UbRow"], {
+								label: "参考最近 AI 回复",
+								hint: `打分时带上最近几楼 AI 回复（0–${$setup.maxContextFloors}），另带用户最新输入。0 表示只看用户输入；楼数越多，每个请求的输入越长。`
+							}, {
+								default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
+									key: `contextAiFloors-${$setup.inputKey}`,
+									"model-value": $setup.store.settings.contextAiFloors,
+									type: "number",
+									min: 0,
+									max: $setup.maxContextFloors,
+									step: 1,
+									"aria-label": "参考最近 AI 回复",
+									onChange: _cache[5] || (_cache[5] = ($event) => $setup.setNumber("contextAiFloors", $event))
+								}, null, 8, ["model-value", "max"]))]),
+								_: 1
+							}, 8, ["hint"]),
+							createVNode($setup["UbRow"], {
+								label: "每组条数",
+								hint: `每次请求里放几条纪要（1–${$setup.maxBatchSize}）。条数少，模型看得更仔细，但请求更多，前文每次都要重发一遍。`
+							}, {
+								default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
+									key: `batchSize-${$setup.inputKey}`,
+									"model-value": $setup.store.settings.batchSize,
+									type: "number",
+									min: 1,
+									max: $setup.maxBatchSize,
+									step: 1,
+									"aria-label": "每组条数",
+									onChange: _cache[6] || (_cache[6] = ($event) => $setup.setNumber("batchSize", $event))
+								}, null, 8, ["model-value", "max"]))]),
+								_: 1
+							}, 8, ["hint"]),
+							createVNode($setup["UbRow"], {
+								label: "判定次数",
+								hint: `同一组让决策模型判定几次，每条纪要取平均分（1–${$setup.maxJudgeRuns}）。次数越多越稳，请求数也成倍增加；失败的那几次不计入平均。`
+							}, {
+								default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
+									key: `judgeRuns-${$setup.inputKey}`,
+									"model-value": $setup.store.settings.judgeRuns,
+									type: "number",
+									min: 1,
+									max: $setup.maxJudgeRuns,
+									step: 1,
+									"aria-label": "判定次数",
+									onChange: _cache[7] || (_cache[7] = ($event) => $setup.setNumber("judgeRuns", $event))
+								}, null, 8, ["model-value", "max"]))]),
+								_: 1
+							}, 8, ["hint"]),
+							createVNode($setup["UbRow"], {
+								label: "并发数",
+								hint: `决策召回自己同时发出几个请求（1–${$setup.maxConcurrency}），与其它功能无关。硅基流动等按每分钟 token 数限流的服务商并发太高会被限流。`
+							}, {
+								default: withCtx(() => [(openBlock(), createBlock($setup["UbInput"], {
+									key: `concurrency-${$setup.inputKey}`,
+									"model-value": $setup.store.settings.concurrency,
+									type: "number",
+									min: 1,
+									max: $setup.maxConcurrency,
+									step: 1,
+									"aria-label": "并发数",
+									onChange: _cache[8] || (_cache[8] = ($event) => $setup.setNumber("concurrency", $event))
+								}, null, 8, ["model-value", "max"]))]),
+								_: 1
+							}, 8, ["hint"])
+						]),
+						_: 1
+					}, 8, ["meta", "expanded"])
 				]),
 				_: 1
 			}, 8, ["description"]),
@@ -209007,7 +209047,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 					key: 0,
 					variant: "accent"
 				}, {
-					default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
+					default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
 						"未保存",
 						-1
 						/* CACHED */
@@ -209022,7 +209062,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						"auto-resize": "",
 						mono: "",
 						"aria-label": "注入指令",
-						"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.directiveDraft = $event)
+						"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.directiveDraft = $event)
 					}, null, 8, ["model-value"]),
 					createBaseVNode(
 						"p",
@@ -209036,7 +209076,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						icon: "fa-solid fa-rotate-left",
 						onClick: $setup.resetDirective
 					}, {
-						default: withCtx(() => [..._cache[11] || (_cache[11] = [createTextVNode(
+						default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
 							"恢复默认",
 							-1
 							/* CACHED */
@@ -209049,7 +209089,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.directiveDirty,
 						onClick: $setup.saveDirective
 					}, {
-						default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
+						default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
 							"保存指令",
 							-1
 							/* CACHED */
@@ -209062,7 +209102,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 			createVNode($setup["UbSection"], {
 				id: "dr-test",
 				title: "测试召回",
-				description: "用下面这句输入和当前聊天最近两楼 AI 回复跑一次完整打分，只显示结果，不写进聊天。会按所选服务商实际计费。",
+				description: `用下面这句输入${$setup.store.settings.contextAiFloors > 0 ? `和当前聊天最近 ${$setup.store.settings.contextAiFloors} 楼 AI 回复` : ""}跑一次完整打分，只显示结果，不写进聊天。会按所选服务商实际计费。`,
 				icon: "fa-solid fa-flask-vial",
 				padded: ""
 			}, {
@@ -209080,7 +209120,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						busy: $setup.store.testBusy,
 						onClick: $setup.store.runTest
 					}, {
-						default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
+						default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 							"测试召回",
 							-1
 							/* CACHED */
@@ -209096,22 +209136,18 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 					)) : createCommentVNode("v-if", true)
 				]),
 				_: 1
-			})
+			}, 8, ["description"])
 		]),
 		_: 1
 	});
 }
-var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-77b3bf06"]]);
+var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-50e3923d"]]);
 
 const developerCopy = {
     panels: {
         gatedFields: {
             title: "开发者 gated 字段",
             description: "集中管理各功能的开发者专属功能。默认关闭，且建议无经验用户不开启使用。",
-        },
-        formFillRuntime: {
-            title: "填表执行参数",
-            description: "最大并发更新组数会影响多个表格分组同时填表的数量,不建议普通用户修改。",
         },
     },
 };
@@ -209121,10 +209157,7 @@ var _sfc_main$e = /*@__PURE__*/ defineComponent({
     setup(__props, { expose: __expose }) {
         __expose();
         const devOptions = useDevOptions();
-        const settings = useFormFillSettings();
-        const maxConcurrentGroups = computed(() => settings.numberFields.value.find(field => field.key === 'maxConcurrentGroups')?.value ?? 1);
-        onMounted(() => settings.refresh());
-        const __returned__ = { devOptions, settings, maxConcurrentGroups, get copy() { return developerCopy; }, UbInput, UbPage, UbRow, UbSection, UbSwitch };
+        const __returned__ = { devOptions, get copy() { return developerCopy; }, UbPage, UbRow, UbSection, UbSwitch };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
@@ -209172,26 +209205,6 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 					_: 1
 				})
 			]),
-			_: 1
-		}, 8, ["title", "description"]), createVNode($setup["UbSection"], {
-			title: $setup.copy.panels.formFillRuntime.title,
-			description: $setup.copy.panels.formFillRuntime.description,
-			icon: "fa-solid fa-gauge-high"
-		}, {
-			default: withCtx(() => [createVNode($setup["UbRow"], {
-				label: "最大并发更新组数",
-				hint: "大于 1 时多个表格分组可能同时调用填表 API。越大越快，但 API 压力和排查难度也越高。"
-			}, {
-				default: withCtx(() => [createVNode($setup["UbInput"], {
-					type: "number",
-					min: 1,
-					step: 1,
-					"model-value": $setup.maxConcurrentGroups,
-					"aria-label": "最大并发更新组数",
-					onChange: _cache[3] || (_cache[3] = ($event) => $setup.settings.setNumber("maxConcurrentGroups", $event))
-				}, null, 8, ["model-value"])]),
-				_: 1
-			})]),
 			_: 1
 		}, 8, ["title", "description"])]),
 		_: 1

@@ -88,6 +88,25 @@ describe('runDecisionRecall_ACU', () => {
     expect(body.model).toBe('SemIf');
   });
 
+  it('参考最近几楼 AI 回复可调：0 楼时只带用户输入，3 楼时带最近 3 楼', async () => {
+    const chat = [
+      { is_user: false, mes: '回复一' }, { is_user: true, mes: '问' },
+      { is_user: false, mes: '回复二' }, { is_user: false, mes: '回复三' }, { is_user: false, mes: '回复四' },
+    ];
+    const none = scoringFetch(() => 3);
+    await runDecisionRecall_ACU({ userInput: '最新输入', settings: settings({ contextAiFloors: 0 }) }, { sources: makeSources(makeRows(10), null, chat), fetch: none, sleep: noSleep });
+    const noneState = JSON.parse(none.mock.calls[0][1].body).state as string;
+    expect(noneState).toContain('最新输入');
+    expect(noneState).not.toContain('回复');
+
+    const three = scoringFetch(() => 3);
+    await runDecisionRecall_ACU({ userInput: '最新输入', settings: settings({ contextAiFloors: 3 }) }, { sources: makeSources(makeRows(10), null, chat), fetch: three, sleep: noSleep });
+    const threeState = JSON.parse(three.mock.calls[0][1].body).state as string;
+    expect(threeState).toContain('回复二');
+    expect(threeState).toContain('回复四');
+    expect(threeState).not.toContain('回复一');
+  });
+
   it('每组 20 条：45 条候选分 3 组，最多同时发 3 组', async () => {
     let inFlight = 0;
     let peak = 0;

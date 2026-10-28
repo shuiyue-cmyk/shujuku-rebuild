@@ -114,16 +114,12 @@ describe('DeveloperPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('最大并发更新组数输入会保存到 settings', async () => {
-    const { mount, settings, saveSettings } = await mountDeveloperPage();
+  it('填表的最大并发更新组数已移到填表工作台，开发者选项里不再有填表执行参数', async () => {
+    const { mount } = await mountDeveloperPage();
 
-    const input = document.querySelector<HTMLInputElement>('[data-ub-main] input[aria-label="最大并发更新组数"]')!;
-    input.value = '4';
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-    await Promise.resolve();
-
-    expect(settings.maxConcurrentGroups).toBe(4);
-    expect(saveSettings).toHaveBeenCalled();
+    const page = document.querySelector('[data-ub-main]')!;
+    expect(page.querySelector('input[aria-label="最大并发更新组数"]')).toBeNull();
+    expect(page.textContent || '').not.toContain('填表执行参数');
 
     mount.__resetAcuV2MountForTests();
   });

@@ -20,8 +20,9 @@ export const DECISION_RECALL_MAX_TOTAL_ACU = 50;
 export const DECISION_RECALL_MAX_COUNT_ACU = DECISION_RECALL_MAX_TOTAL_ACU - DECISION_RECALL_FIXED_RECENT_COUNT_ACU;
 /** 默认召回 20 条，加固定 5 条合计 25 条，与时间召回的默认条数一致。 */
 export const DEFAULT_DECISION_RECALL_COUNT_ACU = 20;
-/** 打分时参考最近几楼 AI 回复（另带最新的用户输入）。 */
+/** 打分时默认参考最近几楼 AI 回复（另带最新的用户输入）；用户可调到 0–10，0 表示只看用户输入。 */
 export const DECISION_RECALL_CONTEXT_AI_FLOORS_ACU = 2;
+export const DECISION_RECALL_MAX_CONTEXT_AI_FLOORS_ACU = 10;
 /** 默认同时在途的打分请求数：硅基流动按每分钟 token 数限流，一次全发容易撞 429；用户可调到 1–100。 */
 export const DECISION_RECALL_CONCURRENCY_ACU = 3;
 export const DECISION_RECALL_MAX_CONCURRENCY_ACU = 100;
@@ -104,6 +105,7 @@ export function buildDefaultDecisionRecallSettings_ACU() {
     aihubmixApiKey: '',
     aihubmixModel: DEFAULT_AIHUBMIX_DECISION_MODEL_ACU,
     recallCount: DEFAULT_DECISION_RECALL_COUNT_ACU,
+    contextAiFloors: DECISION_RECALL_CONTEXT_AI_FLOORS_ACU,
     batchSize: DECISION_RECALL_BATCH_SIZE_ACU,
     judgeRuns: DEFAULT_DECISION_RECALL_JUDGE_RUNS_ACU,
     concurrency: DECISION_RECALL_CONCURRENCY_ACU,
