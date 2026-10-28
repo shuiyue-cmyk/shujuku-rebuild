@@ -162,6 +162,8 @@ describe('DecisionRecallPage', () => {
 
     expect(settings.decisionRecallSettings.provider).toBe('aihubmix');
     expect(document.body.textContent).toContain('AIHubMix Key');
+    const options = Array.from(document.querySelectorAll<HTMLOptionElement>('select[aria-label="常用决策模型"] option')).map(option => option.textContent);
+    expect(options).toEqual(expect.arrayContaining(['Mammoth 1（27B）（免费）', 'Elephant 1（9B）（免费）', 'Decision Model Preview（Qwen）（免费）']));
   });
 
   it('预设服务商的决策模型可直接填模型名，也可以从常用模型里选；清空回到默认', async () => {

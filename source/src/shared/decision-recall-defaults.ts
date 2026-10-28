@@ -41,11 +41,17 @@ export const DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU = 90000;
 export const AIHUBMIX_DECISION_API_URL_ACU = 'https://aihubmix.com/v1/systemone';
 export const DEFAULT_AIHUBMIX_DECISION_MODEL_ACU = 'jev-latest';
 /** AIHubMix 的模型列表接口不区分决策模型，按模型页内置。 */
+/**
+ * AIHubMix 决策模型（2026-10-28 核对其模型列表）。Mammoth 1 / Elephant 1 免费但上下文只有约 16K token；
+ * Span 01 Lite 按「行为描述」打分、不是选择题格式，用不了，不列。
+ */
 export const AIHUBMIX_DECISION_MODELS_ACU: readonly { id: string; name: string; free: boolean }[] = [
   { id: 'jev-latest', name: 'Jev（最新版）', free: false },
   { id: 'jev-1.14', name: 'Jev 1.14', free: false },
   { id: 'jev-1.13', name: 'Jev 1.13', free: false },
-  { id: 'decision-model-preview', name: 'Decision Model Preview', free: false },
+  { id: 'mammoth-1-free', name: 'Mammoth 1（27B）', free: true },
+  { id: 'elephant-1-free', name: 'Elephant 1（9B）', free: true },
+  { id: 'decision-model-preview', name: 'Decision Model Preview（Qwen）', free: true },
 ];
 
 /** custom：像交火那样自己填接口地址、Key 与模型；其余三家是预设。 */

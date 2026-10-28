@@ -20,7 +20,7 @@
         <UbSelect :options="providerOptions" :model-value="store.settings.provider" aria-label="决策召回服务商" @update:model-value="setProvider" />
       </UbRow>
       <UbCallout v-if="store.endpoint.missing" kind="warning">
-        还没填 {{ store.endpoint.label }} {{ store.endpoint.missing }}：纪要多于召回条数时不会打分，只带上最新 5 条纪要。
+        还没填 {{ store.endpoint.label }} {{ store.endpoint.missing }}：纪要多到需要挑选时，只会带上最新 5 条纪要，其余的不带；纪要不多时照常全部带上。
       </UbCallout>
       <UbRow
         v-if="store.settings.provider === 'custom'"
@@ -266,10 +266,10 @@ const PROVIDER_VIEW_ACU: Record<DecisionRecallProvider_ACU, { providerHint: stri
     modelHint: '标「免费」的不扣费；点刷新按钮拉取最新列表。',
   },
   aihubmix: {
-    providerHint: '按输入计费、输出不收费（Jev 最新版标价每百万输入 token 0.0462 美元）。',
+    providerHint: '按输入计费、输出不收费（Jev 标价每百万输入 token 0.0462 美元）；Mammoth 1、Elephant 1 与 Decision Model Preview（Qwen）免费。',
     keyHint: '在 aihubmix.com 的 API 密钥页面创建。',
     keyPlaceholder: 'sk-...',
-    modelHint: '',
+    modelHint: 'Mammoth 1、Elephant 1 上下文只有约 16K token：打分内容选「概要 + 纪要正文」、每组条数又多时容易超长，建议只看概要或把每组条数调小。',
   },
 };
 const providerView = computed(() => PROVIDER_VIEW_ACU[store.settings.provider]);
