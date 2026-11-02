@@ -402,6 +402,41 @@ describe('续写固定工作流（TT）', () => {
     expect(blockedResult.escalationKind).toBe('pending_fix');
   });
 
+  it('先整行契约结算、定向重派改用 write_sql：契约已受理的条目派工前先落帧，读回帧时不被顶掉', async () => {
+    const hook = (id: string) => ({ action: 'upsert' as const, id, summary: `伏笔${id}`, status: 'planted' as const, importance: 'mid' as const, plantedIndex: 2, plannedPayoff: '后文回收', reason: '' });
+    let frame = snapshot_ACU();
+    let maintainerCalls = 0;
+    const { run } = harness_ACU({
+      snapshot: frame,
+      readCommittedSnapshot: () => frame,
+      syncSnapshot: async next => { frame = next; },
+      runAgent: async call => {
+        if (call.agentName !== 'hook-cognition-maintainer') {
+          return { ok: true, summary: call.agentName, planner: { summary: '建议', recommendation: '安静地问一句', mustPreserve: [], risks: [] } };
+        }
+        maintainerCalls += 1;
+        if (maintainerCalls === 1) {
+          return {
+            ok: true,
+            summary: '契约结算',
+            maintainer: { summary: '契约结算', delta: delta_ACU({ hooks: [hook('H_RUN1')] }) },
+            writes: ['hooks'],
+            readRevisions: frame.revisions,
+            unresolvedIssues: [{ module: 'hooks', source: 'contract_rejected', path: 'hooks.H_BAD', message: '缺少回收计划' }],
+          };
+        }
+        // 第二次按提示改用 write_sql：模拟子代理按帧逐栏提交
+        frame = { ...frame, hooks: [...frame.hooks, { ...frame.hooks[0], id: 'H_RUN2', summary: '伏笔H_RUN2' }], revisions: { ...frame.revisions, hooks: frame.revisions.hooks + 1 } };
+        return { ok: true, summary: '逐栏补齐', writes: ['hooks'], usedFieldWrites: true };
+      },
+    });
+
+    const result = await run();
+
+    expect(maintainerCalls).toBe(2);
+    expect(result.snapshot.hooks.map(item => item.id).sort()).toEqual(['H_RUN1', 'H_RUN2']);
+  });
+
   it('工作流内容斥证据门：chronology 引用非 AI 楼时记入 pendingFixes 且不入库', async () => {
     const harness = harness_ACU({
       allowedEvidenceIndexes: new Set([2, 4, 6]),

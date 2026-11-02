@@ -116,6 +116,8 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
     
     let nestingLevel = 1;
     let currentIndex = ifStartTagEnd;
+    // 只认本层的 <else>：嵌套 if 自己的 <else> 不能拿来切外层分支
+    let topLevelElse: { index: number; length: number } | null = null;
     
     while (currentIndex < content.length && nestingLevel > 0) {
       const remainingContent = content.slice(currentIndex);
@@ -146,10 +148,9 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
           const endIndex = nearest.index + nearest.length;
           
           let ifContent, elseContent;
-          const elseTagMatch = ifBody.match(/<else>/i);
-          if (elseTagMatch && elseTagMatch.index !== undefined) {
-            ifContent = ifBody.slice(0, elseTagMatch.index);
-            elseContent = ifBody.slice(elseTagMatch.index + elseTagMatch[0].length);
+          if (topLevelElse) {
+            ifContent = content.slice(ifStartTagEnd, topLevelElse.index);
+            elseContent = content.slice(topLevelElse.index + topLevelElse.length, nearest.index);
           } else {
             ifContent = ifBody;
             elseContent = '';
@@ -180,6 +181,7 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
           currentIndex = nearest.index + nearest.length;
         }
       } else if (nearest.type === 'else') {
+        if (!topLevelElse) topLevelElse = { index: nearest.index, length: nearest.length };
         currentIndex = nearest.index + nearest.length;
       }
     }

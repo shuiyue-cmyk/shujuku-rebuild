@@ -19,6 +19,7 @@ import {
 import { isWorldbookEntrySkillifyCandidate_ACU } from './agent-skillify-service';
 import { hasUsableWorldbookSkillMeta_ACU } from './agent-worldbook-skill-meta';
 import { isDatabaseGeneratedLorebookEntry_ACU } from '../worldbook/worldbook-placeholder-classification';
+import { createAgentTakeoverMetaPattern_ACU, stripAgentTakeoverMetaBlockLoose_ACU } from '../../shared/agent-worldbook-comment';
 
 const FAVORITE_WORLDBOOKS_KEY_ACU = 'agentFavoriteWorldbooks';
 
@@ -83,12 +84,43 @@ function isAgentRuntimeEntry_ACU(entry: Record<string, any>): boolean {
   return comment.startsWith('TavernDB-ACU-') || isDatabaseGeneratedLorebookEntry_ACU(entry);
 }
 
-/** 复制用的世界书数据：深拷贝，去掉数据库生成与 Agent 状态条目。 */
+function readTakeoverMeta_ACU(comment: string): { previousEnabled?: unknown; previousType?: unknown } | null {
+  const match = createAgentTakeoverMetaPattern_ACU().exec(comment);
+  if (!match) return null;
+  try {
+    const meta = JSON.parse(match[1].trim());
+    return meta?.version === 1 && meta?.kind === 'agent_worldbook_takeover' ? meta : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 源书正被别的卡 Agent 接管时，条目是「关闭 + comment 里的接管记录」（放行过的还改成了常驻）。
+ * 副本按接管记录还原成接管前的样子，否则挂到新卡上是一本全关的死书，新卡的接管也认不出它。
+ * 文件数据是宿主原生格式：开关是 disable，常驻是 constant。
+ */
+function restoreTakeoverBaseline_ACU(entry: Record<string, any>): void {
+  const comment = String(entry.comment ?? '');
+  if (!createAgentTakeoverMetaPattern_ACU().test(comment)) return;
+  const meta = readTakeoverMeta_ACU(comment);
+  entry.comment = stripAgentTakeoverMetaBlockLoose_ACU(comment);
+  if (!meta) return;
+  entry.disable = meta.previousEnabled === false;
+  const previousType = typeof meta.previousType === 'string' ? meta.previousType.trim().toLowerCase() : '';
+  if (entry.constant === true && previousType && previousType !== 'constant') {
+    entry.constant = false;
+    if (previousType === 'vectorized') entry.vectorized = true;
+  }
+}
+
+/** 复制用的世界书数据：深拷贝，去掉数据库生成与 Agent 状态条目，被接管的条目还原成接管前的样子。 */
 export function buildFavoriteWorldbookCopyData_ACU(data: Record<string, any>): Record<string, any> {
   const copy = structuredClone(data);
   const entries = copy?.entries && typeof copy.entries === 'object' ? copy.entries : {};
   copy.entries = Object.fromEntries(Object.entries(entries)
     .filter(([, entry]) => entry && typeof entry === 'object' && !isAgentRuntimeEntry_ACU(entry as Record<string, any>)));
+  for (const entry of Object.values<Record<string, any>>(copy.entries)) restoreTakeoverBaseline_ACU(entry);
   return copy;
 }
 

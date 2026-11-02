@@ -119,6 +119,40 @@ describe('useVisualizerConfigEditing', () => {
     expect(store.currentSheet.content[1]).toEqual([null, '苹果', '2', null]);
   });
 
+  it('新增列同步追加 DDL 列定义（中文列名用 ASCII 物理名），之后 DDL 与表头仍一致', async () => {
+    const store = await loadSheet();
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const { validateDDLTextAgainstHeaders_ACU, parseDDLColumnInfos_ACU } = await import('../../../src/shared/ddl-utils');
+    const config = useVisualizerConfigEditing();
+
+    config.addColumn('品质');
+    const ddl = store.currentSheet.sourceData.ddl;
+    expect(ddl).toContain('quantity INTEGER, -- 数量');
+    expect(validateDDLTextAgainstHeaders_ACU(ddl, store.currentSheet.content[0]).valid).toBe(true);
+    const added = parseDDLColumnInfos_ACU(ddl).at(-1)!;
+    expect(added.comment).toBe('品质');
+    expect(added.sqlName).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
+
+    config.addColumn('Quantity');
+    expect(validateDDLTextAgainstHeaders_ACU(store.currentSheet.sourceData.ddl, store.currentSheet.content[0]).valid).toBe(true);
+    expect(new Set(parseDDLColumnInfos_ACU(store.currentSheet.sourceData.ddl).map(column => column.sqlName.toLowerCase())).size).toBe(5);
+  });
+
+  it('新增与已有列同名的列、或 DDL 已与表头不一致时拒绝，草稿不变', async () => {
+    const store = await loadSheet();
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const config = useVisualizerConfigEditing();
+
+    const before = JSON.stringify(store.tempData);
+    config.addColumn('数量');
+    expect(JSON.stringify(store.tempData)).toBe(before);
+
+    store.currentSheet.content[0].push('草稿列');
+    const beforeMismatch = JSON.stringify(store.tempData);
+    config.addColumn('品质');
+    expect(JSON.stringify(store.tempData)).toBe(beforeMismatch);
+  });
+
   it('删除 SQLite 业务列时原子同步 DDL、表头和所有数据行', async () => {
     const store = await loadSheet();
     const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');

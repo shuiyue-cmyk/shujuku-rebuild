@@ -318,10 +318,41 @@ describe('useVisualizerSave', () => {
 
     const saved = await useVisualizerSave().saveToChat();
 
-    expect(saved).toBe(false);
+    // 结构没变的表可以先单独存行数据；改名仍留在草稿里等模板保存，不被当成已保存吞掉
+    expect(saved).toBe(true);
+    expect(runtimeMock.getCurrentData().sheet_test_vz2.content[1][2]).toBe('数据已改');
     expect(store.dirty).toBe(true);
     expect(store.templateBaseData?.sheet_test_vz2.name).toBe('角色状态');
-    expect(toastMock.error).toHaveBeenCalledWith(expect.stringContaining('模板'), { muteable: false });
+    expect(store.tempData.sheet_test_vz2.name).toBe('模板改名未保存');
+    const { hasVisualizerPendingDataOps_ACU } = await import('../../../src/service/visualizer/visualizer-data-ops');
+    expect(hasVisualizerPendingDataOps_ACU(store)).toBe(false);
+    expect(toastMock.success).toHaveBeenCalledWith(expect.stringContaining('保存模板到当前聊天'), { muteable: false });
+  });
+
+  it('同一张表既改了结构又改了行数据：数据保存说明无法分开保存，模板保存的提示也不再互相指向对方', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    const initialData = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_test_vz2: sheet(),
+    };
+    store.loadSnapshot(initialData, ['sheet_test_vz2'], 'chat-a::iso-test');
+    runtimeMock._set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(initialData)));
+    store.updateCell(0, 1, '数据已改');
+    store.tempData.sheet_test_vz2.content[0][1] = '状态（改名）';
+    store.setDirty(true);
+
+    const save = useVisualizerSave();
+    expect(await save.saveToChat()).toBe(false);
+    const dataMessage = String(toastMock.error.mock.calls.at(-1)?.[0] || '');
+    expect(dataMessage).toContain('角色状态');
+    expect(dataMessage).toContain('撤销');
+    expect(dataMessage).not.toContain('请先保存模板');
+
+    expect(await save.saveTemplateToCurrentChat()).toBe(false);
+    expect(String(toastMock.error.mock.calls.at(-1)?.[0] || '')).toContain('保存数据到当前消息');
+    expect(runtimeMock.getCurrentData().sheet_test_vz2.content[1][2]).not.toBe('数据已改');
   });
 
   it('聊天身份变化后拒绝把旧聊天草稿写入当前聊天', async () => {
@@ -1880,7 +1911,7 @@ describe('useVisualizerSave', () => {
     const saved = await useVisualizerSave().saveToChat();
 
     expect(saved).toBe(false);
-    expect(toastMock.error).toHaveBeenCalledWith(expect.stringContaining('请先保存模板'), { muteable: false });
+    expect(toastMock.error).toHaveBeenCalledWith(expect.stringContaining('保存模板到当前聊天'), { muteable: false });
     expect(serviceMock.saveTableLocksForSheet_ACU).not.toHaveBeenCalled();
     expect(store.templateBaseData?.sheet_test_vz2?.name).toBe('原表名');
     expect(store.dirty).toBe(true);

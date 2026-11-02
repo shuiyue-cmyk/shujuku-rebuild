@@ -1,5 +1,6 @@
 import { computed } from 'vue';
 import {
+  appendDDLColumn_ACU,
   getSheetColumnProjection_ACU,
   validateDDLTextAgainstHeaders_ACU,
   parseDDLColumnNames,
@@ -276,8 +277,27 @@ export function useVisualizerConfigEditing() {
   function addColumn(name: string): void {
     const normalizedName = name.trim();
     if (!normalizedName) return;
-    withSheet(sheet => {
-      const content = ensureSheetContent(sheet);
+    const sheet = currentSheet.value;
+    if (!sheet) return;
+    // 与删除列同规格：有 DDL 时原子追加列定义，DDL 与表头不一致就不能保存模板
+    let nextDDL: string | null = null;
+    if (String(sheet.sourceData?.ddl || '').trim()) {
+      const headers = ensureSheetContent(sheet)[0];
+      const currentValidation = validateDDLTextAgainstHeaders_ACU(sheet.sourceData.ddl, headers);
+      if (!currentValidation.valid) {
+        toastStore.error(`新增列已拒绝：当前 DDL 与表头不一致：${currentValidation.message}`, { muteable: false });
+        return;
+      }
+      try {
+        nextDDL = appendDDLColumn_ACU(sheet.sourceData.ddl, normalizedName);
+      } catch (error: any) {
+        toastStore.error(`新增列已拒绝：${error?.message || String(error)}`, { muteable: false });
+        return;
+      }
+    }
+    withSheet(current => {
+      const content = ensureSheetContent(current);
+      if (nextDDL !== null) current.sourceData.ddl = nextDDL;
       content[0].push(normalizedName);
       content.slice(1).forEach((row: any) => {
         if (Array.isArray(row)) row.push(null);

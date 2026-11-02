@@ -325,6 +325,33 @@ describe('useContentReplaceStore', () => {
     expect(store.message?.kind).toBe('error');
   });
 
+  it('重新优化等待期间用户就地改了这楼正文或滑到别的回复，不覆盖', async () => {
+    for (const change of [
+      (message: any) => { message.mes = '用户刚手改的正文'; },
+      (message: any) => { message.swipe_id = 1; message.mes = '另一个回复版本'; },
+    ]) {
+      const { store, performOptimization, replaceChatMessage, setChat } = await setupStore();
+      const chat: any[] = [
+        { message_id: 'a-0', mes: '开场' },
+        { message_id: 'a-1', mes: '用户' },
+        { message_id: 'a-2', mes: '上次替换后的正文', swipe_id: 0 },
+      ];
+      setChat('chat-a', chat);
+      store.setBoolean('enabled', true);
+      let resolveOptimization: ((value: any) => void) | null = null;
+      performOptimization.mockImplementation(() => new Promise(resolve => { resolveOptimization = resolve; }));
+
+      const pending = store.reoptimizeLatest();
+      await Promise.resolve();
+      change(chat[2]);
+      resolveOptimization?.({ success: true, optimizations: [{ original: '旧句子', optimized: '新句子', plan: '改写' }], optimizedContent: '新句子', summary: '完成' });
+      await pending;
+
+      expect(replaceChatMessage).not.toHaveBeenCalled();
+      expect(store.message?.kind).toBe('error');
+    }
+  });
+
   it('优化当前正文：取最新一条 AI 回复此刻的正文（含已替换部分）再优化，带楼层快照写回', async () => {
     const { store, performOptimization, replaceChatMessage, getOriginalContent, setChat, toast } = await setupStore();
     setChat('chat-a', [
@@ -370,7 +397,10 @@ describe('useContentReplaceStore', () => {
 
     expect(getOriginalContent).toHaveBeenCalledWith(2);
     expect(performOptimization).toHaveBeenCalledWith('旧句子', { currentLoop: 1, userMessage: '' });
-    expect(replaceChatMessage).toHaveBeenCalledWith(2, '新句子', { originalContent: '旧句子' });
+    expect(replaceChatMessage).toHaveBeenCalledWith(2, '新句子', {
+      originalContent: '旧句子',
+      expected: expect.objectContaining({ messageIndex: 2, messageId: 'a-2', mes: '旧句子' }),
+    });
     expect(store.message).toBeNull();
     expect(toast.items.map(item => item.text)).toContain('已重新优化并替换 1 处内容。');
   });

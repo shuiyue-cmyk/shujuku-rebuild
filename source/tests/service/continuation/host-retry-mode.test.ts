@@ -1,15 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveHostRetryMode_ACU } from '../../../src/service/continuation/host-retry-mode';
+import { hostMessageFingerprint_ACU, resolveHostRetryMode_ACU } from '../../../src/service/continuation/host-retry-mode';
 
 function fingerprint(message: Record<string, unknown>): string {
-  const text = JSON.stringify({ is_user: message.is_user === true, mes: String(message.mes ?? ''), name: String(message.name ?? '') });
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `fp-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+  return hostMessageFingerprint_ACU(message);
 }
 
 const capture = { capturedAt: 1, capturedChatLength: 2, capturedAiFloorCount: 1, generationSeq: null, instructionIndex: 1, instructionFingerprint: fingerprint({ is_user: true, mes: '主 Agent 的指令' }) };
@@ -34,6 +28,15 @@ describe('resolveHostRetryMode_ACU', () => {
     expect(resolveHostRetryMode_ACU([opening, reply], capture)).toBeNull();
     // 没有正文时用户又发送了另一条消息：generate 不能改投新用户楼。
     expect(resolveHostRetryMode_ACU([opening, instruction, { is_user: true, mes: '用户插话' }], capture)).toBeNull();
+  });
+
+  it('发送时按指令文本合成的指纹，能认出宿主带上用户名（persona）建出的真实指令楼', () => {
+    // send() 在宿主建楼前只能按 { is_user, mes } 合成指纹；宿主真实楼带 name（如「用户」）
+    const syntheticCapture = { ...capture, instructionFingerprint: hostMessageFingerprint_ACU({ is_user: true, mes: '主 Agent 的指令' }) };
+    const hostInstruction = { is_user: true, mes: '主 Agent 的指令', name: '用户' };
+    expect(resolveHostRetryMode_ACU([opening, hostInstruction, reply], syntheticCapture)).toBe('regenerate');
+    expect(resolveHostRetryMode_ACU([opening, hostInstruction], syntheticCapture)).toBe('generate');
+    expect(resolveHostRetryMode_ACU([opening, { ...hostInstruction, mes: '别的话' }], syntheticCapture)).toBeNull();
   });
 
   it('regenerate 重试预减过的快照同样适用', () => {

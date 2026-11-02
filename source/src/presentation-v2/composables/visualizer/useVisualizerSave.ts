@@ -95,6 +95,7 @@ import {
 import {
   applyVisualizerPendingDataOps_ACU,
   hasVisualizerPendingDataOps_ACU,
+  listVisualizerPendingDataOpSheetKeys_ACU,
   replaceVisualizerTemporaryRowIds_ACU,
 } from '../../../service/visualizer/visualizer-data-ops';
 import {
@@ -420,11 +421,24 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         || templateChanges.mateChanged
         || JSON.stringify(baseOrderWithoutDeleted) !== JSON.stringify(currentOrderWithoutDeleted);
       const hasLockChanges = visualizer.lockDirty;
-      // R10A-02：只有锁改动时同样拒绝。markSaved('data') 会把模板基线设成当前草稿，
-      // 未提交的改表名/改列/调顺序会被当成「已保存」吞掉，之后模板保存看不到任何变化。
-      if ((hasDataChanges || hasLockChanges) && hasPendingTemplateChanges) {
-        toastStore.error('数据保存不能混入未提交的模板变化；请先保存模板，再保存数据。', { muteable: false });
+      // R10A-02：markSaved('data') 会把模板基线设成当前草稿，未提交的改表名/改列/调顺序会被当成
+      // 「已保存」吞掉。所以模板改动没保存时，数据路径只单独存行数据（基线只同步这几张表的行），
+      // 锁和结构改动留给模板保存；模板保存又要求先清掉行数据增量，两条路由此分步走通。
+      // 同一张表既改了列又改了行数据，行增量按旧列记录、模板按新列提交，无法分开保存。
+      const dataSheetKeys = listVisualizerPendingDataOpSheetKeys_ACU(visualizer);
+      if (hasPendingTemplateChanges && hasLockChanges && !hasDataChanges) {
+        toastStore.error('锁设置要和未保存的结构改动一起提交；请使用「保存模板到当前聊天」。', { muteable: false });
         return false;
+      }
+      if (hasPendingTemplateChanges && hasDataChanges) {
+        const structuralSheetKeys = new Set([...templateChanges.addedSheetKeys, ...templateChanges.schemaChangedSheetKeys]);
+        const conflictNames = dataSheetKeys
+          .filter(sheetKey => structuralSheetKeys.has(sheetKey))
+          .map(sheetKey => String(visualizer.templateBaseData?.[sheetKey]?.name || visualizer.tempData?.[sheetKey]?.name || sheetKey));
+        if (conflictNames.length > 0) {
+          toastStore.error(`表「${conflictNames.join('」「')}」同时改了列和行数据，两者无法分开保存：请先撤销其中一类（把列改回原样，或丢弃草稿后分两次编辑）。`, { muteable: false });
+          return false;
+        }
       }
       const result = hasDataChanges
         ? await applyVisualizerPendingDataOps_ACU(visualizer, saveContextKey)
@@ -447,7 +461,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           { muteable: false });
         return false;
       }
-      if (hasLockChanges) saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
+      if (hasLockChanges && !hasPendingTemplateChanges) saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
       try {
         // 阶段 E：行数据保存路径复用 applyVisualizerPendingDataOps_ACU 已完成的
         // post-save canonical replay 结果，避免 merged refresh 内部再整链 replay 一次
@@ -474,6 +488,11 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
       try {
         (topLevelWindow_ACU as any).AutoCardUpdaterAPI?._notifyTableUpdate?.();
       } catch {}
+      if (hasPendingTemplateChanges) {
+        visualizer.markDataSavedKeepingTemplateDraft(dataSheetKeys);
+        toastStore.success('行数据已保存到当前消息；结构改动还没保存，请再点「保存模板到当前聊天」。', { muteable: false });
+        return true;
+      }
       visualizer.markSaved('data');
       toastStore.success(
         result.changed && hasLockChanges ? '数据增量与锁设置已保存到当前消息。'
@@ -636,7 +655,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         return true;
       };
       if (hasVisualizerPendingDataOps_ACU(visualizer)) {
-        toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
+        toastStore.error('还有没保存的行数据改动：请先点「保存数据到当前消息」，再保存模板。', { muteable: false });
         return false;
       }
       const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder);
@@ -1062,7 +1081,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         return false;
       }
       if (hasVisualizerPendingDataOps_ACU(visualizer)) {
-        toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
+        toastStore.error('还有没保存的行数据改动：请先点「保存数据到当前消息」，再保存模板。', { muteable: false });
         return false;
       }
       const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder);

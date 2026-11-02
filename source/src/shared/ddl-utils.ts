@@ -6,6 +6,7 @@
  */
 
 import { logWarn_ACU } from './utils';
+import { mapSqlColumnIdentifiers_ACU } from './sql-identifier-mapper';
 import type { Sheet_ACU } from './models/table-data';
 
 // ═══════════════════════════════════════════════════════════════
@@ -992,6 +993,56 @@ export function removeDDLColumnAtIndex_ACU(ddl: string, sourceIndex: number): st
     .filter((_, index) => index !== targetIndex)
     .map(column => column.sqlName.toLowerCase() === 'row_id' ? 'row_id' : (column.comment || column.sqlName)));
   if (!validation.valid) throw new Error(`删除列后的 DDL 非法：${validation.message}`);
+  return next;
+}
+
+/**
+ * Appends one business column at the end of a CREATE TABLE statement, keeping every
+ * other authored byte. The physical name is the fallback ASCII identifier for the
+ * header, suffixed (_2, _3…) when it collides with an existing column. Same limits as
+ * removeDDLColumnAtIndex_ACU: one column per line and no table constraints, otherwise
+ * it fails closed and callers must leave the editor draft untouched.
+ */
+export function appendDDLColumn_ACU(ddl: string, header: string): string {
+  const value = String(ddl || '');
+  const displayName = String(header ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+  if (!displayName) throw new Error('列名不能为空。');
+  const bounds = findCreateTableDefinitionBounds_ACU(value);
+  if (!bounds) throw new Error('无法解析 CREATE TABLE 语句，不能安全追加列。');
+  const columns = parseDDLColumnInfos_ACU(value);
+  const body = value.slice(bounds.openingIndex + 1, bounds.closingIndex);
+  const hasTableConstraint = splitColumnDefinitions(body).some(definition =>
+    /^(?:PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CHECK|CONSTRAINT)\b/i.test(stripSqlLineComments_ACU(definition).trim()),
+  );
+  if (hasTableConstraint) throw new Error('DDL 含表级约束，不能安全自动追加列。');
+  const lines = body.split('\n');
+  const columnLineIndices = lines
+    .map((line, index) => (/^([^\s,()]+)/.test(stripSqlLineComments_ACU(line).trim()) ? index : -1))
+    .filter(index => index >= 0);
+  if (!columnLineIndices.length || columnLineIndices.length !== columns.length) {
+    throw new Error('DDL 含多行列定义，不能安全自动追加列。');
+  }
+
+  const usedNames = new Set(columns.map(column => canonicalSqlIdentifier_ACU(column.sqlName)));
+  const baseName = mapSqlColumnIdentifiers_ACU(['row_id', displayName]).mappings[1]?.sqlName || 'col';
+  let sqlName = baseName;
+  for (let suffix = 2; usedNames.has(sqlName.toLowerCase()); suffix += 1) sqlName = `${baseName}_${suffix}`;
+
+  const lastLineIndex = columnLineIndices[columnLineIndices.length - 1];
+  const lastLine = lines[lastLineIndex];
+  const lastCode = stripSqlLineComments_ACU(lastLine).replace(/\s+$/, '');
+  if (!lastLine.startsWith(lastCode)) throw new Error('DDL 最后一列含块注释，不能安全自动追加列。');
+  if (!lastCode.endsWith(',')) {
+    lines[lastLineIndex] = `${lastCode},${lastLine.slice(lastCode.length)}`;
+  }
+  const indent = lastLine.match(/^\s*/)?.[0] ?? '  ';
+  lines.splice(lastLineIndex + 1, 0, `${indent}${sqlName} TEXT -- ${displayName}`);
+  const next = `${value.slice(0, bounds.openingIndex + 1)}${lines.join('\n')}${value.slice(bounds.closingIndex)}`;
+  const validation = validateDDLTextAgainstHeaders_ACU(next, [
+    ...columns.map(column => column.sqlName.toLowerCase() === 'row_id' ? 'row_id' : (column.comment || column.sqlName)),
+    displayName,
+  ]);
+  if (!validation.valid) throw new Error(`追加列后的 DDL 非法：${validation.message}`);
   return next;
 }
 

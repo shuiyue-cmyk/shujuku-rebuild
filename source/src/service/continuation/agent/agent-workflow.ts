@@ -110,6 +110,11 @@ export interface ContinuationWorkflowInput_ACU {
   runAgent: (call: ContinuationWorkflowAgentCall_ACU) => Promise<ContinuationWorkflowAgentPayload_ACU>;
   /** 已即时保存时读回提交后快照；不传则沿用传入快照（旧行为）。 */
   readCommittedSnapshot?: () => AgentModuleSnapshot_ACU;
+  /**
+   * 把工作流本地已应用、还没落帧的资料先落帧。带 write_sql 的子代理按帧提交、结算时又从帧读回，
+   * 本地契约结算若不先落帧，读回时会被整份顶掉。不传则不落（旧行为）。
+   */
+  syncSnapshot?: (snapshot: AgentModuleSnapshot_ACU) => Promise<void>;
   runComposer: (call: { prompt: string; revisionFeedback: string; priorInstruction: string; snapshot?: AgentModuleSnapshot_ACU }) => Promise<AgentComposerOutput_ACU>;
   runFinalReview: (instruction: string, summary: string, snapshot?: AgentModuleSnapshot_ACU) => Promise<AgentFinalReviewerOutput_ACU>;
   /** 本轮实际注入的正文起点；缺省保留既有完整结算语义。 */
@@ -142,6 +147,8 @@ const MAINLINE_NAME_ACU = 'mainline-planner';
 const BEAT_NAME_ACU = 'beat-planner';
 const ARC_NAME_ACU = 'arc-architect';
 const WEB_NAME_ACU = 'web-researcher';
+/** 持有资料写端口（write_sql）的子代理。 */
+const MATERIAL_WRITER_NAMES_ACU = new Set([MAINTAINER_NAME_ACU, ARC_NAME_ACU, WEB_NAME_ACU]);
 const MAINTAINER_MODULES_ACU = ['hooks', 'infoGap', 'chronology'] as const;
 export const CONTINUATION_REPAIRABLE_MODULES_ACU = [...MAINTAINER_MODULES_ACU, 'storyArc', 'webRefs'] as const;
 const BEAT_OBLIGATION_PATTERN_ACU = /伏笔|埋设|回收|误导|信息差|揭示/;
@@ -565,9 +572,49 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
   const outsidePending = snapshot.pendingFixes.filter(item => !pendingWithinSettlement_ACU(item, settlementStartIndex, settlementEndIndex));
   const previousCompletion = input.snapshot.materialCompletion;
 
+  // syncedSnapshot：帧上此刻的快照；syncedFrom：它对应的本地快照（本地变了才需要再落帧）。
+  // 开始时两者都是传入快照，之后每次落帧或从帧读回都跟着更新。
+  let syncedSnapshot = snapshot;
+  let syncedFrom = snapshot;
+  const readCommittedSnapshot_ACU = (): AgentModuleSnapshot_ACU => {
+    syncedSnapshot = input.readCommittedSnapshot!();
+    syncedFrom = syncedSnapshot;
+    return syncedSnapshot;
+  };
+  // 带 write_sql 的可写子代理按帧提交、结算时又从帧读回：派工前先把本地契约结算的资料条目落帧，
+  // 否则读回时会被整份顶掉。只落资料条目与修订号；挂账、完成状态、水位仍是工作流自己的账，
+  // 结束时统一落盘（与原口径一致）。同批并行派工共用一次落帧。
+  let syncing: { from: AgentModuleSnapshot_ACU; promise: Promise<void> } | null = null;
+  const syncMaterialsBeforeWriterDispatch_ACU = async (): Promise<void> => {
+    if (!input.syncSnapshot || snapshot === syncedFrom) return;
+    if (syncing?.from === snapshot) return syncing.promise;
+    const from = snapshot;
+    const materials: AgentModuleSnapshot_ACU = {
+      ...from,
+      settledThroughIndex: syncedSnapshot.settledThroughIndex,
+      settledPrefixFingerprint: syncedSnapshot.settledPrefixFingerprint,
+      settlementBoundary: syncedSnapshot.settlementBoundary,
+      materialCompletion: syncedSnapshot.materialCompletion,
+      pendingFixes: syncedSnapshot.pendingFixes,
+    };
+    if (materials.settledPrefixFingerprint === undefined) delete materials.settledPrefixFingerprint;
+    if (materials.settlementBoundary === undefined) delete materials.settlementBoundary;
+    const promise = input.syncSnapshot(materials).then(() => {
+      syncedSnapshot = materials;
+      syncedFrom = from;
+    });
+    syncing = { from, promise };
+    try {
+      await promise;
+    } finally {
+      if (syncing?.promise === promise) syncing = null;
+    }
+  };
+
   // 每次派工带上工作流此刻的资料：结算后的策划、补足与编排必须看到本轮刚结算的账本。
   const runSafe_ACU = async (call: ContinuationWorkflowAgentCall_ACU): Promise<ContinuationWorkflowAgentPayload_ACU> => {
     try {
+      if (MATERIAL_WRITER_NAMES_ACU.has(call.agentName)) await syncMaterialsBeforeWriterDispatch_ACU();
       return await input.runAgent({ ...call, snapshot });
     } catch (error) {
       if (isStale_ACU(error)) throw error;
@@ -599,7 +646,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     steps.push({ agentName: WEB_NAME_ACU, status: web.ok ? 'ok' : 'failed', summary: web.summary });
     if (web.ok && web.usedFieldWrites) {
       assertFieldWriteSettleable_ACU({ agentName: WEB_NAME_ACU, usedFieldWrites: web.usedFieldWrites, contractTouched: false, researcherTouched: (web.researcher?.items.length ?? 0) > 0 || (web.researcher?.patches?.length ?? 0) > 0 });
-      if (input.readCommittedSnapshot) snapshot = input.readCommittedSnapshot();
+      if (input.readCommittedSnapshot) snapshot = readCommittedSnapshot_ACU();
     } else if (web.ok && web.researcher && (web.researcher.items.length || (web.researcher.patches ?? []).length)) {
       const applied = await applyAgentWebRefsDeltaViaSql_ACU(
         snapshot,
@@ -646,7 +693,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       assertFieldWriteSettleable_ACU({ agentName: MAINTAINER_NAME_ACU, usedFieldWrites: maintainer.usedFieldWrites, contractTouched: deltaTouched_ACU(maintainer.maintainer?.delta), researcherTouched: false });
       if (input.readCommittedSnapshot) {
         const before = snapshot;
-        snapshot = input.readCommittedSnapshot();
+        snapshot = readCommittedSnapshot_ACU();
         for (const module of writes) {
           if ((snapshot.revisions as any)[module] > (before.revisions as any)[module]) appliedModules.push(module);
         }
@@ -822,7 +869,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
         contractTouched: deltaTouched_ACU((repair.maintainer ?? repair.arc)?.delta),
         researcherTouched: (repair.researcher?.items.length ?? 0) > 0 || (repair.researcher?.patches?.length ?? 0) > 0,
       });
-      if (input.readCommittedSnapshot) snapshot = input.readCommittedSnapshot();
+      if (input.readCommittedSnapshot) snapshot = readCommittedSnapshot_ACU();
     } else {
       if (repair.researcher && targetModules.includes('webRefs')) {
         snapshot = (await applyAgentWebRefsDeltaViaSql_ACU(snapshot, repair.researcher, repair.readRevisions?.webRefs, Date.now(), tolerantOptions_ACU(agentName))).snapshot;

@@ -1707,6 +1707,16 @@ export class ContinuationAgentTurnPlanner_ACU {
       allowedEvidenceIndexes: aiEvidenceIndexes,
       // S11-TT：工作流内已即时保存的栏目从帧重读，不再走旧最终写集覆盖。
       readCommittedSnapshot: () => readAgentModuleSnapshot_ACU(chat),
+      // 派工前把本地契约结算的资料先落帧（水位与挂账不变）；落盘前同样复核楼层与租约。
+      syncSnapshot: async snapshot => {
+        assertChatUnchangedForWorkflow_ACU();
+        const syncProbe = request.createInternalRequestIdentity(0);
+        if (request.signal?.aborted || !request.isInternalRequestCurrent(syncProbe)) {
+          throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '固定工作流派工前租约已失效', false));
+        }
+        context.moduleSnapshot = snapshot;
+        await this.persistSnapshot_ACU(chat, snapshot);
+      },
       // 窗口外仍有未处理正文、或已登记追溯边界时，不得推进连续结算水位。
       canAdvanceSettlement: unsettledSelection.hiddenCount === 0 && !context.moduleSnapshot.settlementBoundary,
       runAgent: async call => {

@@ -114,6 +114,29 @@ describe('挂载到当前角色卡', () => {
     expect(h.bind).toHaveBeenCalledWith({ name: '艾琳', avatar: 'Erin.png' }, '艾琳-战斗技能');
   });
 
+  it('源书正被别的卡 Agent 接管时，副本还原成接管前的样子：打开开关、去掉接管记录、放行留下的常驻改回', async () => {
+    const takeover = (meta: Record<string, unknown>) => `<!-- ACU_AGENT_WORLDBOOK_TAKEOVER_META_START\n${JSON.stringify({
+      version: 1, kind: 'agent_worldbook_takeover', selectionSignature: 'sig-card-a', createdAt: 1, previousKeys: ['剑'], ...meta,
+    })}\nACU_AGENT_WORLDBOOK_TAKEOVER_META_END -->`;
+    h.books.set('战斗技能', book({
+      1: { uid: 1, comment: `剑术${SKILL}\n\n${takeover({ previousEnabled: true, previousType: 'selective' })}`, disable: true, constant: false, content: '剑术内容' },
+      2: { uid: 2, comment: `弓术\n\n${takeover({ previousEnabled: true, previousType: 'selective' })}`, disable: false, constant: true, content: '弓术内容' },
+      3: { uid: 3, comment: `原本就关着\n\n${takeover({ previousEnabled: false, previousType: 'selective' })}`, disable: true, constant: false },
+    }));
+
+    await mountFavoriteWorldbooksToCurrentCharacter_ACU(['战斗技能'], { resolveExisting: vi.fn() });
+
+    const copied = h.books.get('艾琳-战斗技能').entries;
+    expect(copied[1]).toMatchObject({ disable: false, constant: false, content: '剑术内容' });
+    expect(copied[1].comment).toBe(`剑术${SKILL}`.trim());
+    expect(copied[2]).toMatchObject({ disable: false, constant: false });
+    expect(copied[2].comment).toBe('弓术');
+    expect(copied[3]).toMatchObject({ disable: true });
+    for (const entry of Object.values<any>(copied)) expect(entry.comment).not.toContain('ACU_AGENT_WORLDBOOK_TAKEOVER_META');
+    // 源书不动
+    expect(h.books.get('战斗技能').entries[1].disable).toBe(true);
+  });
+
   it('副本已存在时询问：保留则不改副本、只确保挂上；覆盖则用常用书重写；跳过则不复制也不挂', async () => {
     h.books.set('战斗技能', book({ 1: { uid: 1, comment: '新内容' } }));
     h.books.set('地理百科', book({ 1: { uid: 1, comment: '地理' } }));

@@ -21,7 +21,7 @@ import {
 import { stripMvuUpdateBlocks_ACU } from '../../shared/text-optimization';
 import { applyContextTagFilters_ACU } from '../../service/runtime/helpers-context-tags';
 import { getLastOptimizedMessageIndex_ACU } from '../../service/plot/plot-logic';
-import { currentChatFileIdentifier_ACU, settings_ACU } from '../../service/runtime/state-manager';
+import { settings_ACU } from '../../service/runtime/state-manager';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { isAiFloor_ACU } from '../../shared/ai-floor';
 import {
@@ -791,35 +791,26 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         return;
       }
       const messageIndex = getLastOptimizedMessageIndex_ACU();
-      const chatAtStart = getChatArray_ACU();
-      const messageAtStart = chatAtStart[messageIndex];
-      const chatIdentityAtStart = String(currentChatFileIdentifier_ACU || '');
-      const messageIdAtStart = messageAtStart?.message_id;
       this.lastOptimizedMessageIndex = messageIndex;
       if (messageIndex < 0) {
         setMessage(this, 'warning', '当前还没有已被正文替换过的 AI 回复。');
         return;
       }
       if (this.busyAction) return;
+      // R9-01 同款写回快照：AI 在途期间切聊天、删楼、滑动或就地改了这楼正文，都不能覆盖
+      const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
       this.busyAction = 'reoptimize';
       try {
         const originalContent = getOriginalContent_ACU(messageIndex);
         if (!originalContent) throw new Error('无法获取上次替换前的原文。');
         const result = await performContentOptimization_ACU(originalContent, { currentLoop: 1, userMessage: '' });
-        const currentChat = getChatArray_ACU();
-        const currentMessage = currentChat[messageIndex];
-        const chatChanged = Boolean(chatIdentityAtStart || messageAtStart)
-          && (currentChat !== chatAtStart
-            || String(currentChatFileIdentifier_ACU || '') !== chatIdentityAtStart
-            || currentMessage !== messageAtStart
-            || (messageIdAtStart != null && currentMessage?.message_id !== messageIdAtStart));
-        if (chatChanged) throw new Error('聊天已切换，旧正文的优化结果已拒绝写回。');
+        if (!isChatMessageWriteTargetCurrent_ACU(writeTarget)) throw new Error(CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
         if (!result?.success) throw new Error(result?.error || '正文替换失败。');
         if (!Array.isArray(result.optimizations) || result.optimizations.length === 0) {
           clearMessageAndToast(this, 'info', '原文已足够好，无需重新替换。', { muteable: false });
           return;
         }
-        const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, { originalContent });
+        const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, { originalContent, expected: writeTarget });
         if (!success) throw new Error('写回聊天消息失败。');
         this.refreshFromSettings();
         clearMessageAndToast(this, 'success', `已重新优化并替换 ${result.optimizations.length} 处内容。`, { muteable: false });

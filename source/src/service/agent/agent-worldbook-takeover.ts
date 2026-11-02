@@ -62,6 +62,7 @@ import {
   writeAgentWorldbookStateToWorldbook_ACU,
 } from './agent-worldbook-config-meta';
 import { runExclusiveAgentWorldbookOperation_ACU } from './agent-worldbook-operation-lock';
+import { restoreAgentWorldbookSnapshotEntries_ACU } from './agent-worldbook-snapshot-restore';
 import { decideAgentWorldbookEntryRestore_ACU, doesAgentTakeoverCommentHashMatch_ACU, hasAgentTakeoverMetaBlock_ACU, isAgentWorldbookEntryRestored_ACU, selectRestorableSnapshotEntries_ACU, type AgentWorldbookRestorePatch_ACU } from './agent-worldbook-restore-core';
 
 export interface AgentWorldbookTakeoverEntryUpdate_ACU {
@@ -1275,6 +1276,37 @@ export function releaseFinalGenerationGreenlightsForChatSwitch_ACU(options: { in
   });
 }
 
+/**
+ * 作用域里多挂了书（挂载常用世界书，或在宿主里给角色卡加了附加世界书）：账本签名对不上新书单，
+ * 旧书单下关掉的条目新账本认不出，退出接管也找不回，会永久关着。账本来自本卡自己的状态条目，
+ * 只要账本里的书都还在作用域里，就先按旧账本把条目恢复，接管再按新书单重来。
+ * 书被移出作用域或整个换了书单（如换角色卡）时不动，保持原口径；恢复不完整时保留旧账本，下次再试。
+ */
+async function restoreTakeoverAfterScopeGrew_ACU(resolvedBookNames: string[], selectionSignature: string): Promise<void> {
+  let previous: AgentWorldbookControlSnapshot_ACU;
+  try {
+    previous = (await readAgentWorldbookStateFromWorldbooks_ACU()).snapshot;
+  } catch (error) {
+    logWarn_ACU('[Agent世界书] 读取接管账本失败，跳过作用域变化后的恢复。', error);
+    return;
+  }
+  if (previous?.active !== true || !previous.selectionSignature || previous.selectionSignature === selectionSignature) return;
+  const ledgerBookNames = Object.keys(previous.books || {}).map(name => String(name || '').trim()).filter(Boolean);
+  const scope = new Set(resolvedBookNames);
+  if (ledgerBookNames.length === 0 || !ledgerBookNames.every(name => scope.has(name))) return;
+  const restore = await restoreAgentWorldbookSnapshotEntries_ACU(previous, resolvedBookNames, { allowSignatureMismatch: true });
+  if (restore.failed > 0 || restore.skipped > 0) {
+    logWarn_ACU(`[Agent世界书] 作用域多了书之后按旧账本恢复不完整（恢复 ${restore.restored}、跳过 ${restore.skipped}、失败 ${restore.failed}），保留旧账本下次再试。`);
+    return;
+  }
+  try {
+    await writeAgentWorldbookStateToWorldbook_ACU({ snapshot: buildInactiveSnapshot_ACU(selectionSignature) });
+  } catch (error) {
+    logWarn_ACU('[Agent世界书] 作用域多了书之后已恢复条目，但清空旧账本失败。', error);
+  }
+  logDebug_ACU(`[Agent世界书] 作用域多了书：已按旧账本恢复 ${restore.restored} 条，接管按新书单重来。`);
+}
+
 export function takeoverWorldbookGreenlights_ACU(): Promise<AgentWorldbookTakeoverResult_ACU> {
   return runExclusiveAgentWorldbookOperation_ACU(() => takeoverWorldbookGreenlightsExclusive_ACU());
 }
@@ -1300,6 +1332,7 @@ async function takeoverWorldbookGreenlightsExclusive_ACU(): Promise<AgentWorldbo
     };
   }
 
+  await restoreTakeoverAfterScopeGrew_ACU(resolvedBookNames, selectionSignature);
   // 已在 takeover 独占锁内：账本迁移写沿用外层串行保证，禁止重入锁。
   const existingSnapshot = await readAndMaybeCachePlotAgentWorldbookSnapshot_ACU(
     resolvedBookNames,
@@ -1435,6 +1468,7 @@ async function restoreWorldbookGreenlightsExclusive_ACU(options: {
   const cleanupMode = options.cleanupMode || 'full';
   const resolvedBookNames = await resolveTakeoverBookNames_ACU();
   const selectionSignature = buildWorldbookSelectionSignature_ACU(resolvedBookNames);
+  if (cleanupMode === 'full') await restoreTakeoverAfterScopeGrew_ACU(resolvedBookNames, selectionSignature);
   // restore 已在 operation-lock 内，读账本时的迁移写不得再次入锁（锁不可重入）。
   const worldbookSnapshot = await readPlotAgentWorldbookSnapshotFromStateOrLegacy_ACU(
     resolvedBookNames,

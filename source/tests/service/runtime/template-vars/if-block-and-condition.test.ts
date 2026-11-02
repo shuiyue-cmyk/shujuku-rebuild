@@ -124,6 +124,15 @@ describe('parseIfBlockRecursive_ACU — db/sql 条件类型', () => {
     expect(result).toBe('外层内层');
   });
 
+  it('外层成立分支里嵌套带 <else> 的 if：按顶层 <else> 切分支，外层两种结果都正确', () => {
+    mockEvaluateSqlCondition.mockReturnValue(true);
+    const content = '<if db="outer">外真<if sql="inner">内真<else>内假</if>尾<else>外假</if>';
+    mockEvaluateDbCondition.mockReturnValue(true);
+    expect(parseIfBlockRecursive_ACU(content, context)).toBe('外真内真尾');
+    mockEvaluateDbCondition.mockReturnValue(false);
+    expect(parseIfBlockRecursive_ACU(content, context)).toBe('外假');
+  });
+
   it('db 条件嵌套在 sql 条件中（验证实际解析行为）', () => {
     // 注意：解析器的嵌套 if 在处理不同类型时，内层 </if> 可能被外层消耗
     // 这里验证的是解析器的实际行为，而非理想行为

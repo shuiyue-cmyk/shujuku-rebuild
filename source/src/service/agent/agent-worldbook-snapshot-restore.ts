@@ -93,12 +93,17 @@ export function buildAgentWorldbookSelectionSignature_ACU(bookNames: string[]): 
 }
 
 
+/**
+ * @param options.allowSignatureMismatch 调用方已确认这是本卡自己的账本、只是作用域书单变了
+ *   （例如挂了一本新书），按账本里记下的书和条目恢复，不再要求签名与 expectedBookNames 一致。
+ */
 export async function restoreAgentWorldbookSnapshotEntries_ACU(
   snapshot: AgentWorldbookControlSnapshot_ACU,
   expectedBookNames: string[],
+  options: { allowSignatureMismatch?: boolean } = {},
 ): Promise<AgentWorldbookSnapshotRestoreResult_ACU> {
   const expectedSignature = buildAgentWorldbookSelectionSignature_ACU(expectedBookNames);
-  if (snapshot.active !== true || snapshot.selectionSignature !== expectedSignature) {
+  if (snapshot.active !== true || (snapshot.selectionSignature !== expectedSignature && options.allowSignatureMismatch !== true)) {
     return {
       restored: 0,
       skipped: 0,

@@ -487,6 +487,21 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
       this.lastSavedAt = Date.now();
       this.setDirty(false);
     },
+    /**
+     * 模板改动还没保存时先单独存了行数据：只把这几张表的行同步进基线、清掉数据增量，
+     * 结构 / 表名 / 顺序 / 锁的改动原样留在草稿里，等模板保存。
+     */
+    markDataSavedKeepingTemplateDraft(sheetKeys: string[]): void {
+      for (const sheetKey of sheetKeys) {
+        const baseSheet = this.templateBaseData?.[sheetKey];
+        const draftSheet = this.tempData?.[sheetKey];
+        if (baseSheet && draftSheet) baseSheet.content = cloneData(draftSheet.content);
+      }
+      resetVisualizerPendingDataOps_ACU(this);
+      this.lastSavedTarget = 'data';
+      this.lastSavedAt = Date.now();
+      this.setDirty(true);
+    },
     recordGlobalTemplateSaved(): void {
       this.lastSavedTarget = 'template-global';
       this.lastSavedAt = Date.now();

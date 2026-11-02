@@ -189,6 +189,16 @@ export function hasVisualizerPendingDataOps_ACU(state: any): boolean {
         || Object.keys(pending.insertsByClientRowId).length > 0;
 }
 
+/** 待保存的行数据增量涉及哪些表。 */
+export function listVisualizerPendingDataOpSheetKeys_ACU(state: any): string[] {
+    const pending = ensurePendingOps_ACU(state);
+    return [...new Set([
+        ...Object.values(pending.deletesByRow),
+        ...Object.values(pending.updatesByRow),
+        ...Object.values(pending.insertsByClientRowId),
+    ].map(op => op.sheetKey))];
+}
+
 function addWriteSet_ACU(writeSet: TableWriteConflictUnitV2_ACU[], unit: TableWriteConflictUnitV2_ACU): void {
     const key = JSON.stringify(unit);
     if (!writeSet.some(item => JSON.stringify(item) === key)) writeSet.push(unit);

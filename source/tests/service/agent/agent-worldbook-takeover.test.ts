@@ -167,6 +167,51 @@ beforeEach(() => {
   ]);
 });
 
+describe('作用域里多挂了一本书（如挂载常用世界书）', () => {
+  function entryA() {
+    return mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1);
+  }
+
+  async function takeoverThenMountCopy() {
+    await takeoverWorldbookGreenlights_ACU();
+    expect(entryA()?.enabled).toBe(false);
+    mockEntriesByBook.set('副本书', [
+      { uid: 7, enabled: true, keys: ['钥匙B'], type: 'selective', comment: skillCommentB_ACU, content: '内容B' },
+    ]);
+    mockResolveBookNames.mockImplementation(async () => ['角色A世界书', '副本书']);
+  }
+
+  it('再接管时旧书单下关掉的条目进新账本，退出接管能全部恢复', async () => {
+    await takeoverThenMountCopy();
+
+    await takeoverWorldbookGreenlights_ACU();
+    expect(mockStateSnapshot.current.selectionSignature).toBe(buildWorldbookSelectionSignature_ACU(['角色A世界书', '副本书']));
+    expect((mockStateSnapshot.current.books['角色A世界书'] || []).map((entry: any) => entry.uid)).toContain(1);
+
+    await restoreWorldbookGreenlights_ACU();
+    expect(entryA()).toMatchObject({ enabled: true });
+    expect(String(entryA()?.comment)).not.toContain('ACU_AGENT_WORLDBOOK_TAKEOVER_META');
+    expect(mockEntriesByBook.get('副本书')?.[0]).toMatchObject({ enabled: true });
+  });
+
+  it('书单变了、还没再接管就退出接管：按旧账本恢复', async () => {
+    await takeoverThenMountCopy();
+
+    await restoreWorldbookGreenlights_ACU();
+    expect(entryA()).toMatchObject({ enabled: true });
+    expect(String(entryA()?.comment)).not.toContain('ACU_AGENT_WORLDBOOK_TAKEOVER_META');
+  });
+
+  it('换成完全不同的书单（如换角色卡）时不动旧账本里的条目', async () => {
+    await takeoverWorldbookGreenlights_ACU();
+    mockEntriesByBook.set('角色B世界书', []);
+    mockResolveBookNames.mockImplementation(async () => ['角色B世界书']);
+
+    await takeoverWorldbookGreenlights_ACU();
+    expect(entryA()?.enabled).toBe(false);
+  });
+});
+
 describe('agent worldbook session snapshot reset', () => {
   it('切换会话时只丢弃内存 snapshot，不触碰持久 Agent state', async () => {
     setPlotAgentWorldbookSnapshot_ACU({

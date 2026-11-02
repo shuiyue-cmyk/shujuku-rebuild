@@ -7685,9 +7685,13 @@ async function rollbackAgentWorldbookSnapshotRestore_ACU(rollbackPatchesByBook, 
 function buildAgentWorldbookSelectionSignature_ACU(bookNames) {
     return buildAgentWorldbookSnapshotSelectionSignature_ACU(bookNames);
 }
-async function restoreAgentWorldbookSnapshotEntries_ACU(snapshot, expectedBookNames) {
+/**
+ * @param options.allowSignatureMismatch 调用方已确认这是本卡自己的账本、只是作用域书单变了
+ *   （例如挂了一本新书），按账本里记下的书和条目恢复，不再要求签名与 expectedBookNames 一致。
+ */
+async function restoreAgentWorldbookSnapshotEntries_ACU(snapshot, expectedBookNames, options = {}) {
     const expectedSignature = buildAgentWorldbookSelectionSignature_ACU(expectedBookNames);
-    if (snapshot.active !== true || snapshot.selectionSignature !== expectedSignature) {
+    if (snapshot.active !== true || (snapshot.selectionSignature !== expectedSignature && options.allowSignatureMismatch !== true)) {
         return {
             restored: 0,
             skipped: 0,
@@ -35674,6 +35678,57 @@ function removeDDLColumnAtIndex_ACU(ddl, sourceIndex) {
         .map(column => column.sqlName.toLowerCase() === 'row_id' ? 'row_id' : (column.comment || column.sqlName)));
     if (!validation.valid)
         throw new Error(`删除列后的 DDL 非法：${validation.message}`);
+    return next;
+}
+/**
+ * Appends one business column at the end of a CREATE TABLE statement, keeping every
+ * other authored byte. The physical name is the fallback ASCII identifier for the
+ * header, suffixed (_2, _3…) when it collides with an existing column. Same limits as
+ * removeDDLColumnAtIndex_ACU: one column per line and no table constraints, otherwise
+ * it fails closed and callers must leave the editor draft untouched.
+ */
+function appendDDLColumn_ACU(ddl, header) {
+    const value = String(ddl || '');
+    const displayName = String(header ?? '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+    if (!displayName)
+        throw new Error('列名不能为空。');
+    const bounds = findCreateTableDefinitionBounds_ACU(value);
+    if (!bounds)
+        throw new Error('无法解析 CREATE TABLE 语句，不能安全追加列。');
+    const columns = parseDDLColumnInfos_ACU(value);
+    const body = value.slice(bounds.openingIndex + 1, bounds.closingIndex);
+    const hasTableConstraint = splitColumnDefinitions(body).some(definition => /^(?:PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CHECK|CONSTRAINT)\b/i.test(stripSqlLineComments_ACU(definition).trim()));
+    if (hasTableConstraint)
+        throw new Error('DDL 含表级约束，不能安全自动追加列。');
+    const lines = body.split('\n');
+    const columnLineIndices = lines
+        .map((line, index) => (/^([^\s,()]+)/.test(stripSqlLineComments_ACU(line).trim()) ? index : -1))
+        .filter(index => index >= 0);
+    if (!columnLineIndices.length || columnLineIndices.length !== columns.length) {
+        throw new Error('DDL 含多行列定义，不能安全自动追加列。');
+    }
+    const usedNames = new Set(columns.map(column => canonicalSqlIdentifier_ACU(column.sqlName)));
+    const baseName = mapSqlColumnIdentifiers_ACU(['row_id', displayName]).mappings[1]?.sqlName || 'col';
+    let sqlName = baseName;
+    for (let suffix = 2; usedNames.has(sqlName.toLowerCase()); suffix += 1)
+        sqlName = `${baseName}_${suffix}`;
+    const lastLineIndex = columnLineIndices[columnLineIndices.length - 1];
+    const lastLine = lines[lastLineIndex];
+    const lastCode = stripSqlLineComments_ACU(lastLine).replace(/\s+$/, '');
+    if (!lastLine.startsWith(lastCode))
+        throw new Error('DDL 最后一列含块注释，不能安全自动追加列。');
+    if (!lastCode.endsWith(',')) {
+        lines[lastLineIndex] = `${lastCode},${lastLine.slice(lastCode.length)}`;
+    }
+    const indent = lastLine.match(/^\s*/)?.[0] ?? '  ';
+    lines.splice(lastLineIndex + 1, 0, `${indent}${sqlName} TEXT -- ${displayName}`);
+    const next = `${value.slice(0, bounds.openingIndex + 1)}${lines.join('\n')}${value.slice(bounds.closingIndex)}`;
+    const validation = validateDDLTextAgainstHeaders_ACU(next, [
+        ...columns.map(column => column.sqlName.toLowerCase() === 'row_id' ? 'row_id' : (column.comment || column.sqlName)),
+        displayName,
+    ]);
+    if (!validation.valid)
+        throw new Error(`追加列后的 DDL 非法：${validation.message}`);
     return next;
 }
 function canonicalSqlIdentifier_ACU(value) {
@@ -73297,6 +73352,8 @@ function parseSingleIfBlock_ACU(content, startIndex, type, expression, context, 
     const ifStartTagEnd = startIndex + ifStartMatch[0].length;
     let nestingLevel = 1;
     let currentIndex = ifStartTagEnd;
+    // 只认本层的 <else>：嵌套 if 自己的 <else> 不能拿来切外层分支
+    let topLevelElse = null;
     while (currentIndex < content.length && nestingLevel > 0) {
         const remainingContent = content.slice(currentIndex);
         const nestedIfMatch = remainingContent.match(/<if\s+(?:seed|cell|cond|db|sql)\s*=\s*"[^"]*"\s*>/i);
@@ -73324,10 +73381,9 @@ function parseSingleIfBlock_ACU(content, startIndex, type, expression, context, 
                 const ifBody = content.slice(ifStartTagEnd, nearest.index);
                 const endIndex = nearest.index + nearest.length;
                 let ifContent, elseContent;
-                const elseTagMatch = ifBody.match(/<else>/i);
-                if (elseTagMatch && elseTagMatch.index !== undefined) {
-                    ifContent = ifBody.slice(0, elseTagMatch.index);
-                    elseContent = ifBody.slice(elseTagMatch.index + elseTagMatch[0].length);
+                if (topLevelElse) {
+                    ifContent = content.slice(ifStartTagEnd, topLevelElse.index);
+                    elseContent = content.slice(topLevelElse.index + topLevelElse.length, nearest.index);
                 }
                 else {
                     ifContent = ifBody;
@@ -73361,6 +73417,8 @@ function parseSingleIfBlock_ACU(content, startIndex, type, expression, context, 
             }
         }
         else if (nearest.type === 'else') {
+            if (!topLevelElse)
+                topLevelElse = { index: nearest.index, length: nearest.length };
             currentIndex = nearest.index + nearest.length;
         }
     }
@@ -83374,6 +83432,40 @@ function releaseFinalGenerationGreenlightsForChatSwitch_ACU(options) {
         logDebug_ACU(`[Agent世界书] 切换聊天收回正文绿灯：上一聊天改回 ${previousPatched} 条，当前作用域 ${result.status}（改回 ${result.patched} 条）`);
     });
 }
+/**
+ * 作用域里多挂了书（挂载常用世界书，或在宿主里给角色卡加了附加世界书）：账本签名对不上新书单，
+ * 旧书单下关掉的条目新账本认不出，退出接管也找不回，会永久关着。账本来自本卡自己的状态条目，
+ * 只要账本里的书都还在作用域里，就先按旧账本把条目恢复，接管再按新书单重来。
+ * 书被移出作用域或整个换了书单（如换角色卡）时不动，保持原口径；恢复不完整时保留旧账本，下次再试。
+ */
+async function restoreTakeoverAfterScopeGrew_ACU(resolvedBookNames, selectionSignature) {
+    let previous;
+    try {
+        previous = (await readAgentWorldbookStateFromWorldbooks_ACU()).snapshot;
+    }
+    catch (error) {
+        logWarn_ACU('[Agent世界书] 读取接管账本失败，跳过作用域变化后的恢复。', error);
+        return;
+    }
+    if (previous?.active !== true || !previous.selectionSignature || previous.selectionSignature === selectionSignature)
+        return;
+    const ledgerBookNames = Object.keys(previous.books || {}).map(name => String(name || '').trim()).filter(Boolean);
+    const scope = new Set(resolvedBookNames);
+    if (ledgerBookNames.length === 0 || !ledgerBookNames.every(name => scope.has(name)))
+        return;
+    const restore = await restoreAgentWorldbookSnapshotEntries_ACU(previous, resolvedBookNames, { allowSignatureMismatch: true });
+    if (restore.failed > 0 || restore.skipped > 0) {
+        logWarn_ACU(`[Agent世界书] 作用域多了书之后按旧账本恢复不完整（恢复 ${restore.restored}、跳过 ${restore.skipped}、失败 ${restore.failed}），保留旧账本下次再试。`);
+        return;
+    }
+    try {
+        await writeAgentWorldbookStateToWorldbook_ACU({ snapshot: buildInactiveSnapshot_ACU(selectionSignature) });
+    }
+    catch (error) {
+        logWarn_ACU('[Agent世界书] 作用域多了书之后已恢复条目，但清空旧账本失败。', error);
+    }
+    logDebug_ACU(`[Agent世界书] 作用域多了书：已按旧账本恢复 ${restore.restored} 条，接管按新书单重来。`);
+}
 function takeoverWorldbookGreenlights_ACU() {
     return runExclusiveAgentWorldbookOperation_ACU(() => takeoverWorldbookGreenlightsExclusive_ACU());
 }
@@ -83396,6 +83488,7 @@ async function takeoverWorldbookGreenlightsExclusive_ACU() {
             updates: [],
         };
     }
+    await restoreTakeoverAfterScopeGrew_ACU(resolvedBookNames, selectionSignature);
     // 已在 takeover 独占锁内：账本迁移写沿用外层串行保证，禁止重入锁。
     const existingSnapshot = await readAndMaybeCachePlotAgentWorldbookSnapshot_ACU(resolvedBookNames, selectionSignature, getAgentWorldbookSnapshotRevision_ACU(), undefined, { assumeOperationLock: true });
     const { snapshotBooks, updates } = await collectTakeoverCandidates_ACU(resolvedBookNames);
@@ -83502,6 +83595,8 @@ async function restoreWorldbookGreenlightsExclusive_ACU(options = {}) {
     const cleanupMode = options.cleanupMode || 'full';
     const resolvedBookNames = await resolveTakeoverBookNames_ACU();
     const selectionSignature = buildWorldbookSelectionSignature_ACU(resolvedBookNames);
+    if (cleanupMode === 'full')
+        await restoreTakeoverAfterScopeGrew_ACU(resolvedBookNames, selectionSignature);
     // restore 已在 operation-lock 内，读账本时的迁移写不得再次入锁（锁不可重入）。
     const worldbookSnapshot = await readPlotAgentWorldbookSnapshotFromStateOrLegacy_ACU(resolvedBookNames, selectionSignature, { backfillMissingMeta: false, assumeOperationLock: true });
     const legacySnapshot = getLegacyPlotAgentWorldbookSnapshot_ACU();
@@ -94675,8 +94770,8 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /**
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
- * rollup 打包时把版本写进 `"Unbirth A.D. 4624"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261028-1332"`。源码直跑、测试环境或注入失败时读不到，
+ * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
+ * 同值），构建时间戳写进 `"20261102-1857"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -94685,7 +94780,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
 /** 插件版本号；读不到返回 'unknown'。 */
 function readAcuBuildVersion_ACU() {
     try {
-        const version = "Unbirth A.D. 4624";
+        const version = "Unbirth A.D. 6386";
         return typeof version === 'string' && version ? version : 'unknown';
     }
     catch {
@@ -94695,7 +94790,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261028-1332";
+        const stamp = "20261102-1857";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -138121,12 +138216,15 @@ function hostBoundaryFingerprint_ACU(chat) {
     }
     return `bf-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
-/** Stable, non-content identity for the instruction floor used by host retry. */
+/**
+ * Stable, non-content identity for the instruction floor used by host retry.
+ * 不含 name：send() 在宿主建楼前只能按指令文本合成指纹，宿主建出的真实楼会带上用户名（persona），
+ * 计入 name 会让发送时的指纹永远对不上真实楼，宿主重发重试全部失效。楼层下标 + is_user + 正文足以锁定指令楼。
+ */
 function hostMessageFingerprint_ACU(message) {
     const text = JSON.stringify({
         is_user: message.is_user === true,
         mes: String(message.mes ?? ''),
-        name: String(message.name ?? ''),
     });
     let hash = 0x811c9dc5;
     for (let index = 0; index < text.length; index += 1) {
@@ -139229,6 +139327,8 @@ const MAINLINE_NAME_ACU = 'mainline-planner';
 const BEAT_NAME_ACU = 'beat-planner';
 const ARC_NAME_ACU = 'arc-architect';
 const WEB_NAME_ACU = 'web-researcher';
+/** 持有资料写端口（write_sql）的子代理。 */
+const MATERIAL_WRITER_NAMES_ACU = new Set([MAINTAINER_NAME_ACU, ARC_NAME_ACU, WEB_NAME_ACU]);
 const MAINTAINER_MODULES_ACU = ['hooks', 'infoGap', 'chronology'];
 const CONTINUATION_REPAIRABLE_MODULES_ACU = [...MAINTAINER_MODULES_ACU, 'storyArc', 'webRefs'];
 const BEAT_OBLIGATION_PATTERN_ACU = /伏笔|埋设|回收|误导|信息差|揭示/;
@@ -139604,9 +139704,55 @@ async function runContinuationAgentWorkflow_ACU(input) {
     // 本轮窗口外的缺口不受本轮清账与水位影响；完成区间与上轮连续时合并（移植上游 5f8afe3a）。
     const outsidePending = snapshot.pendingFixes.filter(item => !pendingWithinSettlement_ACU(item, settlementStartIndex, settlementEndIndex));
     const previousCompletion = input.snapshot.materialCompletion;
+    // syncedSnapshot：帧上此刻的快照；syncedFrom：它对应的本地快照（本地变了才需要再落帧）。
+    // 开始时两者都是传入快照，之后每次落帧或从帧读回都跟着更新。
+    let syncedSnapshot = snapshot;
+    let syncedFrom = snapshot;
+    const readCommittedSnapshot_ACU = () => {
+        syncedSnapshot = input.readCommittedSnapshot();
+        syncedFrom = syncedSnapshot;
+        return syncedSnapshot;
+    };
+    // 带 write_sql 的可写子代理按帧提交、结算时又从帧读回：派工前先把本地契约结算的资料条目落帧，
+    // 否则读回时会被整份顶掉。只落资料条目与修订号；挂账、完成状态、水位仍是工作流自己的账，
+    // 结束时统一落盘（与原口径一致）。同批并行派工共用一次落帧。
+    let syncing = null;
+    const syncMaterialsBeforeWriterDispatch_ACU = async () => {
+        if (!input.syncSnapshot || snapshot === syncedFrom)
+            return;
+        if (syncing?.from === snapshot)
+            return syncing.promise;
+        const from = snapshot;
+        const materials = {
+            ...from,
+            settledThroughIndex: syncedSnapshot.settledThroughIndex,
+            settledPrefixFingerprint: syncedSnapshot.settledPrefixFingerprint,
+            settlementBoundary: syncedSnapshot.settlementBoundary,
+            materialCompletion: syncedSnapshot.materialCompletion,
+            pendingFixes: syncedSnapshot.pendingFixes,
+        };
+        if (materials.settledPrefixFingerprint === undefined)
+            delete materials.settledPrefixFingerprint;
+        if (materials.settlementBoundary === undefined)
+            delete materials.settlementBoundary;
+        const promise = input.syncSnapshot(materials).then(() => {
+            syncedSnapshot = materials;
+            syncedFrom = from;
+        });
+        syncing = { from, promise };
+        try {
+            await promise;
+        }
+        finally {
+            if (syncing?.promise === promise)
+                syncing = null;
+        }
+    };
     // 每次派工带上工作流此刻的资料：结算后的策划、补足与编排必须看到本轮刚结算的账本。
     const runSafe_ACU = async (call) => {
         try {
+            if (MATERIAL_WRITER_NAMES_ACU.has(call.agentName))
+                await syncMaterialsBeforeWriterDispatch_ACU();
             return await input.runAgent({ ...call, snapshot });
         }
         catch (error) {
@@ -139634,7 +139780,7 @@ async function runContinuationAgentWorkflow_ACU(input) {
         if (web.ok && web.usedFieldWrites) {
             assertFieldWriteSettleable_ACU({ agentName: WEB_NAME_ACU, usedFieldWrites: web.usedFieldWrites, contractTouched: false, researcherTouched: (web.researcher?.items.length ?? 0) > 0 || (web.researcher?.patches?.length ?? 0) > 0 });
             if (input.readCommittedSnapshot)
-                snapshot = input.readCommittedSnapshot();
+                snapshot = readCommittedSnapshot_ACU();
         }
         else if (web.ok && web.researcher && (web.researcher.items.length || (web.researcher.patches ?? []).length)) {
             const applied = await applyAgentWebRefsDeltaViaSql_ACU(snapshot, web.researcher, web.readRevisions?.webRefs, Date.now(), tolerantOptions_ACU(WEB_NAME_ACU));
@@ -139675,7 +139821,7 @@ async function runContinuationAgentWorkflow_ACU(input) {
                 assertFieldWriteSettleable_ACU({ agentName: MAINTAINER_NAME_ACU, usedFieldWrites: maintainer.usedFieldWrites, contractTouched: deltaTouched_ACU(maintainer.maintainer?.delta), researcherTouched: false });
                 if (input.readCommittedSnapshot) {
                     const before = snapshot;
-                    snapshot = input.readCommittedSnapshot();
+                    snapshot = readCommittedSnapshot_ACU();
                     for (const module of writes) {
                         if (snapshot.revisions[module] > before.revisions[module])
                             appliedModules.push(module);
@@ -139860,7 +140006,7 @@ async function runContinuationAgentWorkflow_ACU(input) {
                 researcherTouched: (repair.researcher?.items.length ?? 0) > 0 || (repair.researcher?.patches?.length ?? 0) > 0,
             });
             if (input.readCommittedSnapshot)
-                snapshot = input.readCommittedSnapshot();
+                snapshot = readCommittedSnapshot_ACU();
         }
         else {
             if (repair.researcher && targetModules.includes('webRefs')) {
@@ -148264,6 +148410,16 @@ class ContinuationAgentTurnPlanner_ACU {
             allowedEvidenceIndexes: aiEvidenceIndexes,
             // S11-TT：工作流内已即时保存的栏目从帧重读，不再走旧最终写集覆盖。
             readCommittedSnapshot: () => readAgentModuleSnapshot_ACU(chat),
+            // 派工前把本地契约结算的资料先落帧（水位与挂账不变）；落盘前同样复核楼层与租约。
+            syncSnapshot: async (snapshot) => {
+                assertChatUnchangedForWorkflow_ACU();
+                const syncProbe = request.createInternalRequestIdentity(0);
+                if (request.signal?.aborted || !request.isInternalRequestCurrent(syncProbe)) {
+                    throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '固定工作流派工前租约已失效', false));
+                }
+                context.moduleSnapshot = snapshot;
+                await this.persistSnapshot_ACU(chat, snapshot);
+            },
             // 窗口外仍有未处理正文、或已登记追溯边界时，不得推进连续结算水位。
             canAdvanceSettlement: unsettledSelection.hiddenCount === 0 && !context.moduleSnapshot.settlementBoundary,
             runAgent: async (call) => {
@@ -156339,7 +156495,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261028-1332";
+        const stamp = "20261102-1857";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -175219,6 +175375,15 @@ function hasVisualizerPendingDataOps_ACU(state) {
         || Object.keys(pending.updatesByRow).length > 0
         || Object.keys(pending.insertsByClientRowId).length > 0;
 }
+/** 待保存的行数据增量涉及哪些表。 */
+function listVisualizerPendingDataOpSheetKeys_ACU(state) {
+    const pending = ensurePendingOps_ACU(state);
+    return [...new Set([
+            ...Object.values(pending.deletesByRow),
+            ...Object.values(pending.updatesByRow),
+            ...Object.values(pending.insertsByClientRowId),
+        ].map(op => op.sheetKey))];
+}
 function addWriteSet_ACU(writeSet, unit) {
     const key = JSON.stringify(unit);
     if (!writeSet.some(item => JSON.stringify(item) === key))
@@ -175948,6 +176113,22 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
             this.lastSavedAt = Date.now();
             this.setDirty(false);
         },
+        /**
+         * 模板改动还没保存时先单独存了行数据：只把这几张表的行同步进基线、清掉数据增量，
+         * 结构 / 表名 / 顺序 / 锁的改动原样留在草稿里，等模板保存。
+         */
+        markDataSavedKeepingTemplateDraft(sheetKeys) {
+            for (const sheetKey of sheetKeys) {
+                const baseSheet = this.templateBaseData?.[sheetKey];
+                const draftSheet = this.tempData?.[sheetKey];
+                if (baseSheet && draftSheet)
+                    baseSheet.content = cloneData$3(draftSheet.content);
+            }
+            resetVisualizerPendingDataOps_ACU(this);
+            this.lastSavedTarget = 'data';
+            this.lastSavedAt = Date.now();
+            this.setDirty(true);
+        },
         recordGlobalTemplateSaved() {
             this.lastSavedTarget = 'template-global';
             this.lastSavedAt = Date.now();
@@ -176585,8 +176766,30 @@ function useVisualizerConfigEditing() {
         const normalizedName = name.trim();
         if (!normalizedName)
             return;
-        withSheet(sheet => {
-            const content = ensureSheetContent(sheet);
+        const sheet = currentSheet.value;
+        if (!sheet)
+            return;
+        // 与删除列同规格：有 DDL 时原子追加列定义，DDL 与表头不一致就不能保存模板
+        let nextDDL = null;
+        if (String(sheet.sourceData?.ddl || '').trim()) {
+            const headers = ensureSheetContent(sheet)[0];
+            const currentValidation = validateDDLTextAgainstHeaders_ACU(sheet.sourceData.ddl, headers);
+            if (!currentValidation.valid) {
+                toastStore.error(`新增列已拒绝：当前 DDL 与表头不一致：${currentValidation.message}`, { muteable: false });
+                return;
+            }
+            try {
+                nextDDL = appendDDLColumn_ACU(sheet.sourceData.ddl, normalizedName);
+            }
+            catch (error) {
+                toastStore.error(`新增列已拒绝：${error?.message || String(error)}`, { muteable: false });
+                return;
+            }
+        }
+        withSheet(current => {
+            const content = ensureSheetContent(current);
+            if (nextDDL !== null)
+                current.sourceData.ddl = nextDDL;
             content[0].push(normalizedName);
             content.slice(1).forEach((row) => {
                 if (Array.isArray(row))
@@ -177598,11 +177801,24 @@ function useVisualizerSave(interactions = {}) {
                 || templateChanges.mateChanged
                 || JSON.stringify(baseOrderWithoutDeleted) !== JSON.stringify(currentOrderWithoutDeleted);
             const hasLockChanges = visualizer.lockDirty;
-            // R10A-02：只有锁改动时同样拒绝。markSaved('data') 会把模板基线设成当前草稿，
-            // 未提交的改表名/改列/调顺序会被当成「已保存」吞掉，之后模板保存看不到任何变化。
-            if ((hasDataChanges || hasLockChanges) && hasPendingTemplateChanges) {
-                toastStore.error('数据保存不能混入未提交的模板变化；请先保存模板，再保存数据。', { muteable: false });
+            // R10A-02：markSaved('data') 会把模板基线设成当前草稿，未提交的改表名/改列/调顺序会被当成
+            // 「已保存」吞掉。所以模板改动没保存时，数据路径只单独存行数据（基线只同步这几张表的行），
+            // 锁和结构改动留给模板保存；模板保存又要求先清掉行数据增量，两条路由此分步走通。
+            // 同一张表既改了列又改了行数据，行增量按旧列记录、模板按新列提交，无法分开保存。
+            const dataSheetKeys = listVisualizerPendingDataOpSheetKeys_ACU(visualizer);
+            if (hasPendingTemplateChanges && hasLockChanges && !hasDataChanges) {
+                toastStore.error('锁设置要和未保存的结构改动一起提交；请使用「保存模板到当前聊天」。', { muteable: false });
                 return false;
+            }
+            if (hasPendingTemplateChanges && hasDataChanges) {
+                const structuralSheetKeys = new Set([...templateChanges.addedSheetKeys, ...templateChanges.schemaChangedSheetKeys]);
+                const conflictNames = dataSheetKeys
+                    .filter(sheetKey => structuralSheetKeys.has(sheetKey))
+                    .map(sheetKey => String(visualizer.templateBaseData?.[sheetKey]?.name || visualizer.tempData?.[sheetKey]?.name || sheetKey));
+                if (conflictNames.length > 0) {
+                    toastStore.error(`表「${conflictNames.join('」「')}」同时改了列和行数据，两者无法分开保存：请先撤销其中一类（把列改回原样，或丢弃草稿后分两次编辑）。`, { muteable: false });
+                    return false;
+                }
             }
             const result = hasDataChanges
                 ? await applyVisualizerPendingDataOps_ACU(visualizer, saveContextKey)
@@ -177620,7 +177836,7 @@ function useVisualizerSave(interactions = {}) {
                     : '没有需要保存的数据、锁或删表增量。', { muteable: false });
                 return false;
             }
-            if (hasLockChanges)
+            if (hasLockChanges && !hasPendingTemplateChanges)
                 saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
             try {
                 // 阶段 E：行数据保存路径复用 applyVisualizerPendingDataOps_ACU 已完成的
@@ -177650,6 +177866,11 @@ function useVisualizerSave(interactions = {}) {
                 topLevelWindow_ACU.AutoCardUpdaterAPI?._notifyTableUpdate?.();
             }
             catch { }
+            if (hasPendingTemplateChanges) {
+                visualizer.markDataSavedKeepingTemplateDraft(dataSheetKeys);
+                toastStore.success('行数据已保存到当前消息；结构改动还没保存，请再点「保存模板到当前聊天」。', { muteable: false });
+                return true;
+            }
             visualizer.markSaved('data');
             toastStore.success(result.changed && hasLockChanges ? '数据增量与锁设置已保存到当前消息。'
                 : result.changed ? '数据增量已保存到当前消息。'
@@ -177815,7 +178036,7 @@ function useVisualizerSave(interactions = {}) {
                 return true;
             };
             if (hasVisualizerPendingDataOps_ACU(visualizer)) {
-                toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
+                toastStore.error('还有没保存的行数据改动：请先点「保存数据到当前消息」，再保存模板。', { muteable: false });
                 return false;
             }
             const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder);
@@ -178256,7 +178477,7 @@ function useVisualizerSave(interactions = {}) {
                 return false;
             }
             if (hasVisualizerPendingDataOps_ACU(visualizer)) {
-                toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
+                toastStore.error('还有没保存的行数据改动：请先点「保存数据到当前消息」，再保存模板。', { muteable: false });
                 return false;
             }
             const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder);
@@ -189266,12 +189487,47 @@ function isAgentRuntimeEntry_ACU(entry) {
     // 数据库生成条目与 Agent 每卡状态（配置、快照、绿灯）都不属于常用书内容，复制会把别的卡的状态带过来。
     return comment.startsWith('TavernDB-ACU-') || isDatabaseGeneratedLorebookEntry_ACU(entry);
 }
-/** 复制用的世界书数据：深拷贝，去掉数据库生成与 Agent 状态条目。 */
+function readTakeoverMeta_ACU(comment) {
+    const match = createAgentTakeoverMetaPattern_ACU().exec(comment);
+    if (!match)
+        return null;
+    try {
+        const meta = JSON.parse(match[1].trim());
+        return meta?.version === 1 && meta?.kind === 'agent_worldbook_takeover' ? meta : null;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * 源书正被别的卡 Agent 接管时，条目是「关闭 + comment 里的接管记录」（放行过的还改成了常驻）。
+ * 副本按接管记录还原成接管前的样子，否则挂到新卡上是一本全关的死书，新卡的接管也认不出它。
+ * 文件数据是宿主原生格式：开关是 disable，常驻是 constant。
+ */
+function restoreTakeoverBaseline_ACU(entry) {
+    const comment = String(entry.comment ?? '');
+    if (!createAgentTakeoverMetaPattern_ACU().test(comment))
+        return;
+    const meta = readTakeoverMeta_ACU(comment);
+    entry.comment = stripAgentTakeoverMetaBlockLoose_ACU(comment);
+    if (!meta)
+        return;
+    entry.disable = meta.previousEnabled === false;
+    const previousType = typeof meta.previousType === 'string' ? meta.previousType.trim().toLowerCase() : '';
+    if (entry.constant === true && previousType && previousType !== 'constant') {
+        entry.constant = false;
+        if (previousType === 'vectorized')
+            entry.vectorized = true;
+    }
+}
+/** 复制用的世界书数据：深拷贝，去掉数据库生成与 Agent 状态条目，被接管的条目还原成接管前的样子。 */
 function buildFavoriteWorldbookCopyData_ACU(data) {
     const copy = structuredClone(data);
     const entries = copy?.entries && typeof copy.entries === 'object' ? copy.entries : {};
     copy.entries = Object.fromEntries(Object.entries(entries)
         .filter(([, entry]) => entry && typeof entry === 'object' && !isAgentRuntimeEntry_ACU(entry)));
+    for (const entry of Object.values(copy.entries))
+        restoreTakeoverBaseline_ACU(entry);
     return copy;
 }
 async function readFavoriteWorldbookSkillStatus_ACU(bookName) {
@@ -198268,10 +198524,6 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
                 return;
             }
             const messageIndex = getLastOptimizedMessageIndex_ACU();
-            const chatAtStart = getChatArray_ACU();
-            const messageAtStart = chatAtStart[messageIndex];
-            const chatIdentityAtStart = String(currentChatFileIdentifier_ACU || '');
-            const messageIdAtStart = messageAtStart?.message_id;
             this.lastOptimizedMessageIndex = messageIndex;
             if (messageIndex < 0) {
                 setMessage$1(this, 'warning', '当前还没有已被正文替换过的 AI 回复。');
@@ -198279,28 +198531,23 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
             }
             if (this.busyAction)
                 return;
+            // R9-01 同款写回快照：AI 在途期间切聊天、删楼、滑动或就地改了这楼正文，都不能覆盖
+            const writeTarget = captureChatMessageWriteTarget_ACU(messageIndex);
             this.busyAction = 'reoptimize';
             try {
                 const originalContent = getOriginalContent_ACU(messageIndex);
                 if (!originalContent)
                     throw new Error('无法获取上次替换前的原文。');
                 const result = await performContentOptimization_ACU(originalContent, { currentLoop: 1, userMessage: '' });
-                const currentChat = getChatArray_ACU();
-                const currentMessage = currentChat[messageIndex];
-                const chatChanged = Boolean(chatIdentityAtStart || messageAtStart)
-                    && (currentChat !== chatAtStart
-                        || String(currentChatFileIdentifier_ACU || '') !== chatIdentityAtStart
-                        || currentMessage !== messageAtStart
-                        || (messageIdAtStart != null && currentMessage?.message_id !== messageIdAtStart));
-                if (chatChanged)
-                    throw new Error('聊天已切换，旧正文的优化结果已拒绝写回。');
+                if (!isChatMessageWriteTargetCurrent_ACU(writeTarget))
+                    throw new Error(CHAT_MESSAGE_TARGET_CHANGED_MESSAGE_ACU);
                 if (!result?.success)
                     throw new Error(result?.error || '正文替换失败。');
                 if (!Array.isArray(result.optimizations) || result.optimizations.length === 0) {
                     clearMessageAndToast(this, 'info', '原文已足够好，无需重新替换。', { muteable: false });
                     return;
                 }
-                const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, { originalContent });
+                const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, { originalContent, expected: writeTarget });
                 if (!success)
                     throw new Error('写回聊天消息失败。');
                 this.refreshFromSettings();

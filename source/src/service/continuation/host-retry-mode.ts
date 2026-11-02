@@ -25,12 +25,15 @@ export function hostBoundaryFingerprint_ACU(chat: readonly unknown[]): string {
   return `bf-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
-/** Stable, non-content identity for the instruction floor used by host retry. */
+/**
+ * Stable, non-content identity for the instruction floor used by host retry.
+ * 不含 name：send() 在宿主建楼前只能按指令文本合成指纹，宿主建出的真实楼会带上用户名（persona），
+ * 计入 name 会让发送时的指纹永远对不上真实楼，宿主重发重试全部失效。楼层下标 + is_user + 正文足以锁定指令楼。
+ */
 export function hostMessageFingerprint_ACU(message: Record<string, unknown>): string {
   const text = JSON.stringify({
     is_user: message.is_user === true,
     mes: String(message.mes ?? ''),
-    name: String(message.name ?? ''),
   });
   let hash = 0x811c9dc5;
   for (let index = 0; index < text.length; index += 1) {
