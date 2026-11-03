@@ -4,7 +4,7 @@
  * service 层不驱动 UI，只返回结果/状态，presentation 层根据返回值自行决定 UI 操作。
  */
 
-import { currentChatFileIdentifier_ACU, isAutoUpdatingCard_ACU, isTableFillStopRequested_ACU, pendingFinalGenerationGreenlights_ACU, _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
+import { currentChatFileIdentifier_ACU, getTableFillStopSeq_ACU, isAutoUpdatingCard_ACU, isTableFillStopRequested_ACU, latchTableFillStopRequestedSince_ACU, pendingFinalGenerationGreenlights_ACU, _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
 import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { callCustomOpenAI_ACU, RetryableAiResponseError_ACU } from '../ai/prompt-builder';
 import type { TableFillRetryTurn_ACU } from '../ai/prompt-builder/table-fill-retry';
@@ -5190,6 +5190,8 @@ export async function orchestrateManualUpdate_ACU(
         };
     } = {},
 ): Promise<ManualUpdateResult> {
+    // 从这里起点的「终止」都算本轮：清理阶段「正在填表」还没置位，置位后补锁存
+    const stopSeqAtStart = getTableFillStopSeq_ACU();
     let committedBucketCount = 0;
     // 与 committedBucketCount 分开计数：伪提交（帧只落进度/事件，modifiedKeys 为空）推前者不推后者。
     const postCommitWarnings: TableUpdatePostCommitWarning_ACU[] = [];
@@ -5742,6 +5744,7 @@ export async function orchestrateManualUpdate_ACU(
         }
 
         _set_isAutoUpdatingCard_ACU(true);
+        latchTableFillStopRequestedSince_ACU(stopSeqAtStart);
         const maxConcurrentGroups = Math.max(1, Number(settings_ACU.maxConcurrentGroups) || 1);
         const totalChunks = Math.max(1, Math.ceil(groupKeys.length / maxConcurrentGroups));
         const failedGroups: Array<{ key: string; error?: string }> = [];

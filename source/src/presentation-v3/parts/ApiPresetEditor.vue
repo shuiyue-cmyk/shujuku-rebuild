@@ -302,6 +302,12 @@ const draftError = ref('');
 const connectionTesting = ref(false);
 // 测试结果只对应当时填写的内容：切换预设、新建或放弃修改时清掉，避免张冠李戴
 const connectionResult = ref<ApiConnectionTestResult_ACU | null>(null);
+// 每次清掉结果都换一代：在途测试迟到返回时代次已变，就不再显示到别的预设下
+let connectionTestGeneration = 0;
+function clearConnectionResult(): void {
+  connectionTestGeneration += 1;
+  connectionResult.value = null;
+}
 
 const draftDirty = computed(() => {
   if (formMode.value === 'create') return JSON.stringify(draft) !== draftSnapshot.value;
@@ -361,7 +367,7 @@ function syncActiveDraft(): void {
   }
   draftSnapshot.value = JSON.stringify(draft);
   draftError.value = '';
-  connectionResult.value = null;
+  clearConnectionResult();
 }
 
 function startCreateDraft(): void {
@@ -370,7 +376,7 @@ function startCreateDraft(): void {
   formMode.value = 'create';
   draftSnapshot.value = JSON.stringify(draft);
   draftError.value = '';
-  connectionResult.value = null;
+  clearConnectionResult();
 }
 
 async function selectPreset(name: string): Promise<void> {
@@ -448,10 +454,12 @@ function truncateReply(text: string): string {
 async function testConnectionForActive(): Promise<void> {
   if (connectionTesting.value) return;
   connectionTesting.value = true;
-  connectionResult.value = null;
+  clearConnectionResult();
+  const generation = connectionTestGeneration;
   try {
     const preset = apiPresetFromDraft(draft);
-    connectionResult.value = await store.testConnectionForConfig(preset.apiConfig, { nonPrefillSupport: preset.nonPrefillSupport === true });
+    const result = await store.testConnectionForConfig(preset.apiConfig, { nonPrefillSupport: preset.nonPrefillSupport === true });
+    if (generation === connectionTestGeneration) connectionResult.value = result;
   } finally {
     connectionTesting.value = false;
   }

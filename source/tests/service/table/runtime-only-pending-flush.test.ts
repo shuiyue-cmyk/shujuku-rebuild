@@ -133,6 +133,21 @@ describe('flushRuntimeOnlyPendingChanges_ACU', () => {
     expect(readRuntimeOnlyPendingSheets_ACU(scope())).toBeNull();
   });
 
+  it('锁外比对期间同一张表又被写入并重新登记：不按旧快照清掉新登记', async () => {
+    markRuntimeOnlyPendingSheets_ACU(scope(), { all: false, sheetKeys: ['sheet_b'] });
+    mocks.replay.mockImplementationOnce(async () => {
+      // 回放比对让出执行权时，外部脚本改了 sheet_b 并登记
+      mocks.providerData.sheet_b = sheet([['row_id', '值'], ['9', '脚本新写入']]);
+      markRuntimeOnlyPendingSheets_ACU(scope(), { all: false, sheetKeys: ['sheet_b'] });
+      return { data: { sheet_a: sheet([['row_id', '值']]), sheet_b: sheet([['row_id', '值']]) } };
+    });
+    mocks.commit.mockResolvedValue({ success: false, error: 'busy' });
+
+    await flushRuntimeOnlyPendingChanges_ACU('test');
+
+    expect(readRuntimeOnlyPendingSheets_ACU(scope())?.sheetKeys).toContain('sheet_b');
+  });
+
   it('all 登记按运行时全部表比对；回放失败时保守地写回全部候选表', async () => {
     markRuntimeOnlyPendingSheets_ACU(scope(), { all: true, sheetKeys: [] });
     mocks.replay.mockRejectedValue(new Error('replay broken'));

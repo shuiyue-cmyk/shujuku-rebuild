@@ -85,6 +85,7 @@
 
 <script setup lang="ts">
 import { downloadJsonToHost_ACU } from '../../presentation-v2/bootstrap/host-download';
+import { canLeaveCurrentPage } from '../../presentation-v2/composables/useUiCloseGuard';
 import {
   ACU_CLAUDE_COLOR_MODE_OPTIONS,
   ACU_UI_SCALE_OPTIONS,
@@ -135,7 +136,9 @@ function pickTheme(id: AcuV2ThemeId): void {
   void suggestClaudeStyleOnce_UB(id);
 }
 
-function setMode(value: string): void {
+async function setMode(value: string): Promise<void> {
+  // 基础/高手模式的可见页互斥，切模式必然换页：与侧栏切模式一样先过守卫，否则页内草稿静默丢失
+  if (value === uiMode.mode || !(await canLeaveCurrentPage())) return;
   uiMode.setMode(value as AcuV2UiMode);
   router.ensureActiveVisible();
 }

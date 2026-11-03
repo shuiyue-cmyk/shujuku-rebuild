@@ -11,6 +11,7 @@
  * 判定失败一律返回 error，由调用方照常替换，判定永远不会卡住正文。
  */
 import { settings_ACU } from '../runtime/state-manager';
+import { maskSensitiveText_ACU } from '../../shared/log-buffer';
 import { stripMvuUpdateBlocks_ACU } from '../../shared/text-optimization';
 import {
   DEFAULT_DECISION_MODEL_ACU,
@@ -215,13 +216,14 @@ export async function requestContentDecision_ACU(
     });
     if (!response.ok) {
       const reason = await readErrorMessage_ACU(response);
-      return { kind: 'error', message: `HTTP ${response.status}${reason ? `：${reason}` : ''}` };
+      // 服务商可能把收到的 Key 回显进错误体，这条原因会直接进 toast 与判定测试输出
+      return { kind: 'error', message: maskSensitiveText_ACU(`HTTP ${response.status}${reason ? `：${reason}` : ''}`) };
     }
     return interpretDecisionResponse_ACU(await response.json(), settings.threshold);
   });
   if (outcome.ok) return outcome.value!;
   if (outcome.failure) return { kind: 'error', message: `决策模型${outcome.failure}` };
-  return { kind: 'error', message: `请求失败：${(outcome.error as any)?.message || outcome.error}` };
+  return { kind: 'error', message: maskSensitiveText_ACU(`请求失败：${(outcome.error as any)?.message || outcome.error}`) };
 }
 
 /**

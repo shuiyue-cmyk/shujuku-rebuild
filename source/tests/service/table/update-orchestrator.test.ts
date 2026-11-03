@@ -63,6 +63,7 @@ let mockCurrentJsonTableData: any = null;
 let mockIsAutoUpdating = false;
 let mockWasStopped = false;
 let mockFillStopLatched = false;
+let mockStopSeq = 0;
 let mockCoreApisReady = true;
 let mockPendingFinalGenerationGreenlights: any[] = [];
 
@@ -73,6 +74,8 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   get isAutoUpdatingCard_ACU() { return mockIsAutoUpdating; },
   get wasStoppedByUser_ACU() { return mockWasStopped; },
   isTableFillStopRequested_ACU: () => mockWasStopped || mockFillStopLatched,
+  getTableFillStopSeq_ACU: () => mockStopSeq,
+  latchTableFillStopRequestedSince_ACU: (seq: number) => { if (mockIsAutoUpdating && mockStopSeq !== seq) mockFillStopLatched = true; },
   get coreApisAreReady_ACU() { return mockCoreApisReady; },
   get pendingFinalGenerationGreenlights_ACU() { return mockPendingFinalGenerationGreenlights; },
   independentTableStates_ACU: mockIndependentTableStates,
@@ -424,6 +427,8 @@ import {
 import { abortTableFillRequestsWithStaleTarget_ACU } from '../../../src/service/table/table-fill-target-watch';
 
 beforeEach(() => {
+  mockStopSeq = 0;
+  mockFillStopLatched = false;
   mockChatArrayForSeedStage.length = 0;
   gatewayChatHolder.chat = [];
   Object.keys(mockIndependentTableStates).forEach(key => delete mockIndependentTableStates[key]);
@@ -2310,6 +2315,28 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(clearManualRefillIncrementalDataInRange_ACU).not.toHaveBeenCalled();
     expect(clearTableDataAtFloors_ACU).not.toHaveBeenCalled();
     expect(mockPurgeSheetKeysFromChatHistoryHard).not.toHaveBeenCalled();
+  });
+
+  it('清理阶段（「正在填表」置位前）点终止，随后一次性停止标记被复位：仍按终止处理，不再调用 AI', async () => {
+    const { getChatArray_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true },
+      { is_user: false, mes: 'AI回复1' },
+    ]);
+    mockCurrentJsonTableData = { sheet_0: { name: '测试表A', updateConfig: {} } };
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+    const originalClear = vi.mocked(clearManualRefillSheetDataInRange_ACU).getMockImplementation();
+    vi.mocked(clearManualRefillSheetDataInRange_ACU).mockImplementationOnce(async (...args: any[]) => {
+      // 用户在清理阶段点终止；随后宿主新生成 / 新一轮前置检查把一次性标记复位
+      mockStopSeq += 1;
+      mockWasStopped = false;
+      return originalClear ? (originalClear as any)(...args) : undefined;
+    });
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
+
+    expect(result.success).toBe(false);
+    expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
   });
 
   it('重填范围内存在与目标表重叠的导入增量（生产形状 data_replace reason=import）时阻断重填', async () => {

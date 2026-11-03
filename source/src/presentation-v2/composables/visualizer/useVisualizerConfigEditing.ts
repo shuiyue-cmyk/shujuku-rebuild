@@ -223,6 +223,19 @@ export function useVisualizerConfigEditing() {
   function renameSheet(value: string | number): void {
     const nextName = stringValue(value).trim();
     if (!nextName) return;
+    // 与新增表同款查重：改成另一张表的现有名会被放行提交，之后协调器按「表名规范化重复」拦死一切模板操作。
+    const nextCanonicalForCheck = canonicalizeDisplayName_ACU(nextName);
+    const currentKey = visualizer.currentSheetKey;
+    const collides = Object.entries(visualizer.tempData || {}).some(([key, other]: [string, any]) => (
+      key !== currentKey
+      && key.startsWith('sheet_')
+      && !!other
+      && canonicalizeDisplayName_ACU(stringValue(other.name)) === nextCanonicalForCheck
+    ));
+    if (collides) {
+      toastStore.warning(`表名「${nextName}」与现有表重复，已拒绝改名。`, { muteable: false });
+      return;
+    }
     withSheet(sheet => {
       const previousName = stringValue(sheet.name).trim();
       sheet.name = nextName;

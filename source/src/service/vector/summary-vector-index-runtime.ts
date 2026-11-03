@@ -732,7 +732,8 @@ async function runSummaryVectorRecall_ACU(
             // 输入本身过长被向量模型拒绝时，同一条长消息每次都会失败、永远发不出去：截短重试一次
             if (queryText.length <= EMBEDDING_QUERY_RETRY_MAX_CHARS_ACU || !isActive()) throw error;
             logWarn_ACU('[交火模式纪要索引] query embedding 失败，截短查询后重试一次:', error);
-            const shortQuery = [userInput.slice(0, EMBEDDING_QUERY_RETRY_MAX_CHARS_ACU), keywords.join('，')].filter(Boolean).join('\n关键词：');
+            // 整条查询（含 AI 关键词）一起截到上限：只截用户输入时，关键词撑长的查询重试仍与首次逐字相同
+            const shortQuery = queryText.slice(0, EMBEDDING_QUERY_RETRY_MAX_CHARS_ACU);
             queryVector = await embedQuery(shortQuery);
         }
         if (queryVector.length === 0) {

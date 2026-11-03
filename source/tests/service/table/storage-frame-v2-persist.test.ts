@@ -4178,6 +4178,32 @@ describe('persistTableMutationLogBatchV2_ACU', () => {
     expect(laterMessage.TavernDB_ACU_IsolatedData[''].storageFrame.logEntries).toHaveLength(1);
   });
 
+  it('校验回放期间删了前面一楼、目标下标换成另一条 AI 楼：拒绝落盘，不把旧候选写到错位楼层', async () => {
+    const checkpointMessage = seedFrame({ logEntries: [] });
+    const earlierAi = { is_user: false, mes: '更早的 AI 楼' };
+    const targetMessage = { is_user: false, mes: '目标楼', TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: appendableFrame() } } };
+    const laterAi = { is_user: false, mes: '后一楼' };
+    mocks.chat.splice(0, mocks.chat.length, checkpointMessage, earlierAi, targetMessage, laterAi);
+    const afterData = { mate: { type: 'acu' }, sheet_a: { ...sheetA, content: [['row_id', 'value'], ['1', 'updated']] } };
+    let deleted = false;
+    mocks.loadReplayDetailed.mockImplementation(async (chat: any[]) => {
+      if (chat !== mocks.chat && !deleted) {
+        deleted = true;
+        mocks.chat.splice(1, 1);
+      }
+      return { baseKind: 'full_checkpoint', data: afterData };
+    });
+
+    const outcome = await persistTableMutationLogBatchV2_ACU(makeBatchOptions(afterData, [
+      { targetMessageIndex: 2, changedSheetKeys: ['sheet_a'], operations: [{ kind: 'row_upsert', sheetKey: 'sheet_a', rowId: '1', cells: ['1', 'updated'] }] },
+    ])).then(result => result, error => ({ saved: false, error: String(error?.message || error) }));
+
+    expect(deleted).toBe(true);
+    expect(outcome.saved).toBe(false);
+    expect((laterAi as any).TavernDB_ACU_IsolatedData).toBeUndefined();
+    expect(mocks.saveChatStrict).not.toHaveBeenCalled();
+  });
+
   // R2B-09：候选聊天不再整份深克隆（长聊天正文每批 stringify+parse）；非目标消息直接复用原对象。
   it('R2B-09：batch 候选只替换目标消息，非目标消息复用原对象且原消息在保存前不被改动', async () => {
     const checkpointMessage = seedFrame({ logEntries: [] });

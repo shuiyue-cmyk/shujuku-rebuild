@@ -508,6 +508,8 @@ function buildMigrationRevision_ACU(): string {
 
 interface LegacyMigrationScopeSnapshot_ACU {
   chat: any[];
+  /** 开始时各楼的消息对象：判定期间删楼 / 插楼会让迁移目标与证据下标整体错位。 */
+  messages: any[];
   chatKey: string;
   activeIsolationKey: string;
 }
@@ -515,6 +517,7 @@ interface LegacyMigrationScopeSnapshot_ACU {
 function captureLegacyMigrationScope_ACU(chat: any[]): LegacyMigrationScopeSnapshot_ACU {
   return {
     chat,
+    messages: chat.slice(),
     chatKey: String(currentChatFileIdentifier_ACU || '').trim(),
     activeIsolationKey: getCurrentIsolationKey_ACU(),
   };
@@ -523,6 +526,9 @@ function captureLegacyMigrationScope_ACU(chat: any[]): LegacyMigrationScopeSnaps
 function getLegacyMigrationScopeChangeError_ACU(snapshot: LegacyMigrationScopeSnapshot_ACU): string | null {
   if (getChatArray_ACU() !== snapshot.chat) {
     return 'legacy migration aborted: active chat changed before commit';
+  }
+  if (snapshot.chat.length !== snapshot.messages.length || snapshot.messages.some((message, index) => snapshot.chat[index] !== message)) {
+    return 'legacy migration aborted: chat messages changed before commit';
   }
   if (String(currentChatFileIdentifier_ACU || '').trim() !== snapshot.chatKey) {
     return 'legacy migration aborted: active chat identifier changed before commit';

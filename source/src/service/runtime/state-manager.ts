@@ -654,10 +654,13 @@ export function _set_isAutoUpdatingCard_ACU(v: any) {
 // 可能在批次 / 分组 / 重试之间「复活」。锁存只在本轮结束时解除。
 let tableFillStopLatched_ACU = false;
 let fillRunSeq_ACU = 0;
+// 每点一次「终止」加一：手动填表在「正在填表」置位前（规划、清理阶段）就可能被终止，届时还没有可锁存的轮次
+let tableFillStopSeq_ACU = 0;
 const TABLE_FILL_STOP_FORCE_RELEASE_MS_ACU = 30_000;
 
 /** 用户点「终止」填表：终止本轮当前与后续全部批次。不立即放开「正在填表」，免得旧轮收尾时新一轮叠进来。 */
 export function requestTableFillStop_ACU(): void {
+  tableFillStopSeq_ACU += 1;
   _set_wasStoppedByUser_ACU(true);
   if (isAutoUpdatingCard_ACU) tableFillStopLatched_ACU = true;
   // R10A-19：只终止填表请求，不连带中止正在进行的剧情推进规划
@@ -670,6 +673,18 @@ export function requestTableFillStop_ACU(): void {
       _set_isAutoUpdatingCard_ACU(false);
     }
   }, TABLE_FILL_STOP_FORCE_RELEASE_MS_ACU);
+}
+
+export function getTableFillStopSeq_ACU(): number {
+  return tableFillStopSeq_ACU;
+}
+
+/**
+ * 「正在填表」置位后补锁存：从 seq 记下之后点过「终止」（如手动填表的清理阶段），就按本轮已终止处理，
+ * 免得一次性停止标记在置位前被宿主新生成或新一轮前置检查复位，终止被悄悄撤销。
+ */
+export function latchTableFillStopRequestedSince_ACU(seq: number): void {
+  if (isAutoUpdatingCard_ACU && tableFillStopSeq_ACU !== seq) tableFillStopLatched_ACU = true;
 }
 
 /** 填表是否已被要求终止（宿主停止生成的一次性信号，或本轮内用户点过「终止」）。 */

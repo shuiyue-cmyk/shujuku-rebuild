@@ -21,6 +21,7 @@ import {
 } from '../../service/template/dormant-data-service';
 import { useDialogStore } from '../stores/dialog-store';
 import { useToastStore } from '../stores/toast-store';
+import { CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU, captureChatActionScope_ACU, isChatActionScopeCurrent_ACU } from './chat-action-scope';
 
 export function useDormantData() {
   const dialogStore = useDialogStore();
@@ -65,6 +66,8 @@ export function useDormantData() {
       toast.error(entry.wakeBlockedReason || '该休眠表当前不可唤醒。');
       return false;
     }
+    // 确认框里的表 / 列属于弹出时的聊天：确认期间切了聊天就不执行（同数据管理页其它危险操作）
+    const scope = captureChatActionScope_ACU();
     const confirmed = await dialogStore.confirm({
       title: '唤醒休眠表',
       message: `将表「${entry.name}」（${entry.rowCount} 行 · ${entry.columnCount} 列）恢复到当前模板？其休眠前的数据将一并复原。`,
@@ -72,6 +75,10 @@ export function useDormantData() {
       confirmVariant: 'primary',
     });
     if (!confirmed) return false;
+    if (!isChatActionScopeCurrent_ACU(scope)) {
+      toast.error(CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU);
+      return false;
+    }
     busyAction.value = `wake:${entry.sheetKey}`;
     try {
       const result = await wakeDormantTable_ACU(entry.sheetKey);
@@ -89,6 +96,8 @@ export function useDormantData() {
 
   async function wakeColumn(entry: DormantColumnEntry_ACU): Promise<boolean> {
     if (busyAction.value) return false;
+    // 确认框里的表 / 列属于弹出时的聊天：确认期间切了聊天就不执行（同数据管理页其它危险操作）
+    const scope = captureChatActionScope_ACU();
     const confirmed = await dialogStore.confirm({
       title: '唤醒休眠列',
       message: `将表「${entry.sheetName}」的列「${entry.header}」恢复为可见？该列的既有数据将一并复原。`,
@@ -96,6 +105,10 @@ export function useDormantData() {
       confirmVariant: 'primary',
     });
     if (!confirmed) return false;
+    if (!isChatActionScopeCurrent_ACU(scope)) {
+      toast.error(CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU);
+      return false;
+    }
     busyAction.value = `wake:${entry.sheetKey}:${entry.hiddenName}`;
     try {
       const result = await wakeDormantColumn_ACU(entry.sheetKey, entry.hiddenName);

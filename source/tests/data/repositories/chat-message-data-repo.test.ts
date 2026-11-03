@@ -948,6 +948,40 @@ describe('purgeManualRefillIncrementalSheetKeysFromMessage_ACU', () => {
     }]);
   });
 
+  it('SQL 模式增量预清理按 SQLite 词法认字符串：文本以反斜杠结尾时照样删掉目标表语句', () => {
+    const msg: any = {
+      TavernDB_ACU_IsolatedData: {
+        tag1: {
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full',
+              data: {
+                sheet_0: { uid: 'inventory', name: '背包表', sourceData: { ddl: 'CREATE TABLE inventory (row_id TEXT)' } },
+                sheet_1: { uid: 'quest_log', name: '任务表', sourceData: { ddl: 'CREATE TABLE quest_log (row_id TEXT)' } },
+              },
+            },
+            logEntries: [{ operations: [] as any[] }],
+          },
+        },
+      },
+    };
+    // SQLite 里反斜杠不是转义符：'C:' || 反斜杠 是完整字符串，之后的 inventory 仍是目标表
+    const path = "'C:" + String.fromCharCode(92) + "'";
+    msg.TavernDB_ACU_IsolatedData.tag1.storageFrame.logEntries[0].operations = [{
+      kind: 'sql_batch',
+      statements: [
+        `UPDATE inventory SET note = ${path} WHERE row_id = 'r1'`,
+        "UPDATE quest_log SET value = 'keep' WHERE row_id = 'q1'",
+      ],
+    }];
+
+    expect(purgeManualRefillIncrementalSheetKeysFromMessage_ACU(msg, 'tag1', ['sheet_0'])).toBe(true);
+    expect(msg.TavernDB_ACU_IsolatedData.tag1.storageFrame.logEntries[0].operations[0].statements).toEqual([
+      "UPDATE quest_log SET value = 'keep' WHERE row_id = 'q1'",
+    ]);
+  });
+
   it('SQL 模式增量预清理在 sql_batch 全部命中目标表时删除 operation 和空壳 entry', () => {
     const msg: any = {
       TavernDB_ACU_IsolatedData: {

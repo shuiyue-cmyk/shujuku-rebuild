@@ -2122,8 +2122,12 @@ export class ContinuationAgentTurnPlanner_ACU {
       throw stale.error;
     }
 
-    let nextSnapshot = snapshot;
-    let snapshotChanged = false;
+    // 同批里有逐栏即时保存的派工时，帧上已经是本批全部 write_sql 的结果：先读一次作为结算基线，
+    // 契约派工的 delta 再叠在它上面。逐条结算时各自重读帧、整份替换，会把先结算的契约条目顶掉
+    // （或让后结算的契约撞上被帧推进的修订号），结果取决于派工排列顺序。
+    const batchUsedFieldWrites = settled.some(item => item.result?.usedFieldWrites);
+    let nextSnapshot = batchUsedFieldWrites ? readAgentModuleSnapshot_ACU(chat) : snapshot;
+    let snapshotChanged = batchUsedFieldWrites;
 
     for (const item of settled) {
       ledger.delegationsUsed += 1;
@@ -2135,10 +2139,10 @@ export class ContinuationAgentTurnPlanner_ACU {
       const result = item.result;
       if (result.maintainer) {
         try {
-          // S11-TT：已即时保存的栏目从帧重读，不再走旧最终写集覆盖。
+          // S11-TT：已即时保存的栏目在批前读过的帧基线里，不再走旧最终写集覆盖。
           // 余量非空时不清零丢弃：先 fail-closed 拒绝，不流入重读交付。
           assertFieldWriteSettleable_ACU({ agentName: result.agentName, usedFieldWrites: result.usedFieldWrites, contractTouched: continuationWorkflowContractTouched_ACU(result.maintainer.delta), researcherTouched: false });
-          const committed = result.usedFieldWrites ? readAgentModuleSnapshot_ACU(chat) : null;
+          const committed = result.usedFieldWrites ? nextSnapshot : null;
           const delta = mergeAgentDeltaRevisions_ACU(result.maintainer.delta, result.readRevisions);
           const applied = committed ?? (await applyAgentModuleDeltaViaSql_ACU(nextSnapshot, delta, result.writes, chat.length - 1, [], aiEvidenceIndexes)).snapshot;
           // T9 部分完成口径：子代理返回 ok:true + partial + unresolvedIssues 时，
@@ -2211,7 +2215,7 @@ export class ContinuationAgentTurnPlanner_ACU {
           // S11-TT：已即时保存的栏目从帧重读，不再走旧最终写集覆盖。
           // 余量非空时不清零丢弃：先 fail-closed 拒绝，不流入重读交付。
           assertFieldWriteSettleable_ACU({ agentName: result.agentName, usedFieldWrites: result.usedFieldWrites, contractTouched: continuationWorkflowContractTouched_ACU(result.arc.delta), researcherTouched: false });
-          const committed = result.usedFieldWrites ? readAgentModuleSnapshot_ACU(chat) : null;
+          const committed = result.usedFieldWrites ? nextSnapshot : null;
           const delta = mergeAgentDeltaRevisions_ACU(result.arc.delta, result.readRevisions);
           const completedStageNumbers = context.execution.task.stages
             .filter(stage => stage.status === 'completed')
@@ -2272,7 +2276,7 @@ export class ContinuationAgentTurnPlanner_ACU {
         // 余量非空时不清零丢弃：先 fail-closed 拒绝，不流入重读交付。
         assertFieldWriteSettleable_ACU({ agentName: result.agentName, usedFieldWrites: result.usedFieldWrites, contractTouched: false, researcherTouched: result.researcher.items.length > 0 || (result.researcher.patches?.length ?? 0) > 0 });
         const settled = result.usedFieldWrites
-          ? { snapshot: readAgentModuleSnapshot_ACU(chat), outcome: { agentName: result.agentName, ok: true, summary: result.researcher.summary || '百科资料库已逐栏保存', detail: `百科资料库已逐栏即时保存${result.expandedReads.length ? `；补充读取：${result.expandedReads.join('、')}` : ''}`, rejectedReason: '' } }
+          ? { snapshot: nextSnapshot, outcome: { agentName: result.agentName, ok: true, summary: result.researcher.summary || '百科资料库已逐栏保存', detail: `百科资料库已逐栏即时保存${result.expandedReads.length ? `；补充读取：${result.expandedReads.join('、')}` : ''}`, rejectedReason: '' } }
           : await this.settleResearcherResult_ACU(result, nextSnapshot);
         if (settled.snapshot !== nextSnapshot) { nextSnapshot = settled.snapshot; snapshotChanged = true; }
         settleOutcome(item.delegation, settled.outcome, result.usage);

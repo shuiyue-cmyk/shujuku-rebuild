@@ -1306,6 +1306,40 @@ describe('派工与写集落盘', () => {
     expect(feedback).toContain('hooks 的 revision 已变化');
   });
 
+  it('同批一个按整行契约结算、一个逐栏即时保存：结算顺序不影响结果，契约结算的条目不被帧重读顶掉', async () => {
+    const { writeAgentModuleSnapshot_ACU } = await import('../../../../src/service/continuation/agent/agent-module-store');
+    const { applyAgentModuleDelta_ACU } = await import('../../../../src/service/continuation/agent/agent-transaction');
+    const { _set_SillyTavern_API_ACU } = await import('../../../../src/shared/host-api');
+    const emptyDelta = { expectedRevisions: {}, hooks: [], hookPatches: [], infoGap: [], infoGapPatches: [], storyArc: [], storyArcPatches: [], chronology: [], constraintProposals: [] };
+    const h = harness_ACU({
+      budget: { maxSameAgent: 2, maxConcurrent: 2 },
+      mainReplies: [
+        '{"action":"delegate","delegations":[{"agentName":"hook-cognition-maintainer","prompt":"契约结算","reads":["$HISTORY_UNSETTLED"],"writes":["$HOOKS_LEDGER"]},{"agentName":"hook-cognition-maintainer","prompt":"逐栏保存","reads":["$HISTORY_UNSETTLED"],"writes":["$CHRONOLOGY"]}]}',
+        '{"action":"finalize","instruction":"指导"}',
+      ],
+    });
+    const chat = (h.planner as any).dependencies.readChat();
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const base = snapshotWithArc_ACU();
+    const runtime = (h.planner as any).dependencies.subagentRuntime;
+    vi.spyOn(runtime, 'run').mockImplementation(async (input: any) => {
+      const common = { agentName: 'hook-cognition-maintainer', kind: 'maintain', arc: null, planner: null, reviewer: null, researcher: null, composer: null, requirements: null, iterations: 1, attempts: 1, expandedReads: [], readRevisions: { ...base.revisions } };
+      if (input.delegation.prompt === '契约结算') {
+        return { ...common, writes: ['hooks'], usedFieldWrites: false, maintainer: { summary: '契约', delta: { ...emptyDelta, hooks: [{ action: 'upsert', id: 'H1', summary: '晶屑', status: 'planted', importance: 'high', plantedIndex: 3, plannedPayoff: '', reason: '' }] } } };
+      }
+      // 逐栏保存：write_sql 已把故事时间即时落帧
+      const framed = applyAgentModuleDelta_ACU(base, { ...emptyDelta, chronology: [{ action: 'upsert', id: 'T1', anchor: '抵达禁区外围的第三日', elapsed: '自开篇约三日', precision: 'approximate', transition: '主角一行赶路三日抵达禁区外围', evidenceIndexes: [3] }] } as any, ['chronology'], 3).snapshot;
+      await writeAgentModuleSnapshot_ACU(chat, chat.length - 1, framed);
+      return { ...common, writes: ['chronology'], usedFieldWrites: true, maintainer: { summary: '逐栏', delta: emptyDelta } };
+    });
+
+    await h.planner.plan(h.request);
+
+    const finalSnapshot = h.written.at(-1)!.snapshot;
+    expect(finalSnapshot.chronology.map(entry => entry.id)).toEqual(['T1']);
+    expect(finalSnapshot.hooks.map(hook => hook.id)).toEqual(['H1']);
+  });
+
   it('模型自报的旧 revision 由运行时实际读取版本覆盖，不制造伪冲突', async () => {
     const stale = buildEmptyAgentModuleSnapshot_ACU();
     stale.revisions.hooks = 5;

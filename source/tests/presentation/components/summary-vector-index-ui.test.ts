@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   process: vi.fn(),
   rebuild: vi.fn(),
+  resetDedupe: vi.fn(),
   toast: vi.fn(),
   confirm: vi.fn(),
   clear: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock('../../../src/shared/constants', () => ({ ACU_TOAST_CATEGORY_ACU: { PLAN
 vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logWarn_ACU: vi.fn() }));
 vi.mock('../../../src/service/vector/summary-vector-index-runtime', () => ({
   processSummaryVectorIndexBeforeGeneration_ACU: h.process,
+  resetSummaryVectorIndexRuntimeDedupeState_ACU: h.resetDedupe,
 }));
 vi.mock('../../../src/service/vector/summary-vector-index-rebuild-service', () => ({
   rebuildCurrentSummaryVectorIndexNow_ACU: h.rebuild,
@@ -83,6 +85,18 @@ describe('summary vector index UI recovery', () => {
     expect(h.toast).toHaveBeenCalledWith('error', '交火索引快照重建失败：rebuild failed');
     expect(h.clear).toHaveBeenCalledTimes(2);
     expect(h.remove).toHaveBeenCalledTimes(2);
+  });
+
+  it('用户确认重建却没建成（返回失败或抛错）：放掉 8 秒去重，按提示点「重新生成」会真的重新召回', async () => {
+    h.rebuild.mockResolvedValueOnce({ success: false, skipped: false, errors: ['boom'] });
+    const failed = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
+    expect(failed).toMatchObject({ success: false, reason: 'rebuild_failed' });
+    expect(h.resetDedupe).toHaveBeenCalledTimes(1);
+
+    h.rebuild.mockRejectedValueOnce(new Error('rebuild failed'));
+    const thrown = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
+    expect(thrown).toMatchObject({ success: false, reason: 'rebuild_failed' });
+    expect(h.resetDedupe).toHaveBeenCalledTimes(2);
   });
 
   it('重建失败为跨源被拒时，错误 toast 带出 CORS 处置建议（V1 用户可见路径）', async () => {

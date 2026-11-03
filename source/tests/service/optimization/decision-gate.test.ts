@@ -125,6 +125,17 @@ describe('requestContentDecision_ACU', () => {
     expect((verdict as any).message).toContain('User not found.');
   });
 
+  it('服务商把收到的 Key 回显进错误体时，返回的错误原因去掉 Key（toast 与判定测试输出直接展示它）', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(401, { error: { message: 'invalid api key sk-abcdefghijklmnopqrstuvwxyz123456' } }));
+    const verdict = await requestContentDecision_ACU('正文', settings, { fetch: fetchImpl });
+    expect((verdict as any).message).toContain('HTTP 401');
+    expect((verdict as any).message).not.toContain('abcdefghijklmnopqrstuvwxyz123456');
+
+    const failing = vi.fn(async () => { throw new Error('proxy rejected key sk-abcdefghijklmnopqrstuvwxyz123456'); });
+    const failed = await requestContentDecision_ACU('正文', settings, { fetch: failing });
+    expect((failed as any).message).not.toContain('abcdefghijklmnopqrstuvwxyz123456');
+  });
+
   it('网络异常与超时都返回错误，不抛出', async () => {
     const failing = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
     expect((await requestContentDecision_ACU('正文', settings, { fetch: failing })).kind).toBe('error');

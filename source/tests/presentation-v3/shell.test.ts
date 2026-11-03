@@ -97,6 +97,35 @@ describe('v3 外壳', () => {
     unregister();
   });
 
+  it('外观抽屉里切「界面模式」同样先过关闭守卫，拒绝则模式与页面都不变', async () => {
+    const { mount, router } = await mountV3();
+    cleanup = () => mount.__resetAcuV2MountForTests();
+    router.setActivePage('api');
+    await flush();
+    const { registerUiCloseGuard } = await import('../../src/presentation-v2/composables/useUiCloseGuard');
+    let allow = false;
+    const guard = vi.fn(() => allow);
+    const unregister = registerUiCloseGuard(guard);
+
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-rail button'))
+      .find(button => button.textContent?.includes('外观与界面'))!.click();
+    await flush();
+    const basicOption = () => Array.from(document.querySelectorAll<HTMLButtonElement>('[aria-label="界面模式"] button'))
+      .find(button => button.textContent?.includes('基础'))!;
+    basicOption().click();
+    await flush();
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(router.activePageId).toBe('api');
+    expect(document.querySelector('.ub-brand__tag')?.textContent).toContain('高手模式');
+
+    allow = true;
+    basicOption().click();
+    await flush();
+    expect(guard).toHaveBeenCalledTimes(2);
+    expect(router.activePageId).not.toBe('api');
+    unregister();
+  });
+
   it('默认风格下选 Claude 主题：提示有 Claude 整体风格，只问一次；同意则切到 Claude 风格并按主题定明暗', async () => {
     const { mount } = await mountV3({ uiState: { theme: { activeId: 'jirai-kei' } } });
     cleanup = () => mount.__resetAcuV2MountForTests();

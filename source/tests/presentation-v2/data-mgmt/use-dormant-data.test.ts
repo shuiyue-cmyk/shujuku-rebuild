@@ -12,8 +12,14 @@ async function loadDormant(overrides: {
   audit?: any;
   wakeTable?: any;
   wakeColumn?: any;
+  scopeStillCurrent?: () => boolean;
 } = {}) {
   vi.resetModules();
+  vi.doMock('../../../src/presentation-v2/composables/chat-action-scope', () => ({
+    CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU: '确认期间当前聊天或隔离标识已切换，本次操作未执行；请在当前聊天重新操作。',
+    captureChatActionScope_ACU: () => ({ chatIdentity: 'chat-a', isolationKey: '' }),
+    isChatActionScopeCurrent_ACU: () => (overrides.scopeStillCurrent ? overrides.scopeStillCurrent() : true),
+  }));
   const listTables = vi.fn(overrides.tables ?? (() => ({ ok: true, entries: [] })));
   const listColumns = vi.fn(overrides.columns ?? (() => ({ ok: true, entries: [] })));
   const audit = vi.fn(overrides.audit ?? (() => ({ ok: true, issues: [], hiddenCount: 0 })));
@@ -62,6 +68,15 @@ const columnEntry = {
 beforeEach(() => { vi.restoreAllMocks(); });
 
 describe('useDormantData', () => {
+
+  it('确认框弹着时切了聊天：唤醒表 / 列都不执行，提示重新操作', async () => {
+    const d = await loadDormant({ scopeStillCurrent: () => false });
+    expect(await d.dormant.wakeTable(tableEntry as any)).toBe(false);
+    expect(await d.dormant.wakeColumn(columnEntry as any)).toBe(false);
+    expect(d.wakeTable).not.toHaveBeenCalled();
+    expect(d.wakeColumn).not.toHaveBeenCalled();
+    expect(d.toastError).toHaveBeenCalledWith(expect.stringContaining('已切换'));
+  });
 
   it('refresh：任一来源失败进入错误态（区分「无休眠」与「读不出」）', async () => {
     const d = await loadDormant({

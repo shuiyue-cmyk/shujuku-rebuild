@@ -653,6 +653,28 @@ describe('AbortController 管理', () => {
     abortAllActiveRequests_ACU();
   });
 
+  it('「正在填表」置位前点的终止：置位后补锁存，扛得住一次性标记复位；之前的终止不算', async () => {
+    const { getTableFillStopSeq_ACU, latchTableFillStopRequestedSince_ACU } = await import('../../../src/service/runtime/state-manager');
+    requestTableFillStop_ACU();
+    const seq = getTableFillStopSeq_ACU();
+    _set_wasStoppedByUser_ACU(false);
+    _set_isAutoUpdatingCard_ACU(true);
+    latchTableFillStopRequestedSince_ACU(seq);
+    expect(isTableFillStopRequested_ACU()).toBe(false);
+    _set_isAutoUpdatingCard_ACU(false);
+
+    const seqAtStart = getTableFillStopSeq_ACU();
+    requestTableFillStop_ACU();
+    _set_wasStoppedByUser_ACU(false);
+    _set_isAutoUpdatingCard_ACU(true);
+    latchTableFillStopRequestedSince_ACU(seqAtStart);
+    _set_wasStoppedByUser_ACU(false);
+    expect(isTableFillStopRequested_ACU()).toBe(true);
+    _set_isAutoUpdatingCard_ACU(false);
+    expect(isTableFillStopRequested_ACU()).toBe(false);
+    abortAllActiveRequests_ACU();
+  });
+
   it('终止后本轮迟迟不结束：30 秒后仍是同一轮就强制放开；期间已换新一轮则不动', () => {
     vi.useFakeTimers();
     try {

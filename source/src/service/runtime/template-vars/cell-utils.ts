@@ -193,15 +193,18 @@ import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../../shared/utils';
     } else if (parts.length === 2) {
       const targetName = name1;
       let foundAnyCell = false;
+      // 行名在首个业务列：V2 表首列恒为 row_id（或 null 占位），按它认行条件会永远不成立
+      const firstHeader = headerRow[0];
+      const rowNameIndex = firstHeader === null || firstHeader === undefined || String(firstHeader).trim().toLowerCase() === 'row_id' ? 1 : 0;
       
       const targetRow = dataRows.find((row: any) => {
         if (!Array.isArray(row)) return false;
-        return String(row[0] || '').trim() === targetName.trim();
+        return String(row[rowNameIndex] || '').trim() === targetName.trim();
       });
       
       if (targetRow) {
         foundAnyCell = true;
-        for (let colIdx = 1; colIdx < targetRow.length; colIdx++) {
+        for (let colIdx = rowNameIndex + 1; colIdx < targetRow.length; colIdx++) {
           const cellValue = targetRow[colIdx];
           if (compareValue_ACU(cellValue, matchedOperator, compareValue)) {
             return true;

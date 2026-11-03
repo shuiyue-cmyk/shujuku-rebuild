@@ -30,7 +30,7 @@ import { topLevelWindow_ACU } from '../../shared/env';
 import { useDialogStore } from '../stores/dialog-store';
 import { useToastStore } from '../stores/toast-store';
 import { isAiFloor_ACU } from '../../shared/ai-floor';
-import { logWarn_ACU } from '../../shared/utils';
+import { logError_ACU } from '../../shared/utils';
 
 type MessageKind = 'info' | 'success' | 'warning' | 'error';
 
@@ -706,8 +706,8 @@ export function useManualUpdate(): ManualUpdateState {
             },
         },
       );
-      // 提示里只说通俗结论，具体原因留在运行日志
-      if (result.error) logWarn_ACU(`[手动追平] ${result.outcome || '未完成'}：${result.error}`);
+      // 提示里只说通俗结论，具体原因留在运行日志（记 ERROR：WARN 默认不采集，提示里说的「运行日志」会是空的）
+      if (result.error) logError_ACU(`[手动追平] ${result.outcome || '未完成'}：${result.error}`);
       if (result.outcome === 'sync_pending') {
         showCatchUpSyncPending();
       } else if (result.outcome === 'no_work') {
@@ -727,7 +727,7 @@ export function useManualUpdate(): ManualUpdateState {
         finishToast('error', result.error || '追平没有完成，请稍后再试。');
       }
     } catch (error: any) {
-      logWarn_ACU('[手动追平] 执行异常:', error);
+      logError_ACU('[手动追平] 执行异常:', error);
       finishToast('error', '追平过程中出错了，请稍后再试。');
     } finally {
       catchUpAbortController = null;

@@ -7,7 +7,12 @@
 import { toastr_API_ACU } from '../../shared/host-api';
 import { ACU_TOAST_CATEGORY_ACU } from '../../shared/constants';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
-import { processSummaryVectorIndexBeforeGeneration_ACU, type SummaryVectorIndexRuntimeOptions_ACU, type SummaryVectorIndexRuntimeResult_ACU } from '../../service/vector/summary-vector-index-runtime';
+import {
+  processSummaryVectorIndexBeforeGeneration_ACU,
+  resetSummaryVectorIndexRuntimeDedupeState_ACU,
+  type SummaryVectorIndexRuntimeOptions_ACU,
+  type SummaryVectorIndexRuntimeResult_ACU,
+} from '../../service/vector/summary-vector-index-runtime';
 import { rebuildCurrentSummaryVectorIndexNow_ACU } from '../../service/vector/summary-vector-index-rebuild-service';
 import { isSummaryVectorIndexSourceTextOutdated_ACU, type SummaryVectorIndexArchiveResult_ACU } from '../../service/vector/summary-vector-index-archive-service';
 import { getLatestSummaryVectorIndexSnapshotState_ACU } from '../../service/vector/summary-vector-index-state-service';
@@ -126,6 +131,15 @@ export function isSummaryVectorRecallFailure_ACU(result: SummaryVectorIndexRunti
   return !!result && result.success !== true && result.skipped !== true;
 }
 
+/**
+ * 首轮召回（rebuild_required，属 skipped）已写下 8 秒去重签名：这里合成的失败不经 runtime 的失败释放，
+ * 不放掉签名的话，发送层提示的「点重新生成会重新召回」在 8 秒内会被当成已召回直接放行。
+ */
+function recallFailedAfterRebuild_ACU(reason: string): SummaryVectorIndexRuntimeResult_ACU {
+  resetSummaryVectorIndexRuntimeDedupeState_ACU();
+  return { success: false, reason };
+}
+
 export async function processSummaryVectorIndexBeforeGenerationWithUI_ACU(
   options: SummaryVectorIndexRuntimeOptions_ACU = {},
 ): Promise<SummaryVectorIndexRuntimeResult_ACU> {
@@ -171,11 +185,11 @@ export async function processSummaryVectorIndexBeforeGenerationWithUI_ACU(
     try {
       const rebuildResult = await rebuildCurrentSummaryVectorIndexWithUI_ACU();
       // 用户已确认重建却没建成：这一轮没有可用记忆，按召回失败处理，由发送层停止这次生成
-      if (!rebuildResult.success) return { success: false, reason: 'rebuild_failed' };
+      if (!rebuildResult.success) return recallFailedAfterRebuild_ACU('rebuild_failed');
       rebuilt = !rebuildResult.skipped;
     } catch (error) {
       logWarn_ACU(`[交火模式纪要索引] 失效索引已删除，但普通重建路径执行失败：${error instanceof Error ? error.message : String(error)}`);
-      return { success: false, reason: 'rebuild_failed' };
+      return recallFailedAfterRebuild_ACU('rebuild_failed');
     }
     // 重建成功后在同一次发送里补跑一次召回，否则这一轮目录沿用上一轮的内容。
     if (rebuilt) {
@@ -194,7 +208,7 @@ export async function processSummaryVectorIndexBeforeGenerationWithUI_ACU(
       } catch (error) {
         // 索引已重建、补跑召回却失败：按召回失败处理，由发送层停止这次生成
         logWarn_ACU(`[交火模式纪要索引] 自愈重建后补跑召回失败：${error instanceof Error ? error.message : String(error)}`);
-        return { success: false, reason: 'recall_after_rebuild_failed' };
+        return recallFailedAfterRebuild_ACU('recall_after_rebuild_failed');
       }
     }
   }

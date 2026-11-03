@@ -52,6 +52,15 @@ describe('evaluateCellExpression_ACU', () => {
     // 所以需要用列名匹配
     expect(evaluateCellExpression_ACU('角色属性表/数值 > 50', mockTables)).toBe(true);
   });
+  it('两段路径按行名匹配：首列是 row_id 时按第一个业务列认行，比较该行其余各格', () => {
+    expect(evaluateCellExpression_ACU('角色属性表/生命值 > 50', mockTables)).toBe(true);
+    expect(evaluateCellExpression_ACU('角色属性表/攻击力 > 50', mockTables)).toBe(false);
+    // 行找到了且唯一的值等于 25：!= 不能给出「真」
+    expect(evaluateCellExpression_ACU('角色属性表/攻击力 != 25', mockTables)).toBe(false);
+    // 旧表（无 row_id）仍按首列认行
+    const legacy = { sheet_0: { name: '旧表', content: [['属性', '数值'], ['生命值', '80']] } };
+    expect(evaluateCellExpression_ACU('旧表/生命值 > 50', legacy)).toBe(true);
+  });
   it('两段路径按列匹配', () => {
     expect(evaluateCellExpression_ACU('角色属性表/数值 > 50', mockTables)).toBe(true);
   });

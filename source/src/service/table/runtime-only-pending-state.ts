@@ -42,6 +42,12 @@ export type RuntimeOnlyPendingFlushResult_ACU = {
 };
 
 const pendingByScope_ACU = new Map<string, PendingState_ACU>();
+// 每次登记加一：锁外比对会让出执行权，比对期间有新登记时不能按旧快照清账
+let pendingMarkSeq_ACU = 0;
+
+export function getRuntimeOnlyPendingMarkSeq_ACU(): number {
+  return pendingMarkSeq_ACU;
+}
 let registeredFlusher_ACU: PendingFlusher_ACU | null = null;
 
 function normalizeScopePart_ACU(value: string | null | undefined, fallback: string): string {
@@ -78,6 +84,7 @@ export function markRuntimeOnlyPendingSheets_ACU(
   scope: RuntimeOnlyPendingScope_ACU,
   pending: { all: boolean; sheetKeys: readonly string[]; deletedSheetKeys?: readonly string[] },
 ): void {
+  pendingMarkSeq_ACU += 1;
   const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
   const state = pendingByScope_ACU.get(scopeKey) || {
     all: false,

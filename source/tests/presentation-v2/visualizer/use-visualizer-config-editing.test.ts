@@ -291,6 +291,31 @@ describe('useVisualizerConfigEditing', () => {
     expect(JSON.stringify({ content: store.currentSheet.content, locks: store.tableLockDrafts, dirty: store.dirty })).toBe(before);
   });
 
+  it('改名成同聊天另一张表的现有名（规范化后相同）时拒绝，表名与别名都不动', async () => {
+    const store = await loadSheet();
+    store.tempData.sheet_b = {
+      uid: 'sheet_b',
+      name: '任务表',
+      orderNo: 1,
+      content: [[null, '任务']],
+      sourceData: {},
+      updateConfig: {},
+      exportConfig: {},
+    };
+    store.dirty = false;
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const config = useVisualizerConfigEditing();
+
+    config.renameSheet(' 任务表 ');
+
+    expect(store.tempData.sheet_a.name).toBe('背包表');
+    expect(store.tempData.sheet_a.sourceData.tableAliases).toBeUndefined();
+    expect(store.dirty).toBe(false);
+
+    config.renameSheet('背包表');
+    expect(store.tempData.sheet_a.name).toBe('背包表');
+  });
+
   it('往返改名后别名链只保留非当前名：A→B→A 得到 [B]', async () => {
     const store = await loadSheet();
     const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');

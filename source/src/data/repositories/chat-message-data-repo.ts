@@ -271,13 +271,9 @@ function tokenizeTopLevelSqlForPurge_ACU(statement: string): SqlPurgeTokenizeRes
             let value = '';
             let closed = false;
             index += 1;
+            // 按 SQLite 词法：引号内只有重复引号是转义，反斜杠是普通字符（与写入端分词器一致）
             while (index < statement.length) {
                 const current = statement[index];
-                if (current === '\\' && index + 1 < statement.length) {
-                    value += statement[index + 1];
-                    index += 2;
-                    continue;
-                }
                 if (current === closing) {
                     if (statement[index + 1] === closing) {
                         value += closing;

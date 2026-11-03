@@ -75,13 +75,16 @@ export async function runDecisionRecallWithUI_ACU(userMessage: any, _options: an
   // 按剧情推进的请求登记：切聊天时一并中止，用户终止填表时不受影响
   trackAbortController_ACU(controller, 'plot');
   let manuallyAborted = false;
-  const $toast = showProgressToast_ACU(() => {
-    manuallyAborted = true;
-    controller.abort();
-    logDebug_ACU('[决策召回] 用户点击了终止。');
-  });
+  let $toast: any = null;
 
+  // 弹进度提示也放进 try：宿主 / 美化脚本换掉的 toastr 可能同步抛错，在途标记必须由 finally 复位，
+  // 否则此后整场会话的单独召回都按「在途」静默跳过
   try {
+    $toast = showProgressToast_ACU(() => {
+      manuallyAborted = true;
+      controller.abort();
+      logDebug_ACU('[决策召回] 用户点击了终止。');
+    });
     const settings = normalizeDecisionRecallSettings_ACU(settings_ACU?.decisionRecallSettings);
     const result = await runDecisionRecall_ACU({ userInput, settings, signal: controller.signal });
     clearToast_ACU($toast);

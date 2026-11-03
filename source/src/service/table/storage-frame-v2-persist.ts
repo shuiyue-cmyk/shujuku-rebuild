@@ -2946,6 +2946,9 @@ async function persistTableMutationLogBatchV2Core_ACU(
   const mergedTargets = mergeBatchTargetsByMessageIndex_ACU(options.targets, options.afterData);
   if ('error' in mergedTargets) return { saved: false, error: mergedTargets.error };
   const targetByIndex = mergedTargets;
+  // 记下各目标楼层的消息对象：校验回放会让出执行权，期间删楼会让同一下标换成另一条消息
+  const targetMessageByIndex = new Map([...targetByIndex.keys()].map(index => [index, chat[index]]));
+  const latestCheckpointMessage = latestCheckpoint ? chat[latestCheckpoint.index] : undefined;
   const changedSheetKeys = new Set<string>();
   for (const [targetIndex, target] of targetByIndex) {
     if (!Number.isInteger(targetIndex) || targetIndex < latestReplayRootIndex || !chat[targetIndex] || chat[targetIndex].is_user) {
@@ -3116,7 +3119,10 @@ async function persistTableMutationLogBatchV2Core_ACU(
     throw new Error('目标聊天已切换，已拒绝旧的批量表格保存。');
   }
   for (const index of targetByIndex.keys()) {
-    if (!chat[index] || chat[index].is_user) throw new Error('批量保存目标已变化，已拒绝旧结果。');
+    if (!chat[index] || chat[index].is_user || chat[index] !== targetMessageByIndex.get(index)) throw new Error('批量保存目标已变化，已拒绝旧结果。');
+  }
+  if (provisionalConvergenceReplay && latestCheckpoint && chat[latestCheckpoint.index] !== latestCheckpointMessage) {
+    throw new Error('批量保存的回放根楼层已变化，已拒绝旧结果。');
   }
   options.transactionContext?.assertFresh?.('persistTableMutationLogBatchV2:after_replay');
 

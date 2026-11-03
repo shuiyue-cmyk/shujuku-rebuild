@@ -9,15 +9,16 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockLogDebug, mockLogWarn } = vi.hoisted(() => ({
+const { mockLogDebug, mockLogWarn, mockLogError } = vi.hoisted(() => ({
   mockLogDebug: vi.fn(),
   mockLogWarn: vi.fn(),
+  mockLogError: vi.fn(),
 }));
 
 vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: mockLogDebug,
   logWarn_ACU: mockLogWarn,
-  logError_ACU: vi.fn(),
+  logError_ACU: mockLogError,
   isSummaryOrOutlineTable_ACU: vi.fn(() => false),
 }));
 
@@ -627,8 +628,8 @@ describe('executeAutoUpdatePlan_ACU', () => {
     const ops = makeOps({ processGroupedUpdates: mockGrouped });
     const result = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, ops, { runId: 'run-1' });
     expect(result.success).toBe(false);
-    // 失败原因必须进日志：否则 Debug 导出里只有「1 组失败」，看不出为什么。
-    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('统一提交失败：示例原因'));
+    // 失败原因必须进日志，且是默认就采集的 ERROR：否则 Debug 导出里只有「1 组失败」，看不出为什么。
+    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('统一提交失败：示例原因'));
     expect(mockLogDebug).toHaveBeenCalledWith(
       '[AutoFill] Trigger skipped',
       expect.objectContaining({ reason: 'execution_failed', runId: 'run-1', stage: 'execute', failedGroupCount: 1 }),

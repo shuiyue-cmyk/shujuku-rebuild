@@ -5,7 +5,7 @@
  * 只负责「遍历表格检查更新条件 + 构建 tablesToUpdate 列表 + 分组」，不涉及 UI（toast/status）。
  */
 
-import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { logAutoFillSkip_ACU, logAutoFillStage_ACU } from '../../shared/trigger-diagnostics';
 import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performance';
 import { getSortedSheetKeys_ACU } from '../template/chat-scope';
@@ -432,7 +432,8 @@ export async function executeAutoUpdatePlan_ACU(
 
     if (failedGroupKeys.length > 0) {
         // 诊断结构化字段不带业务载荷，失败原因单独记一条（每组截短），Debug 导出里才能看到为什么失败。
-        logWarn_ACU(`[自动填表] ${failedGroupKeys.length}/${totalGroups} 组失败：${failedGroupErrors.map(error => error.slice(0, 300)).join('；') || '未返回具体错误'}`);
+        // 记 ERROR：WARN 默认不采集，记成 WARN 时导出里同样看不到。
+        logError_ACU(`[自动填表] ${failedGroupKeys.length}/${totalGroups} 组失败：${failedGroupErrors.map(error => error.slice(0, 300)).join('；') || '未返回具体错误'}`);
         const runnerUnavailableGroupKeys = stagingGroupKeys.filter(key => failedGroupKeys.includes(key));
         logAutoFillSkip_ACU(runnerUnavailableGroupKeys.length ? 'staging_runner_unavailable' : 'execution_failed', {
             runId: performanceContext?.runId, stage: 'execute', groupCount: totalGroups,

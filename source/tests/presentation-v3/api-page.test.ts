@@ -146,6 +146,24 @@ describe('API 页', () => {
     expect(page().textContent).toContain('连接失败（300 毫秒）：API请求失败: 401 invalid key');
   });
 
+  it('测试连接在途时切到别的预设，迟到的结果不显示在新预设下', { timeout: 60_000 }, async () => {
+    const { page, testConnection } = await mountApiPage();
+    let resolveTest: ((value: any) => void) | null = null;
+    testConnection.mockImplementationOnce(() => new Promise(resolve => { resolveTest = resolve; }));
+    byText<HTMLButtonElement>('button', '测试连接', page())!.click();
+    await flush();
+
+    page().querySelector<HTMLButtonElement>('.ub-picker__trigger')!.click();
+    await flush();
+    byText<HTMLElement>('.ub-picker-panel__item', 'alpha')!.click();
+    await flush();
+    resolveTest?.({ ok: true, elapsedMs: 20_000, reply: '这是 beta 端点的回复' });
+    await flush();
+
+    expect(page().textContent).not.toContain('这是 beta 端点的回复');
+    expect(page().textContent).not.toContain('连接成功');
+  });
+
   it('「加载模型」按草稿的接口协议探活：customApiFormat 透传', { timeout: 60_000 }, async () => {
     const settings = createSettings();
     settings.apiPresets[1].apiConfig.customApiFormat = 'claude_messages';

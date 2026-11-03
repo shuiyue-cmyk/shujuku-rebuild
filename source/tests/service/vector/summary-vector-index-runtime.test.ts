@@ -709,6 +709,25 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     expect(retryInput.length).toBeLessThan(longInput.length);
   });
 
+  it('用户输入不长、AI 关键词把查询撑过上限被拒：重试时真的截短（不与首次相同），照常召回', async () => {
+    h.config.keywordGenerationEnabled = true;
+    h.config.keywordPromptGroup = [{ role: 'user', content: '$USER_INPUT' }];
+    const longKeyword = '很长的关键词'.repeat(80);
+    h.callAI.mockResolvedValue(`<keywords>secret relic，${longKeyword}</keywords>`);
+    h.createEmbeddings.mockRejectedValueOnce(new Error('Embedding 请求失败 400: input too long'));
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 'long-keywords' });
+
+    expect(result.success).toBe(true);
+    const calls = h.createEmbeddings.mock.calls.map((call: any) => call[0].input[0]);
+    const firstInput = calls.at(-2);
+    const retryInput = calls.at(-1);
+    expect(firstInput).toContain(longKeyword);
+    expect(retryInput).not.toBe(firstInput);
+    expect(retryInput.length).toBeLessThanOrEqual(300);
+    expect(retryInput.startsWith('find secret relic')).toBe(true);
+  });
+
   it('T5：query embedding 返回空向量同样判召回失败（非跳过）', async () => {
     h.config.summaryIndexRecentFixedInjectCount = 1;
     h.createEmbeddings.mockResolvedValueOnce([{ index: 0, embedding: [] }]);

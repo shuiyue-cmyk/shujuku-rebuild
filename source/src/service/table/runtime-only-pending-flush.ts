@@ -25,6 +25,7 @@ import { ensureStorageProviderReady_ACU } from './table-storage-strategy';
 import { runTableUpdateCommit_ACU } from './table-update-commit';
 import {
   clearRuntimeOnlyPendingSheetKeys_ACU,
+  getRuntimeOnlyPendingMarkSeq_ACU,
   markRuntimeOnlyPendingSheets_ACU,
   readRuntimeOnlyPendingSheets_ACU,
   registerRuntimeOnlyPendingFlusher_ACU,
@@ -109,6 +110,7 @@ const NOTHING_TO_FLUSH_ERROR_ACU = '__ACU_RUNTIME_ONLY_FLUSH_NOTHING_TO_FLUSH__'
 
 export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promise<RuntimeOnlyPendingFlushResult_ACU> {
   const scope = currentScope_ACU();
+  const markSeqAtStart = getRuntimeOnlyPendingMarkSeq_ACU();
   const pending = readRuntimeOnlyPendingSheets_ACU(scope);
   if (!pending) return { flushed: false, sheetKeys: [] };
 
@@ -150,7 +152,8 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
     candidateSheetKeys,
     pending.all,
   );
-  if (divergedSheetKeys.length === 0 && !requiresFullSnapshot) {
+  // 比对期间又有新登记（可能正是 T0 候选表被再次写入）：不在锁外按旧快照清账，交给下面持锁重算
+  if (divergedSheetKeys.length === 0 && !requiresFullSnapshot && getRuntimeOnlyPendingMarkSeq_ACU() === markSeqAtStart) {
     // T0 候选集与回放一致，无需落盘：按集合清除 T0 候选（回放比对窗口内并发写者新登记
     // 的表不在 T0 集合内，不受影响）；持锁后的最终确认仍由事务内重算兜底。
     clearRuntimeOnlyPendingSheetKeys_ACU(scope, candidateSheetKeys, { dropAllFlag: pending.all });
