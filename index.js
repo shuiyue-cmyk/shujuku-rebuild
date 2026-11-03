@@ -8293,15 +8293,23 @@ class SqliteRuntimeUnavailableError_ACU extends Error {
         this.cause = cause;
     }
 }
+/**
+ * 模块级 sql.js 运行时单例（移植上游 a43d0569）。
+ * 每次回放都会 new SqliteEngine()；运行时若挂在实例上，每个实例都要重新解码内联 wasm base64
+ * 并重新走 initSqlJs。运行时本身无状态（Database 才有状态），因此全进程共享一份：
+ * 成功后永久复用；失败时清空 Promise，下次调用可重试（不把失败的 Promise 永久缓存）。
+ */
+let sharedSqlJsRuntime_ACU = null;
+let sharedSqlJsInitPromise_ACU = null;
+/** 仅供测试隔离：清空模块级运行时缓存。 */
+function resetSqliteRuntimeCacheForTests_ACU() {
+    sharedSqlJsRuntime_ACU = null;
+    sharedSqlJsInitPromise_ACU = null;
+}
 class SqliteEngine {
     constructor() {
         this.db = null;
         this.sqlJs = null;
-        /**
-         * 单一运行时初始化 Promise：并发调用 init()/loadFromBinary() 时只初始化一次 sql.js。
-         * 失败后置 null，保证下次调用可重试（不会把失败的 Promise 永久缓存）。
-         */
-        this.sqlJsInitPromise = null;
     }
     /** 是否已初始化 */
     get isReady() {
@@ -8345,21 +8353,25 @@ class SqliteEngine {
     }
     /**
      * 初始化 sql.js 运行时（单一入口，init/loadFromBinary 共用）。
-     * - 已初始化过运行时直接返回；
-     * - 否则复用/创建 sqlJsInitPromise，并发调用只初始化一次；
-     * - 失败时把 Promise 置 null 后重抛，保证下次可重试。
+     * - 本实例或模块级已有运行时直接返回；
+     * - 否则复用/创建模块级初始化 Promise，跨实例并发调用只初始化一次；
+     * - 失败时把模块级 Promise 置 null 后重抛，保证下次可重试。
      */
     async initializeRuntime() {
         if (this.sqlJs)
             return this.sqlJs;
+        if (sharedSqlJsRuntime_ACU) {
+            this.sqlJs = sharedSqlJsRuntime_ACU;
+            return this.sqlJs;
+        }
         // [6.7.2] 检测 sql.js 是否可用（CDN @require 可能加载失败）
         if (typeof initSqlJs !== 'function') {
             throw new SqliteRuntimeUnavailableError_ACU('sql.js 引擎未加载：initSqlJs 函数不存在。' +
                 '请检查构建产物是否正确打包 sql-wasm.js 与内联 wasm（base64），' +
                 '或 CDN 是否可达。');
         }
-        if (!this.sqlJsInitPromise) {
-            this.sqlJsInitPromise = (async () => {
+        if (!sharedSqlJsInitPromise_ACU) {
+            sharedSqlJsInitPromise_ACU = (async () => {
                 try {
                     logDebug_ACU('[SQLite引擎] 正在初始化 sql.js...');
                     const runtime = await initSqlJs(this.buildInitConfig_ACU());
@@ -8374,11 +8386,16 @@ class SqliteEngine {
                 }
             })();
         }
+        const pending = sharedSqlJsInitPromise_ACU;
         try {
-            this.sqlJs = await this.sqlJsInitPromise;
+            const runtime = await pending;
+            sharedSqlJsRuntime_ACU = runtime;
+            this.sqlJs = runtime;
         }
         catch (error) {
-            this.sqlJsInitPromise = null;
+            // 只清理本次失败的 Promise；期间若已被重置/替换，不覆盖新的初始化。
+            if (sharedSqlJsInitPromise_ACU === pending)
+                sharedSqlJsInitPromise_ACU = null;
             throw error;
         }
         return this.sqlJs;
@@ -41072,6 +41089,8 @@ const SAFE_METRIC_KEYS_ACU = new Set([
     'replayReuseCount', 'replayReuseFallbackCount',
     'replayShareCount',
     'yieldCount',
+    // 交火召回读取向量镜像 pack（纯计数）
+    'packCount', 'packCacheHitCount', 'packMissingCount',
 ]);
 let nextSpanId_ACU = 1;
 let recentSpans_ACU = [];
@@ -52089,9 +52108,69 @@ async function persistSummaryVectorMirrorManifestPrepared_ACU(params) {
         createdNew: true,
     };
 }
-async function loadSummaryVectorMirrorPack_ACU(ref) {
-    if (!ref?.path)
-        return null;
+/**
+ * 内容寻址 pack 的内存缓存（移植上游 a43d0569）。
+ * pack 路径主体即内容 sha256，写入端对同路径不同内容直接抛错，读取端复核 packKey，
+ * 因此「路径 + packHash」唯一确定内容，命中无需失效。只缓存校验通过的结果；读取失败、
+ * schema/packKey 不符都不入缓存，下次照常重读（不把失败伪装成空索引）。按字符量做 LRU 上限，
+ * 避免手机端内存膨胀。上游同时加的向量解码缓存不跟：实测解码只占几毫秒，不值得再占一份内存。
+ */
+const MIRROR_PACK_CACHE_MAX_CHARS_ACU = 8000000;
+/** 召回 / 折叠并行读取 pack 的上限：兼顾手机端读取耗时与瞬时内存、本机服务压力。 */
+const SUMMARY_VECTOR_MIRROR_PACK_READ_CONCURRENCY_ACU = 4;
+const mirrorPackCache_ACU = new Map();
+const mirrorPackInflight_ACU = new Map();
+let mirrorPackCacheChars_ACU = 0;
+let mirrorPackCacheHits_ACU = 0;
+/**
+ * checkpoint manifest 缓存：路径含 manifestHash，读取时已按 manifestHash 复核 sha256，
+ * 只缓存复核通过的结果；未带 manifestHash 的引用不缓存。条目数有界（LRU）。
+ */
+const MIRROR_MANIFEST_CACHE_MAX_ENTRIES_ACU = 16;
+const mirrorManifestCache_ACU = new Map();
+function estimatePackChars_ACU(blob) {
+    let total = 256;
+    for (const chunk of blob.chunks) {
+        total += 128 + String(chunk?.vector || '').length + String(chunk?.text || '').length;
+    }
+    return total;
+}
+function dropMirrorPack_ACU(key) {
+    const previous = mirrorPackCache_ACU.get(key);
+    if (!previous)
+        return;
+    mirrorPackCacheChars_ACU -= previous.chars;
+    mirrorPackCache_ACU.delete(key);
+}
+function storeMirrorPack_ACU(key, blob) {
+    dropMirrorPack_ACU(key);
+    const chars = estimatePackChars_ACU(blob);
+    if (chars > MIRROR_PACK_CACHE_MAX_CHARS_ACU)
+        return;
+    mirrorPackCache_ACU.set(key, { blob, chars });
+    mirrorPackCacheChars_ACU += chars;
+    while (mirrorPackCacheChars_ACU > MIRROR_PACK_CACHE_MAX_CHARS_ACU && mirrorPackCache_ACU.size > 0) {
+        const oldestKey = mirrorPackCache_ACU.keys().next().value;
+        dropMirrorPack_ACU(oldestKey);
+    }
+}
+/** 返回浅副本：调用方可重排/增删 chunks 数组而不影响缓存；chunk 对象按只读约定共享。 */
+function clonePackShell_ACU(blob) {
+    return { ...blob, chunks: blob.chunks.slice() };
+}
+/** 仅供测试隔离：清空 pack / manifest 内存缓存。 */
+function clearSummaryVectorMirrorPackCache_ACU() {
+    mirrorPackCache_ACU.clear();
+    mirrorPackInflight_ACU.clear();
+    mirrorPackCacheChars_ACU = 0;
+    mirrorPackCacheHits_ACU = 0;
+    mirrorManifestCache_ACU.clear();
+}
+/** 累计 pack 缓存命中次数（性能诊断用：调用方前后取差得到本轮命中数）。 */
+function getSummaryVectorMirrorPackCacheHitCount_ACU() {
+    return mirrorPackCacheHits_ACU;
+}
+async function readSummaryVectorMirrorPackUncached_ACU(ref) {
     const loaded = await readVectorIndexJsonFile_ACU(ref.path);
     if (!loaded.ok || !loaded.data)
         return null;
@@ -52102,9 +52181,54 @@ async function loadSummaryVectorMirrorPack_ACU(ref) {
         return null;
     return loaded.data;
 }
-async function loadSummaryVectorMirrorManifest_ACU(ref) {
+async function loadSummaryVectorMirrorPack_ACU(ref, options = {}) {
     if (!ref?.path)
         return null;
+    // 只有带 packHash 的引用才是内容寻址的，可安全缓存；其余保持每次直读。
+    if (!ref.packHash)
+        return readSummaryVectorMirrorPackUncached_ACU(ref);
+    const key = `${ref.path}\u0000${ref.packHash}`;
+    if (options.fresh === true) {
+        const blob = await readSummaryVectorMirrorPackUncached_ACU(ref);
+        if (blob)
+            storeMirrorPack_ACU(key, blob);
+        else
+            dropMirrorPack_ACU(key);
+        return blob ? clonePackShell_ACU(blob) : null;
+    }
+    const cached = mirrorPackCache_ACU.get(key);
+    if (cached) {
+        mirrorPackCache_ACU.delete(key);
+        mirrorPackCache_ACU.set(key, cached);
+        mirrorPackCacheHits_ACU += 1;
+        return clonePackShell_ACU(cached.blob);
+    }
+    let pending = mirrorPackInflight_ACU.get(key);
+    if (!pending) {
+        pending = readSummaryVectorMirrorPackUncached_ACU(ref)
+            .then((blob) => {
+            if (blob)
+                storeMirrorPack_ACU(key, blob);
+            return blob;
+        })
+            .finally(() => { mirrorPackInflight_ACU.delete(key); });
+        mirrorPackInflight_ACU.set(key, pending);
+    }
+    const blob = await pending;
+    return blob ? clonePackShell_ACU(blob) : null;
+}
+async function loadSummaryVectorMirrorManifest_ACU(ref, options = {}) {
+    if (!ref?.path)
+        return null;
+    const cacheKey = ref.manifestHash ? `${ref.path}\u0000${ref.manifestHash}` : '';
+    if (cacheKey && options.fresh === true)
+        mirrorManifestCache_ACU.delete(cacheKey);
+    const cached = cacheKey ? mirrorManifestCache_ACU.get(cacheKey) : undefined;
+    if (cached) {
+        mirrorManifestCache_ACU.delete(cacheKey);
+        mirrorManifestCache_ACU.set(cacheKey, cached);
+        return { ...cached, rows: cached.rows.slice() };
+    }
     const loaded = await readVectorIndexJsonFile_ACU(ref.path);
     if (!loaded.ok || !loaded.data)
         return null;
@@ -52119,6 +52243,14 @@ async function loadSummaryVectorMirrorManifest_ACU(ref) {
         }));
         if (actualHash !== ref.manifestHash)
             return null;
+        mirrorManifestCache_ACU.set(cacheKey, loaded.data);
+        while (mirrorManifestCache_ACU.size > MIRROR_MANIFEST_CACHE_MAX_ENTRIES_ACU) {
+            const oldestKey = mirrorManifestCache_ACU.keys().next().value;
+            if (oldestKey === undefined)
+                break;
+            mirrorManifestCache_ACU.delete(oldestKey);
+        }
+        return { ...loaded.data, rows: loaded.data.rows.slice() };
     }
     return loaded.data;
 }
@@ -55114,7 +55246,8 @@ async function tryReadV2MirrorDisplayStats_ACU() {
             chat,
             isolationKey,
             sourceTableKey,
-            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref),
+            // 状态展示如实反映盘上文件，不走内存缓存
+            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref, { fresh: true }),
         });
         if (head.status !== 'ok' || !head.checkpoint)
             return null;
@@ -57433,6 +57566,11 @@ async function runScopedRetentionGcAfterFlush_ACU(scope) {
  * 写 checkpoint@C → 清 C..H 旧 delta → strict save → 立刻 flush 补仍未镜像的 C..H。
  * rebuild_repair 复用当前 head 中读回校验通过的 refs；initial / rebuild_user 全量 embedding。
  */
+/**
+ * 重建 / 修复一律直读盘上文件，不走镜像内存缓存：缓存会让外部删掉的文件在本次会话里看起来仍可读，
+ * 修复据此「复用」一个已不存在的 pack，刷新后召回就会缺块。重建是低频操作，正确性优先。
+ */
+const FRESH_READ_ACU = { fresh: true };
 function emptyResult_ACU(partial) {
     return {
         success: false,
@@ -57515,7 +57653,7 @@ async function snapshotSummaryVectorMirrorExcludingRows_ACU(options) {
         chat,
         isolationKey: getCurrentIsolationKey_ACU(),
         sourceTableKey,
-        loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref),
+        loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref, FRESH_READ_ACU),
     });
     if (head.status !== 'ok' || !head.checkpoint || !isSummaryVectorEmbeddingIdentity_ACU(head.checkpoint.embedding)) {
         return { kind: 'none' };
@@ -57772,7 +57910,7 @@ async function rebuildSummaryVectorMirror_ACU(options) {
             chat,
             isolationKey,
             sourceTableKey: selected.summaryKey,
-            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref),
+            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref, FRESH_READ_ACU),
         });
         if (head.status === 'ok') {
             const headPackRefsByHash = new Map(head.packRefs.map((ref) => [ref.packHash, ref]));
@@ -57784,7 +57922,7 @@ async function rebuildSummaryVectorMirror_ACU(options) {
                 const liveSourceHash = String(preparedById.get(rowId)?.vectorSourceHash || '');
                 for (const ref of refs) {
                     const packRef = headPackRefsByHash.get(ref.packHash);
-                    const pack = await loadSummaryVectorMirrorPack_ACU({ packHash: ref.packHash, path: packRef?.path || '', chunkCount: 0, byteLength: 0 });
+                    const pack = await loadSummaryVectorMirrorPack_ACU({ packHash: ref.packHash, path: packRef?.path || '', chunkCount: 0, byteLength: 0 }, FRESH_READ_ACU);
                     const packed = pack?.chunks?.[ref.chunkIndex];
                     if (!packed || (liveSourceHash && String(packed.textHash || '') !== liveSourceHash)) {
                         valid = false;
@@ -57911,7 +58049,7 @@ async function rebuildSummaryVectorMirror_ACU(options) {
             chat,
             isolationKey,
             sourceTableKey: selected.summaryKey,
-            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref),
+            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref, FRESH_READ_ACU),
         });
         if (existingHead.status === 'ok' && existingHead.checkpoint && isSummaryVectorEmbeddingIdentity_ACU(existingHead.checkpoint.embedding)) {
             embedding = { ...existingHead.checkpoint.embedding };
@@ -94965,7 +95103,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261103-1218"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261103-1250"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -94984,7 +95122,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261103-1218";
+        const stamp = "20261103-1250";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -107983,6 +108121,25 @@ function findAppendedTailSinceCapture_ACU(target) {
 }
 
 /**
+ * 有界并发映射（移植上游 a43d0569）：结果按输入顺序返回，同时最多运行 limit 个任务。
+ * 任一任务抛错时整体 reject（与串行 for-await 的失败语义一致），调用方自行决定如何处理。
+ */
+async function mapWithBoundedConcurrency_ACU(items, limit, task) {
+    const results = new Array(items.length);
+    const workerCount = Math.max(1, Math.min(items.length, Math.floor(Number(limit) || 1)));
+    let cursor = 0;
+    const worker = async () => {
+        while (cursor < items.length) {
+            const index = cursor;
+            cursor += 1;
+            results[index] = await task(items[index], index);
+        }
+    };
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return results;
+}
+
+/**
  * service/vector/summary-vector-mirror-fold.ts — compaction 时把 vector head 折到新锚点
  *
  * 纯 I/O：resolver(楼层 < anchor) → 合并 pack + 新 manifest → 写 checkpoint@anchor →
@@ -108030,8 +108187,10 @@ async function foldSummaryVectorMirrorAtBoundary_ACU(params) {
     }
     const embedding = head.checkpoint?.embedding || buildCurrentSummaryVectorEmbeddingIdentity_ACU();
     const packByHash = new Map();
-    for (const packRef of head.packRefs) {
-        const pack = await loadSummaryVectorMirrorPack_ACU(packRef);
+    // 有界并发读取（上游 a43d0569）；失败语义不变：按 packRefs 顺序报告首个读不到的 pack。
+    const loadedPacks = await mapWithBoundedConcurrency_ACU(head.packRefs, SUMMARY_VECTOR_MIRROR_PACK_READ_CONCURRENCY_ACU, (packRef) => loadSummaryVectorMirrorPack_ACU(packRef));
+    for (const [index, packRef] of head.packRefs.entries()) {
+        const pack = loadedPacks[index];
         if (!pack)
             return stripAllSummaryVectorMirrorFrames_ACU(params.chat, params.isolationKey, `无法读取 pack ${packRef.packHash}`);
         packByHash.set(packRef.packHash, pack);
@@ -132499,11 +132658,21 @@ function filterChunksByLiveSummaryTable_ACU(chunks, rows) {
 }
 async function materializeSummaryVectorMirrorHead_ACU(head, live) {
     const packByHash = new Map();
-    for (const packRef of head.packRefs) {
-        const pack = await loadSummaryVectorMirrorPack_ACU(packRef);
+    // 有界并发读取（上游 a43d0569，内容寻址 pack 另有内存缓存）；失败语义不变：读不到的 pack 跳过。
+    // 耗时计入性能诊断：慢于阈值时总会记一条警告，开启性能诊断后每次都记。
+    const cacheHitsBefore = getSummaryVectorMirrorPackCacheHitCount_ACU();
+    const packLoadSpan = startRuntimePerformanceSpan_ACU('vector-mirror-pack-load', { settings: settings_ACU });
+    const loadedPacks = await mapWithBoundedConcurrency_ACU(head.packRefs, SUMMARY_VECTOR_MIRROR_PACK_READ_CONCURRENCY_ACU, (packRef) => loadSummaryVectorMirrorPack_ACU(packRef));
+    head.packRefs.forEach((packRef, index) => {
+        const pack = loadedPacks[index];
         if (pack)
             packByHash.set(packRef.packHash, pack);
-    }
+    });
+    packLoadSpan.end({
+        packCount: head.packRefs.length,
+        packCacheHitCount: getSummaryVectorMirrorPackCacheHitCount_ACU() - cacheHitsBefore,
+        packMissingCount: loadedPacks.filter((pack) => !pack).length,
+    });
     const rows = [];
     const chunks = [];
     const incompleteRowIds = new Set();
@@ -156851,7 +157020,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261103-1218";
+        const stamp = "20261103-1250";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

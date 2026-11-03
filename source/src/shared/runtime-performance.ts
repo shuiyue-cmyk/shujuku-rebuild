@@ -59,6 +59,8 @@ const SAFE_METRIC_KEYS_ACU = new Set([
   'replayReuseCount', 'replayReuseFallbackCount',
   'replayShareCount',
   'yieldCount',
+  // 交火召回读取向量镜像 pack（纯计数）
+  'packCount', 'packCacheHitCount', 'packMissingCount',
 ]);
 
 let nextSpanId_ACU = 1;

@@ -25,9 +25,11 @@ import {
     loadSummaryVectorMirrorManifest_ACU,
     loadSummaryVectorMirrorPack_ACU,
     persistSummaryVectorMirrorManifestPrepared_ACU,
+    SUMMARY_VECTOR_MIRROR_PACK_READ_CONCURRENCY_ACU,
     persistSummaryVectorMirrorPackPrepared_ACU,
 } from './summary-vector-mirror-storage';
 import { buildCurrentSummaryVectorEmbeddingIdentity_ACU } from './summary-vector-mirror-writer';
+import { mapWithBoundedConcurrency_ACU } from '../../shared/bounded-concurrency';
 import type { SummaryVectorIndexContentPackChunk_ACU, SummaryVectorIndexExternalFileRef_ACU } from './summary-vector-index-types';
 
 export interface FoldSummaryVectorMirrorResult_ACU {
@@ -82,8 +84,12 @@ export async function foldSummaryVectorMirrorAtBoundary_ACU(params: {
 
     const embedding = head.checkpoint?.embedding || buildCurrentSummaryVectorEmbeddingIdentity_ACU();
     const packByHash = new Map<string, Awaited<ReturnType<typeof loadSummaryVectorMirrorPack_ACU>>>();
-    for (const packRef of head.packRefs) {
-        const pack = await loadSummaryVectorMirrorPack_ACU(packRef);
+    // 有界并发读取（上游 a43d0569）；失败语义不变：按 packRefs 顺序报告首个读不到的 pack。
+    const loadedPacks = await mapWithBoundedConcurrency_ACU(
+        head.packRefs, SUMMARY_VECTOR_MIRROR_PACK_READ_CONCURRENCY_ACU, (packRef) => loadSummaryVectorMirrorPack_ACU(packRef),
+    );
+    for (const [index, packRef] of head.packRefs.entries()) {
+        const pack = loadedPacks[index];
         if (!pack) return stripAllSummaryVectorMirrorFrames_ACU(params.chat, params.isolationKey, `无法读取 pack ${packRef.packHash}`);
         packByHash.set(packRef.packHash, pack);
     }

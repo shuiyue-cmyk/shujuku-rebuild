@@ -64,8 +64,10 @@ import { _resetTableWriteTransactionLocksForTest_ACU } from '../../../src/servic
 import { rebuildSummaryVectorMirror_ACU } from '../../../src/service/vector/summary-vector-mirror-rebuild';
 import { resolveSummaryVectorMirrorHead_ACU } from '../../../src/service/vector/summary-vector-mirror-resolver';
 import {
+  clearSummaryVectorMirrorPackCache_ACU,
   finalizeSummaryVectorMirrorFiles_ACU,
   loadSummaryVectorMirrorManifest_ACU,
+  loadSummaryVectorMirrorPack_ACU,
   persistSummaryVectorMirrorManifestPrepared_ACU,
 } from '../../../src/service/vector/summary-vector-mirror-storage';
 
@@ -76,6 +78,7 @@ const rows = [
 
 async function setup() {
   _resetTableWriteTransactionLocksForTest_ACU();
+  clearSummaryVectorMirrorPackCache_ACU();
   h.disk.clear(); h.registry.clear(); h.deleted = [];
   h.saveStrict.mockReset(); h.saveStrict.mockResolvedValue(undefined);
   h.table = { name: '纪要表', content: [['row_id', '概要', '编码索引'], ['r1', 't1', 'A1'], ['r2', 't2', 'A2']] };
@@ -138,5 +141,19 @@ describe('块 5 复审 R5-09：全部复用时维度取自复用的向量', () =
     expect(result.success).toBe(true);
     const checkpoint = h.chat[0].TavernDB_ACU_IsolatedData.iso.storageFrame.summaryVectorIndexFrame.checkpoint;
     expect(checkpoint.embedding.dimension).toBe(3);
+  });
+});
+
+describe('镜像内存缓存：重建修复直读盘上文件', () => {
+  it('pack 已在缓存里但盘上文件被删时，修复不复用它（改为重新向量化）', async () => {
+    await setup();
+    // 召回时读过一次：pack 进入内存缓存
+    expect(await loadSummaryVectorMirrorPack_ACU({ packHash: 'P', path: 'pack-P', chunkCount: 2, byteLength: 1 })).not.toBeNull();
+    h.disk.delete('pack-P');
+    const result = await rebuildSummaryVectorMirror_ACU({ reason: 'rebuild_repair' });
+    // 若误用缓存，会把两行都判为可复用并「成功」，新 checkpoint 仍引用已不存在的 pack-P；
+    // 直读时两行都需要重新向量化，本用例的嵌入桩会拒绝，因此修复失败且不提交。
+    expect(result.success).toBe(false);
+    expect(result.errors.join(' ')).toContain('should not embed');
   });
 });

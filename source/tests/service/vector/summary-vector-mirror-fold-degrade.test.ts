@@ -14,6 +14,7 @@ vi.mock('../../../src/service/table/compat-transition-checkpoint', () => ({
 vi.mock('../../../src/service/vector/summary-vector-mirror-storage', () => ({
   loadSummaryVectorMirrorManifest_ACU: async () => h.manifest,
   loadSummaryVectorMirrorPack_ACU: async () => h.pack,
+  SUMMARY_VECTOR_MIRROR_PACK_READ_CONCURRENCY_ACU: 4,
   discardSummaryVectorMirrorPreparedFiles_ACU: vi.fn(async () => undefined),
   finalizeSummaryVectorMirrorFiles_ACU: vi.fn(async () => undefined),
   persistSummaryVectorMirrorManifestPrepared_ACU: vi.fn(async () => { throw new Error('should not persist'); }),

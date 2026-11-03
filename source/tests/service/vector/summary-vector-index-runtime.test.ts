@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   rebuild: vi.fn(),
   hasLegacy: false,
   restoreFullIndex: vi.fn(),
+  settings: {} as any,
 }));
 
 vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logWarn_ACU: vi.fn(), logError_ACU: vi.fn(), assertSafeHttpEndpoint_ACU: vi.fn() }));
@@ -118,6 +119,8 @@ vi.mock('../../../src/service/vector/summary-vector-mirror-resolver', () => ({
   }),
 }));
 vi.mock('../../../src/service/vector/summary-vector-mirror-storage', () => ({
+  SUMMARY_VECTOR_MIRROR_PACK_READ_CONCURRENCY_ACU: 4,
+  getSummaryVectorMirrorPackCacheHitCount_ACU: () => 0,
   loadSummaryVectorMirrorManifest_ACU: async () => ({ schema: 'summary_vector_mirror_manifest', version: 1, sourceTableKey: 'summary-source', rows: [] }),
   loadSummaryVectorMirrorPack_ACU: async (ref: any) => {
     const chunk = (h.chunks || []).find((item: any) => `p-${item.rowKey}` === ref.packHash);
@@ -147,8 +150,10 @@ vi.mock('../../../src/service/vector/summary-vector-mirror-writer', () => ({
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   currentChatFileIdentifier_ACU: 'chat-a',
   getCurrentIsolationKey_ACU: () => 'iso-source',
+  settings_ACU: h.settings,
 }));
 
+import { getRecentRuntimePerformanceSpans_ACU } from '../../../src/shared/runtime-performance';
 import {
   processSummaryVectorIndexBeforeGeneration_ACU,
   resetSummaryVectorIndexRuntimeDedupeState_ACU,
@@ -268,6 +273,22 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     const content = createdContent_ACU();
     expect(content).toContain('old sparse summary');
     expect(content).toContain('dense summary');
+  });
+
+  it('读取向量镜像 pack 的耗时与读取数计入性能诊断（开启诊断时）', async () => {
+    h.settings.performanceDiagnosticsEnabled = true;
+    try {
+      const second = row_ACU('second', 2, 'second row');
+      h.rows = [h.rows[0], second];
+      h.chunks = [h.chunks[0]];
+
+      await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'secret relic', source: 'perf-span' });
+
+      const span = getRecentRuntimePerformanceSpans_ACU().filter((item) => item.name === 'vector-mirror-pack-load').pop();
+      expect(span?.metrics).toMatchObject({ packCount: 2, packMissingCount: 1, packCacheHitCount: 0 });
+    } finally {
+      h.settings.performanceDiagnosticsEnabled = false;
+    }
   });
 
   it('部分 pack/chunk 缺失时触发 repair，repair 未恢复前 fail-closed', async () => {

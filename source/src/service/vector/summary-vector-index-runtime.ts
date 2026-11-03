@@ -1,6 +1,6 @@
 import { createEmbeddings_ACU } from '../../data/gateways/vector-embedding-gateway';
 import { createRerankScores_ACU } from '../../data/gateways/vector-rerank-gateway';
-import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
+import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../runtime/state-manager';
 import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { callAIWithPreset_ACU } from '../ai/api-call';
@@ -22,9 +22,13 @@ import {
 import { resolveSummaryVectorMirrorHead_ACU } from './summary-vector-mirror-resolver';
 import {
     decodeSummaryVectorMirrorVector_ACU,
+    getSummaryVectorMirrorPackCacheHitCount_ACU,
     loadSummaryVectorMirrorManifest_ACU,
     loadSummaryVectorMirrorPack_ACU,
+    SUMMARY_VECTOR_MIRROR_PACK_READ_CONCURRENCY_ACU,
 } from './summary-vector-mirror-storage';
+import { mapWithBoundedConcurrency_ACU } from '../../shared/bounded-concurrency';
+import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performance';
 import { buildCurrentSummaryVectorEmbeddingIdentity_ACU } from './summary-vector-mirror-writer';
 import type {
     ChatSummaryVectorIndexChunk_ACU,
@@ -452,10 +456,22 @@ async function materializeSummaryVectorMirrorHead_ACU(
     contentMismatchedRowIds: Set<string>;
 }> {
     const packByHash = new Map<string, Awaited<ReturnType<typeof loadSummaryVectorMirrorPack_ACU>>>();
-    for (const packRef of head.packRefs) {
-        const pack = await loadSummaryVectorMirrorPack_ACU(packRef);
+    // 有界并发读取（上游 a43d0569，内容寻址 pack 另有内存缓存）；失败语义不变：读不到的 pack 跳过。
+    // 耗时计入性能诊断：慢于阈值时总会记一条警告，开启性能诊断后每次都记。
+    const cacheHitsBefore = getSummaryVectorMirrorPackCacheHitCount_ACU();
+    const packLoadSpan = startRuntimePerformanceSpan_ACU('vector-mirror-pack-load', { settings: settings_ACU });
+    const loadedPacks = await mapWithBoundedConcurrency_ACU(
+        head.packRefs, SUMMARY_VECTOR_MIRROR_PACK_READ_CONCURRENCY_ACU, (packRef) => loadSummaryVectorMirrorPack_ACU(packRef),
+    );
+    head.packRefs.forEach((packRef, index) => {
+        const pack = loadedPacks[index];
         if (pack) packByHash.set(packRef.packHash, pack);
-    }
+    });
+    packLoadSpan.end({
+        packCount: head.packRefs.length,
+        packCacheHitCount: getSummaryVectorMirrorPackCacheHitCount_ACU() - cacheHitsBefore,
+        packMissingCount: loadedPacks.filter((pack) => !pack).length,
+    });
     const rows: ChatSummaryVectorIndexRow_ACU[] = [];
     const chunks: ChatSummaryVectorIndexChunk_ACU[] = [];
     const incompleteRowIds = new Set<string>();

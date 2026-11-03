@@ -3378,7 +3378,8 @@ async function tryReadV2MirrorDisplayStats_ACU(): Promise<{
             chat,
             isolationKey,
             sourceTableKey,
-            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref),
+            // 状态展示如实反映盘上文件，不走内存缓存
+            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref, { fresh: true }),
         });
         if (head.status !== 'ok' || !head.checkpoint) return null;
         const chunkCount = [...head.head.values()].reduce((sum, refs) => sum + refs.length, 0);

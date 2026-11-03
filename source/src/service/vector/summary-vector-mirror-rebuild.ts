@@ -57,6 +57,12 @@ import { runScopedRetentionGcAfterFlush_ACU } from './summary-vector-index-chat-
 import type { SummaryVectorIndexContentPackChunk_ACU, SummaryVectorIndexExternalFileRef_ACU } from './summary-vector-index-types';
 import { createSummaryVectorMirrorUndoLog_ACU, type SummaryVectorMirrorUndoLog_ACU } from './summary-vector-mirror-undo';
 
+/**
+ * 重建 / 修复一律直读盘上文件，不走镜像内存缓存：缓存会让外部删掉的文件在本次会话里看起来仍可读，
+ * 修复据此「复用」一个已不存在的 pack，刷新后召回就会缺块。重建是低频操作，正确性优先。
+ */
+const FRESH_READ_ACU = { fresh: true } as const;
+
 export type SummaryVectorMirrorRebuildReason_ACU = 'initial' | 'rebuild_user' | 'rebuild_repair';
 
 export interface SummaryVectorMirrorRebuildResult_ACU {
@@ -179,7 +185,7 @@ export async function snapshotSummaryVectorMirrorExcludingRows_ACU(options: {
         chat,
         isolationKey: getCurrentIsolationKey_ACU(),
         sourceTableKey,
-        loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref),
+        loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref, FRESH_READ_ACU),
     });
     if (head.status !== 'ok' || !head.checkpoint || !isSummaryVectorEmbeddingIdentity_ACU(head.checkpoint.embedding)) {
         return { kind: 'none' };
@@ -465,7 +471,7 @@ export async function rebuildSummaryVectorMirror_ACU(options: {
             chat,
             isolationKey,
             sourceTableKey: selected.summaryKey,
-            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref),
+            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref, FRESH_READ_ACU),
         });
         if (head.status === 'ok') {
             const headPackRefsByHash = new Map(head.packRefs.map((ref) => [ref.packHash, ref]));
@@ -476,7 +482,7 @@ export async function rebuildSummaryVectorMirror_ACU(options: {
                 const liveSourceHash = String(preparedById.get(rowId)?.vectorSourceHash || '');
                 for (const ref of refs) {
                     const packRef = headPackRefsByHash.get(ref.packHash);
-                    const pack = await loadSummaryVectorMirrorPack_ACU({ packHash: ref.packHash, path: packRef?.path || '', chunkCount: 0, byteLength: 0 });
+                    const pack = await loadSummaryVectorMirrorPack_ACU({ packHash: ref.packHash, path: packRef?.path || '', chunkCount: 0, byteLength: 0 }, FRESH_READ_ACU);
                     const packed = pack?.chunks?.[ref.chunkIndex];
                     if (!packed || (liveSourceHash && String(packed.textHash || '') !== liveSourceHash)) {
                         valid = false;
@@ -605,7 +611,7 @@ export async function rebuildSummaryVectorMirror_ACU(options: {
             chat,
             isolationKey,
             sourceTableKey: selected.summaryKey,
-            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref),
+            loadManifest: (ref) => loadSummaryVectorMirrorManifest_ACU(ref, FRESH_READ_ACU),
         });
         if (existingHead.status === 'ok' && existingHead.checkpoint && isSummaryVectorEmbeddingIdentity_ACU(existingHead.checkpoint.embedding)) {
             embedding = { ...existingHead.checkpoint.embedding };
