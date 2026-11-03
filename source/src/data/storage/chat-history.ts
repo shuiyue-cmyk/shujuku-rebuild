@@ -238,7 +238,7 @@ function mergeLegacyGuideIntoMetadata_ACU(metadataContainer: Record<string, unkn
  * @param chat SillyTavern 聊天数组
  * @returns 解析后的配置对象，或 null
  */
-function readChatScopedConfigContainer_ACU(chat: unknown[], persistLegacyMerge: boolean): Record<string, unknown> | null {
+function readChatScopedConfigSources_ACU(chat: unknown[]): { metadataContainer: Record<string, unknown> | null; legacyContainer: Record<string, unknown> | null } | null {
     if (!hasActiveChatContext_ACU(chat)) return null;
     const rawMetadataContainer = readContainer_ACU(getChatMetadata_ACU()?.[CHAT_SCOPED_CONFIG_FIELD_ACU]);
     const first = getChatFirstLayerMessageLocal_ACU(chat);
@@ -246,6 +246,13 @@ function readChatScopedConfigContainer_ACU(chat: unknown[], persistLegacyMerge: 
     const metadataContainer = shouldUseChatMetadataContainer_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, rawMetadataContainer, legacyContainer)
         ? rawMetadataContainer
         : null;
+    return { metadataContainer, legacyContainer };
+}
+
+function readChatScopedConfigContainer_ACU(chat: unknown[], persistLegacyMerge: boolean): Record<string, unknown> | null {
+    const sources = readChatScopedConfigSources_ACU(chat);
+    if (!sources) return null;
+    const { metadataContainer, legacyContainer } = sources;
     const merged = mergeLegacyScopedConfigIntoMetadata_ACU(metadataContainer, legacyContainer);
     if (persistLegacyMerge && merged.changed && merged.container) writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, merged.container);
     return merged.container;
@@ -258,6 +265,40 @@ export function getChatScopedConfigContainer_ACU(chat: unknown[]): Record<string
 /** 事务快照专用纯读取：合并 legacy 槽位但绝不回写 chatMetadata。 */
 export function peekChatScopedConfigContainer_ACU(chat: unknown[]): Record<string, unknown> | null {
     return readChatScopedConfigContainer_ACU(chat, false);
+}
+
+function hasLegacyScopedConfigAdditions_ACU(metadata: Record<string, unknown> | null, legacy: Record<string, unknown> | null): boolean {
+    if (!legacy) return false;
+    if (!metadata) return true;
+    return Object.keys(legacy).some(key => {
+        if (key === 'version') return false;
+        if (!Object.prototype.hasOwnProperty.call(metadata, key)) return true;
+        const target = metadata[key];
+        const fallback = legacy[key];
+        return !!target && typeof target === 'object' && !Array.isArray(target)
+            && !!fallback && typeof fallback === 'object' && !Array.isArray(fallback)
+            && Object.keys(fallback).some(slot => !Object.prototype.hasOwnProperty.call(target, slot));
+    });
+}
+
+/**
+ * 只读作用域配置里的一个字段（移植上游 85ebff04 / #68）：读模式开关这类小字段时，整份深拷贝会把
+ * 模板归档（可达数 MB）一并复制，每次发送都要付这份开销。没有待迁移的 legacy 缺项时只复制所需字段；
+ * 有缺项时仍走完整容器的迁移回写，语义与 getChatScopedConfigContainer_ACU 一致。返回独立副本。
+ */
+export function getChatScopedConfigField_ACU(chat: unknown[], field: string): unknown {
+    const sources = readChatScopedConfigSources_ACU(chat);
+    if (!sources) return undefined;
+    const { metadataContainer, legacyContainer } = sources;
+    if (hasLegacyScopedConfigAdditions_ACU(metadataContainer, legacyContainer)) {
+        const merged = mergeLegacyScopedConfigIntoMetadata_ACU(metadataContainer, legacyContainer);
+        if (merged.changed && merged.container) writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, merged.container);
+        return merged.container?.[field];
+    }
+    const project = (container: Record<string, unknown> | null): Record<string, unknown> | null => container
+        ? { [field]: container[field] }
+        : null;
+    return mergeLegacyScopedConfigIntoMetadata_ACU(project(metadataContainer), project(legacyContainer)).container?.[field];
 }
 
 /**

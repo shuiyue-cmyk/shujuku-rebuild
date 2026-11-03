@@ -71,10 +71,16 @@ describe('ensureWritableIsolatedDataContainer_ACU（字符串形态容器统一�
     expect(readIsolatedDataContainer_ACU(msg)?.tagA?.independentData?.sheet_9?.name).toBe('原值');
   });
 
-  it('损坏字符串 / 缺失 / 数组形态：按空容器写回', () => {
+  it('损坏字符串：拒绝写入并保留原始字符串（对齐上游 e284f00f），不覆盖成空容器', () => {
     const broken: any = { TavernDB_ACU_IsolatedData: '{不是合法JSON' };
-    expect(ensureWritableIsolatedDataContainer_ACU(broken)).toEqual({});
-    expect(broken.TavernDB_ACU_IsolatedData).toEqual({});
+    expect(() => ensureWritableIsolatedDataContainer_ACU(broken)).toThrow('存档容器无法解析');
+    expect(broken.TavernDB_ACU_IsolatedData).toBe('{不是合法JSON');
+  });
+
+  it('空字符串 / 缺失 / 数组形态：按空容器写回', () => {
+    const blank: any = { TavernDB_ACU_IsolatedData: '' };
+    expect(ensureWritableIsolatedDataContainer_ACU(blank)).toEqual({});
+    expect(blank.TavernDB_ACU_IsolatedData).toEqual({});
 
     const missing: any = {};
     expect(ensureWritableIsolatedDataContainer_ACU(missing)).toEqual({});

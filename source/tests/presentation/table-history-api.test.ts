@@ -31,7 +31,8 @@ describe('public read-only table history API', () => {
         expect(result.snapshots.map((snapshot: any) => snapshot.messageIndex)).toEqual([2, 0]);
         expect(mocks.replay).toHaveBeenCalledExactlyOnceWith(mocks.host.chat, '', [2, 0], {
             updateRuntimeState: false, compatibilityMode: 'disabled', allowTemporaryTemplateBaseline: false, backgroundFixation: 'skip',
-        });
+            yieldBudgetMs: 8,
+        }, { inheritFramelessBoundaries: true });
     });
 
     it('returns independent copies, including snapshots sharing an engine result', async () => {

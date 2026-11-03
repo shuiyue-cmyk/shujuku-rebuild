@@ -46,7 +46,7 @@ async function loadFlow() {
 
   vi.doMock('../../../src/service/runtime/state-manager', () => ({ settings_ACU: settings, get currentChatFileIdentifier_ACU() { return chatState.id; }, currentJsonTableData_ACU: { sheet_a: {} }, getCurrentIsolationKey_ACU: () => settings.dataIsolationCode }));
   vi.doMock('../../../src/service/table/table-checkpoint-transfer', async (importOriginal) => ({ ...(await importOriginal<any>()), restoreTableCheckpointToLatestAi_ACU: restoreCheckpoint }));
-  vi.doMock('../../../src/service/settings/settings-service', () => ({ applyTemplateScopeForCurrentChat_ACU: applyTemplateScope, applyCombinedSettingsImport_ACU: applyCombinedImport, getDataIsolationHistory_ACU: () => [...history], removeDataIsolationHistory_ACU: removeHistory, saveSettings_ACU: saveSettings }));
+  vi.doMock('../../../src/service/settings/settings-service', () => ({ applyTemplateScopeForCurrentChat_ACU: applyTemplateScope, applyCombinedSettingsImport_ACU: applyCombinedImport, saveSettings_ACU: saveSettings }));
   vi.doMock('../../../src/service/settings/settings-write-service', () => ({ resetAllPromptsToDefault_ACU: vi.fn(() => ({ ok: true, code: 'ok', changed: true })) }));
   vi.doMock('../../../src/service/chat/chat-service', () => ({ getChatArray_ACU: () => chat, deleteLocalDataWithScope_ACU: deleteScoped, isFullRangeDeletionRequest_ACU: () => chatState.fullRange, overrideLatestLayerWithTemplateCore_ACU: overrideLatest }));
   vi.doMock('../../../src/service/table/table-service', () => ({ loadOrCreateJsonTableFromChatHistory_ACU: loadOrCreate }));

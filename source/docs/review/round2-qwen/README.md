@@ -97,7 +97,7 @@
 未纳入本次修复 / 交接事项：
 
 - G05-04、G14-07 仍待真机（TT 生成中能否删楼、切聊天是否派发 GENERATED_STOPPED）。
-- legacy 向量写链（archive-service 的 archive/migrate/flush 管线）生产零调用方，是否立项下线待产品决定。
-- `getDataIsolationHistory_ACU` / `removeDataIsolationHistory_ACU`（settings-service re-export）疑似下一层死代码，未动。
-- G04-04 的 chat-service / 共享工具 / 恢复服务三份降级逻辑未收敛（本次只对齐字段行为）。
+- legacy 向量写链（archive-service 的 archive/migrate/flush 管线）生产零调用方：**决定暂不下线**。它被 5 个测试文件当夹具来守护仍在用的作用域互斥（`runSummaryVectorIndexArchiveScopeMutationExclusive_ACU`）与写屏障，删掉要重写这批测试；不运行、不影响使用。
+- `getDataIsolationHistory_ACU` / `removeDataIsolationHistory_ACU`：确认只供已下线的隔离码管理 UI 使用，**已删除**（历史列表仍由设置加载时 add/normalize 维护）。
+- G04-04 的三份降级逻辑：**决定不合并**。字段行为已对齐，合并是纯重构、无行为收益，改动面却跨三条事务路径。
 - 用户可见口径变化（Claude 复核后调整）：①填表「高级参数」徽标：自动填表间隔选内置档位（每 1/3/5 层）联动的三项不算自定义，间隔为自定义或其余 5 项任一非默认才标「自定义」；②API 预设：切预设 / 新建 / 放弃修改时清空模型列表，保存（含改名、新建后保存）不清。

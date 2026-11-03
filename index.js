@@ -4136,7 +4136,7 @@ function mergeLegacyGuideIntoMetadata_ACU(metadataContainer, legacyContainer) {
  * @param chat SillyTavern 聊天数组
  * @returns 解析后的配置对象，或 null
  */
-function readChatScopedConfigContainer_ACU(chat, persistLegacyMerge) {
+function readChatScopedConfigSources_ACU(chat) {
     if (!hasActiveChatContext_ACU(chat))
         return null;
     const rawMetadataContainer = readContainer_ACU(getChatMetadata_ACU()?.[CHAT_SCOPED_CONFIG_FIELD_ACU]);
@@ -4145,6 +4145,13 @@ function readChatScopedConfigContainer_ACU(chat, persistLegacyMerge) {
     const metadataContainer = shouldUseChatMetadataContainer_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, rawMetadataContainer, legacyContainer)
         ? rawMetadataContainer
         : null;
+    return { metadataContainer, legacyContainer };
+}
+function readChatScopedConfigContainer_ACU(chat, persistLegacyMerge) {
+    const sources = readChatScopedConfigSources_ACU(chat);
+    if (!sources)
+        return null;
+    const { metadataContainer, legacyContainer } = sources;
     const merged = mergeLegacyScopedConfigIntoMetadata_ACU(metadataContainer, legacyContainer);
     if (persistLegacyMerge && merged.changed && merged.container)
         writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, merged.container);
@@ -4156,6 +4163,44 @@ function getChatScopedConfigContainer_ACU(chat) {
 /** 事务快照专用纯读取：合并 legacy 槽位但绝不回写 chatMetadata。 */
 function peekChatScopedConfigContainer_ACU(chat) {
     return readChatScopedConfigContainer_ACU(chat, false);
+}
+function hasLegacyScopedConfigAdditions_ACU(metadata, legacy) {
+    if (!legacy)
+        return false;
+    if (!metadata)
+        return true;
+    return Object.keys(legacy).some(key => {
+        if (key === 'version')
+            return false;
+        if (!Object.prototype.hasOwnProperty.call(metadata, key))
+            return true;
+        const target = metadata[key];
+        const fallback = legacy[key];
+        return !!target && typeof target === 'object' && !Array.isArray(target)
+            && !!fallback && typeof fallback === 'object' && !Array.isArray(fallback)
+            && Object.keys(fallback).some(slot => !Object.prototype.hasOwnProperty.call(target, slot));
+    });
+}
+/**
+ * 只读作用域配置里的一个字段（移植上游 85ebff04 / #68）：读模式开关这类小字段时，整份深拷贝会把
+ * 模板归档（可达数 MB）一并复制，每次发送都要付这份开销。没有待迁移的 legacy 缺项时只复制所需字段；
+ * 有缺项时仍走完整容器的迁移回写，语义与 getChatScopedConfigContainer_ACU 一致。返回独立副本。
+ */
+function getChatScopedConfigField_ACU(chat, field) {
+    const sources = readChatScopedConfigSources_ACU(chat);
+    if (!sources)
+        return undefined;
+    const { metadataContainer, legacyContainer } = sources;
+    if (hasLegacyScopedConfigAdditions_ACU(metadataContainer, legacyContainer)) {
+        const merged = mergeLegacyScopedConfigIntoMetadata_ACU(metadataContainer, legacyContainer);
+        if (merged.changed && merged.container)
+            writeChatMetadataField_ACU(CHAT_SCOPED_CONFIG_FIELD_ACU, merged.container);
+        return merged.container?.[field];
+    }
+    const project = (container) => container
+        ? { [field]: container[field] }
+        : null;
+    return mergeLegacyScopedConfigIntoMetadata_ACU(project(metadataContainer), project(legacyContainer)).container?.[field];
 }
 /**
  * 规范化作用域配置容器（确保 version 字段存在且合法）
@@ -4897,30 +4942,20 @@ function normalizeDataIsolationHistory_ACU(list) {
     globalMeta_ACU.isolationCodeList = cleaned.slice(0, MAX_DATA_ISOLATION_HISTORY);
     return globalMeta_ACU.isolationCodeList;
 }
-function getDataIsolationHistory_ACU() {
-    return normalizeDataIsolationHistory_ACU();
-}
 function addDataIsolationHistory_ACU(code, { save = true } = {}) {
     if (typeof code !== 'string')
         return;
     const trimmed = code.trim();
     if (!trimmed)
         return;
-    const history = getDataIsolationHistory_ACU();
+    const history = normalizeDataIsolationHistory_ACU();
     globalMeta_ACU.isolationCodeList = [trimmed, ...history.filter((item) => item !== trimmed)].slice(0, MAX_DATA_ISOLATION_HISTORY);
     if (save)
         saveGlobalMeta_ACU();
 }
-function removeDataIsolationHistory_ACU(code, { save = true } = {}) {
-    if (typeof code !== 'string')
-        return;
-    const history = getDataIsolationHistory_ACU();
-    globalMeta_ACU.isolationCodeList = history.filter((item) => item !== code);
-    if (save)
-        saveGlobalMeta_ACU();
-}
-// ensureProfileExists_ACU 与 switchIsolationProfile_ACU（业务编排）已一并删除：
-// 隔离码切换 UI 已下线，全库无任何调用方（第二轮复审 G11 跨组线索 1 坐实的死代码群）。
+// ensureProfileExists_ACU、switchIsolationProfile_ACU（业务编排）与只供隔离码管理 UI 用的
+// getDataIsolationHistory_ACU / removeDataIsolationHistory_ACU 已一并删除：隔离码切换 UI 已下线，
+// 全库无任何调用方（第二轮复审 G11 跨组线索 1）。历史列表仍由设置加载时 add/normalize 维护。
 
 /**
  * shared/decision-gate-defaults.ts — 正文替换「替换前判定」的默认值（叶子模块，无依赖）。
@@ -40122,10 +40157,12 @@ function readIsolatedDataContainer_ACU(msg) {
  *
  * 规则：
  * - 已是对象形态：原引用返回（保持既有就地写入与身份比较语义不变）；
- * - 字符串形态：解析后**克隆**为新对象并整体换字段写回——其他标签槽原样保留；
- *   解析失败（损坏串）按空容器处理。克隆而非直接引用解析结果，保证解析 memo
- *   里的快照不被就地改写，回滚还原原字符串后再次解析读到的仍是原值；
- * - 缺失 / 数组 / 其他非法形态：置空容器。
+ * - 字符串形态：解析后**克隆**为新对象并整体换字段写回——其他标签槽原样保留。
+ *   克隆而非直接引用解析结果，保证解析 memo 里的快照不被就地改写，回滚还原原字符串后
+ *   再次解析读到的仍是原值；
+ * - 非空但解析不了的损坏串：抛错并原样保留（对齐上游 e284f00f），不覆盖成空容器把原始数据销毁；
+ *   调用方都在候选克隆或快照回滚里，抛错即整次写入放弃；
+ * - 空串 / 缺失 / 数组 / 其他非法形态：置空容器。
  *
  * 回写形态统一为对象：与本文件 purge 路径「按既有约定写回对象」一致（有测试锁定），
  * 也保证各处直读 `msg.TavernDB_ACU_IsolatedData?.[isolationKey]` 的读者能立即看到新写入的数据。
@@ -40139,6 +40176,8 @@ function ensureWritableIsolatedDataContainer_ACU(msg) {
         return {};
     if (typeof raw === 'string') {
         const parsed = parseIsolatedDataField(msg);
+        if (!parsed && raw.trim())
+            throw new Error('存档容器无法解析，已保留原始数据，本次写入已放弃。');
         const container = parsed ? cloneScopedConfigData_ACU(parsed) : {};
         msg.TavernDB_ACU_IsolatedData = container;
         return container;
@@ -46122,6 +46161,46 @@ function registerReplayKeyRedirect_ACU(identity, fromKey, toKey) {
             identity.keyRedirects.set(key, toKey);
     }
 }
+/**
+ * 回放 SQL 来自历史聊天，INSERT/UPDATE 的 VALUES 是用户剧情数据，不得进入错误文本（日志 / UI）。
+ * 保留「第 N 条语句失败: <语句摘要> → <SQLite 错误>」结构，下游按该格式解析序号与错误的逻辑不受影响（移植上游 132136a6）。
+ */
+function redactReplaySqlFailureMessage_ACU(message) {
+    const failure = /^([\s\S]*?第 \d+ 条语句失败:\s*)([\s\S]*)\s→\s([\s\S]+)$/.exec(message);
+    if (!failure)
+        return message;
+    const [, prefix, statement, sqliteError] = failure;
+    const head = /^\s*(INSERT\s+(?:OR\s+[A-Za-z]+\s+)?INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+[A-Za-z]+)?|DELETE\s+FROM|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE|DROP\s+TABLE(?:\s+IF\s+EXISTS)?)\s+("(?:[^"]|"")*"|`[^`]*`|\[[^\]]*\]|[^\s(,;]+)/i.exec(statement);
+    const summary = head
+        ? `${head[1].replace(/\s+/g, ' ').toUpperCase()} ${head[2]}`
+        : /^\s*WITH\b/i.test(statement) ? 'WITH …' : 'SQL 语句';
+    return `${prefix}${summary} → ${sqliteError}`;
+}
+/**
+ * 休眠表（非首列空业务表头）在 SQL 活动路径中不建表，其历史 sql_sheet_batch 写入严格回放必撞
+ * no such table，整段历史因此只能兼容只读、之后写入全被拒；这些写入已无保留价值，跳过（也不补锚）。
+ * 目标表在当前回放状态中休眠，或缺失且当前模板同 key 表休眠时跳过；含结构 SQL 的 operation、
+ * 以及缺失且模板中也无法确认休眠的目标表，仍按原语义执行（fail-closed）。移植上游 132136a6。
+ */
+function shouldSkipDormantSqlSheetBatchForReplay_ACU(state, operation, identity, template) {
+    if (!operation || operation.kind !== 'sql_sheet_batch' || typeof operation.sheetKey !== 'string')
+        return false;
+    const statements = Array.isArray(operation.statements) ? operation.statements : [];
+    if (statements.some(statement => /^\s*(CREATE|ALTER|DROP|RENAME)\b/i.test(String(statement || ''))))
+        return false;
+    const resolvedKey = redirectReplaySheetKey_ACU(identity, operation.sheetKey);
+    const sheet = state[resolvedKey];
+    if (sheet && typeof sheet === 'object' && !Array.isArray(sheet))
+        return !isSqlActiveTemplateSheet_ACU(sheet);
+    // 被同名归并的 loser key：数据在 winner 表里，按原语义经别名回放。
+    if (identity.loserKeys.has(operation.sheetKey))
+        return false;
+    const templateSheet = template?.[operation.sheetKey];
+    return !!templateSheet
+        && typeof templateSheet === 'object'
+        && !Array.isArray(templateSheet)
+        && !isSqlActiveTemplateSheet_ACU(templateSheet);
+}
 /** 解析规范 key：沿重定向链到底（链在登记时已压平，最多再跳一次）。 */
 function redirectReplaySheetKey_ACU(identity, sheetKey) {
     if (!identity)
@@ -47128,6 +47207,11 @@ async function loadTableStateFromFramesV2DetailedCore_ACU(chatArg, isolationKeyA
                                 continue;
                             }
                             try {
+                                if (shouldSkipDormantSqlSheetBatchForReplay_ACU(state, operation, identity, headerOnlyTemplate)) {
+                                    const skippedSheetKey = String(operation.sheetKey ?? '');
+                                    logWarn_ACU(`[V2 Replay] 跳过休眠表的历史 SQL 写入：sheetKey=${skippedSheetKey}, messageIndex=${ref.messageIndex}, seq=${entry.seq}, operationIndex=${operationIndex}。`);
+                                    continue;
+                                }
                                 if (options.compatibilityMode !== 'disabled'
                                     && operation?.kind === 'sql_sheet_batch'
                                     && typeof operation.sheetKey === 'string'
@@ -47160,7 +47244,7 @@ async function loadTableStateFromFramesV2DetailedCore_ACU(chatArg, isolationKeyA
                                 appliedAnyOperation = true;
                             }
                             catch (error) {
-                                const message = error instanceof Error ? error.message : String(error);
+                                const message = redactReplaySqlFailureMessage_ACU(error instanceof Error ? error.message : String(error));
                                 throw new Error(`[V2 Replay] operation failed: messageIndex=${ref.messageIndex}, seq=${entry.seq}, operationIndex=${operationIndex}, kind=${String(operation?.kind || 'unknown')}: ${message}`);
                             }
                         }
@@ -47284,7 +47368,7 @@ async function recoverWithLegacyTolerantReplay_ACU(chat, isolationKey, options, 
     // 保证写门闸的失败信号不被降级链吞掉（读永远宽容，写才严格）。
     if (options.compatibilityMode === 'disabled')
         throw originalError;
-    const originalMessage = originalError instanceof Error ? originalError.message : String(originalError);
+    const originalMessage = redactReplaySqlFailureMessage_ACU(originalError instanceof Error ? originalError.message : String(originalError));
     let tolerant;
     try {
         tolerant = await replayWithLegacyTolerances_ACU(chat, isolationKey, {
@@ -47293,7 +47377,7 @@ async function recoverWithLegacyTolerantReplay_ACU(chat, isolationKey, options, 
     }
     catch (tolerantError) {
         logError_ACU(`[V2 Compat Replay] Tier-1 兼容回放也失败，保留原始错误。兼容回放错误：`
-            + `${tolerantError instanceof Error ? tolerantError.message : String(tolerantError)}`);
+            + `${redactReplaySqlFailureMessage_ACU(tolerantError instanceof Error ? tolerantError.message : String(tolerantError))}`);
         throw originalError;
     }
     const toleranceSummary = summarizeLegacyToleranceReport_ACU(tolerant.toleranceReport);
@@ -47540,27 +47624,7 @@ async function loadTableStateFromFramesV2Detailed_ACU(chatArg, isolationKeyArg, 
         throw error;
     }
 }
-/**
- * 阶段 H：多 boundary 一次前向 replay（简化版）。
- *
- * 对同一 candidateChat/isolationKey 上的多个递增 boundary 捕获 canonical 快照。
- * 仅当**所有 boundary 共享同一起算 full checkpoint**（从各自 frameRefs 反向查找
- * 的最后一个 full checkpoint 完全相同）时走前向捕获：从该 checkpoint 起算、沿
- * frame 顺序推进，在每个命中 boundary 处 materialize 并深克隆快照。此语义与
- * 「分别冷 replay 到每个 boundary」完全一致（同一 state/aliasContext/runtime
- * 生命周期，alias registry 推导不丢），但 frame 扫描与 SQL 执行只发生一次。
- *
- * 任一起算 checkpoint 不同（跨 checkpoint 段）时回退**逐次冷 replay**（与当前
- * 行为完全一致），不做部分前向捕获——避免在共享前缀不完整时产生错误快照。
- *
- * 仅支持 updateRuntimeState:false（只读路径）；副作用路径拒绝多 boundary 捕获。
- * 任一 boundary 的 replay 失败（baseKind 非 full_checkpoint / 依赖 repair /
- * 抛错）时整体失败并抛出，调用方保持原有逐边界校验语义。
- *
- * @returns Map<boundary, TableReplayResultV2_ACU>，key 严格递增，每个结果的
- *   capturedBoundary 标记对应 boundary。
- */
-async function loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(chatArg, isolationKeyArg, boundaries, options = {}) {
+async function loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(chatArg, isolationKeyArg, boundaries, options = {}, batchOptions = {}) {
     const chat = chatArg || getChatArray_ACU();
     if (!Array.isArray(chat) || chat.length === 0)
         return new Map();
@@ -47576,6 +47640,20 @@ async function loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(chatArg, isol
     // 不晚于它的最后一个帧。因此**不做**越界拒绝——超出最大帧的 boundary 等价于
     // 不设上限（处理全量），与既有 maxMessageIndex 语义完全一致。
     const allFrameRefs = getV2FrameRefs_ACU(chat, isolationKey);
+    // 每个 boundary 的捕获目标：默认就是 boundary 本身；开启继承时取 ≤ boundary 的最后一个帧，
+    // 否则无帧 boundary 永远不会被 core 捕获，整批会在一次前向回放后再退回逐次冷回放。
+    const captureTargetOf = new Map();
+    for (const boundary of boundaries) {
+        let target = boundary;
+        if (batchOptions.inheritFramelessBoundaries === true) {
+            for (const ref of allFrameRefs) {
+                if (ref.messageIndex > boundary)
+                    break;
+                target = ref.messageIndex;
+            }
+        }
+        captureTargetOf.set(boundary, target);
+    }
     // 每个 boundary 的起算 checkpoint：该 boundary 的 frameRefs 中最后一个 full checkpoint。
     // 全部相同才允许前向捕获；否则回退逐次冷 replay。
     const roots = new Map();
@@ -47589,7 +47667,7 @@ async function loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(chatArg, isol
     const allShareRoot = [...roots.values()].every(root => root === firstRoot && root !== null);
     if (allShareRoot) {
         // 前向捕获：单次 replay，captureBoundaries 驱动中间快照。
-        const sorted = [...boundaries].sort((a, b) => a - b);
+        const sorted = [...new Set(captureTargetOf.values())].sort((a, b) => a - b);
         // 调用方传入的可写容器：core 在捕获时写入，此处读回各 boundary 快照。
         // 若不传容器，core 使用内部临时 Map（结果随调用结束丢弃），本函数将读不到
         // 中间快照——因此必须显式传入，杜绝「静默只返回最终态」的错误语义。
@@ -47614,8 +47692,11 @@ async function loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(chatArg, isol
             || snap.requiresCheckpointConvergence);
         if (missing.length === 0 && invalid.length === 0) {
             const results = new Map();
-            for (const boundary of sorted)
-                results.set(boundary, captureSink.get(boundary));
+            for (const boundary of [...boundaries].sort((a, b) => a - b)) {
+                const target = captureTargetOf.get(boundary);
+                const snapshot = captureSink.get(target);
+                results.set(boundary, target === boundary ? snapshot : { ...snapshot, capturedBoundary: boundary });
+            }
             return results;
         }
         // 覆盖不全或有 repair：回退逐次冷 replay（下方共用回退路径）。
@@ -73212,9 +73293,9 @@ function normalizeFlightModeState_ACU(value) {
     };
 }
 function getCurrentFlightModeState_ACU() {
-    const container = getChatScopedConfigContainer_ACU(getChatArray_ACU());
+    // 只取这一个字段，不整份深拷贝作用域配置（含模板归档，#68）
+    const states = getChatScopedConfigField_ACU(getChatArray_ACU(), 'flightModeByIsolationKey');
     const isolationKey = String(getCurrentIsolationKey_ACU() ?? '');
-    const states = container?.flightModeByIsolationKey;
     if (states && typeof states === 'object' && !Array.isArray(states)) {
         return normalizeFlightModeState_ACU(states[isolationKey]);
     }
@@ -93519,6 +93600,43 @@ function getEnabledPlotTasks_ACU(plotSettings) {
     return sortPlotTasksForRuntime_ACU(normalizePlotTasks_ACU(plotSettings)
         .filter((task) => task && task.enabled !== false));
 }
+// [幂等闸]（移植上游 a49259f5 / 3c4cc0b2）剧情推进把用户输入包进注入外壳（默认 finalSystemDirective：
+// 「以下是用户的本轮输入：\n<本轮用户输入>$8</本轮用户输入>」）后送生成；输入框 / 楼层里滞留的包装产物
+// 被下一轮当作原文再包一层，历史楼层就会出现多层嵌套。剥壳条件从严：只剥完整包住整段输入的外壳。
+const PLOT_USER_INPUT_HEADER_ACU = '以下是用户的本轮输入：';
+const PLOT_USER_INPUT_OPEN_ACU = '<本轮用户输入>';
+const PLOT_USER_INPUT_CLOSE_ACU = '</本轮用户输入>';
+const PLOT_USER_INPUT_UNWRAP_MAX_ACU = 10;
+/**
+ * 只剥掉完整包住输入的外壳；嵌套按配对标签识别。
+ * 外壳前后有额外输入、标签不完整或内容为空时保留原文，避免丢失用户追加内容。
+ */
+function unwrapPlotUserInputShell_ACU(value) {
+    let current = String(value ?? '');
+    for (let k = 0; k < PLOT_USER_INPUT_UNWRAP_MAX_ACU; k++) {
+        const head = current.trim();
+        const shell = head.startsWith(PLOT_USER_INPUT_HEADER_ACU)
+            ? head.slice(PLOT_USER_INPUT_HEADER_ACU.length).trimStart() : head;
+        if (!shell.startsWith(PLOT_USER_INPUT_OPEN_ACU))
+            break;
+        let depth = 0;
+        let closingEnd = -1;
+        for (const match of shell.matchAll(/<\/?本轮用户输入>/g)) {
+            depth += match[0] === PLOT_USER_INPUT_OPEN_ACU ? 1 : -1;
+            if (depth === 0) {
+                closingEnd = match.index + match[0].length;
+                break;
+            }
+        }
+        if (closingEnd !== shell.length)
+            break;
+        const inner = shell.slice(PLOT_USER_INPUT_OPEN_ACU.length, closingEnd - PLOT_USER_INPUT_CLOSE_ACU.length);
+        if (!inner.trim())
+            break;
+        current = inner;
+    }
+    return current;
+}
 async function buildPlotSharedContext_ACU(plotSettings, userMessage, runtimeOptions = {}) {
     const readContext = runtimeOptions.readContext;
     const chat = getChatArray_ACU();
@@ -93751,7 +93869,9 @@ async function buildPlotSharedContext_ACU(plotSettings, userMessage, runtimeOpti
                 continue;
             const value = taskOverrides[key] !== undefined ? taskOverrides[key] : replacements[key];
             const regex = new RegExp(escapeRegExp_ACU(key), 'g');
-            const filteredValue = filterPlotInjectedContent(value, key);
+            // $8 是注入外壳的内插位：先剥掉滞留的旧壳，防止旧壳连同原文被再包一层；其余槽位行为不变。
+            const gatedValue = key === '$8' ? unwrapPlotUserInputShell_ACU(value) : value;
+            const filteredValue = filterPlotInjectedContent(gatedValue, key);
             processed = processed.replace(regex, () => filteredValue);
         }
         return processed;
@@ -94845,7 +94965,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261103-1147"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261103-1218"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -94864,7 +94984,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261103-1147";
+        const stamp = "20261103-1218";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -151790,6 +151910,8 @@ function createCoreDataApi(ctx) {
  * 对外只读接口：按楼层读取表格历史快照（移植上游 PR #31 / 412182b4 + e445c967）。
  * 本库没有上游的结构化回放失败点（V2ReplayOperationError），失败只返回 code + error。
  */
+/** 公共历史读取的主线程让步预算（毫秒），与保存链回放同口径。 */
+const PUBLIC_HISTORY_REPLAY_YIELD_BUDGET_MS_ACU = 8;
 function createTableHistoryApi() {
     return {
         /**
@@ -151849,7 +151971,9 @@ function createTableHistoryApi() {
                     compatibilityMode: 'disabled',
                     allowTemporaryTemplateBaseline: false,
                     backgroundFixation: 'skip',
-                });
+                    // 长回放按预算让出主线程（与保存链同口径）；无帧楼层并入同一次前向回放（上游 #63）
+                    yieldBudgetMs: PUBLIC_HISTORY_REPLAY_YIELD_BUDGET_MS_ACU,
+                }, { inheritFramelessBoundaries: true });
                 if (!isCurrent())
                     return stale();
                 const snapshots = indices.map(messageIndex => {
@@ -156727,7 +156851,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261103-1147";
+        const stamp = "20261103-1218";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -210145,20 +210269,15 @@ function useManualUpdate() {
         abortRequested = true;
         // 终止锁存到本轮结束；只终止填表请求，不连带中止剧情推进规划（R10A-19）
         requestTableFillStop_ACU();
-        if (progressToastId) {
-            toast.update(progressToastId, 'warning', '手动填表已终止，正在停止当前任务与后续批次...', {
-                durationMs: 0,
-                muteable: false,
-                dismissible: false,
-            });
+        // 终止后改为一次性提示（移植上游 a21d3269）：常驻提示只能等编排器返回才关闭，收尾慢或卡住时会一直停留。
+        // 最终结果由 finishToast 另发；manualUpdateBusy 仍保持到编排器真正返回。
+        const text = '手动填表已终止，正在停止当前任务与后续批次...';
+        if (progressToastId && toast.update(progressToastId, 'warning', text, { muteable: false })) {
+            progressToastId = null;
+            return;
         }
-        else {
-            toast.warning('手动填表已终止，正在停止当前任务与后续批次...', {
-                durationMs: 0,
-                muteable: false,
-                dismissible: false,
-            });
-        }
+        progressToastId = null;
+        toast.warning(text, { muteable: false });
     }
     function requestCatchUpAbort() {
         if (!catchUpAbortController || catchUpAbortController.signal.aborted)
@@ -210360,7 +210479,9 @@ function useManualUpdate() {
             if (extra)
                 _set_manualExtraHint_ACU(`以下为用户的额外填表要求,请严格遵守:\n${extra}`);
             const handleProgress = (event) => {
-                notifyProgress(progressLabel(event));
+                // 终止后迟到的进度事件不得重建常驻进度提示；结果仍由 finishToast 汇报。
+                if (!abortRequested)
+                    notifyProgress(progressLabel(event));
                 if (event.phase === 'complete') {
                     try {
                         topLevelWindow_ACU.AutoCardUpdaterAPI?._notifyTableUpdate?.();

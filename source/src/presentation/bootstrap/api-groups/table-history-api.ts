@@ -9,6 +9,9 @@ import { getCurrentIsolationKey_ACU } from '../../../service/runtime/state-manag
 import { loadTableStatesAtBoundariesFromFramesV2Detailed_ACU } from '../../../service/table/storage-frame-v2-replay';
 import { computeReplayHeadRevisionDigest_ACU } from '../../../service/table/v2-replay-session';
 
+/** 公共历史读取的主线程让步预算（毫秒），与保存链回放同口径。 */
+const PUBLIC_HISTORY_REPLAY_YIELD_BUDGET_MS_ACU = 8;
+
 export type PublicTableHistoryResult_ACU =
     | { success: true; snapshots: Array<{ messageIndex: number; data: TableDataObject_ACU }> }
     | { success: false; code: 'invalid_message_indices' | 'host_unavailable' | 'context_changed' | 'replay_failed'; error: string };
@@ -73,7 +76,9 @@ export function createTableHistoryApi(): Record<string, Function> {
                     compatibilityMode: 'disabled',
                     allowTemporaryTemplateBaseline: false,
                     backgroundFixation: 'skip',
-                });
+                    // 长回放按预算让出主线程（与保存链同口径）；无帧楼层并入同一次前向回放（上游 #63）
+                    yieldBudgetMs: PUBLIC_HISTORY_REPLAY_YIELD_BUDGET_MS_ACU,
+                }, { inheritFramelessBoundaries: true });
                 if (!isCurrent()) return stale();
                 const snapshots = indices.map(messageIndex => {
                     const state = states.get(messageIndex);

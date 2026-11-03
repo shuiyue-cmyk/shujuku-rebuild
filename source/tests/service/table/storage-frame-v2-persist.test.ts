@@ -5109,16 +5109,13 @@ describe('writeInitFullCheckpointFrameV2_ACU（S2-4 init 写协议统一入口�
     });
   });
 
-  it('G14-04：损坏字符串容器按空容器写入，不产出垃圾键', () => {
+  it('G14-04：损坏字符串容器拒绝写入并保留原始字符串，不产出垃圾键', () => {
     const chat = [{ is_user: false, mes: 'ai', TavernDB_ACU_IsolatedData: '{不是合法JSON' }];
     const checkpoint = makeInitCheckpoint();
 
-    writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex: 0, isolationKey: '', checkpoint });
-
-    const container = (chat[0] as any).TavernDB_ACU_IsolatedData;
-    expect(container).toEqual({
-      '': { _acu_storage_version: 2, storageFrame: { version: 2, checkpoint, logEntries: [] } },
-    });
+    expect(() => writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex: 0, isolationKey: '', checkpoint }))
+      .toThrow('存档容器无法解析');
+    expect((chat[0] as any).TavernDB_ACU_IsolatedData).toBe('{不是合法JSON');
   });
 
   it('目标楼不存在或是 user 楼时抛错且不写入', () => {

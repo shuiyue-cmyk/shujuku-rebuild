@@ -206,8 +206,6 @@ async function mountDataMgmtPage(chatFileIdentifier = 'chat-data', initialMixedD
   });
   vi.doMock('../../../src/service/settings/settings-service', () => ({
     applyTemplateScopeForCurrentChat_ACU: applyTemplateScope,
-    getDataIsolationHistory_ACU: () => [...isolationHistory],
-    removeDataIsolationHistory_ACU: removeHistory,
     saveSettings_ACU: saveSettings,
     applyCombinedSettingsImport_ACU: vi.fn(() => ['charCardPrompt']),
   }));

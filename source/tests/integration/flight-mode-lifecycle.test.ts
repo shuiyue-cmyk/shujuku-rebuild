@@ -20,6 +20,7 @@ vi.mock('../../src/data/gateways/chat-gateway', () => ({
 vi.mock('../../src/data/storage/chat-history', () => ({
   getActiveChatStorageIdentity_ACU: () => 'flight-mode-lifecycle',
   getChatScopedConfigContainer_ACU: () => h.scope,
+  getChatScopedConfigField_ACU: (_chat: unknown[], field: string) => h.scope?.[field],
   peekChatScopedConfigContainer_ACU: () => h.scope,
   normalizeChatScopedConfigContainer_ACU: (value: any) => JSON.parse(JSON.stringify(value || { version: 1 })),
   setChatScopedConfigContainer_ACU: (_chat: any[], value: any) => { h.scope = value; },

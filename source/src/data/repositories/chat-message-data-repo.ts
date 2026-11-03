@@ -1088,10 +1088,12 @@ export function readIsolatedDataContainer_ACU(msg: any): IsolatedDataContainer_A
  *
  * 规则：
  * - 已是对象形态：原引用返回（保持既有就地写入与身份比较语义不变）；
- * - 字符串形态：解析后**克隆**为新对象并整体换字段写回——其他标签槽原样保留；
- *   解析失败（损坏串）按空容器处理。克隆而非直接引用解析结果，保证解析 memo
- *   里的快照不被就地改写，回滚还原原字符串后再次解析读到的仍是原值；
- * - 缺失 / 数组 / 其他非法形态：置空容器。
+ * - 字符串形态：解析后**克隆**为新对象并整体换字段写回——其他标签槽原样保留。
+ *   克隆而非直接引用解析结果，保证解析 memo 里的快照不被就地改写，回滚还原原字符串后
+ *   再次解析读到的仍是原值；
+ * - 非空但解析不了的损坏串：抛错并原样保留（对齐上游 e284f00f），不覆盖成空容器把原始数据销毁；
+ *   调用方都在候选克隆或快照回滚里，抛错即整次写入放弃；
+ * - 空串 / 缺失 / 数组 / 其他非法形态：置空容器。
  *
  * 回写形态统一为对象：与本文件 purge 路径「按既有约定写回对象」一致（有测试锁定），
  * 也保证各处直读 `msg.TavernDB_ACU_IsolatedData?.[isolationKey]` 的读者能立即看到新写入的数据。
@@ -1104,6 +1106,7 @@ export function ensureWritableIsolatedDataContainer_ACU(msg: any): IsolatedDataC
     if (!msg || typeof msg !== 'object') return {};
     if (typeof raw === 'string') {
         const parsed = parseIsolatedDataField(msg);
+        if (!parsed && raw.trim()) throw new Error('存档容器无法解析，已保留原始数据，本次写入已放弃。');
         const container: IsolatedDataContainer_ACU = parsed ? cloneScopedConfigData_ACU(parsed) : {};
         msg.TavernDB_ACU_IsolatedData = container;
         return container;

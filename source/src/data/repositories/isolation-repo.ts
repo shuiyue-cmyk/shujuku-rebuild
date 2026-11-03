@@ -26,15 +26,11 @@ export function normalizeDataIsolationHistory_ACU(list?: any[]): string[] {
     return globalMeta_ACU.isolationCodeList;
 }
 
-export function getDataIsolationHistory_ACU(): string[] {
-    return normalizeDataIsolationHistory_ACU();
-}
-
 export function addDataIsolationHistory_ACU(code: string, { save = true } = {}): void {
     if (typeof code !== 'string') return;
     const trimmed = code.trim();
     if (!trimmed) return;
-    const history = getDataIsolationHistory_ACU();
+    const history = normalizeDataIsolationHistory_ACU();
     globalMeta_ACU.isolationCodeList = [trimmed, ...history.filter((item: string) => item !== trimmed)].slice(
         0,
         MAX_DATA_ISOLATION_HISTORY,
@@ -42,12 +38,6 @@ export function addDataIsolationHistory_ACU(code: string, { save = true } = {}):
     if (save) saveGlobalMeta_ACU();
 }
 
-export function removeDataIsolationHistory_ACU(code: string, { save = true } = {}): void {
-    if (typeof code !== 'string') return;
-    const history = getDataIsolationHistory_ACU();
-    globalMeta_ACU.isolationCodeList = history.filter((item: string) => item !== code);
-    if (save) saveGlobalMeta_ACU();
-}
-
-// ensureProfileExists_ACU 与 switchIsolationProfile_ACU（业务编排）已一并删除：
-// 隔离码切换 UI 已下线，全库无任何调用方（第二轮复审 G11 跨组线索 1 坐实的死代码群）。
+// ensureProfileExists_ACU、switchIsolationProfile_ACU（业务编排）与只供隔离码管理 UI 用的
+// getDataIsolationHistory_ACU / removeDataIsolationHistory_ACU 已一并删除：隔离码切换 UI 已下线，
+// 全库无任何调用方（第二轮复审 G11 跨组线索 1）。历史列表仍由设置加载时 add/normalize 维护。

@@ -1464,4 +1464,3 @@ export function applyCombinedSettingsImport_ACU(combinedData: any): string[] {
 // re-export data 层基础设施（供 presentation 层通过 service 层访问，避免 presentation→data 直接依赖）
 export { getConfigStorage_ACU, persistTavernSettings_ACU } from '../../data/storage/tavern-storage';
 export { saveCurrentProfileTemplate_ACU } from '../../data/repositories/profile-repo';
-export { getDataIsolationHistory_ACU, removeDataIsolationHistory_ACU } from '../../data/repositories/isolation-repo';

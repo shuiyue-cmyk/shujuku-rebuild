@@ -93,6 +93,106 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     mockLogWarn.mockClear();
   });
 
+  it('批量读取：无帧的用户楼按此前最后一个帧并入同一次前向回放，结果按原楼层返回（上游 #63）', async () => {
+    const chat: any[] = [
+      { is_user: false, TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: {
+        version: 2, checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: makeCheckpointData() }, logEntries: [] } } } },
+      { is_user: true, mes: '用户 1' },
+      { is_user: false, TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: {
+        version: 2, logEntries: [{
+          seq: 1, entryId: 'later', createdAt: 2, source: 'auto_fill', targetMessageIndex: 2, aiFloor: 2,
+          filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+          operations: [{ kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'inventory', reason: 'system',
+            statements: ["UPDATE inventory SET name = '钢剑' WHERE row_id = 1"] }],
+        }] } } } },
+      { is_user: true, mes: '用户 2' },
+    ];
+    const options = { updateRuntimeState: false, compatibilityMode: 'disabled' as const };
+
+    const inherited = await loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(chat, '', [3, 1], options, { inheritFramelessBoundaries: true });
+    const cold = await loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(chat, '', [3, 1], options);
+
+    expect([...inherited.keys()]).toEqual([1, 3]);
+    expect(inherited.get(1)!.capturedBoundary).toBe(1);
+    expect(inherited.get(3)!.capturedBoundary).toBe(3);
+    expect(inherited.get(1)!.data.sheet_0.content).toEqual(cold.get(1)!.data.sheet_0.content);
+    expect(inherited.get(3)!.data.sheet_0.content).toEqual(cold.get(3)!.data.sheet_0.content);
+    expect(inherited.get(3)!.data.sheet_0.content[1]).toContain('钢剑');
+    expect(inherited.get(1)!.data.sheet_0.content[1]).not.toContain('钢剑');
+  });
+
+  it('休眠表（非首列空业务表头）的历史 sql_sheet_batch 写入被跳过，不再撞 no such table', async () => {
+    const data = makeCheckpointData();
+    data.sheet_dormant = {
+      uid: 'dazongjie',
+      name: '大总结',
+      content: [['row_id', 'summary_text', ''], ['1', '旧摘要', '']],
+      sourceData: { ddl: 'CREATE TABLE dazongjie (row_id INTEGER PRIMARY KEY, summary_text TEXT, extra TEXT);' },
+      updateConfig: {}, exportConfig: {}, orderNo: 1,
+    };
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data },
+            logEntries: [{
+              seq: 1, entryId: 'dormant-write', createdAt: 2, source: 'auto_fill', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: ['sheet_dormant'], changedSheetKeys: ['sheet_dormant'], groupKeys: [],
+              operations: [
+                {
+                  kind: 'sql_sheet_batch', sheetKey: 'sheet_dormant', tableName: 'dazongjie', reason: 'system',
+                  statements: ["INSERT INTO dazongjie (row_id, summary_text) VALUES (2, '机密剧情')"],
+                },
+                {
+                  kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'inventory', reason: 'system',
+                  statements: ["UPDATE inventory SET name = '钢剑' WHERE row_id = 1"],
+                },
+              ],
+            }],
+          },
+        },
+      },
+    }];
+
+    const result = await loadTableStateFromFramesV2_ACU(chat, '');
+
+    expect(result?.sheet_0.content).toEqual([['row_id', 'name'], ['1', '钢剑']]);
+    expect(mockLogWarn.mock.calls.some(call => String(call[0]).includes('跳过休眠表的历史 SQL 写入：sheetKey=sheet_dormant'))).toBe(true);
+  });
+
+  it('回放 SQL 失败的错误信息保留语句摘要与 SQLite 错误，但不包含 VALUES 业务数据', async () => {
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: makeCheckpointData() },
+            logEntries: [{
+              seq: 1, entryId: 'redact', createdAt: 2, source: 'auto_fill', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+              operations: [{
+                kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'inventory', reason: 'system',
+                statements: ["INSERT INTO inventory (row_id, missing_col) VALUES (2, '机密剧情')"],
+              }],
+            }],
+          },
+        },
+      },
+    }];
+
+    const error = await loadTableStateFromFramesV2_ACU(chat, '').then(() => null, (reason: unknown) => reason as Error);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error!.message).toMatch(/kind=sql_sheet_batch: 第 1 条语句失败: INSERT INTO inventory → .*missing_col/);
+    expect(error!.message).not.toContain('机密剧情');
+  });
+
+
   it('从最后 checkpoint 开始，在同一个恢复 runtime 上顺序回放 sql_batch', async () => {
     const chat = [
       {

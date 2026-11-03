@@ -316,19 +316,15 @@ export function useManualUpdate(): ManualUpdateState {
     abortRequested = true;
     // 终止锁存到本轮结束；只终止填表请求，不连带中止剧情推进规划（R10A-19）
     requestTableFillStop_ACU();
-    if (progressToastId) {
-      toast.update(progressToastId, 'warning', '手动填表已终止，正在停止当前任务与后续批次...', {
-        durationMs: 0,
-        muteable: false,
-        dismissible: false,
-      });
-    } else {
-      toast.warning('手动填表已终止，正在停止当前任务与后续批次...', {
-        durationMs: 0,
-        muteable: false,
-        dismissible: false,
-      });
+    // 终止后改为一次性提示（移植上游 a21d3269）：常驻提示只能等编排器返回才关闭，收尾慢或卡住时会一直停留。
+    // 最终结果由 finishToast 另发；manualUpdateBusy 仍保持到编排器真正返回。
+    const text = '手动填表已终止，正在停止当前任务与后续批次...';
+    if (progressToastId && toast.update(progressToastId, 'warning', text, { muteable: false })) {
+      progressToastId = null;
+      return;
     }
+    progressToastId = null;
+    toast.warning(text, { muteable: false });
   }
 
   function requestCatchUpAbort(): void {
@@ -540,7 +536,8 @@ export function useManualUpdate(): ManualUpdateState {
       const extra = manualExtraHint.value.trim();
       if (extra) _set_manualExtraHint_ACU(`以下为用户的额外填表要求,请严格遵守:\n${extra}`);
       const handleProgress = (event: CardUpdateProgressEvent) => {
-        notifyProgress(progressLabel(event));
+        // 终止后迟到的进度事件不得重建常驻进度提示；结果仍由 finishToast 汇报。
+        if (!abortRequested) notifyProgress(progressLabel(event));
         if (event.phase === 'complete') {
           try { (topLevelWindow_ACU as any).AutoCardUpdaterAPI?._notifyTableUpdate?.(); } catch (_) {}
           refreshTick.value++;

@@ -479,6 +479,10 @@ describe('FormFillPage', () => {
     expect(advancedButton().textContent).toContain('自定义');
     await setField('批处理层数', '3');
     expect(advancedButton().textContent).toContain('默认');
+    // 三项凑成「每 3 层」内置档位（上下文 3 / 频率 3 / 批处理 3）：仍是默认
+    await setField('自动填表频率', '3');
+    expect(settings.autoUpdateFrequency).toBe(3);
+    expect(advancedButton().textContent).toContain('默认');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -832,6 +836,40 @@ describe('FormFillPage · 手动填表面板', () => {
     releaseOrchestrate();
     await new Promise(r => setTimeout(r, 0));
 
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('点终止后：终止提示不再常驻，迟到的进度事件也不重建带终止按钮的进度提示', async () => {
+    const { mount, orchestrate } = await mountFormFillPage();
+    let releaseOrchestrate = () => {};
+    let onProgress: ((event: any) => void) | undefined;
+    orchestrate.mockImplementation(async (_targetKeys: string[], _refreshData: any, options: any) => {
+      onProgress = options.onProgress;
+      await new Promise<void>(resolve => {
+        releaseOrchestrate = resolve;
+      });
+      return { success: false, error: '手动更新已终止。' };
+    });
+
+    const panel = document.getElementById('ff-manual')!;
+    Array.from(panel.querySelectorAll<HTMLButtonElement>('button'))
+      .find(btn => btn.textContent?.includes('执行手动填表'))!.click();
+    await clickDialogButton('确认并继续');
+    await new Promise(r => setTimeout(r, 0));
+
+    Array.from(document.querySelectorAll<HTMLButtonElement>('.ub-toast button'))
+      .find(btn => btn.textContent?.includes('终止'))!.click();
+    await Promise.resolve();
+    const { useToastStore } = await import('../../../src/presentation-v2/stores/toast-store');
+    const stopped = useToastStore().items.find(item => item.text.includes('手动填表已终止'));
+    expect(stopped?.durationMs).toBeGreaterThan(0);
+
+    onProgress?.({ phase: 'calling_ai', currentBatch: 2, totalBatches: 4, attempt: 1, maxRetries: 3 });
+    await Promise.resolve();
+    expect(document.querySelector('.ub-toasts')?.textContent || '').not.toContain('批次 2/4');
+
+    releaseOrchestrate();
+    await new Promise(r => setTimeout(r, 0));
     mount.__resetAcuV2MountForTests();
   });
 

@@ -55,7 +55,6 @@ vi.mock('../../../src/shared/defaults-json.js', () => ({
 
 import {
   addDataIsolationHistory_ACU,
-  removeDataIsolationHistory_ACU,
 } from '../../../src/data/repositories/isolation-repo';
 
 beforeEach(() => {
@@ -73,16 +72,6 @@ describe('addDataIsolationHistory_ACU', () => {
     addDataIsolationHistory_ACU('new_code');
     expect(mockGlobalMeta.isolationCodeList[0]).toBe('new_code');
     expect(mockGlobalMeta.isolationCodeList).toContain('existing');
-    expect(mockSaveGlobalMeta).toHaveBeenCalled();
-  });
-});
-
-// ═══ removeDataIsolationHistory_ACU ═══
-describe('removeDataIsolationHistory_ACU', () => {
-  it('移除指定代码', () => {
-    mockGlobalMeta.isolationCodeList = ['a', 'b', 'c'];
-    removeDataIsolationHistory_ACU('b');
-    expect(mockGlobalMeta.isolationCodeList).toEqual(['a', 'c']);
     expect(mockSaveGlobalMeta).toHaveBeenCalled();
   });
 });

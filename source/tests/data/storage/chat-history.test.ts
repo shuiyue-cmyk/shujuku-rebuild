@@ -31,6 +31,7 @@ import {
   CHAT_TEMPLATE_ARCHIVE_OPTION_PREFIX_ACU,
   MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU,
   getChatScopedConfigContainer_ACU,
+  getChatScopedConfigField_ACU,
   peekChatScopedConfigContainer_ACU,
   normalizeChatScopedConfigContainer_ACU,
   getChatSheetGuideContainer_ACU,
@@ -67,6 +68,42 @@ describe('常量导出', () => {
 
   it('MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU 钉数值', () => {
     expect(MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU).toBe(8);
+  });
+});
+
+// ═══ getChatScopedConfigField_ACU ═══
+describe('getChatScopedConfigField_ACU（#68：读小字段不整份深拷贝）', () => {
+  it('只复制所需字段：不触碰同容器里的模板归档，返回独立副本', () => {
+    let archiveReads = 0;
+    const archive: any = {};
+    Object.defineProperty(archive, 'big', { enumerable: true, get: () => { archiveReads += 1; return 'x'.repeat(10); } });
+    const metadataConfig: any = { version: 1, flightModeByIsolationKey: { '': { enabled: true } }, templateArchives: archive };
+    _set_SillyTavern_API_ACU({ chatMetadata: { [CHAT_SCOPED_CONFIG_FIELD_ACU]: metadataConfig } } as any);
+
+    const states: any = getChatScopedConfigField_ACU([{}], 'flightModeByIsolationKey');
+
+    expect(states).toEqual({ '': { enabled: true } });
+    expect(archiveReads).toBe(0);
+    states[''].enabled = false;
+    expect(metadataConfig.flightModeByIsolationKey[''].enabled).toBe(true);
+  });
+
+  it('chatMetadata 缺 legacy 槽位时照常迁移回写，读到合并后的字段', () => {
+    const metadataConfig = { version: 1, flightModeByIsolationKey: { other: { enabled: false } } };
+    const chatConfig = { version: 1, flightModeByIsolationKey: { '': { enabled: true } } };
+    const metadata: any = { [CHAT_SCOPED_CONFIG_FIELD_ACU]: metadataConfig };
+    _set_SillyTavern_API_ACU({ chatMetadata: metadata } as any);
+
+    const states: any = getChatScopedConfigField_ACU([{ [CHAT_SCOPED_CONFIG_FIELD_ACU]: chatConfig }], 'flightModeByIsolationKey');
+
+    expect(states['']).toEqual({ enabled: true });
+    expect(states.other).toEqual({ enabled: false });
+    expect(metadata[CHAT_SCOPED_CONFIG_FIELD_ACU].flightModeByIsolationKey[''].enabled).toBe(true);
+  });
+
+  it('无活动聊天时返回 undefined', () => {
+    _set_SillyTavern_API_ACU({ chatMetadata: { [CHAT_SCOPED_CONFIG_FIELD_ACU]: { version: 1, flightModeByIsolationKey: {} } } } as any);
+    expect(getChatScopedConfigField_ACU([], 'flightModeByIsolationKey')).toBeUndefined();
   });
 });
 

@@ -260,6 +260,42 @@ import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-s
     );
   }
 
+  // [幂等闸]（移植上游 a49259f5 / 3c4cc0b2）剧情推进把用户输入包进注入外壳（默认 finalSystemDirective：
+  // 「以下是用户的本轮输入：\n<本轮用户输入>$8</本轮用户输入>」）后送生成；输入框 / 楼层里滞留的包装产物
+  // 被下一轮当作原文再包一层，历史楼层就会出现多层嵌套。剥壳条件从严：只剥完整包住整段输入的外壳。
+  const PLOT_USER_INPUT_HEADER_ACU = '以下是用户的本轮输入：';
+  const PLOT_USER_INPUT_OPEN_ACU = '<本轮用户输入>';
+  const PLOT_USER_INPUT_CLOSE_ACU = '</本轮用户输入>';
+  const PLOT_USER_INPUT_UNWRAP_MAX_ACU = 10;
+
+  /**
+   * 只剥掉完整包住输入的外壳；嵌套按配对标签识别。
+   * 外壳前后有额外输入、标签不完整或内容为空时保留原文，避免丢失用户追加内容。
+   */
+  function unwrapPlotUserInputShell_ACU(value: any): string {
+    let current = String(value ?? '');
+    for (let k = 0; k < PLOT_USER_INPUT_UNWRAP_MAX_ACU; k++) {
+      const head = current.trim();
+      const shell = head.startsWith(PLOT_USER_INPUT_HEADER_ACU)
+        ? head.slice(PLOT_USER_INPUT_HEADER_ACU.length).trimStart() : head;
+      if (!shell.startsWith(PLOT_USER_INPUT_OPEN_ACU)) break;
+      let depth = 0;
+      let closingEnd = -1;
+      for (const match of shell.matchAll(/<\/?本轮用户输入>/g)) {
+        depth += match[0] === PLOT_USER_INPUT_OPEN_ACU ? 1 : -1;
+        if (depth === 0) {
+          closingEnd = match.index! + match[0].length;
+          break;
+        }
+      }
+      if (closingEnd !== shell.length) break;
+      const inner = shell.slice(PLOT_USER_INPUT_OPEN_ACU.length, closingEnd - PLOT_USER_INPUT_CLOSE_ACU.length);
+      if (!inner.trim()) break;
+      current = inner;
+    }
+    return current;
+  }
+
   async function buildPlotSharedContext_ACU(plotSettings: Record<string, any>, userMessage: string, runtimeOptions: any = {}) {
     const readContext: PlotWorldbookReadContext_ACU | undefined = runtimeOptions.readContext;
     const chat = getChatArray_ACU();
@@ -504,7 +540,9 @@ import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-s
         if (key === '$9') continue;
         const value = taskOverrides[key] !== undefined ? taskOverrides[key] : replacements[key];
         const regex = new RegExp(escapeRegExp_ACU(key), 'g');
-        const filteredValue = filterPlotInjectedContent(value, key);
+        // $8 是注入外壳的内插位：先剥掉滞留的旧壳，防止旧壳连同原文被再包一层；其余槽位行为不变。
+        const gatedValue = key === '$8' ? unwrapPlotUserInputShell_ACU(value) : value;
+        const filteredValue = filterPlotInjectedContent(gatedValue, key);
         processed = processed.replace(regex, () => filteredValue);
       }
       return processed;
