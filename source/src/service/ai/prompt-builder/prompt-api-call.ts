@@ -83,8 +83,6 @@ export class RetryableAiResponseError_ACU extends Error {
     _set_currentAbortController_ACU(localAbortController);
     trackAbortController_ACU(localAbortController);
     const abortSignal = localAbortController.signal;
-    const skipProfileSwitch = !!options?.skipProfileSwitch;
-    const forceDirectApi = !!options?.forceDirectApi;
 
     try {
         // 已取消的调用不再启动模板或网络

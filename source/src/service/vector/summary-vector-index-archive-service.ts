@@ -369,7 +369,11 @@ function buildStableSummaryRowKey_ACU(summaryKey: string, rowId: string, indexCo
 }
 
 /**
- * 单一指纹公式：所有行指纹必须经由这里计算，避免三处内联公式漂移。
+ * legacy 归档链私有的行复用指纹公式（与 summary-vector-row-fingerprint 模块不同：
+ * 原文直拼、无版本标签，且不含 rowOrder）。仅在本 legacy 归档链内自洽——行复用比较
+ * （existingFingerprint vs prepared.sourceFingerprint）两侧都用这一份，故不改行为。
+ * 注意：本公式产出的 sourceFingerprint 会被持久化进 legacy manifest，镜像 V2 主链路的
+ * 内容变化判定走的是 vectorSourceHash（hashSummaryVectorSourceText_ACU），二者不可混用。G10-02。
  * 输入字段顺序与 join 分隔符与历史实现逐字符一致（T1，零行为变化）。
  */
 function buildSummaryRowFingerprint_ACU(source: {

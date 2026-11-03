@@ -1088,26 +1088,6 @@ async function writeFinalGenerationGreenlightsExclusive_ACU(greenlights: unknown
   return patchResult.patched > 0;
 }
 
-export async function readFinalGenerationGreenlights_ACU(): Promise<AgentWorldbookFinalGreenlightRef_ACU[]> {
-  const snapshot = getPlotAgentWorldbookSnapshot_ACU();
-  const snapshotUidSetByBook = buildSnapshotUidSetByBook_ACU(snapshot);
-  const greenlights: AgentWorldbookFinalGreenlightRef_ACU[] = [];
-  const seen = new Set<string>();
-
-  for (const [bookName, uidSet] of snapshotUidSetByBook.entries()) {
-    const entries = await getLorebookEntries_ACU(bookName);
-    for (const entry of entries || []) {
-      if (!hasValidWorldbookUid_ACU(entry?.uid) || !uidSet.has(String(entry.uid)) || !isFinalGenerationBlueLightEntry_ACU(entry)) continue;
-      const key = buildFinalGreenlightKey_ACU(bookName, entry.uid);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      greenlights.push({ bookName, uid: entry.uid });
-    }
-  }
-
-  return greenlights;
-}
-
 export interface ClearFinalGenerationGreenlightsResult_ACU {
   status: 'noop' | 'cleared' | 'isolated_stale' | 'failed';
   patched: number;

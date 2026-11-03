@@ -20,6 +20,7 @@ export type { TableUpdatePostCommitWarning_ACU } from '../../shared/post-commit-
 export { formatPostCommitWarnings_ACU } from '../../shared/post-commit-warnings';
 import { logAutoFillSkip_ACU, logAutoFillStage_ACU } from '../../shared/trigger-diagnostics';
 import { abortableDelay } from '../../shared/abortable-delay';
+import { maskSensitiveText_ACU } from '../../shared/log-buffer';
 import { enqueueSummaryVectorIndexFlush_ACU } from '../vector/summary-vector-index-flush-queue';
 import {
   ensureSummaryVectorMirrorAfterTableFill_ACU,
@@ -90,7 +91,7 @@ import { buildGuidedBaseDataFromSheetGuide_ACU, getSortedSheetKeys_ACU } from '.
 import { isSqliteMode } from './storage-mode';
 import type { TableMutationOperationV2_ACU } from './storage-frame-v2-types';
 import { applySqlEditsToTableDataSnapshot_ACU, assertNoHiddenPhysicalColumnMutations_ACU, buildSqlSheetBatchOperations_ACU, captureSqlTableApplyScope_ACU, extractRowIdsFromSqlSheetBatch_ACU, extractTableNamesFromStatements, mapSqlTableNamesToSheetKeys_ACU, normalizeSqlStatementsForRuntimeLog_ACU, rebindSqlMutationIdentifiers_ACU, splitSqlStatements, SqlRowIdMaterializationError_ACU, SqlRuntimeSchemaInvalidError_ACU, SqlRuntimeSchemaStaleError_ACU, SqlRuntimeSnapshotError_ACU } from './sql-table-service';
-import { hasStructuralReplayCompatibilityRepairs_ACU, hasUnanchoredReplayArtifactsForChatV2_ACU, loadTableStateFromFramesV2Detailed_ACU } from './storage-frame-v2-replay';
+import { buildCompatReadonlyGuidance_ACU, hasStructuralReplayCompatibilityRepairs_ACU, hasUnanchoredReplayArtifactsForChatV2_ACU, loadTableStateFromFramesV2Detailed_ACU } from './storage-frame-v2-replay';
 import { ensureStorageProviderReady_ACU, getStorageProvider, reloadStorageProvider } from './table-storage-strategy';
 import { applySpecialIndexSequenceToSummaryTables_ACU } from '../runtime/helpers-remaining';
 import { isSameSheetHeader_ACU } from '../template/guide-metadata-overlay';
@@ -696,12 +697,17 @@ class UpdateAttemptError_ACU extends Error {
     }
 }
 
+/**
+ * 填表重试反馈脱敏 + 限长。
+ * G02-02 收敛：密钥形态（Authorization 头、Bearer/Basic 长令牌、api_key=/cookie= 等
+ * 裸键值、?key= 查询参数、裸 sk-/AIza）统一走 shared 的 maskSensitiveText_ACU——
+ * 此前本函数自带一份平行清单（漏裸 sk-，?key= 只认 api_key= 变体）。
+ * 这里只保留重试反馈专用处理：协议标记剥离、URL 整体抹除（比 shared 更严的口径，
+ * 保留）、控制/零宽字符清理、空白折叠与限长。
+ */
 function sanitizeRetryFeedback_ACU(value: unknown, maxLength = MAX_RETRY_FEEDBACK_LENGTH_ACU): string {
-    return String(value || '')
+    return maskSensitiveText_ACU(String(value || ''))
         .replace(/<!--\s*(?:SQL_ERROR_FEEDBACK|UNIFIED_GROUP_ERROR_FEEDBACK)\s*-->/gi, '')
-        .replace(/\b(?:authorization\s*:\s*)?bearer\s+[a-z0-9._~+/=-]+/gi, 'Bearer [REDACTED]')
-        .replace(/\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|cookie)\b(\s*[:=]\s*)([^\s,;}&]+)/gi, '$1$2[REDACTED]')
-        .replace(/([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd)=)[^&#\s]*/gi, '$1[REDACTED]')
         .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1[REDACTED]@')
         .replace(/https?:\/\/[^\s]+/gi, '[REDACTED_URL]')
         .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
@@ -1206,7 +1212,8 @@ async function loadV2ReplayMergeBase_ACU(
         if (replayResult?.baseKind === 'compat_tolerant_replay') {
             throw new Error(
                 `V2 replay 仅可经兼容宽容回放读出（严格回放失败：${replayResult.legacyToleranceDiagnosis?.strictError || '未知错误'}），不能作为填表基底；`
-                + '请在数据管理 → 「诊断 V2 数据恢复」中把兼容回放结果固化为过渡根后重试。',
+                // G13-02：指引与真实 UI 对齐（后台自动固化 / 历史恢复诊断入口），不再指向不存在的按钮。
+                + buildCompatReadonlyGuidance_ACU(replayResult.legacyToleranceDiagnosis),
             );
         }
         if (hasStructuralReplayCompatibilityRepairs_ACU(replayResult?.compatibilityRepairs)) {
@@ -3130,6 +3137,10 @@ export async function executeAutoFillStagingGroups_ACU(
     const failedGroups = new Set<string>();
     let firstError: string | undefined;
     let committedBucketCount = 0;
+    // G03-06：返回类型声明了 postCommitWarnings，staging 各段的结果就必须真正收集进来
+    // （与 processGroupedRuntimeChunkCore_ACU 同形）。当前 pre/post 段都传 syncAfterCommit:false，
+    // 段级告警恒为空、行为无变化；接上之后未来打开提交后同步或新增告警来源时不再静默丢告警。
+    const postCommitWarnings: TableUpdatePostCommitWarning_ACU[] = [];
     let boundaryCommitted = false;
     let stagingRun: TableFillStagingRunContext_ACU | null = null;
     let stagingSession: TableFillStagingSession_ACU | null = null;
@@ -3193,6 +3204,7 @@ export async function executeAutoFillStagingGroups_ACU(
             failedGroups: [...new Set([...failedGroups, ...normalizedGroups.map(group => group.key)])],
             error,
             committedBucketCount,
+            ...(postCommitWarnings.length ? { postCommitWarnings } : {}),
         };
     };
 
@@ -3223,7 +3235,7 @@ export async function executeAutoFillStagingGroups_ACU(
 
     // 三阶段（R2A-07）：先跑完所有组的边界前段（全部进 staging），再统一汇合一次，最后跑所有组的边界后段。
     // 逐组「pre → 汇合 → post」时，第一组汇合后 session 已清空，后续组的边界前结果会被静默丢弃。
-    const abortedResult = () => ({ success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount });
+    const abortedResult = () => ({ success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) });
     const plannedGroups = normalizedGroups.map((group) => {
         const groupIndices = [...(group.indices || [])].sort((a, b) => a - b);
         const segments = splitMessageIndicesAtSchemaBoundaries_ACU(groupIndices, originalFullIndex, schemaBoundaries);
@@ -3254,6 +3266,7 @@ export async function executeAutoFillStagingGroups_ACU(
                 performanceParentSpanId: options.performanceParentSpanId,
             });
             committedBucketCount += preResult.committedBucketCount;
+            postCommitWarnings.push(...(preResult.postCommitWarnings || []));
             if (!preResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || preResult.error || '边界前 staging 提交失败。';
@@ -3292,6 +3305,7 @@ export async function executeAutoFillStagingGroups_ACU(
                 performanceParentSpanId: options.performanceParentSpanId,
             });
             committedBucketCount += postResult.committedBucketCount;
+            postCommitWarnings.push(...(postResult.postCommitWarnings || []));
             if (!postResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || postResult.error || '边界后持久化提交失败。';
@@ -3311,8 +3325,8 @@ export async function executeAutoFillStagingGroups_ACU(
     await stagingSession?.discard();
 
     return failedGroups.size > 0
-        ? { success: false, failedGroups: [...failedGroups], error: firstError || '跨根 staging 执行失败。', committedBucketCount }
-        : { success: true, failedGroups: [], committedBucketCount };
+        ? { success: false, failedGroups: [...failedGroups], error: firstError || '跨根 staging 执行失败。', committedBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) }
+        : { success: true, failedGroups: [], committedBucketCount, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
 }
 
 
@@ -3882,7 +3896,10 @@ export async function executeCardUpdateCore_ACU(
 
             // 填表完成后异步收尾：当前环境无交火向量数据则立刻重建，
             // 已有镜像再入队防抖增量 flush。不阻塞 complete 提示。
-            if (!isImportMode && success) {
+            // G14-09 短期对齐：世界书刷新失败（postCommitWarnings 非空）时跳过向量收尾，
+            // 与统一路径 applyUnifiedGroupFillResponsesCore_ACU 同口径——派生刷新半失败时
+            // 不再继续做派生收尾；镜像陈旧由下次发送的 stale 检测自愈。
+            if (!isImportMode && success && postCommitWarnings.length === 0) {
                 void runSummaryVectorFollowupAfterTableFill_ACU({
                     tableData: currentJsonTableData_ACU as Record<string, any>,
                     modifiedKeys,
@@ -4258,7 +4275,8 @@ async function ensureStrictlyReplayableHistoryForCatchUp_ACU(
             return {
                 ok: false,
                 error: `追平前检测到聊天历史（${bound.label}）仅可经兼容宽容回放读出（严格回放失败：${replay.legacyToleranceDiagnosis?.strictError || '未知错误'}），`
-                    + '不能继续写入；请在数据管理 → 「诊断 V2 数据恢复」中把兼容回放结果固化为过渡根后重试。',
+                    // G13-02：指引与真实 UI 对齐（后台自动固化 / 历史恢复诊断入口），不再指向不存在的按钮。
+                    + `不能继续写入；${buildCompatReadonlyGuidance_ACU(replay.legacyToleranceDiagnosis)}`,
             };
         }
     }

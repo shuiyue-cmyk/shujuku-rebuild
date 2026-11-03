@@ -11,11 +11,17 @@ const h = vi.hoisted(() => ({
   status: vi.fn(async (bookName: string) => ({ bookName, exists: true, candidateCount: 3, skilledCount: 3 })),
   choose: vi.fn(),
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn(), info: vi.fn() },
+  /** 非 null 时名单写入按此结果失败：模拟 saveSettings 落盘失败（G08-04）。 */
+  writeFailure: null as { error?: string } | null,
 }));
 
 vi.mock('../../../src/service/agent/agent-favorite-worldbooks', () => ({
   readFavoriteWorldbookNames_ACU: () => [...h.favorites],
-  writeFavoriteWorldbookNames_ACU: (names: string[]) => { h.favorites = [...new Set(names)]; return [...h.favorites]; },
+  writeFavoriteWorldbookNames_ACU: (names: string[]) => {
+    if (h.writeFailure) return { names: [...h.favorites], saved: false, error: h.writeFailure.error || '保存设置失败。' };
+    h.favorites = [...new Set(names)];
+    return { names: [...h.favorites], saved: true };
+  },
   readFavoriteWorldbookSkillStatus_ACU: (name: string) => h.status(name),
   mountFavoriteWorldbooksToCurrentCharacter_ACU: (...args: any[]) => h.mount(...args),
   buildMountedWorldbookName_ACU: (c: string, b: string) => `${c}-${b}`,
@@ -36,6 +42,7 @@ beforeEach(() => {
   h.mount.mockReset();
   h.status.mockClear();
   h.choose.mockReset();
+  h.writeFailure = null;
   Object.values(h.toast).forEach(fn => fn.mockClear());
 });
 
@@ -59,6 +66,24 @@ describe('useFavoriteWorldbooks', () => {
     fav.remove('地理百科');
     expect(h.favorites).toEqual(['战斗技能']);
     expect(fav.selected.value).toEqual([]);
+  });
+
+  it('名单落盘失败时 add/remove 如实报错，界面名单保持旧值（G08-04）', async () => {
+    const fav = useFavoriteWorldbooks({ skillifyBooks: vi.fn() });
+    await fav.refresh();
+    h.writeFailure = { error: '保存设置到存储失败。' };
+
+    await fav.add('地理百科');
+    expect(fav.favorites.value).toEqual(['战斗技能']);
+    expect(fav.statuses.value['地理百科']).toBeUndefined();
+    expect(h.toast.error).toHaveBeenCalledWith(expect.stringContaining('保存设置到存储失败'), expect.anything());
+
+    h.toast.error.mockClear();
+    fav.toggleSelected('战斗技能', true);
+    fav.remove('战斗技能');
+    expect(fav.favorites.value).toEqual(['战斗技能']);
+    expect(fav.selected.value).toEqual(['战斗技能']);
+    expect(h.toast.error).toHaveBeenCalledWith(expect.stringContaining('保存设置到存储失败'), expect.anything());
   });
 
   it('挂载：副本已存在时弹三选一，取消按跳过；全部挂上后提示成功并清空勾选', async () => {

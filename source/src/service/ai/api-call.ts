@@ -8,7 +8,7 @@ import { settings_ACU } from '../runtime/state-manager';
 import { assertSafeHttpEndpoint_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { resolveApiConfigByPreset_ACU, normalizePromptPostProcessing_ACU, normalizeApiSendChannel_ACU } from '../settings/api-preset-service';
 import { acquirePresetRateLimitSlot_ACU } from './preset-rate-limiter';
-import { isDebugLogEnabled } from '../../shared/log-buffer';
+import { isDebugLogEnabled, maskSensitiveText_ACU } from '../../shared/log-buffer';
 import { markDirectSendBody_ACU, sendChatCompletionBody_ACU } from './direct-send';
 
 /**
@@ -270,10 +270,16 @@ const MAX_UPSTREAM_ERROR_BODY_LENGTH_ACU = 2048;
 /**
  * 上游错误体可能回显请求头、Cookie 或 API key；它在错误消息里会继续进入日志/UI，
  * 因而必须先脱敏再限长。无敏感信息的短错误体保持逐字不变。
+ * G02-02 收敛：密钥形态基底（Authorization 头、Bearer/Basic 长令牌、裸 key=value、
+ * ?key=/api_key= 等 URL 查询参数、裸 sk-/AIza 前缀）统一复用 shared 的
+ * maskSensitiveText_ACU——此前本函数自带一份清单，漏掉了 Gemini 转接的 ?key=
+ * 查询参数与裸密钥回显形态。这里只补展示侧专用规则：短 Basic/Bearer 令牌
+ * （无 16 位阈值，展示口径更严）、引号包裹的头名键值（shared 只认双引号 JSON
+ * 形态，单引号 'api-key': 'x' 由此补齐）与 Cookie/Set-Cookie（含整行抹掉）。
  */
 function sanitizeUpstreamErrorBodyForDisplay_ACU(raw: unknown): string {
-  let text = String(raw ?? '')
-    .replace(/((?:proxy-)?authorization\s*:\s*)(?:bearer|basic)\s+[^\s"',}\r\n]+/gi, '$1***')
+  let text = maskSensitiveText_ACU(String(raw ?? ''))
+    .replace(/((?:proxy-)?authorization\s*:\s*)basic\s+[^\s"',}\r\n]+/gi, '$1***')
     .replace(/\b(bearer|basic)\s+[a-z0-9._~+/=-]+/gi, '$1 ***')
     .replace(/((?:"|')?(?:proxy-authorization|authorization|(?:x[-_])?api[-_]?key|set-cookie|cookie)(?:"|')?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,}\]]+)/gi, '$1***')
     .replace(/^(\s*(?:set-cookie|cookie)\s*:\s*).+$/gim, '$1***');

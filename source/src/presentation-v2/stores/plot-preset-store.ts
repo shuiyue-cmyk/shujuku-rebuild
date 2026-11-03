@@ -6,7 +6,7 @@
  */
 import { defineStore } from 'pinia';
 import { settings_ACU } from '../../service/runtime/state-manager';
-import { saveSettings_ACU, setGlobalPlotEnabled_ACU } from '../../service/settings/settings-service';
+import { saveSettings_ACU } from '../../service/settings/settings-service';
 import { useToastStore } from './toast-store';
 import { setFeatureApiPreset_ACU } from '../../service/settings/feature-preset-reference-service';
 import { DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
@@ -215,18 +215,6 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
       this.pendingDisguiseEnabled = next;
       (settings_ACU.plotSettings as Record<string, any>).pendingDisguiseEnabled = next;
       if (!savePlotSettingsOrRollback_ACU(snapshot)) this.pendingDisguiseEnabled = snapshot.pendingDisguiseEnabled === true;
-    },
-    /** 设置剧情推进总开关。 */
-    setEnabled(enabled: boolean): void {
-      const next = !!enabled;
-      const snapshot = snapshotPlotSettings_ACU();
-      this.enabled = next;
-      try {
-        setGlobalPlotEnabled_ACU(next);
-      } catch {
-        (settings_ACU.plotSettings as Record<string, any>).enabled = next;
-      }
-      if (!savePlotSettingsOrRollback_ACU(snapshot)) this.enabled = snapshot.enabled === true;
     },
 
     /** D23.2：切换"当前聊天使用"——即 PresetDropdown 主操作。 */

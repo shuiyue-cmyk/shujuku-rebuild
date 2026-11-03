@@ -611,6 +611,9 @@ function buildRowIndex_ACU(indexId: string, rows: ChatSummaryVectorIndexRow_ACU[
             rowId: row.rowId,
             rowOrder: row.rowOrder,
             summaryKey: row.rowKey,
+            // 兜底指纹（G10-02）：仅在落盘行自带 sourceFingerprint 缺失时补写 legacy manifest 的 rowIndex，
+            // 全仓没有等值比较消费它。公式与 archive-service 私有版不同（多 rowOrder 字段），
+            // 两者只在各自链内自洽、不可互换；镜像 V2 主链路的内容变化判定走 vectorSourceHash，与此无关。
             sourceFingerprint: row.sourceFingerprint || hashUserInput_ACU([row.rowId, row.rowOrder, row.timeSpan, row.location, row.summary, row.indexCode, row.vectorSourceText].join('\n')),
             indexCode: row.indexCode,
             chunkIds: [...row.chunkIds],

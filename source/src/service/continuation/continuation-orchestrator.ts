@@ -631,7 +631,6 @@ export class ContinuationOrchestrator_ACU {
       try {
         const preparedTurn = await this.dependencies.executionEngine.prepareCurrentTurnInstruction(
           () => this.isLeaseCurrent_ACU(chatIdentity, lease),
-          undefined,
           async instruction => (await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, instruction, 'running')).opResult,
           controller.signal,
           async action => this.adjustAgentProgressWithinLease_ACU(chatIdentity, lease, task.taskId, action),

@@ -645,6 +645,46 @@ describe('mainInitialize_ACU 交火召回失败停发与发送租约（移植上
   });
 });
 
+describe('mainInitialize_ACU 交火召回 userInput 兜底（G14-10）', () => {
+  /** 「继续」类发送：末楼是 AI 楼、发送框为空，userInput 只能兜底取 params.prompt。 */
+  async function runContinueWithPrompt(prompt: unknown, boxText = '') {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(false);
+    m.shouldProcessSummary.mockReturnValue(true);
+    m.api.chat = [{ is_user: false, mes: 'AI 上一楼正文' }];
+    m.currentChatKey = 'chat-a';
+    const hostInput = await import('../../../src/shared/host-input');
+    vi.mocked(hostInput.getSendTextareaValue_ACU).mockReturnValue(boxText);
+    try {
+      await m.afterCommandsHandler!('continue', { prompt }, false);
+    } finally {
+      m.shouldProcessSummary.mockReturnValue(false);
+    }
+    return m.processBeforeGen.mock.calls.at(-1)?.[0]?.userInput;
+  }
+
+  it('params.prompt 是对象：不当用户输入向量化，按空串走既有跳过路径', async () => {
+    const userInput = await runContinueWithPrompt({ messages: [{ role: 'user', content: 'x' }] });
+    expect(userInput).toBe('');
+  });
+
+  it('params.prompt 是超长格式化提示词：只截尾 500 字符，不整段进关键词与 embedding', async () => {
+    const long = 'S'.repeat(3000) + 'END_尾部真实输入';
+    const userInput = String(await runContinueWithPrompt(long));
+    expect(userInput).toHaveLength(500);
+    expect(userInput.endsWith('END_尾部真实输入')).toBe(true);
+    expect(userInput).not.toContain('S'.repeat(500));
+  });
+
+  it('params.prompt 是普通短字符串：照旧整段作为用户输入', async () => {
+    expect(await runContinueWithPrompt('接下来发生了什么')).toBe('接下来发生了什么');
+  });
+
+  it('发送框有文本时优先于 params.prompt（对象形态也不再兜底）', async () => {
+    expect(await runContinueWithPrompt({ weird: true }, '手打文本')).toBe('手打文本');
+  });
+});
+
 describe('mainInitialize_ACU 重新生成 / 删楼 / 切换版本作废排队中的自动任务（移植上游 2657754a + f874c888）', () => {
   it('新一轮正文生成开始时作废；quiet、dryRun、插件自动触发的生成不作废', async () => {
     const sm = await import('../../../src/service/runtime/state-manager');

@@ -4,11 +4,6 @@
  */
 
 import {
-  _set_currentEditablePlotPresetState_ACU,
-  _set_activePlotEditorSettings_ACU,
-  _set_currentPlotTaskEditorId_ACU
-} from '../../../service/plot/plot-state';
-import {
   showToastr_ACU
 } from '../../theme/toast';
 import {
@@ -53,7 +48,6 @@ import {
   setLastOptimizationBase_ACU,
   shouldSkipDuplicateAutoContentOptimization_ACU,
   recordAutoContentOptimizationProcessed_ACU,
-  _set_optimizationProgressToast_ACU,
   _set_contentOptimizationAbortRequested_ACU
 } from '../../../service/optimization/content-optimization';
 import {

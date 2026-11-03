@@ -52,6 +52,8 @@ interface ApiPresetState {
   modelOptions: string[];
   modelLoadStatus: 'idle' | 'loading' | 'success' | 'error';
   modelLoadError: string;
+  /** G02-03：模型列表所属表单的代数：切预设/新建/放弃修改时 +1，迟到的加载结果代数不符即丢弃（与测试连接的代数守卫同口径） */
+  modelListGeneration: number;
 }
 
 function clone<T>(value: T): T {
@@ -80,6 +82,7 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
     modelOptions: [],
     modelLoadStatus: 'idle',
     modelLoadError: '',
+    modelListGeneration: 0,
   }),
   getters: {
     defaultPreset(state): AcuV2ApiPreset | null {
@@ -142,9 +145,20 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
     ): Promise<ApiConnectionTestResult_ACU> {
       return testApiConnection_ACU(apiConfig, options);
     },
+    /**
+     * G02-03：模型列表只属于加载它时的那份草稿。切换预设 / 新建草稿 / 放弃修改 / 表单重载时
+     * 整份清空并换代，避免 alpha 端点的模型下拉与报错文案挂在 beta 表单下、误选写错模型名。
+     */
+    resetModelListState(): void {
+      this.modelListGeneration += 1;
+      this.modelOptions = [];
+      this.modelLoadStatus = 'idle';
+      this.modelLoadError = '';
+    },
     async loadModelsForConfig(
       apiConfig: Partial<Omit<AcuV2ApiConfig, 'customApiFormat'>> & { customApiFormat?: string },
     ): Promise<boolean> {
+      const generation = this.modelListGeneration;
       this.modelLoadStatus = 'loading';
       this.modelLoadError = '';
       const result = await fetchAvailableModels_ACU(
@@ -155,6 +169,8 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
         // 数据库直接发送的预设同样直接向端点要模型列表。
         { force: true, ...(apiConfig.sendChannel === 'direct' ? { sendChannel: 'direct' as const } : {}) },
       );
+      // G02-03：加载期间切了预设/新建/放弃修改：迟到的结果已不属于当前表单，整份丢弃
+      if (generation !== this.modelListGeneration) return false;
       if (!result.success) {
         this.modelOptions = [];
         this.modelLoadStatus = 'error';

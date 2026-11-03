@@ -408,6 +408,81 @@ describe('FormFillPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('G03-05：高级参数徽标看全部 8 项——改任一项即「自定义」，恢复默认值回「默认」', async () => {
+    // 全部字段取默认值：徽标起步必须是「默认」
+    const defaults = {
+      ...createSettings(),
+      autoUpdateThreshold: 3,
+      autoUpdateFrequency: 1,
+      updateBatchSize: 3,
+      maxConcurrentGroups: 1,
+      skipUpdateFloors: 0,
+      autoUpdateTokenThreshold: 500,
+      tableFillMinResponseLength: 500,
+      tableMaxRetries: 3,
+    };
+    const { mount, settings } = await mountFormFillPage(defaults);
+
+    const updatePanel = document.getElementById('ff-update')!;
+    const advancedButton = () => Array.from(updatePanel.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'))
+      .find(button => (button.textContent || '').includes('高级参数'))!;
+    expect(advancedButton().textContent).toContain('默认');
+
+    advancedButton().click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const setField = async (label: string, value: string) => {
+      const input = updatePanel.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+      expect(input).not.toBeNull();
+      input.value = value;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    };
+
+    // 这三项此前完全不参与判据（G03-05）：改任何一项都应显示「自定义」
+    await setField('填表最大重试', '5');
+    expect(settings.tableMaxRetries).toBe(5);
+    expect(advancedButton().textContent).toContain('自定义');
+    await setField('填表最大重试', '3');
+    expect(advancedButton().textContent).toContain('默认');
+
+    await setField('填表 AI 回复最小长度', '0');
+    expect(settings.tableFillMinResponseLength).toBe(0);
+    expect(advancedButton().textContent).toContain('自定义');
+    await setField('填表 AI 回复最小长度', '500');
+    expect(advancedButton().textContent).toContain('默认');
+
+    await setField('正文回复最小长度', '800');
+    expect(settings.autoUpdateTokenThreshold).toBe(800);
+    expect(advancedButton().textContent).toContain('自定义');
+    await setField('正文回复最小长度', '500');
+    expect(advancedButton().textContent).toContain('默认');
+
+    // 保留例外：skipUpdateFloors=1 是本节外「最新层不填表」开关的档位，不算自定义
+    const skipRow = Array.from(updatePanel.querySelectorAll<HTMLElement>('.ub-row'))
+      .find(row => (row.textContent || '').includes('最新层不填表'))!;
+    skipRow.querySelector<HTMLButtonElement>('[role="switch"]')!.click();
+    await Promise.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(settings.skipUpdateFloors).toBe(1);
+    expect(advancedButton().textContent).toContain('默认');
+
+    // 跳过多于 1 层才是自定义
+    await setField('跳过最新回复数', '2');
+    expect(settings.skipUpdateFloors).toBe(2);
+    expect(advancedButton().textContent).toContain('自定义');
+    await setField('跳过最新回复数', '1');
+
+    // 自动填表间隔选内置档位（每 3 / 每 5 层）联动改了三项高级参数，但不算自定义；手调成非档位组合才算
+    await setField('批处理层数', '5');
+    expect(advancedButton().textContent).toContain('自定义');
+    await setField('批处理层数', '3');
+    expect(advancedButton().textContent).toContain('默认');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('添加排除规则会写入结构化规则', async () => {
     const { mount, settings, saveSettings } = await mountFormFillPage(createSettings(), 'table');
 

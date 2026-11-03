@@ -183,7 +183,6 @@ export const dashboardCopy = {
       templateScopeChangedMessage: "飞行模式启用后，此会话的表格模板已被修改。继续关闭会按启用前归档模板恢复，并覆盖这些模板修改。",
       templateScopeChangedDanger: "关闭飞行模式会跨全部历史永久删除「大总结」表及其内容；此操作不可逆。",
       confirmDisableLabel: "仍要关闭并删除",
-      disabledNoChat: "请先加载一个聊天会话。",
     },
     autoUpdate: {
       label: "自动更新",
@@ -194,11 +193,6 @@ export const dashboardCopy = {
       label: "静默提示框",
       description:
         "默认关闭。开启后仅保留填表、规划等核心提示，其他浮窗通知不再弹出。",
-    },
-    streaming: {
-      label: "开启流式输出",
-      description:
-        "默认关闭。开启后 API 以流式方式输出，部分后端在流式模式下响应更快。",
     },
     plot: {
       label: "剧情推进",

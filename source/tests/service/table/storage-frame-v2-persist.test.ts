@@ -5085,6 +5085,42 @@ describe('writeInitFullCheckpointFrameV2_ACU（S2-4 init 写协议统一入口�
     });
   });
 
+  it('G14-04：目标楼容器为字符串形态时先解析再写——其他隔离键保留、无字符下标垃圾键', () => {
+    const chat = [
+      { is_user: true, mes: 'user' },
+      {
+        is_user: false,
+        mes: 'ai',
+        // 旧时代遗留楼层：容器是 JSON 字符串（repo 层明示支持、有专测锁定的形态）
+        TavernDB_ACU_IsolatedData: JSON.stringify({ other_key: { legacy: true } }),
+      },
+    ];
+    const checkpoint = makeInitCheckpoint();
+
+    writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex: 1, isolationKey: '', checkpoint });
+
+    const container = (chat[1] as any).TavernDB_ACU_IsolatedData;
+    // 修复前：字符串被裸展开成 {0:'{',1:'"',2:'o',…} 字符下标垃圾键，other_key 结构数据丢失且随聊天落盘。
+    expect(typeof container).toBe('object');
+    expect(Object.keys(container).filter(key => /^\d+$/.test(key))).toEqual([]);
+    expect(container).toEqual({
+      other_key: { legacy: true },
+      '': { _acu_storage_version: 2, storageFrame: { version: 2, checkpoint, logEntries: [] } },
+    });
+  });
+
+  it('G14-04：损坏字符串容器按空容器写入，不产出垃圾键', () => {
+    const chat = [{ is_user: false, mes: 'ai', TavernDB_ACU_IsolatedData: '{不是合法JSON' }];
+    const checkpoint = makeInitCheckpoint();
+
+    writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex: 0, isolationKey: '', checkpoint });
+
+    const container = (chat[0] as any).TavernDB_ACU_IsolatedData;
+    expect(container).toEqual({
+      '': { _acu_storage_version: 2, storageFrame: { version: 2, checkpoint, logEntries: [] } },
+    });
+  });
+
   it('目标楼不存在或是 user 楼时抛错且不写入', () => {
     const chat = [{ is_user: true, mes: 'user' }];
     expect(() => writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex: 0, isolationKey: '', checkpoint: makeInitCheckpoint() }))

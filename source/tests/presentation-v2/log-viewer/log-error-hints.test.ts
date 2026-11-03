@@ -49,7 +49,8 @@ describe('resolveLogErrorHint', () => {
     ['[SQLite引擎] query 执行失败: SELECT * FROM x | 错误: no such table: x', 'table-not-found'],
     ['[SQLite引擎] run 执行失败: INSERT ... | 错误: UNIQUE constraint failed: t.row_id', 'sql-constraint'],
     // V2 历史回放 / 恢复：正文带 UNIQUE constraint failed，但根因是历史只能宽容回放，必须先于 sql-constraint 命中。
-    ['[TableUpdateCommit] applyUnifiedGroupFillResponses:snapshot failed: TableUpdateCommitError: V2 写入前检测到聊天历史仅可经兼容宽容回放读出（严格回放失败：[V2 Replay] operation failed: messageIndex=20, seq=2, operationIndex=0, kind=sql_sheet_batch: 第 1 条语句失败: INSERT INTO zhujuexinxi (row_id, character_name) VALUES (1, \'李长风\') → UNIQUE constraint failed: zhujuexinxi.row_id），不能继续写入；请在数据管理 → 「诊断 V2 数据恢复」中把兼容回放结果固化为过渡根后重试。', 'v2-compat-readonly'],
+    // G13-02：指引尾巴已改为真实行为（后台自动固化，无手动按钮），fixture 同步为当前真实文案。
+    ['[TableUpdateCommit] applyUnifiedGroupFillResponses:snapshot failed: TableUpdateCommitError: V2 写入前检测到聊天历史仅可经兼容宽容回放读出（严格回放失败：[V2 Replay] operation failed: messageIndex=20, seq=2, operationIndex=0, kind=sql_sheet_batch: 第 1 条语句失败: INSERT INTO zhujuexinxi (row_id, character_name) VALUES (1, \'李长风\') → UNIQUE constraint failed: zhujuexinxi.row_id），不能继续写入；不含身份归并的兼容结果会在重新加载聊天时由后台自动固化为过渡根（没有手动固化按钮），请重载聊天或稍候再重试写入。', 'v2-compat-readonly'],
     ['V2 replay 仅可经兼容宽容回放读出（严格回放失败：x），不能作为填表基底', 'v2-compat-readonly'],
     ['[TableUpdateCommit] fill failed: V2 写入被拒绝：本次增量与聊天历史回放状态不一致（写入时基底与回放基底不一致），已阻止写出不可严格回放的历史：第 1 条语句失败: INSERT INTO t (row_id) VALUES (1) → UNIQUE constraint failed: t.row_id', 'v2-write-guard'],
     ['[SQL Console] 执行失败: near "SELEC": syntax error', 'sql-syntax'],
@@ -189,6 +190,21 @@ describe('resolveLogErrorHint', () => {
 
   it('规则 ID 唯一', () => {
     expect(new Set(LOG_ERROR_HINT_RULE_IDS).size).toBe(LOG_ERROR_HINT_RULE_IDS.length);
+  });
+
+  // G13-02：兼容只读场景的处理建议必须与真实 UI/行为一致——
+  // 不存在「固化兼容回放为过渡根」按钮，也没有「诊断 V2 数据恢复」入口行；
+  // 真实入口是「备份与恢复」→「历史恢复诊断」→「诊断」，无身份归并的历史由后台自动固化。
+  it('v2-compat-readonly 建议只指向真实存在的入口与真实行为', () => {
+    const hint = resolveLogErrorHint({ level: 'error', tag: '未分类', message: 'V2 replay 仅可经兼容宽容回放读出（严格回放失败：x），不能作为填表基底' });
+    expect(hint?.id).toBe('v2-compat-readonly');
+    const steps = hint?.steps.join(' ') ?? '';
+    expect(steps).not.toContain('固化兼容回放为过渡根');
+    expect(steps).not.toContain('诊断 V2 数据恢复');
+    expect(steps).toContain('历史恢复诊断');
+    expect(steps).toContain('自动固化为过渡根');
+    expect(steps).toContain('导出已保存的原始 frame 备份');
+    expect(steps).toContain('无法自助修复');
   });
 });
 

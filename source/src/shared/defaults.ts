@@ -335,21 +335,13 @@ export const defaultWorldbookConfig_ACU = {
 import { DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU } from './defaults-json.js';
 import { sha256HexSync_ACU } from './sha256-sync';
 
-/** 构建默认正文优化提示词组（纯数据构造，无运行时依赖） */
-export function buildDefaultContentOptimizationPromptGroup_ACU({ mainContent = '' } = {}) {
+/** 构建默认正文优化提示词组（纯数据构造，无运行时依赖）。 */
+export function buildDefaultContentOptimizationPromptGroup_ACU(): any[] {
     const src = DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU;
-    const base = Array.isArray(src) ? JSON.parse(JSON.stringify(src)) : [];
-
-    // 如果提供了主内容，替换 $CONTENT 占位符
-    if (mainContent) {
-        base.forEach((item: any) => {
-            if (item.content && typeof item.content === 'string') {
-                item.content = item.content.replace(/\$CONTENT/g, mainContent);
-            }
-        });
-    }
-
-    return base;
+    // 只返回深拷贝的默认提示词组。历史上此函数曾接受 mainContent 参数并把 $CONTENT 占位符
+    // 用字符串替换展开，但字符串替换会解释 `$&`/`$'`/`$`` 等特殊模式（R8-05 已在服务层改成
+    // 函数替换修掉），且该参数全库无调用方——占位符替换是运行时职责，不属于「构造默认值」。G11-03。
+    return Array.isArray(src) ? JSON.parse(JSON.stringify(src)) : [];
 }
 
 /** 只比角色与内容：存量提示词经过规整，其它标记字段不可靠。 */

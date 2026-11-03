@@ -245,6 +245,20 @@ export function createLegacyToleranceReport_ACU(): LegacyToleranceReport_ACU {
  */
 export const V2_COMPAT_READONLY_MARKER_ACU = '仅可经兼容宽容回放读出';
 
+/**
+ * 兼容只读态的用户指引（G13-02 统一口径）：按是否含 sheetKey 身份归并分支，
+ * 说明系统的真实行为——不含身份归并的兼容结果由加载路径在后台自动固化为过渡根
+ * （scheduleCompatTransitionFixation_ACU，没有手动固化按钮）；含身份归并的不会
+ * 自动固化，且当前版本没有身份归一化自助修复入口，只能指向真实存在的
+ * 「历史恢复诊断」入口与原始 frame 备份导出。不再指向从未存在过的
+ * 「固化兼容回放为过渡根」按钮或「诊断 V2 数据恢复」分节名。
+ */
+export function buildCompatReadonlyGuidance_ACU(diagnosis?: LegacyToleranceDiagnosis_ACU | null): string {
+  return (diagnosis?.identityRemaps?.length || 0) > 0
+    ? '该历史含 sheetKey 身份归并，不会自动固化，当前版本无法自助修复：请到「数据管理」→「备份与恢复」→「历史恢复诊断」点「诊断」查看，并导出日志与原始 frame 备份反馈。'
+    : '不含身份归并的兼容结果会在重新加载聊天时由后台自动固化为过渡根（没有手动固化按钮），请重载聊天或稍候再重试写入。';
+}
+
 export function buildCompatReadonlyWriteRejectionMessage_ACU(
   scope: string,
   replay: { legacyToleranceDiagnosis?: LegacyToleranceDiagnosis_ACU } | null | undefined,
@@ -252,7 +266,7 @@ export function buildCompatReadonlyWriteRejectionMessage_ACU(
 ): string {
   const strictError = replay?.legacyToleranceDiagnosis?.strictError || '未知错误';
   const suffix = extra ? `；${extra}` : '';
-  return `${scope}检测到聊天历史${V2_COMPAT_READONLY_MARKER_ACU}（严格回放失败：${strictError}），不能继续写入${suffix}；请在数据管理 → 「诊断 V2 数据恢复」中把兼容回放结果固化为过渡根后重试。`;
+  return `${scope}检测到聊天历史${V2_COMPAT_READONLY_MARKER_ACU}（严格回放失败：${strictError}），不能继续写入${suffix}；${buildCompatReadonlyGuidance_ACU(replay?.legacyToleranceDiagnosis)}`;
 }
 
 export function isCompatReadonlyWriteRejection_ACU(error: unknown): boolean {
@@ -3337,9 +3351,10 @@ export async function createCompatTransitionCheckpointFromTolerantReplay_ACU(
       .join('；');
     logWarn_ACU(
       `[V2 Compat Replay] 放弃固化兼容过渡根：兼容结果含 sheetKey 身份归并（${remapSummary}），`
-      + '按 key 优先级的归并不能作为持久权威根；请在数据管理中执行 V2 恢复（身份归一化）。数据仍按兼容读取结果可用。',
+      + '按 key 优先级的归并不能作为持久权威根，且当前版本没有身份归一化自助修复入口；'
+      + '可到「数据管理」→「备份与恢复」→「历史恢复诊断」点「诊断」查看状态，并导出原始 frame 备份反馈。数据仍按兼容读取结果可用。',
     );
-    notifyCompatFixationAbandoned_ACU(isolationKey, 'identity_remaps', `兼容过渡根未固化：本聊天表格历史含 sheetKey 身份归并（${remapSummary}），自动固化已跳过，数据仍可读。请到数据管理执行 V2 恢复做身份归一化。`);
+    notifyCompatFixationAbandoned_ACU(isolationKey, 'identity_remaps', `兼容过渡根未固化：本聊天表格历史含 sheetKey 身份归并（${remapSummary}），自动固化已跳过，数据仍可读。当前版本无法自助修复身份归并，请到「数据管理」的「历史恢复诊断」查看，并导出原始 frame 备份反馈。`);
     return false;
   }
   const existing = findLatestTransitionCheckpoint_ACU(chat, isolationKey);

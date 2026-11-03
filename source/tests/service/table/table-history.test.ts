@@ -581,6 +581,43 @@ describe('resolveTableHistoryStateFromChat_ACU', () => {
     expect(getLatestTableAppendMessageIndexFromChat_ACU(chat, '', settings)).toBe(3);
   });
 
+  it('G05-08：isolationKey=\'\' 时只有其它标签数据的楼层不当追加锚点（不再退化成容器级检查）', () => {
+    // 楼 #0 的容器里只有 tagB 槽（旧时代用 tagB 玩的遗留数据）；隔离关闭（''）时
+    // 该楼对默认槽的询问必须是 false——修复前 '' 为 falsy 落入容器级检查，误返回 0。
+    const chat = [
+      {
+        is_user: false,
+        mes: 'AI 1',
+        TavernDB_ACU_IsolatedData: {
+          tagB: { independentData: { sheet_0: { name: '别的标签表', content: [['row_id', 'v'], ['1', 'x']] } } },
+        },
+      },
+      { is_user: true },
+      { is_user: false, mes: 'AI 2' },
+    ];
+
+    expect(getLatestTableAppendMessageIndexFromChat_ACU(chat, '', settings)).toBe(2);
+    // 对照：显式询问 tagB 时该楼仍是有数据的锚点
+    expect(getLatestTableAppendMessageIndexFromChat_ACU(chat, 'tagB', settings)).toBe(0);
+  });
+
+  it('G05-08：默认槽有数据的楼层照常当选追加锚点', () => {
+    const chat = [
+      {
+        is_user: false,
+        mes: 'AI 1',
+        TavernDB_ACU_IsolatedData: {
+          '': { independentData: { sheet_0: { name: '默认槽表', content: [['row_id', 'v'], ['1', 'x']] } } },
+          tagB: { independentData: { sheet_9: { name: '别的标签表' } } },
+        },
+      },
+      { is_user: true },
+      { is_user: false, mes: 'AI 2' },
+    ];
+
+    expect(getLatestTableAppendMessageIndexFromChat_ACU(chat, '', settings)).toBe(0);
+  });
+
 
   it('识别 perSheet checkpoint 的单表数据与压缩填表楼层', () => {
     const chat = [

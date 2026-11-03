@@ -6,7 +6,7 @@
  * 名单存插件设置（所有角色卡共用）。
  */
 import { settings_ACU } from '../runtime/state-manager';
-import { saveSettings_ACU } from '../settings/settings-service';
+import { saveSettings_ACU, type SaveSettingsResult_ACU } from '../settings/settings-service';
 import { getLorebookEntries_ACU } from '../../data/gateways/worldbook-gateway';
 import {
   addAuxWorldbookToCurrentCharacter_ACU,
@@ -58,11 +58,31 @@ export function readFavoriteWorldbookNames_ACU(): string[] {
   return normalizeFavoriteWorldbookNames_ACU((settings_ACU as any)?.[FAVORITE_WORLDBOOKS_KEY_ACU]);
 }
 
-export function writeFavoriteWorldbookNames_ACU(names: unknown): string[] {
+export interface FavoriteWorldbookWriteResult_ACU {
+  /** 写入后生效的名单：保存成功为新名单；失败为回滚后的旧名单（不留「面板已改、刷新丢失」的内存脏写）。 */
+  names: string[];
+  saved: boolean;
+  /** 仅失败时存在：持久化失败原因，供面板如实提示（R6-08 同款修法）。 */
+  error?: string;
+}
+
+export function writeFavoriteWorldbookNames_ACU(names: unknown): FavoriteWorldbookWriteResult_ACU {
   const normalized = normalizeFavoriteWorldbookNames_ACU(names);
+  const previous = readFavoriteWorldbookNames_ACU();
   (settings_ACU as any)[FAVORITE_WORLDBOOKS_KEY_ACU] = normalized;
-  saveSettings_ACU();
-  return normalized;
+  const rollback_ACU = (): void => { (settings_ACU as any)[FAVORITE_WORLDBOOKS_KEY_ACU] = previous; };
+  let saveResult: SaveSettingsResult_ACU;
+  try {
+    saveResult = saveSettings_ACU();
+  } catch (error) {
+    rollback_ACU();
+    return { names: previous, saved: false, error: errorText_ACU(error) };
+  }
+  if (!saveResult.saved) {
+    rollback_ACU();
+    return { names: previous, saved: false, error: saveResult.error || saveResult.warning || '保存设置失败。' };
+  }
+  return { names: normalized, saved: true };
 }
 
 function sanitizeWorldbookNamePart_ACU(text: string): string {

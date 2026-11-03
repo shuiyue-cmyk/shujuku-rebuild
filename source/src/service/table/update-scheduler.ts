@@ -338,7 +338,9 @@ export async function executeAutoUpdatePlan_ACU(
                 indices: group.indices,
                 batchSize: group.batchSize,
                 sheetKeys: group.sheetKeys,
-                requestOptions: { skipProfileSwitch: true, forceDirectApi: true },
+                // G02-04：原 { skipProfileSwitch, forceDirectApi } 是死参数——酒馆主 API / tavern profile
+                // 通路剥离后 callCustomOpenAI_ACU 不再消费这两个开关，调用方不再制造「需要传标志」的假象。
+                requestOptions: null as Record<string, any> | null,
             };
         });
         const groupedOptions = performanceContext?.runId || performanceContext?.parentSpanId
@@ -379,7 +381,8 @@ export async function executeAutoUpdatePlan_ACU(
                 const success = await ops.processUpdates(group.indices, 'auto_independent', {
                     targetSheetKeys: group.sheetKeys,
                     batchSize: group.batchSize,
-                    requestOptions: { skipProfileSwitch: true, forceDirectApi: true }
+                    // G02-04：死参数 skipProfileSwitch/forceDirectApi 已随酒馆主 API 通路剥离一并清除。
+                    requestOptions: null
                 });
 
                 return { key, success, sheetNames: group.sheetNames };

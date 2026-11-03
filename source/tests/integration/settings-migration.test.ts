@@ -74,7 +74,6 @@ import {
 import {
   normalizeDataIsolationHistory_ACU,
   addDataIsolationHistory_ACU,
-  ensureProfileExists_ACU,
 } from '../../src/data/repositories/isolation-repo';
 
 beforeEach(() => {
@@ -161,28 +160,7 @@ describe('I6: 设置加载与迁移', () => {
     });
   });
 
-  describe('ensureProfileExists — Profile 创建', () => {
-    it('无 Profile 时自动创建', () => {
-      ensureProfileExists_ACU('new_code');
-
-      const settings = readProfileSettingsFromStorage_ACU('new_code');
-      expect(settings).not.toBeNull();
-      expect(settings.dataIsolationCode).toBe('new_code');
-
-      const template = readProfileTemplateFromStorage_ACU('new_code');
-      expect(template).not.toBeNull();
-    });
-
-    it('已有 Profile 时不覆盖', () => {
-      writeProfileSettingsToStorage_ACU('existing', { theme: 'light', dataIsolationCode: 'existing' });
-      writeProfileTemplateToStorage_ACU('existing', '{"custom":true}');
-
-      ensureProfileExists_ACU('existing');
-
-      const settings = readProfileSettingsFromStorage_ACU('existing');
-      expect(settings.theme).toBe('light'); // 未被覆盖
-    });
-  });
+  // ensureProfileExists_ACU 已随隔离码切换死代码群删除（G11-02 关联清理），其专属用例一并移除。
 
   describe('完整迁移链路', () => {
     it('旧版设置 → 创建 Profile → 添加历史 → 保存 → 重新加载 → 一致', () => {

@@ -28,7 +28,7 @@ import {
     registerPostChatSaveListener_ACU,
     saveChatToHostStrict_ACU,
 } from '../../data/gateways/chat-gateway';
-import { readIsolatedDataContainer_ACU, readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
+import { ensureWritableIsolatedDataContainer_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
 import { dedupeCompatTransitionRowIdentities_ACU } from '../table/compat-transition-checkpoint';
 import type { CompatTransitionCheckpointRef_ACU, Spv79TransitionCheckpointRef_ACU } from '../table/compat-transition-checkpoint';
@@ -289,12 +289,9 @@ export function installCheckpointDeleteGuard_ACU(): void {
 }
 
 function ensureTargetFrame_ACU(message: any, isolationKey: string): TableStorageFrameV2_ACU {
-    if (!message.TavernDB_ACU_IsolatedData
-        || typeof message.TavernDB_ACU_IsolatedData !== 'object'
-        || Array.isArray(message.TavernDB_ACU_IsolatedData)) {
-        message.TavernDB_ACU_IsolatedData = {};
-    }
-    const container = message.TavernDB_ACU_IsolatedData;
+    // G05-01：嫁接目标楼的容器可能是遗留字符串形态——直接置 {} 会把该楼全部隔离标签槽的
+    // 数据静默清空并随严格保存落盘。统一走 repo 层规范化：先解析保留其他标签槽，按对象形态写回。
+    const container: Record<string, any> = ensureWritableIsolatedDataContainer_ACU(message);
     if (!container[isolationKey] || typeof container[isolationKey] !== 'object') {
         container[isolationKey] = {};
     }

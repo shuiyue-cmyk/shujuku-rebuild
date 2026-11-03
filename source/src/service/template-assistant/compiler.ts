@@ -6,9 +6,11 @@ import {
   updateDDLColumnComment,
   validateDDLTextAgainstHeaders_ACU
 } from '../../shared/ddl-utils';
+import { generateFallbackDDL } from '../../data/sqlite/schema-mapper';
 import {
   allocateStableSheetKeys_ACU,
-  canonicalizeDisplayName_ACU
+  canonicalizeDisplayName_ACU,
+  toAsciiSlug_ACU
 } from '../../shared/sheet-identity';
 import {
   isSummaryOrOutlineTable_ACU
@@ -24,6 +26,9 @@ import {
 import {
   getSortedSheetKeys_ACU
 } from '../template/chat-scope';
+import {
+  createVisualizerTempRowId_ACU
+} from '../visualizer/visualizer-data-ops';
 import {
   buildDefaultExportConfig_ACU,
   ensureGlobalInjectionConfigDefaults_ACU,
@@ -306,6 +311,17 @@ function buildNewSheet_ACU(op: any, newKey: string, orderNo: number) {
     const updateConfig = { ...updateConfigRaw, uiSentinel: -1 };
     const exportConfig = sanitizeAddSheetConfig_ACU(op?.exportConfig, buildDefaultExportConfig_ACU(sheetName), 'exportConfig');
 
+    // G09-06：新建表本地必产 DDL（对齐 v3 的「DDL 必须非空且与表头逐列匹配」口径）。
+    // 此前 v2 add_sheet 不产 DDL，与 v3/保存链语义分叉；生成走与 fallback schema 同一份
+    // 列身份契约（英文/ASCII 物理列名 + `-- 中文表头` 注释，首列 row_id INTEGER PRIMARY KEY）。
+    const ddlHeaderRow = ['row_id', ...headers];
+    const generatedDdl = generateFallbackDDL(toAsciiSlug_ACU(sheetName) || newKey, ddlHeaderRow);
+    const generatedDdlValidation = validateDdlAgainstHeaders_ACU(generatedDdl, ddlHeaderRow);
+    if (!generatedDdlValidation.valid) {
+        throw new Error(`add_sheet 生成的 DDL 非法: ${generatedDdlValidation.message}`);
+    }
+    sourceData.ddl = generatedDdl;
+
     const sheet: AnyRecord = {
         uid: newKey,
         name: sheetName,
@@ -481,7 +497,9 @@ function applySheetContentPatch_ACU(sheet: any, sheetKey: string, rawPatch: any)
             }
         });
         const newRow = new Array(headerRow.length).fill('');
-        newRow[0] = null;
+        // G09-06：新增行分配与编辑器 addRow 同款的临时 row_id（此前写 null——空 row_id 的行
+        // 不进数据增量，模板保存时会被 normalizeCanonicalTableRows_ACU 按「该行已被删除」静默移除）。
+        newRow[0] = createVisualizerTempRowId_ACU();
         headers.forEach((header, headerIndex) => {
             newRow[headerIndex + 1] = Object.prototype.hasOwnProperty.call(rowPatch, header)
                 ? clone_ACU(rowPatch[header])
@@ -732,6 +750,12 @@ export function compileTemplateAssistantDraft_ACU(input: {
         throw new Error('缺少合法 draft.operations');
     }
 
+    // G09-06【生产不可达，保留原因】：以下 v1/v2 增量协议编译路径在生产中不可达——
+    // 请求侧协议门禁恒为 v3（service.ts：UI 不传 protocolVersion，v3 请求下一律拒绝 v1/v2 输出）。
+    // 未删除的原因：v3 与 v1/v2 复用同一套解析/信封校验/提示词组装入口与大量辅助函数，
+    // 且 service 层众多共享基础设施测试以 v2 draft 作轻量夹具，整体删除波及面过大（见第二轮复审台账 G09-06）。
+    // 为防止未来重新接回 v2 时与 v3/保存链语义分叉：addRows 已分配编辑器同款临时 row_id
+    // （createVisualizerTempRowId_ACU），buildNewSheet_ACU 已本地必产 DDL（对齐 v3 硬性要求）。
     const protocolVersion = draft?.protocolVersion === 1 ? 1 : 2;
     const candidateData = clone_ACU(tempData);
     const orderedSheetKeys = getBaseOrderedSheetKeys_ACU(candidateData, input.sheetOrder);

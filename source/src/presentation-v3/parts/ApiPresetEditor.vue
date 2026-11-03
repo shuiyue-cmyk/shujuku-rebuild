@@ -354,6 +354,9 @@ function applyClientPreset(id: string): void {
   if (preset) draft.requestHeaders = applyClientHeaderPreset_ACU(draft.requestHeaders, preset);
 }
 
+/** 保存流程内的表单重载（含新建 / 改名触发的 activePresetName 变化）不清模型列表。 */
+let savingDraft = false;
+
 function syncActiveDraft(): void {
   const preset = store.activePreset;
   if (!preset) {
@@ -368,6 +371,9 @@ function syncActiveDraft(): void {
   draftSnapshot.value = JSON.stringify(draft);
   draftError.value = '';
   clearConnectionResult();
+  // G02-03：模型列表只属于加载它时的那份草稿，表单重载（切预设/放弃修改/重新挂载）时一并清掉；
+  // 保存后重载的还是同一份内容，保留列表
+  if (!savingDraft) store.resetModelListState();
 }
 
 function startCreateDraft(): void {
@@ -377,6 +383,8 @@ function startCreateDraft(): void {
   draftSnapshot.value = JSON.stringify(draft);
   draftError.value = '';
   clearConnectionResult();
+  // G02-03：新建草稿同样不沿用上一个预设加载出来的模型列表
+  store.resetModelListState();
 }
 
 async function selectPreset(name: string): Promise<void> {
@@ -429,6 +437,15 @@ function validateDraft(): boolean {
 
 function saveActiveDraft(): void {
   if (!validateDraft()) return;
+  savingDraft = true;
+  try {
+    saveValidatedDraft();
+  } finally {
+    savingDraft = false;
+  }
+}
+
+function saveValidatedDraft(): void {
   const preset = apiPresetFromDraft(draft);
   if (!store.savePreset(preset, draftOriginalName.value)) {
     draftError.value = '预设保存失败。';

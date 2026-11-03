@@ -16,6 +16,7 @@ import {
   getSubscriberCount,
   extractTag,
   formatArgs,
+  maskSensitiveText_ACU,
   _resetForTesting,
   setDebugLogEnabled,
   setWarnLogEnabledByDevOption_ACU,
@@ -248,6 +249,38 @@ describe('敏感键脱敏', () => {
     const out = formatArgs(['Authorization: Bearer abc.def.ghi 与 sk-abcdefghijklmnopqrstuvwx']);
     expect(out).not.toContain('abc.def.ghi');
     expect(out).toContain('sk-***');
+  });
+
+  // G02-02：展示/日志脱敏的形态覆盖补强（?key= 查询参数、裸 AIza、裸 Basic/Bearer 长令牌）
+  it('URL 查询参数脱敏：?key=（Gemini 转接密钥形态）与 &api_key= 值打码，普通参数不误伤', () => {
+    const out = formatArgs(['请求 https://relay.example.com/v1beta/models?key=AIzaSyD-REAL-LOOKING-SECRET-abcdef&model=m1 失败']);
+    expect(out).not.toContain('AIzaSyD-REAL-LOOKING-SECRET-abcdef');
+    expect(out).toContain('key=***');
+    expect(out).toContain('model=m1');
+    const out2 = maskSensitiveText_ACU('上游回显 https://api.example.com/v1/chat?api_key=sk-short&x=1');
+    expect(out2).not.toContain('sk-short&x=1');
+    expect(out2).toContain('api_key=***');
+  });
+
+  it('裸 AIza 前缀 Gemini 密钥脱敏（无 key= 上下文的回显形态）', () => {
+    const out = maskSensitiveText_ACU('Incorrect API key provided: AIzaSyABCDEFGHIJKLMNOPQRSTUVW');
+    expect(out).not.toContain('AIzaSyABCDEFGHIJKLMNOPQRSTUVW');
+    expect(out).toContain('AIza***');
+  });
+
+  it('裸 Bearer/Basic 长令牌脱敏（无 Authorization 前缀），短英文词不误伤', () => {
+    const out = formatArgs(['凭据无效 Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0 与 basic authentication 流程']);
+    expect(out).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+    expect(out).toContain('basic authentication');
+    // Authorization: Basic 头形态整值打码（此前只掩 Basic 一词、凭据残留）
+    const basic = maskSensitiveText_ACU('Authorization: Basic dXNlcm5hbWU6cGFzc3dvcmQ=');
+    expect(basic).not.toContain('dXNlcm5hbWU6cGFzc3dvcmQ');
+  });
+
+  it('裸键值形态支持带引号的值：api_key="SECRET" 同样打码', () => {
+    const out = maskSensitiveText_ACU('配置回显 api_key="super-secret-value" 请检查');
+    expect(out).not.toContain('super-secret-value');
+    expect(out).toContain('api_key=***');
   });
 });
 

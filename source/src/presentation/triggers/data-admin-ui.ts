@@ -56,6 +56,12 @@ import { importCombinedSettingsWithRollback_ACU } from '../../service/settings/c
 import { chatHasLegacySummaryVectorFields_ACU } from '../../service/vector/summary-vector-mirror-rebuild';
 import { isAiFloor_ACU } from '../../shared/ai-floor';
 import { showCustomConfirm_ACU } from '../theme/custom-confirm';
+// G12-02：legacy 破坏性确认改异步弹框后存在「确认期间切聊天」窗口，复用 V2 既有的聊天作用域快照守卫（R10A-01 同款）
+import {
+  CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU,
+  captureChatActionScope_ACU,
+  isChatActionScopeCurrent_ACU
+} from '../../presentation-v2/composables/chat-action-scope';
 /**
  * presentation/triggers/data-admin-ui.ts — 导入/导出/重置 UI
  * 从 features/data/01_data_admin.js 迁移而来
@@ -247,12 +253,19 @@ import { showCustomConfirm_ACU } from '../theme/custom-confirm';
 
   // [新增] 使用通用模板覆盖最新层所有表格数据的函数
   export async function overrideLatestLayerWithTemplate_ACU() {
+      // G12-02：确认框是异步全屏弹框，期间聊天可能被程序化切换；覆盖核心按「执行时刻」的聊天定位最新层，
+      // 不复核会把破坏性覆盖落到用户没确认过的聊天上。进确认框前捕获聊天身份，确认后比对。
+      const chatScope = captureChatActionScope_ACU();
       if (!(await showCustomConfirm_ACU('用模板覆盖最新一层', '此操作将使用当前通用模板覆盖聊天记录中最新一层的所有表格数据！\n\n' +
                   '• 模板中有的表格会被覆盖（只保留表头，数据清空）\n' +
                   '• 模板中没有的表格会被忽略（本地数据保持不变）\n' +
                   '• 此操作仅影响最新的一条AI消息\n' +
                   '• 删除最新层的聊天数据后即可恢复正常\n\n' +
                   '确定要继续吗？', { confirmLabel: '覆盖', tone: 'danger' }))) {
+          return false;
+      }
+      if (!isChatActionScopeCurrent_ACU(chatScope)) {
+          showToastr_ACU('warning', CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU);
           return false;
       }
 

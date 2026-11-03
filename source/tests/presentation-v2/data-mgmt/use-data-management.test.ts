@@ -22,7 +22,6 @@ async function loadFlow() {
     TavernDB_ACU_InternalSheetGuide: { version: 2, tags: { alpha: { old: true } } },
   }];
   const history = ['alpha', 'beta'];
-  const switchIsolation = vi.fn(async (code: string) => { settings.dataIsolationCode = code; });
   const removeHistory = vi.fn((code: string) => history.splice(history.indexOf(code), 1));
   const deleteGenerated = vi.fn(async () => undefined);
   const clearTemplateSnapshots = vi.fn(async () => {
@@ -47,7 +46,7 @@ async function loadFlow() {
 
   vi.doMock('../../../src/service/runtime/state-manager', () => ({ settings_ACU: settings, get currentChatFileIdentifier_ACU() { return chatState.id; }, currentJsonTableData_ACU: { sheet_a: {} }, getCurrentIsolationKey_ACU: () => settings.dataIsolationCode }));
   vi.doMock('../../../src/service/table/table-checkpoint-transfer', async (importOriginal) => ({ ...(await importOriginal<any>()), restoreTableCheckpointToLatestAi_ACU: restoreCheckpoint }));
-  vi.doMock('../../../src/service/settings/settings-service', () => ({ applyTemplateScopeForCurrentChat_ACU: applyTemplateScope, applyCombinedSettingsImport_ACU: applyCombinedImport, getDataIsolationHistory_ACU: () => [...history], removeDataIsolationHistory_ACU: removeHistory, saveSettings_ACU: saveSettings, switchIsolationProfile_ACU: switchIsolation }));
+  vi.doMock('../../../src/service/settings/settings-service', () => ({ applyTemplateScopeForCurrentChat_ACU: applyTemplateScope, applyCombinedSettingsImport_ACU: applyCombinedImport, getDataIsolationHistory_ACU: () => [...history], removeDataIsolationHistory_ACU: removeHistory, saveSettings_ACU: saveSettings }));
   vi.doMock('../../../src/service/settings/settings-write-service', () => ({ resetAllPromptsToDefault_ACU: vi.fn(() => ({ ok: true, code: 'ok', changed: true })) }));
   vi.doMock('../../../src/service/chat/chat-service', () => ({ getChatArray_ACU: () => chat, deleteLocalDataWithScope_ACU: deleteScoped, isFullRangeDeletionRequest_ACU: () => chatState.fullRange, overrideLatestLayerWithTemplateCore_ACU: overrideLatest }));
   vi.doMock('../../../src/service/table/table-service', () => ({ loadOrCreateJsonTableFromChatHistory_ACU: loadOrCreate }));
@@ -74,7 +73,7 @@ async function loadFlow() {
   const toastSuccess = vi.spyOn(toast, 'success').mockImplementation(() => {});
   const toastError = vi.spyOn(toast, 'error').mockImplementation(() => {});
   const toastWarning = vi.spyOn(toast, 'warning').mockImplementation(() => {});
-  return { flow: useDataManagement(), settings, chat, history, switchIsolation, removeHistory, deleteGenerated, clearTemplateSnapshots, clearTableLocks, clearPlotSnapshots, applyTemplateScope, applyTemplateSnapshot, applyCombinedImport, saveSettings, overrideLatest, deleteScoped, reloadProvider, loadOrCreate, refreshMerged, cleanupWorldbook, scan, prepare, commit, toast, toastSuccess, toastError, toastWarning };
+  return { flow: useDataManagement(), settings, chat, history, removeHistory, deleteGenerated, clearTemplateSnapshots, clearTableLocks, clearPlotSnapshots, applyTemplateScope, applyTemplateSnapshot, applyCombinedImport, saveSettings, overrideLatest, deleteScoped, reloadProvider, loadOrCreate, refreshMerged, cleanupWorldbook, scan, prepare, commit, toast, toastSuccess, toastError, toastWarning };
 }
 
 beforeEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });

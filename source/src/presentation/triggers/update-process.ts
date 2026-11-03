@@ -22,6 +22,12 @@ import {
 import {
   showCustomConfirm_ACU
 } from '../theme/custom-confirm';
+// G12-02：手动填表确认改异步弹框后存在「确认期间切聊天」窗口，复用 V2 既有的聊天作用域快照守卫（R10A-01 同款）
+import {
+  CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU,
+  captureChatActionScope_ACU,
+  isChatActionScopeCurrent_ACU
+} from '../../presentation-v2/composables/chat-action-scope';
 import {
   ACU_TOAST_CATEGORY_ACU
 } from '../../shared/constants';
@@ -341,6 +347,9 @@ export async function handleManualUpdate_ACU() {
         const selectedSheetSummary = buildLegacySelectedSheetSummary_ACU(targetKeys);
         const checkpointFloorsLabel = buildLegacyCheckpointFloorsLabel_ACU();
         const manualRefillRangeLabel = buildLegacyManualRefillRangeLabel_ACU();
+        // G12-02：确认框是异步弹框，期间聊天可能被程序化切换；确认文案里的 checkpoint/重填范围
+        // 都是按弹出时的聊天算的，确认后不一致即放弃这次破坏性重填。
+        const chatScope = captureChatActionScope_ACU();
         // 弹出确认框：手动填表会先删除范围内选中表的 checkpoint 与增量，再重新填写
         const confirmed = await showCustomConfirm_ACU(
             '手动填表确认',
@@ -355,6 +364,12 @@ export async function handleManualUpdate_ACU() {
         if (!confirmed) {
             logDebug_ACU('[更新流程] 用户取消了手动填表确认框');
             showToastr_ACU('info', '已取消手动填表。');
+            return;
+        }
+
+        if (!isChatActionScopeCurrent_ACU(chatScope)) {
+            logDebug_ACU('[更新流程] 手动填表确认期间聊天已切换，放弃本次重填');
+            showToastr_ACU('warning', CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU);
             return;
         }
 

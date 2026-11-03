@@ -3,6 +3,7 @@
  * R9-01：正文优化写回前复核楼层身份（滑动 / 删楼 / 切聊天后不写错楼）。
  * R9-08：手动确认多轮，末轮「跳过」时写回前几轮已确认的结果，填表交给调度层。
  * R9-09：重新优化对话框里 AI 返回的 summary 必须转义。
+ * G01-01：无感模式「查看对比」toast 的延迟入口按楼层身份快照复核后再「重新优化」。
  *
  * @vitest-environment jsdom
  */
@@ -50,18 +51,14 @@ const h = vi.hoisted(() => {
     perform: vi.fn(),
     record: vi.fn(),
     toast: vi.fn(),
+    surfaceToast: vi.fn(),
     triggerAutoUpdate: vi.fn(async () => undefined),
     replace: vi.fn(),
   };
 });
 
 vi.mock('../../src/presentation/dom-utils', () => ({ jQuery_API_ACU: miniJQuery_ACU }));
-vi.mock('../../src/presentation/theme/toast', () => ({ showToastr_ACU: h.toast }));
-vi.mock('../../src/service/plot/plot-state', () => ({
-  _set_currentEditablePlotPresetState_ACU: vi.fn(),
-  _set_activePlotEditorSettings_ACU: vi.fn(),
-  _set_currentPlotTaskEditorId_ACU: vi.fn(),
-}));
+vi.mock('../../src/presentation/theme/toast', () => ({ showToastr_ACU: h.toast, showHostSurfaceToast_ACU: h.surfaceToast }));
 vi.mock('../../src/data/gateways/chat-gateway', () => ({ getChatArray_ACU: () => h.chat }));
 vi.mock('../../src/service/runtime/state-manager', () => ({
   get settings_ACU() { return h.state.settings; },
@@ -136,6 +133,7 @@ beforeEach(() => {
   h.perform.mockReset();
   h.record.mockReset();
   h.toast.mockReset();
+  h.surfaceToast.mockReset();
   h.triggerAutoUpdate.mockClear();
   h.replace.mockClear();
   h.chat.push({ is_user: true, mes: '你好' });
@@ -269,5 +267,63 @@ describe('重新优化', () => {
 
     expect(h.chat[1].mes).toBe('新 swipe');
     expect(document.querySelector('#acu-opt-apply')).toBeNull();
+  });
+});
+
+describe('G01-01 无感模式「查看对比」toast：重新优化前复核楼层身份快照', () => {
+  beforeEach(() => {
+    h.state.settings.contentOptimizationSettings = { enabled: true, autoApply: true, seamlessMode: true, showDiff: true, minLength: 1, loopCount: 1 };
+  });
+
+  /** 跑完一次无感自动替换，拿到完成提示里的「查看对比」动作并点开只读结果对话框。 */
+  async function openResultDialogFromToast() {
+    h.perform.mockImplementationOnce(async (content: string) => optimizeResult(content, '屋檐', '窗台'));
+    expect(await executeContentOptimization_ACU(1)).toBe(true);
+    expect(h.surfaceToast).toHaveBeenCalledTimes(1);
+    const payload = h.surfaceToast.mock.calls[0][0];
+    expect(payload.action?.label).toBe('查看对比');
+    payload.action.onClick();
+    await vi.waitFor(() => expect(document.querySelector('#acu-opt-result-reoptimize')).not.toBeNull());
+  }
+
+  it('toast 出现后目标楼被删除：点「重新优化」被拒绝，提示楼层已变化，不再调 AI', async () => {
+    await openResultDialogFromToast();
+    h.chat.splice(1, 1);
+    h.perform.mockClear();
+
+    click('#acu-opt-result-reoptimize');
+    await vi.waitFor(() => expect(h.toast).toHaveBeenCalledWith('warning', expect.stringContaining('楼层已变化')));
+
+    expect(h.perform).not.toHaveBeenCalled();
+    expect(document.querySelector('#acu-opt-result-reoptimize')).toBeNull();
+  });
+
+  it('toast 出现后切聊天：新聊天同下标有楼也拒绝「重新优化」（跨聊天变体）', async () => {
+    await openResultDialogFromToast();
+    h.state.chatIdentity = 'chat-b';
+    h.chat.length = 0;
+    h.chat.push({ is_user: true, mes: 'B 用户' });
+    h.chat.push({ is_user: false, mes: 'B 楼：完全无关的正文', message_id: 77, swipe_id: 0, extra: {} });
+    h.perform.mockClear();
+
+    click('#acu-opt-result-reoptimize');
+    await vi.waitFor(() => expect(h.toast).toHaveBeenCalledWith('warning', expect.stringContaining('楼层已变化')));
+
+    expect(h.perform).not.toHaveBeenCalled();
+    expect(h.chat[1].mes).toBe('B 楼：完全无关的正文');
+  });
+
+  it('toast 出现后上方删楼导致楼号位移：按 message_id 重定位，重新优化仍作用在原楼层', async () => {
+    await openResultDialogFromToast();
+    // 删掉上方的用户楼：目标楼从下标 1 位移到 0
+    h.chat.splice(0, 1);
+    h.perform.mockClear();
+    h.perform.mockImplementationOnce(async (content: string) => optimizeResult(content, '窗台', '屋檐'));
+
+    click('#acu-opt-result-reoptimize');
+    await vi.waitFor(() => expect(h.perform).toHaveBeenCalledTimes(1));
+
+    // 重新优化读到的是原楼层写回后的正文（含「窗台」），而不是位移后下标 1 上的别的楼
+    expect(String(h.perform.mock.calls[0][0])).toContain('窗台');
   });
 });

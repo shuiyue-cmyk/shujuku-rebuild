@@ -66,6 +66,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
+import {
+  DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
+  DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
+  DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
+  DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU,
+} from '../../shared/defaults';
 import { useApiPresetSelectOptions } from '../../presentation-v2/composables/useApiPresetSelectOptions';
 import { useApiPresetStaleness } from '../../presentation-v2/composables/useApiPresetStaleness';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
@@ -138,9 +144,30 @@ const selectedUpdateEvery = computed<UpdateEveryId>(() => {
 });
 
 const isCustomSkip = computed(() => numberValue('skipUpdateFloors') > 1);
-const advancedMetaLabel = computed(() => (
-  selectedUpdateEvery.value === 'custom' || isCustomSkip.value || numberValue('maxConcurrentGroups') > 1 ? '自定义' : '默认'
-));
+// G03-05：徽标判据与决策召回页「改任一项即自定义」同口径：高级参数 8 项里任何一项 ≠ 默认值即「自定义」。
+// 默认值表与 useFormFillSettings 的 FALLBACKS 对齐（该文件只读引用不改）。
+const ADVANCED_DEFAULTS: Partial<Record<NumberSettingKey, number>> = {
+  autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
+  autoUpdateFrequency: DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
+  updateBatchSize: 3,
+  maxConcurrentGroups: 1,
+  skipUpdateFloors: 0,
+  autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
+  tableFillMinResponseLength: DEFAULT_TABLE_FILL_MIN_RESPONSE_LENGTH_ACU,
+  tableMaxRetries: 3,
+};
+// 上下文层数 / 频率 / 批处理层数由本节外的「自动填表间隔」联动设定：选的是内置档位就不算自定义
+const INTERVAL_LINKED_KEYS = new Set<NumberSettingKey>(['autoUpdateThreshold', 'autoUpdateFrequency', 'updateBatchSize']);
+const advancedMetaLabel = computed(() => {
+  if (selectedUpdateEvery.value === 'custom') return '自定义';
+  for (const field of advancedFields.value) {
+    if (INTERVAL_LINKED_KEYS.has(field.key)) continue;
+    // 例外：skipUpdateFloors=1 是本节外「最新层不填表」开关的档位，不算自定义（>1 才是）
+    if (field.key === 'skipUpdateFloors' && field.value === 1) continue;
+    if (field.value !== (ADVANCED_DEFAULTS[field.key] ?? 0)) return '自定义';
+  }
+  return '默认';
+});
 const skipLatestLayer = computed(() => numberValue('skipUpdateFloors') >= 1);
 const skipLatestLayerLabel = computed(() => (isCustomSkip.value ? '最新层不填表：自定义' : '最新层不填表'));
 const skipLatestLayerHint = computed(() => {

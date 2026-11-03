@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({
   clickSend: vi.fn(() => true),
   clickRegenerate: vi.fn(() => true),
   triggerGenerate: vi.fn(() => true),
-  host: { deleteLastMessage: vi.fn(async () => undefined) } as any,
+  host: {} as any,
 }));
 
 vi.mock('../../../src/shared/host-input', () => ({
@@ -23,28 +23,11 @@ import { SillyTavernHostTurnAdapter_ACU } from '../../../src/service/continuatio
 describe('SillyTavernHostTurnAdapter_ACU', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    h.host = { deleteLastMessage: vi.fn(async () => undefined) };
+    h.host = {};
     h.setTextarea.mockReturnValue(true);
     h.clickSend.mockReturnValue(true);
     h.clickRegenerate.mockReturnValue(true);
     h.triggerGenerate.mockReturnValue(true);
-  });
-
-  it('only reports deletion success after the native host deletion resolves', async () => {
-    const adapter = new SillyTavernHostTurnAdapter_ACU();
-
-    await expect(adapter.removeLastMessage()).resolves.toBe(true);
-
-    expect(h.host.deleteLastMessage).toHaveBeenCalledOnce();
-  });
-
-  it('fails closed when native host deletion is unavailable or rejects', async () => {
-    const adapter = new SillyTavernHostTurnAdapter_ACU();
-    h.host = {};
-    await expect(adapter.removeLastMessage()).resolves.toBe(false);
-
-    h.host = { deleteLastMessage: vi.fn(async () => { throw new Error('host failure'); }) };
-    await expect(adapter.removeLastMessage()).resolves.toBe(false);
   });
 
   it('routes regenerate and generate retries to the corresponding host primitives', () => {

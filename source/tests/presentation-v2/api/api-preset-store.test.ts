@@ -278,4 +278,35 @@ describe('useApiPresetStore', () => {
 
     expect(fetchModels).toHaveBeenCalledWith('https://alpha.test', 'ka', 'claude_messages', { force: true, sendChannel: 'direct' });
   });
+
+  it('G02-03：加载途中 resetModelListState 换代，迟到的模型列表整份丢弃', async () => {
+    const { store, fetchModels } = await importStore(createSettings());
+    let resolveModels: ((value: any) => void) | null = null;
+    fetchModels.mockImplementationOnce(() => new Promise(resolve => { resolveModels = resolve; }));
+
+    const pending = store.loadModelsForConfig({ url: 'https://alpha.test', apiKey: 'ka' });
+    expect(store.modelLoadStatus).toBe('loading');
+
+    // 切预设 / 新建 / 放弃修改 → 组件层调 resetModelListState
+    store.resetModelListState();
+    expect(store.modelLoadStatus).toBe('idle');
+
+    resolveModels?.({ success: true, models: ['late-model'] });
+    await expect(pending).resolves.toBe(false);
+    expect(store.modelOptions).toEqual([]);
+    expect(store.modelLoadStatus).toBe('idle');
+  });
+
+  it('G02-03：resetModelListState 把模型选项、报错文案与加载状态一并清掉', async () => {
+    const { store, fetchModels } = await importStore(createSettings());
+    fetchModels.mockResolvedValueOnce({ success: false, error: '端点 501' });
+    await store.loadModelsForConfig({ url: 'https://alpha.test', apiKey: 'ka' });
+    expect(store.modelLoadStatus).toBe('error');
+    expect(store.modelLoadError).toBe('端点 501');
+
+    store.resetModelListState();
+    expect(store.modelOptions).toEqual([]);
+    expect(store.modelLoadStatus).toBe('idle');
+    expect(store.modelLoadError).toBe('');
+  });
 });

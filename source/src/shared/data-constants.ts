@@ -27,13 +27,20 @@ export function normalizeIsolationCode_ACU(code: string): string {
 }
 
 /**
- * 隔离标识保留名（R7-05）：默认槽（空标识）在向量索引 scope 里归一成 `default`，
- * 用户自建同名标识会和默认槽共用一个 scope，热缓存、manifest 比对与回收会互相误伤。
+ * 隔离标识保留名（R7-05 + G11-02）：
+ * - `default`：默认槽（空标识）在向量索引 scope 里归一成 `default`，用户自建同名标识
+ *   会和默认槽共用一个 scope，热缓存、manifest 比对与回收会互相误伤。
+ * - 槽键产物撞上存储哨兵 `__default__` 的输入（如字面 `__default__`）：自建槽会和默认槽
+ *   共用同一份设置/模板存储、互相覆盖，而向量 scope 侧仍是分开的——两个口径半相撞。
  */
-export const RESERVED_ISOLATION_CODE_MESSAGE_ACU = '「default」是默认数据的保留名，不能用作隔离标识，请换一个名字。';
+export const RESERVED_ISOLATION_CODE_MESSAGE_ACU = '「default」与「__default__」是默认数据的保留名，不能用作隔离标识，请换一个名字。';
 
 export function isReservedIsolationCode_ACU(code: string): boolean {
-  return normalizeIsolationCode_ACU(code).toLowerCase() === 'default';
+  const normalized = normalizeIsolationCode_ACU(code);
+  if (normalized.toLowerCase() === 'default') return true;
+  // 拒绝任何槽键产物等于存储哨兵的输入（encodeURIComponent 不改动下划线，
+  // 字面 `__default__` 会直接撞哨兵）。空标识本身就是默认槽，不在此列。
+  return !!normalized && getIsolationSlot_ACU(normalized) === DEFAULT_ISOLATION_SLOT_ACU;
 }
 
 export function getIsolationSlot_ACU(code: string): string {

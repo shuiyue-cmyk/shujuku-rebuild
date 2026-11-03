@@ -174,6 +174,75 @@ describe('API 页', () => {
     expect(fetchModels).toHaveBeenCalledWith('https://beta.test', '', 'claude_messages', { force: true });
   });
 
+  it('G02-03：加载模型后切预设 / 新建草稿，模型下拉不残留在新表单下', { timeout: 60_000 }, async () => {
+    const { page } = await mountApiPage();
+    byText<HTMLButtonElement>('button', '加载模型', page())!.click();
+    await flush();
+    expect(page().querySelector('select[aria-label="模型列表"]')).not.toBeNull();
+
+    // 切到 alpha：beta 端点加载出来的模型下拉必须整份清掉
+    page().querySelector<HTMLButtonElement>('.ub-picker__trigger')!.click();
+    await flush();
+    byText<HTMLElement>('.ub-picker-panel__item', 'alpha')!.click();
+    await flush();
+    expect(page().textContent).not.toContain('m1');
+    expect(page().querySelector('select[aria-label="模型列表"]')).toBeNull();
+
+    // 切回 beta 重新加载后点「+」新建：新建草稿同样不沿用
+    byText<HTMLButtonElement>('button', '加载模型', page())!.click();
+    await flush();
+    expect(page().querySelector('select[aria-label="模型列表"]')).not.toBeNull();
+    page().querySelector<HTMLButtonElement>('button[title="新建预设"]')!.click();
+    await flush();
+    expect(page().querySelector('select[aria-label="模型列表"]')).toBeNull();
+  });
+
+  it('加载模型后改名保存：保存的还是这份内容，模型下拉保留', { timeout: 60_000 }, async () => {
+    const { page, input } = await mountApiPage();
+    byText<HTMLButtonElement>('button', '加载模型', page())!.click();
+    await flush();
+    expect(page().querySelector('select[aria-label="模型列表"]')).not.toBeNull();
+
+    typeValue(input('预设名称'), 'beta-renamed');
+    await flush();
+    byText<HTMLButtonElement>('button', '保存当前预设', page())!.click();
+    await flush();
+    expect(document.body.textContent).toContain('已保存当前 API 预设');
+    expect(page().querySelector('select[aria-label="模型列表"]')).not.toBeNull();
+  });
+
+  it('G02-03：加载模型在途时切预设，迟到的模型列表不挂到新预设下', { timeout: 60_000 }, async () => {
+    const { page, fetchModels } = await mountApiPage();
+    let resolveModels: ((value: any) => void) | null = null;
+    fetchModels.mockImplementationOnce(() => new Promise(resolve => { resolveModels = resolve; }));
+    byText<HTMLButtonElement>('button', '加载模型', page())!.click();
+    await flush();
+
+    page().querySelector<HTMLButtonElement>('.ub-picker__trigger')!.click();
+    await flush();
+    byText<HTMLElement>('.ub-picker-panel__item', 'alpha')!.click();
+    await flush();
+    resolveModels?.({ success: true, models: ['beta-only-model'] });
+    await flush();
+
+    expect(page().textContent).not.toContain('beta-only-model');
+    expect(page().querySelector('select[aria-label="模型列表"]')).toBeNull();
+  });
+
+  it('G02-03：加载失败的报错文案同样不随预设切换残留', { timeout: 60_000 }, async () => {
+    const { page, fetchModels } = await mountApiPage();
+    fetchModels.mockResolvedValueOnce({ success: false, error: '模型列表加载失败：501' });
+    byText<HTMLButtonElement>('button', '加载模型', page())!.click();
+    await flush();
+    expect(page().textContent).toContain('模型列表加载失败：501');
+
+    page().querySelector<HTMLButtonElement>('.ub-picker__trigger')!.click();
+    await flush();
+    byText<HTMLElement>('.ub-picker-panel__item', 'alpha')!.click();
+    await flush();
+    expect(page().textContent).not.toContain('模型列表加载失败：501');
+  });
+
   it('未设置接口协议的旧预设探活回退 openai_compat', { timeout: 60_000 }, async () => {
     const { page, fetchModels } = await mountApiPage();
     byText<HTMLButtonElement>('button', '加载模型', page())!.click();

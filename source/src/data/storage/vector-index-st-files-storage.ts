@@ -596,13 +596,24 @@ function buildDeleteRequestCandidates_ACU(path: string): VectorIndexFileDeleteRe
     return [preferred, ...candidates.filter((candidate) => candidate.label !== preferredDeletePrefixLabel_ACU)];
 }
 
-async function vectorIndexFileExists_ACU(path: string): Promise<boolean> {
+/**
+ * 删除后存在性探测的三态结果（G05-05）：
+ * - 'missing'：明确 404，证明文件已不存在；
+ * - 'present'：探测成功，文件确实还在（删除未生效）；
+ * - 'unknown'：网络错误 / 超时 / 5xx 等证据不足——**不得**当成「不存在」，
+ *   否则删除会被误报成功、registry 条目被摘除，泄漏的文件从此永久失管
+ *   （与同文件 readVectorIndexJsonFile_ACU「只有 404 才证明不存在」的口径对齐）。
+ */
+type VectorIndexFileProbeResult_ACU = 'missing' | 'present' | 'unknown';
+
+async function probeVectorIndexFile_ACU(path: string): Promise<VectorIndexFileProbeResult_ACU> {
     try {
         const response = await fetchWithTimeout_ACU(getUserFileUrl_ACU(path), { method: 'GET' }, '探测交火向量文件存在性');
-        if (response.status === 404) return false;
-        return response.ok;
+        if (response.status === 404) return 'missing';
+        if (response.ok) return 'present';
+        return 'unknown';
     } catch (_) {
-        return false;
+        return 'unknown';
     }
 }
 
@@ -635,14 +646,24 @@ export async function deleteVectorIndexFile_ACU(path: string): Promise<VectorInd
         }
     }
 
-    if (notFoundSeen && !(await vectorIndexFileExists_ACU(normalizedPath))) {
-        return { ok: true, path: normalizedPath };
+    // G05-05：全部候选 delete 都 404 时，只有探测也明确 404 才能按「文件本就不在」报成功；
+    // 网络错误 / 5xx / 文件仍在一律 ok:false——调用方（deleteRegisteredVectorIndexFilesWhere_ACU）
+    // 据此保留 registry 条目，交下轮 GC 重试，避免泄漏文件被摘除登记后永久失管。
+    let probeNote = '';
+    if (notFoundSeen) {
+        const probe = await probeVectorIndexFile_ACU(normalizedPath);
+        if (probe === 'missing') {
+            return { ok: true, path: normalizedPath };
+        }
+        probeNote = probe === 'present'
+            ? '；探测确认文件仍存在（删除未生效）'
+            : '；探测证据不足（网络错误或非 404），不能证明文件已删除';
     }
 
     return {
         ok: false,
         path: normalizedPath,
-        error: `删除失败，已尝试 ${attempts.length} 种 path 请求体: ${attempts.join('；')}`,
+        error: `删除失败，已尝试 ${attempts.length} 种 path 请求体: ${attempts.join('；')}${probeNote}`,
     };
 }
 

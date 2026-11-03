@@ -458,17 +458,5 @@ describe('剧情推进预设设置保存失败（R10B-12）', () => {
     expect(store.importPresetFromJson(JSON.stringify([{ name: '导入的', plotTasks: [] }]))).toBeNull();
     expect(JSON.stringify(settings.plotSettings)).toBe(before);
   });
-
-  it('总开关保存失败时回到原值', async () => {
-    const settings = createSettings();
-    const { store, saveSettings } = await importStore(settings);
-    store.refreshFromSettings();
-
-    saveSettings.mockReturnValueOnce({ saved: false, storageType: 'memory', error: '写入失败' } as any);
-    store.setEnabled(true);
-
-    expect(store.enabled).toBe(false);
-    expect(settings.plotSettings.enabled).toBe(false);
-  });
 });
 

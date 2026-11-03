@@ -39,7 +39,6 @@ function createHarness(options: { tags?: string; chat?: any[]; pending?: any; se
   };
   const hostInput = {
     send: vi.fn(() => options.send ?? true),
-    removeLastMessage: vi.fn(async () => { chat = chat.slice(0, -1); return true; }),
     retryGeneration: vi.fn(() => options.retry ?? true),
     stopGeneration: vi.fn(),
   };
@@ -191,8 +190,6 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
     h.setChat([{ is_user: true }, { is_user: false, mes: '正文', message_id: 9 }]);
     await h.bridge.onGenerationEnded(9, 7);
     expect(h.runtime.rejectHostTurnForMissingTags).toHaveBeenCalledWith({ identity, messageIndex: 1 });
-    // 删楼交还给酒馆 regenerate 自己完成：桥不再手持 deleteLastMessage 原语。
-    expect(h.hostInput.removeLastMessage).not.toHaveBeenCalled();
     expect(h.hostInput.send).toHaveBeenCalledOnce();
     expect(h.hostInput.retryGeneration).toHaveBeenCalledWith('regenerate');
     expect(h.runtime.recordHostTurn).toHaveBeenLastCalledWith({
@@ -214,7 +211,6 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
     expect(h.runtime.rejectHostTurnForShortGeneration).toHaveBeenCalledWith({ identity, messageIndex: 1, tokenCount: 12, threshold: 1000 });
     // 短楼同样会被宿主 regenerate 删掉重生成：先作废待填表防抖，避免对已删楼双写。
     expect(invalidatePendingAutoFill).toHaveBeenCalledOnce();
-    expect(h.hostInput.removeLastMessage).not.toHaveBeenCalled();
     expect(h.hostInput.retryGeneration).toHaveBeenCalledWith('regenerate');
     expect(h.runtime.confirmCurrentTurn).not.toHaveBeenCalled();
   });
@@ -280,7 +276,6 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
 
     await h.bridge.onGenerationEnded(9, 7);
 
-    expect(h.hostInput.removeLastMessage).not.toHaveBeenCalled();
     expect(h.hostInput.retryGeneration).not.toHaveBeenCalled();
     expect(h.runtime.pauseForHostResultFailure).toHaveBeenCalledWith(identity);
     expect(h.runtime.rejectHostTurnForMissingTags).not.toHaveBeenCalled();

@@ -31,11 +31,43 @@ vi.mock('../../../src/data/gateways/chat-gateway', () => ({
 vi.mock('../../../src/data/repositories/chat-message-data-repo', () => ({
   readIsolatedDataContainer_ACU: (msg: any) => {
     const container = msg?.TavernDB_ACU_IsolatedData;
-    return container && typeof container === 'object' && !Array.isArray(container) ? container : null;
+    if (container && typeof container === 'object' && !Array.isArray(container)) return container;
+    // 与真实实现同口径：字符串形态解析为对象；解析失败返回 null。
+    if (typeof container === 'string' && container) {
+      try {
+        const parsed = JSON.parse(container);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+      } catch { return null; }
+    }
+    return null;
   },
   readIsolatedTagData_ACU: (msg: any, isolationKey: string) => {
-    const tagData = msg?.TavernDB_ACU_IsolatedData?.[isolationKey];
+    const container = msg?.TavernDB_ACU_IsolatedData;
+    let resolved = container;
+    if (typeof container === 'string' && container) {
+      try { resolved = JSON.parse(container); } catch { resolved = null; }
+    }
+    const tagData = resolved?.[isolationKey];
     return tagData && typeof tagData === 'object' ? tagData : null;
+  },
+  // 与真实实现同口径：对象形态原引用返回；字符串形态解析克隆后按对象形态写回；非法/缺失置 {}。
+  ensureWritableIsolatedDataContainer_ACU: (msg: any) => {
+    const raw = msg?.TavernDB_ACU_IsolatedData;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+    if (typeof raw === 'string' && raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        const container = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? JSON.parse(JSON.stringify(parsed)) : {};
+        msg.TavernDB_ACU_IsolatedData = container;
+        return container;
+      } catch {
+        msg.TavernDB_ACU_IsolatedData = {};
+        return msg.TavernDB_ACU_IsolatedData;
+      }
+    }
+    msg.TavernDB_ACU_IsolatedData = {};
+    return msg.TavernDB_ACU_IsolatedData;
   },
 }));
 
@@ -348,6 +380,38 @@ describe('recoverLostCheckpointsAfterMessageDeletion_ACU', () => {
     expect(tagData._acu_storage_version).toBe(2);
     expect(tagData.storageFrame.checkpoint).toEqual(fullCheckpoint());
     expect(tagData.storageFrame.logEntries).toEqual([]);
+  });
+
+  it('G05-01：嫁接目标楼是遗留字符串形态容器时先解析再写，其它标签槽原样保留不被置空', async () => {
+    const rootMsg = aiMsg('root', { version: 2, checkpoint: fullCheckpoint(), logEntries: [] });
+    // 旧时代遗留楼层：容器是 JSON 字符串，只有 tagA 槽（没有当前 '' 槽）
+    const tailMsg: any = {
+      is_user: false,
+      mes: 'tail',
+      TavernDB_ACU_IsolatedData: JSON.stringify({
+        tagA: {
+          independentData: { sheet_9: { name: '旧标签表', content: [['row_id', '值'], ['1', 'x']] } },
+          modifiedKeys: [],
+          updateGroupKeys: [],
+        },
+      }),
+    };
+    const chat = [rootMsg, tailMsg, userMsg('u-tail')];
+    mockGetChatArray.mockReturnValue(chat);
+    captureCheckpointVaultForCurrentChat_ACU();
+
+    chat.splice(0, 1);
+    const result = await recoverLostCheckpointsAfterMessageDeletion_ACU();
+
+    expect(result.recovered).toBe(true);
+    const container = tailMsg.TavernDB_ACU_IsolatedData;
+    // 修复前：字符串容器被 ensureTargetFrame 整体置 {}，tagA 槽数据被静默清空并随严格保存落盘。
+    expect(typeof container).toBe('object');
+    expect(container.tagA.independentData.sheet_9.name).toBe('旧标签表');
+    expect(container['']._acu_storage_version).toBe(2);
+    expect(container[''].storageFrame.checkpoint).toEqual(fullCheckpoint());
+    expect(container[''].storageFrame.logEntries).toEqual([]);
+    expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
   });
 
   it('无后继帧且最后 AI 楼层携带更早增量帧时清空其 logs（已被恢复的 full 吸收）', async () => {

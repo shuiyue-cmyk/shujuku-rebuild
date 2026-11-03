@@ -48,4 +48,17 @@ describe('正文替换默认提示词', () => {
     expect(upgradeContentOptimizationDefaultPrompt_ACU({ contentOptimizationSettings: {} })).toBe(false);
     expect(upgradeContentOptimizationDefaultPrompt_ACU({})).toBe(false);
   });
+
+  it('G11-03：mainContent 死参数已删除——即便误传含 $& 的对象也不展开 $CONTENT 占位符', () => {
+    // 构造出的默认组保留 $CONTENT 原文（占位符替换是运行时职责，不属于「构造默认值」）。
+    const group = buildDefaultContentOptimizationPromptGroup_ACU();
+    const hasPlaceholder = group.some((item: any) => typeof item.content === 'string' && item.content.includes('$CONTENT'));
+    expect(hasPlaceholder).toBe(true);
+
+    // 旧的字符串替换分支会把 `$&` 展开成匹配到的 `$CONTENT` 字面量、`$'` 展开成占位符之后的
+    // 全部文本；参数删除后即使误传（as any 绕过类型）也绝不触碰 content。
+    const withTrap: any = (buildDefaultContentOptimizationPromptGroup_ACU as any)({ mainContent: "$&$'" });
+    expect(withTrap).toEqual(group);
+    expect(withTrap.some((item: any) => typeof item.content === 'string' && item.content.includes('$CONTENT'))).toBe(true);
+  });
 });

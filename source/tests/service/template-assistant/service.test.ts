@@ -168,6 +168,45 @@ describe('template assistant service', () => {
     expect(mockCallAIWithPreset).toHaveBeenCalledWith(expect.any(Array), 'preset-1', undefined, undefined, { needsJsonFormat: true, sessionNamespace: 'template-assistant' });
   });
 
+  it('兜底解析按 templateBaseData 的已保存表名查表级覆盖（G09-04）', async () => {
+    const { settings_ACU } = await import('../../../src/service/runtime/state-manager');
+    const savedOverrides = settings_ACU.tableApiPresetOverridesByName;
+    settings_ACU.tableApiPresetOverridesByName = { 背包表: 'preset-beta', 行囊表: 'preset-wrong' };
+    try {
+      const tempData = buildTempData_ACU();
+      // 草稿改名未提交：草稿名「行囊表」，已保存名仍是「背包表」
+      tempData.sheet_a.name = '行囊表';
+      const templateBaseData = buildTempData_ACU();
+      templateBaseData.sheet_a.name = '背包表';
+      const fp = buildTemplateAssistantFingerprint_ACU(tempData);
+      mockCallAIWithPreset.mockResolvedValue(`<templateAssistantDraft>{"protocolVersion":2,"mode":"modify_current_template_incremental","requestId":"req-base-name","baseFingerprint":"${fp}","atomic":true,"selectedSheetKey":"sheet_a","summary":"x","warnings":[],"operations":[]}</templateAssistantDraft>`);
+
+      await generateTemplateAssistantDraft_ACU({ tempData, templateBaseData, currentSheetKey: 'sheet_a', sheetOrder: ['sheet_a'], userRequest: '修改当前表', protocolVersion: 2 });
+
+      // 命中已保存名「背包表」上的覆盖，而不是草稿名「行囊表」上的
+      expect(mockCallAIWithPreset).toHaveBeenCalledWith(expect.any(Array), 'preset-beta', undefined, undefined, { needsJsonFormat: true, sessionNamespace: 'template-assistant' });
+    } finally {
+      settings_ACU.tableApiPresetOverridesByName = savedOverrides;
+    }
+  });
+
+  it('未提供 templateBaseData 时兜底仍按草稿表名解析（新建未保存表回退口径不变）', async () => {
+    const { settings_ACU } = await import('../../../src/service/runtime/state-manager');
+    const savedOverrides = settings_ACU.tableApiPresetOverridesByName;
+    settings_ACU.tableApiPresetOverridesByName = { A表: 'preset-by-draft' };
+    try {
+      const tempData = buildTempData_ACU();
+      const fp = buildTemplateAssistantFingerprint_ACU(tempData);
+      mockCallAIWithPreset.mockResolvedValue(`<templateAssistantDraft>{"protocolVersion":2,"mode":"modify_current_template_incremental","requestId":"req-draft-name","baseFingerprint":"${fp}","atomic":true,"selectedSheetKey":"sheet_a","summary":"x","warnings":[],"operations":[]}</templateAssistantDraft>`);
+
+      await generateTemplateAssistantDraft_ACU({ tempData, currentSheetKey: 'sheet_a', sheetOrder: ['sheet_a'], userRequest: '修改当前表', protocolVersion: 2 });
+
+      expect(mockCallAIWithPreset).toHaveBeenCalledWith(expect.any(Array), 'preset-by-draft', undefined, undefined, { needsJsonFormat: true, sessionNamespace: 'template-assistant' });
+    } finally {
+      settings_ACU.tableApiPresetOverridesByName = savedOverrides;
+    }
+  });
+
   it('协议缺字段时报错', () => {
     expect(() => validateTemplateAssistantDraft_ACU({ protocolVersion: 1 })).toThrow(/mode/);
   });

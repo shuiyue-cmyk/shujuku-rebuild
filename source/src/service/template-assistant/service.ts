@@ -276,6 +276,11 @@ export interface TemplateAssistantPriorTurn_ACU {
 
 export interface TemplateAssistantGenerateInput_ACU {
     tempData: AnyRecord;
+    /**
+     * 已保存的模板基线（G09-04）：tableApiPreset 为空时，兜底解析表级 API 预设覆盖
+     * 按其中的「已保存表名」查（与 R10A-14 后面板/助手侧的口径一致）；缺省才退回 tempData 草稿名。
+     */
+    templateBaseData?: AnyRecord | null;
     currentSheetKey: string | null;
     sheetOrder?: string[] | null;
     userRequest: string;
@@ -543,6 +548,9 @@ export function buildPseudoRoleTemplateAssistantPromptSegments_ACU(protocolVersi
     if (protocolVersion === 3) {
         return buildPseudoRoleTemplateAssistantPromptSegmentsV3_ACU();
     }
+    // G09-06【生产不可达，保留原因】：v2 分支生产零调用（UI 恒走默认 v3，协议门禁也拒绝 v2 输出）。
+    // 保留是因为 v2 存量提示词段迁移（G09-07）与部分测试以 v2 卡为夹具；如需彻底删除，
+    // 须先收敛 v2/v3 共享的解析/组装入口并重写以 v2 draft 为夹具的共享基础设施测试。
     return [
         {
             role: 'SYSTEM',
@@ -719,6 +727,83 @@ function buildPseudoRoleTemplateAssistantPromptSegmentsV3_ACU(): TemplateAssista
     ];
 }
 
+/**
+ * G09-07：v2 时代存量提示词段的一次性迁移。
+ *
+ * 背景：`settings_ACU.templateAssistantPromptSegments` 无版本标记，v2 为默认协议时期
+ * 保存过提示词的用户，升级后每次 v3 请求都会同时注入「严格使用 protocolVersion=2」
+ * 旧协议卡与 v3 路由卡，指令自相矛盾（模型照 v2 输出即被协议门禁拒绝，白烧修复重试）。
+ *
+ * 策略（最小安全修复）：按旧默认卡的文案指纹识别存量段里的 v2 协议卡，原位替换为
+ * 当前 v3 对应卡（保留原卡的 role/pinned/deletable 与消息顺序）；同类旧协议卡多于
+ * 一张时只保留替换后的第一张，其余剔除。不含指纹的卡一律视为用户自定义卡，原样保留。
+ * 替换是幂等的：v3 卡文案不含任何 v2 指纹。
+ *
+ * 指纹唯一性说明：'protocolVersion=2' / 'modify_current_template_incremental' /
+ * 「操作白名单 + add_sheet + patch_sheet_」组合只出现在 v2 默认协议卡文案里；
+ * 用户自写卡命中这些指纹的概率极低，且命中即意味着与 v3 请求矛盾、本就应剔除。
+ */
+type LegacyV2SegmentKind_ACU = 'core' | 'envelope' | 'whitelist';
+
+function classifyLegacyV2ProtocolSegment_ACU(content: string): LegacyV2SegmentKind_ACU | null {
+    const text = String(content || '');
+    if (!text.trim()) return null;
+    // v2 核心协议卡（老版本 resolve 时追加、被用户复制保存的场景）：带核心协议标记且路由表是 patch_sheet_* 术语
+    if (text.includes(TEMPLATE_ASSISTANT_CORE_PROTOCOL_MARKER_ACU) && text.includes('patch_sheet_')) return 'core';
+    // v2 信封指令卡（旧默认模板第 1 张 SYSTEM 卡 / 旧单条默认系统提示词）
+    if (text.includes('protocolVersion=2') || text.includes('modify_current_template_incremental')) return 'envelope';
+    // v2 协议规则卡（旧默认模板第 3 张 USER 卡，含 $3/$4 占位符）
+    if (text.includes('操作白名单') && text.includes('add_sheet') && text.includes('patch_sheet_')) return 'whitelist';
+    return null;
+}
+
+/** 存量段是否为 v2 时代协议卡（按旧卡文案特征识别；用户自定义卡不命中）。 */
+export function isLegacyV2ProtocolSegment_ACU(segment: TemplateAssistantPromptSegment_ACU | null | undefined): boolean {
+    return classifyLegacyV2ProtocolSegment_ACU(String(segment?.content ?? '')) !== null;
+}
+
+/**
+ * 把存量段中的 v2 协议卡替换为当前 v3 对应卡；其余卡（用户自定义卡）原样保留。
+ * 无 v2 协议卡时原样返回（不复制数组），保证幂等与零开销。
+ */
+export function migrateLegacyV2ProtocolSegments_ACU(
+    segments: TemplateAssistantPromptSegment_ACU[],
+): TemplateAssistantPromptSegment_ACU[] {
+    if (!Array.isArray(segments) || segments.length === 0) return segments;
+    if (!segments.some((seg) => classifyLegacyV2ProtocolSegment_ACU(String(seg?.content ?? '')) !== null)) {
+        return segments;
+    }
+    const v3Cards = buildPseudoRoleTemplateAssistantPromptSegmentsV3_ACU();
+    const replacementByKind: Record<LegacyV2SegmentKind_ACU, string> = {
+        // v2 信封卡 → v3 SYSTEM 信封卡；v2 协议规则卡 → v3 USER 协议卡（保留 $3/$4 占位符，
+        // 结构指纹与语法文档仍由它们注入）；v2 核心协议卡 → v3 核心协议卡（保留核心协议标记）。
+        envelope: String(v3Cards[0]?.content || ''),
+        whitelist: String(v3Cards[2]?.content || ''),
+        core: buildCoreProtocolCardV3_ACU(),
+    };
+    const replaced: Record<LegacyV2SegmentKind_ACU, boolean> = { core: false, envelope: false, whitelist: false };
+    const out: TemplateAssistantPromptSegment_ACU[] = [];
+    for (const seg of segments) {
+        const kind = classifyLegacyV2ProtocolSegment_ACU(String(seg?.content ?? ''));
+        if (!kind) {
+            out.push(seg);
+            continue;
+        }
+        if (replaced[kind]) continue;
+        replaced[kind] = true;
+        out.push({ ...seg, content: replacementByKind[kind] });
+    }
+    return out;
+}
+
+/** 组包口径：仅 v3 请求迁移（显式 v2 请求——现存只有测试在用——保持 v2 卡自洽，不注入 v3 文案）。 */
+function migrateLegacyV2ProtocolSegmentsForRequest_ACU(
+    segments: TemplateAssistantPromptSegment_ACU[],
+    protocolVersion: 2 | 3,
+): TemplateAssistantPromptSegment_ACU[] {
+    return protocolVersion === 3 ? migrateLegacyV2ProtocolSegments_ACU(segments) : segments;
+}
+
 
 /**
  * 将占位符值序列化为字符串，供替换进提示词。
@@ -814,7 +899,11 @@ function assertV3ContextBudget_ACU(payloadText: string) {
 export function buildTemplateAssistantMessages_ACU(input: TemplateAssistantGenerateInput_ACU, baseFingerprint: string) {
     const protocolVersion = input.protocolVersion === 3 ? 3 : (input.protocolVersion === 2 ? 2 : 3);
     const payload = buildUserPromptPayload_ACU(input, baseFingerprint, protocolVersion);
-    const normalized = normalizeAssistantPromptSegments_ACU(settings_ACU.templateAssistantPromptSegments);
+    // G09-07：v3 请求下先迁移存量 v2 协议卡再组包，避免「严格使用 protocolVersion=2」旧卡与 v3 路由卡自相矛盾。
+    const normalized = migrateLegacyV2ProtocolSegmentsForRequest_ACU(
+        normalizeAssistantPromptSegments_ACU(settings_ACU.templateAssistantPromptSegments),
+        protocolVersion,
+    );
     const referenceText = buildTemplateAssistantEmbeddedReferenceText_ACU();
     const valueMap = buildAssistantPlaceholderContext_ACU(payload, referenceText);
     const resolved = resolveAssistantSystemPrompt_ACU(normalized, valueMap, protocolVersion);
@@ -896,7 +985,8 @@ export function buildTemplateAssistantMessages_ACU(input: TemplateAssistantGener
 export function setTemplateAssistantPrompt_ACU(
     segments: TemplateAssistantPromptSegment_ACU[],
 ): { ok: boolean; message?: string } {
-    const normalized = normalizeAssistantPromptSegments_ACU(segments);
+    // G09-07：保存即迁移——存量 v2 协议卡在写回设置时替换为 v3 文案（一次性持久迁移），用户自定义卡原样保留。
+    const normalized = migrateLegacyV2ProtocolSegments_ACU(normalizeAssistantPromptSegments_ACU(segments));
     const result = withSettingsWrite_ACU(['templateAssistantPromptSegments'], () => {
         settings_ACU.templateAssistantPromptSegments = normalized;
     });
@@ -1760,7 +1850,11 @@ export function resolveAssistantSystemPrompt_ACU(
     valueMap?: Record<string, string> | null,
     protocolVersion: 2 | 3 = 3,
 ): Array<{ role: string; content: string }> {
-    const normalized = normalizeAssistantPromptSegments_ACU(segments);
+    // G09-07：v3 请求下先迁移存量 v2 协议卡，避免旧协议文案与 v3 核心协议卡自相矛盾（幂等）。
+    const normalized = migrateLegacyV2ProtocolSegmentsForRequest_ACU(
+        normalizeAssistantPromptSegments_ACU(segments),
+        protocolVersion,
+    );
     if (normalized.length === 0) {
         const referenceText = buildTemplateAssistantEmbeddedReferenceText_ACU();
         const defaultPrompt = protocolVersion === 3 ? buildDefaultSystemPromptV3_ACU() : buildDefaultSystemPrompt_ACU();
@@ -2136,8 +2230,12 @@ export async function generateTemplateAssistantDraft_ACU(input: TemplateAssistan
     let effectivePreset = overridePreset;
     if (!effectivePreset) {
         effectivePreset = settings_ACU.tableApiPreset || '';
+        // G09-04：兜底解析与面板/助手同口径——覆盖按「已保存表名」查（templateBaseData 优先），
+        // 草稿改名未提交时不再按草稿名命中错的覆盖（或查空后静默回落整体配置）。
+        const baseData = asObject_ACU(input?.templateBaseData);
+        const persistedName = input.currentSheetKey ? String(baseData[input.currentSheetKey]?.name ?? '').trim() : '';
         const currentSheet = input.currentSheetKey ? tempData[input.currentSheetKey] : null;
-        const currentTableName = String(currentSheet?.name || '').trim();
+        const currentTableName = persistedName || String(currentSheet?.name || '').trim();
         if (currentTableName) {
             const overrides = settings_ACU.tableApiPresetOverridesByName;
             if (overrides && typeof overrides === 'object' && typeof overrides[currentTableName] === 'string' && overrides[currentTableName].trim()) {
@@ -2285,6 +2383,7 @@ export async function runTemplateAssistantSession_ACU(input: TemplateAssistantSe
             ];
             const result = await generateTemplateAssistantDraft_ACU({
                 tempData: originalTempData,
+                templateBaseData: input.templateBaseData,
                 currentSheetKey,
                 sheetOrder: originalSheetOrder,
                 userRequest: roundUserRequest,

@@ -11,7 +11,7 @@
 
 import type { TableDataObject_ACU } from '../../shared/models/table-data';
 import { extractBusinessKeyColumns_ACU } from './template-data-preflight';
-import { getTemplatePreset_ACU } from './template-preset-service';
+import { getTemplatePreset_ACU, listTemplatePresetNames_ACU } from './template-preset-service';
 import {
   getChatSheetGuideDataForIsolationKey_ACU,
   getCurrentChatTemplateScopeState_ACU,
@@ -238,16 +238,17 @@ export function scanSeedPollution_ACU(): SeedPollutionScanResult_ACU {
     }
   }
 
-  // B) global preset 库（只读 getTemplatePreset_ACU；无法枚举全部预设名时退化为已知常用名）
-  const presetNames = (() => {
+  // B) global preset 库（只读 getTemplatePreset_ACU；预设名用 listTemplatePresetNames_ACU 枚举真实预设库）。
+  // G09-05：此前读一个从未挂载的 globalThis.__templatePresetsStoreForDiagnostics_ACU，恒回退到探测
+  // 「默认模板/标准模板」两个固定名——内置默认模板不在预设库里，这一节实际从不生效。
+  // 现在直接枚举预设库；库为空时本节扫描 0 个预设（如实反映），不再猜测固定名。
+  const candidates = (() => {
     try {
-      const s = (globalThis as any).__templatePresetsStoreForDiagnostics_ACU;
-      return Array.isArray(s) ? s.map((item: any) => item?.name).filter(Boolean) : [];
+      return listTemplatePresetNames_ACU().map((name: any) => String(name ?? '')).filter(Boolean);
     } catch {
-      return [];
+      return [] as string[];
     }
   })();
-  const candidates = presetNames.length > 0 ? presetNames : ['默认模板', '标准模板'];
   for (const name of candidates) {
     const preset = getTemplatePreset_ACU(name);
     if (!preset?.templateStr) continue;

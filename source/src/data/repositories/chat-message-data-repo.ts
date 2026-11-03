@@ -1079,6 +1079,40 @@ export function readIsolatedDataContainer_ACU(msg: any): IsolatedDataContainer_A
 }
 
 /**
+ * 把消息的 TavernDB_ACU_IsolatedData 规范成「可写的对象形态容器」并返回（写入点统一加固）。
+ *
+ * 背景：旧版插件写出的聊天里该字段可能是 JSON 字符串（本层明示支持的遗留形态）。
+ * 写入点若用 `typeof !== 'object'` 判形态直接置 `{}`，会把该楼**全部隔离标签槽**的数据
+ * 静默丢弃；若对字符串裸展开（`...(msg.TavernDB_ACU_IsolatedData || {})`）更会产出
+ * `{0:'{',1:'"',…}` 字符下标垃圾键。所有写入/展开点必须先进本函数规范化。
+ *
+ * 规则：
+ * - 已是对象形态：原引用返回（保持既有就地写入与身份比较语义不变）；
+ * - 字符串形态：解析后**克隆**为新对象并整体换字段写回——其他标签槽原样保留；
+ *   解析失败（损坏串）按空容器处理。克隆而非直接引用解析结果，保证解析 memo
+ *   里的快照不被就地改写，回滚还原原字符串后再次解析读到的仍是原值；
+ * - 缺失 / 数组 / 其他非法形态：置空容器。
+ *
+ * 回写形态统一为对象：与本文件 purge 路径「按既有约定写回对象」一致（有测试锁定），
+ * 也保证各处直读 `msg.TavernDB_ACU_IsolatedData?.[isolationKey]` 的读者能立即看到新写入的数据。
+ */
+export function ensureWritableIsolatedDataContainer_ACU(msg: any): IsolatedDataContainer_ACU {
+    const raw = msg?.TavernDB_ACU_IsolatedData;
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        return raw as IsolatedDataContainer_ACU;
+    }
+    if (!msg || typeof msg !== 'object') return {};
+    if (typeof raw === 'string') {
+        const parsed = parseIsolatedDataField(msg);
+        const container: IsolatedDataContainer_ACU = parsed ? cloneScopedConfigData_ACU(parsed) : {};
+        msg.TavernDB_ACU_IsolatedData = container;
+        return container;
+    }
+    msg.TavernDB_ACU_IsolatedData = {};
+    return msg.TavernDB_ACU_IsolatedData as IsolatedDataContainer_ACU;
+}
+
+/**
  * 从消息读取指定隔离标签的 IsolationTagData。
  * 统一处理 IsolatedData 字段的 string/object 两种格式。
  *
@@ -1511,19 +1545,21 @@ export function clearTableFieldsForIsolation_ACU(
  * 可选传入 isolationKey 和 isolationConfig 来限定检查范围。
  *
  * @param msg 聊天消息对象
- * @param isolationKey 可选，指定检查的隔离标签
+ * @param isolationKey 可选，指定检查的隔离标签。`''` 是合法的默认槽键（直读 container['']）；
+ *   仅 undefined/null（未传）才做「任意标签有数据即真」的容器级检查——两者不得混同，
+ *   否则隔离关闭时对默认槽的询问会退化成「别的标签有数据也返回 true」。
  * @param isolationConfig 可选，用于旧版数据的隔离匹配
  * @returns 是否包含表格数据
  */
 export function hasAnyTableData_ACU(
     msg: any,
-    isolationKey?: string,
+    isolationKey?: string | null,
     isolationConfig?: IsolationConfig_ACU,
 ): boolean {
     if (!msg) return false;
 
     // 检查新版 IsolatedData
-    if (isolationKey) {
+    if (isolationKey !== undefined && isolationKey !== null) {
         const tagData = readIsolatedTagData_ACU(msg, isolationKey);
         if (tagData?.independentData && Object.keys(tagData.independentData).some(k => k.startsWith('sheet_'))) {
             return true;

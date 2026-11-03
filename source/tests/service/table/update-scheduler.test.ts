@@ -552,9 +552,10 @@ describe('executeAutoUpdatePlan_ACU', () => {
 
     expect(result.success).toBe(true);
     expect(mockGrouped).toHaveBeenCalledTimes(1);
+    // G02-04：skipProfileSwitch/forceDirectApi 死参数已删，调度层不再向 runner 传假象标志。
     expect(mockGrouped).toHaveBeenCalledWith([
-      expect.objectContaining({ key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: { skipProfileSwitch: true, forceDirectApi: true } }),
-      expect.objectContaining({ key: 'group_b', groupId: 1, indices: [2], batchSize: 2, sheetKeys: ['sheet_1'], requestOptions: { skipProfileSwitch: true, forceDirectApi: true } }),
+      expect.objectContaining({ key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null }),
+      expect.objectContaining({ key: 'group_b', groupId: 1, indices: [2], batchSize: 2, sheetKeys: ['sheet_1'], requestOptions: null }),
     ], 'auto_independent', {});
     expect(mockProcess).not.toHaveBeenCalled();
   });
@@ -594,6 +595,26 @@ describe('executeAutoUpdatePlan_ACU', () => {
 
     const clean = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, makeOps());
     expect(clean.postCommitWarnings).toBeUndefined();
+  });
+
+  // G03-06：staging runner（executeAutoFillStagingGroups_ACU）的返回类型声明了
+  // postCommitWarnings，调度层按有值消费——锁定这条契约两端的接线。
+  it('staging runner 带回的 postCommitWarnings 同样汇总到结果里', async () => {
+    const plan = {
+      tablesToUpdate: [],
+      updateGroups: {
+        'group_s': { indices: [1], batchSize: 2, groupId: 0, sheetKeys: ['sheet_0'], sheetNames: ['表A'], requiresBoundaryStaging: true },
+      },
+    };
+    const warning = { code: 'worldbook_sync_failed', message: '表格已保存，但世界书刷新失败：S' };
+    const mockStaging = vi.fn().mockResolvedValue({ success: true, failedGroups: [], postCommitWarnings: [warning] });
+    const ops = { ...makeOps(), processStagingGroupedUpdates: mockStaging };
+
+    const result = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, ops as any);
+
+    expect(mockStaging).toHaveBeenCalledTimes(1);
+    expect(result.success).toBe(true);
+    expect(result.postCommitWarnings).toEqual([warning]);
   });
 
   it('grouped 委托返回 failedGroups 时按数量汇总失败组', async () => {

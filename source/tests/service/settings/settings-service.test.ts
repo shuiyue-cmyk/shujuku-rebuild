@@ -21,7 +21,6 @@ const {
   mockWriteProfileTemplate,
   mockBackupProfileTemplate,
   mockSanitizeSettingsForProfileSave,
-  mockEnsureProfileExists,
   mockSetSettings,
   mockSetTableTemplate,
   mockGetCurrentIsolationKey,
@@ -93,7 +92,6 @@ const {
     mockWriteProfileTemplate: vi.fn(),
     mockBackupProfileTemplate: vi.fn(),
     mockSanitizeSettingsForProfileSave: vi.fn((obj: any) => ({ ...obj })),
-    mockEnsureProfileExists: vi.fn(),
     mockSetSettings: vi.fn((newSettings: any) => {
       Object.assign(mockSettings, newSettings);
     }),
@@ -208,7 +206,6 @@ vi.mock('../../../src/shared/defaults', () => ({
 
 vi.mock('../../../src/data/repositories/isolation-repo', () => ({
   addDataIsolationHistory_ACU: mockAddDataIsolationHistory,
-  ensureProfileExists_ACU: mockEnsureProfileExists,
   normalizeDataIsolationHistory_ACU: mockNormalizeDataIsolationHistory,
 }));
 

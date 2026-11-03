@@ -59,12 +59,23 @@ export function useFavoriteWorldbooks(options: { skillifyBooks: (bookNames: stri
 
   async function add(bookName: string): Promise<void> {
     if (!bookName || favorites.value.includes(bookName)) return;
-    favorites.value = writeFavoriteWorldbookNames_ACU([...favorites.value, bookName]);
+    const result = writeFavoriteWorldbookNames_ACU([...favorites.value, bookName]);
+    favorites.value = result.names;
+    if (!result.saved) {
+      // 落盘失败如实提示并还原名单，不让面板显示「已加入」而刷新后静默丢失。
+      toast.error(`加入常用名单失败：${result.error || '保存设置失败'}`, { muteable: false });
+      return;
+    }
     await refreshStatus(bookName);
   }
 
   function remove(bookName: string): void {
-    favorites.value = writeFavoriteWorldbookNames_ACU(favorites.value.filter(name => name !== bookName));
+    const result = writeFavoriteWorldbookNames_ACU(favorites.value.filter(name => name !== bookName));
+    favorites.value = result.names;
+    if (!result.saved) {
+      toast.error(`移出常用名单失败：${result.error || '保存设置失败'}`, { muteable: false });
+      return;
+    }
     selected.value = selected.value.filter(name => name !== bookName);
     const next = { ...statuses.value };
     delete next[bookName];

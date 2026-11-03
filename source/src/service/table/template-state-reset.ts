@@ -13,6 +13,7 @@ import { runTableWriteTransaction_ACU } from './table-write-transaction';
 import { buildChatSheetGuideDataFromTemplateObj_ACU, clearCurrentChatTemplateSnapshots_ACU, ensureStableRowIdsForSheetContent_ACU, setChatSheetGuideDataForIsolationKey_ACU } from '../template/chat-scope';
 import { normalizeTemplateRowIds_ACU, type TemplateRowIdNormalizationAudit_ACU } from '../template/template-row-id-normalizer';
 import { logWarn_ACU } from '../../shared/utils';
+import { readIsolatedDataContainer_ACU } from '../../data/repositories/chat-message-data-repo';
 import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
 
 type ResetResult = {
@@ -146,6 +147,17 @@ export async function resetCurrentChatTableStateFromTemplate_ACU(
           if (isolated && typeof isolated === 'object' && !Array.isArray(isolated)) {
             delete isolated[isolationKey];
             if (Object.keys(isolated).length === 0) delete message.TavernDB_ACU_IsolatedData;
+          } else if (typeof isolated === 'string') {
+            // G14-04 同源加固：遗留字符串形态容器同样要清掉当前隔离键的旧槽，否则「游戏初始化」
+            // 后该楼层仍带着本标签的旧数据（与对象形态口径不一致）。解析成功才改写并按对象形态
+            // 回写（repo 层既有约定）；解析失败的损坏串原样保留，不静默销毁。
+            const parsedContainer = readIsolatedDataContainer_ACU(message);
+            if (parsedContainer) {
+              const nextContainer = { ...parsedContainer };
+              delete nextContainer[isolationKey];
+              if (Object.keys(nextContainer).length === 0) delete message.TavernDB_ACU_IsolatedData;
+              else message.TavernDB_ACU_IsolatedData = nextContainer;
+            }
           }
           const ownsLegacyData = !settings_ACU.dataIsolationEnabled || message.TavernDB_ACU_Identity === settings_ACU.dataIsolationCode;
           if (ownsLegacyData) {

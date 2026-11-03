@@ -1102,7 +1102,7 @@ export function useDashboardPage(): DashboardPageState {
     } else if (key === "contentReplaceEnabled") {
       setContentReplaceEnabledBySettings(!!value);
       saveSettings_ACU();
-    } else if (key === "autoUpdateEnabled" || key === "toastMuteEnabled" || key === "streamingEnabled") {
+    } else if (key === "autoUpdateEnabled" || key === "toastMuteEnabled") {
       settings_ACU[key] = !!value;
       saveSettings_ACU();
     }

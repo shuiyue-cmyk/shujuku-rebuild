@@ -11,6 +11,7 @@ vi.mock('../../../src/shared/json-helpers', () => ({
 
 import {
   readIsolatedDataContainer_ACU,
+  ensureWritableIsolatedDataContainer_ACU,
   isLegacyMatchForIsolation_ACU,
   writeMessageIdentity_ACU,
   purgeManualRefillIncrementalSheetKeysFromStorageFrameV2_ACU,
@@ -37,6 +38,51 @@ describe('readIsolatedDataContainer_ACU', () => {
       alpha: { independentData: { sheet_0: { name: '表' } } },
     };
     expect(readIsolatedDataContainer_ACU({ TavernDB_ACU_IsolatedData: container })).toBe(container);
+  });
+});
+
+describe('ensureWritableIsolatedDataContainer_ACU（字符串形态容器统一加固）', () => {
+  it('对象形态：原引用返回，不换字段（保持就地写入与身份比较语义）', () => {
+    const container = { tag1: { independentData: { sheet_0: { name: '表' } } } };
+    const msg: any = { TavernDB_ACU_IsolatedData: container };
+    expect(ensureWritableIsolatedDataContainer_ACU(msg)).toBe(container);
+    expect(msg.TavernDB_ACU_IsolatedData).toBe(container);
+  });
+
+  it('字符串形态：解析后克隆写回对象，其他标签槽原样保留', () => {
+    const msg: any = {
+      TavernDB_ACU_IsolatedData: JSON.stringify({
+        tagA: { independentData: { sheet_9: { name: '旧标签表' } }, modifiedKeys: ['sheet_9'], updateGroupKeys: [] },
+      }),
+    };
+    const container = ensureWritableIsolatedDataContainer_ACU(msg);
+    expect(typeof msg.TavernDB_ACU_IsolatedData).toBe('object');
+    expect(msg.TavernDB_ACU_IsolatedData).toBe(container);
+    expect(container.tagA.independentData.sheet_9.name).toBe('旧标签表');
+  });
+
+  it('字符串形态：写回的是解析快照的克隆——就地改写容器后还原原字符串，再解析读到的仍是原值', () => {
+    const raw = JSON.stringify({ tagA: { independentData: { sheet_9: { name: '原值' } } } });
+    const msg: any = { TavernDB_ACU_IsolatedData: raw };
+    const container = ensureWritableIsolatedDataContainer_ACU(msg);
+    // 模拟写入点就地改写（换槽位）后事务回滚还原原字符串的时序
+    (container as any).tagA = { independentData: { sheet_9: { name: '被改写' } } };
+    msg.TavernDB_ACU_IsolatedData = raw;
+    expect(readIsolatedDataContainer_ACU(msg)?.tagA?.independentData?.sheet_9?.name).toBe('原值');
+  });
+
+  it('损坏字符串 / 缺失 / 数组形态：按空容器写回', () => {
+    const broken: any = { TavernDB_ACU_IsolatedData: '{不是合法JSON' };
+    expect(ensureWritableIsolatedDataContainer_ACU(broken)).toEqual({});
+    expect(broken.TavernDB_ACU_IsolatedData).toEqual({});
+
+    const missing: any = {};
+    expect(ensureWritableIsolatedDataContainer_ACU(missing)).toEqual({});
+    expect(missing.TavernDB_ACU_IsolatedData).toEqual({});
+
+    const arrayForm: any = { TavernDB_ACU_IsolatedData: [1, 2] };
+    expect(ensureWritableIsolatedDataContainer_ACU(arrayForm)).toEqual({});
+    expect(arrayForm.TavernDB_ACU_IsolatedData).toEqual({});
   });
 });
 
@@ -1543,6 +1589,44 @@ describe('hasAnyTableData_ACU', () => {
       TavernDB_ACU_IndependentData: { sheet_0: {} },
     };
     expect(hasAnyTableData_ACU(msg, undefined, { enabled: true, code: 'code_1' })).toBe(false);
+  });
+
+  // G05-08：`''` 是合法的默认槽键，不得与「未传」混同退化成容器级检查。
+  it('G05-08：isolationKey=\'\' 直读默认槽——只有其它标签有数据时返回 false，未传时才做容器级检查', () => {
+    const msg = {
+      TavernDB_ACU_IsolatedData: {
+        tagB: { independentData: { sheet_0: { name: '别的标签的表' } } },
+      },
+    };
+    expect(hasAnyTableData_ACU(msg, '')).toBe(false);
+    expect(hasAnyTableData_ACU(msg)).toBe(true);
+    expect(hasAnyTableData_ACU(msg, null)).toBe(true);
+  });
+
+  it('G05-08：isolationKey=\'\' 时默认槽里的 V1 数据与 V2 帧都能认出来', () => {
+    const legacySlot = {
+      TavernDB_ACU_IsolatedData: {
+        '': { independentData: { sheet_0: { name: '默认槽表' } } },
+        tagB: { independentData: {} },
+      },
+    };
+    expect(hasAnyTableData_ACU(legacySlot, '')).toBe(true);
+
+    const v2Slot = {
+      TavernDB_ACU_IsolatedData: {
+        '': { _acu_storage_version: 2, storageFrame: { version: 2, logEntries: [] } },
+      },
+    };
+    expect(hasAnyTableData_ACU(v2Slot, '')).toBe(true);
+  });
+
+  it('G05-08：isolationKey=\'\' 且默认槽无数据时不因旧版字段以外的标签数据误报', () => {
+    // 字符串形态容器同样按 '' 直读（解析后判定）
+    const msg = {
+      TavernDB_ACU_IsolatedData: JSON.stringify({ tagB: { independentData: { sheet_0: { name: '表' } } } }),
+    };
+    expect(hasAnyTableData_ACU(msg, '')).toBe(false);
+    expect(hasAnyTableData_ACU(msg)).toBe(true);
   });
 });
 

@@ -38,7 +38,7 @@ function createOrchestrator(options: { preview?: boolean; planner?: ReturnType<t
   let sequence = 0;
   const store = new FirstFloorContinuationStore_ACU();
   const executionEngine = {
-    prepareCurrentTurnInstruction: vi.fn().mockImplementation(async (_isLeaseCurrent: unknown, _retryAttempt: unknown, applyOutline: (instruction: string) => Promise<{ requiresReview: boolean; stopped: string | null }>) => {
+    prepareCurrentTurnInstruction: vi.fn().mockImplementation(async (_isLeaseCurrent: unknown, applyOutline: (instruction: string) => Promise<{ requiresReview: boolean; stopped: string | null }>) => {
       const task = store.readPersisted()?.activeTask;
       const stage = task?.activeStageId ? task.stages.find(item => item.stageId === task.activeStageId) : null;
       if (!stage || stage.status === 'completed') {
@@ -1134,7 +1134,7 @@ describe('ContinuationOrchestrator_ACU', () => {
     await orchestrator.createTask({ originInstruction: '推进剧情' });
     await orchestrator.continueTask();
     executionEngine.prepareCurrentTurnInstruction.mockImplementationOnce(async (
-      _isLeaseCurrent: unknown, _retryAttempt: unknown, _applyOutline: unknown, _signal: unknown,
+      _isLeaseCurrent: unknown, _applyOutline: unknown, _signal: unknown,
       adjustProgress: (action: Record<string, unknown>) => Promise<{ status: string }>,
     ) => {
       const first = store.readPersisted()!.activeTask!.stages[0];

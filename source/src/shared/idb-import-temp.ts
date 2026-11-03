@@ -71,6 +71,9 @@ export async function idbSet_ACU(key: string, value: any): Promise<void> {
     if (!db) return;
     const tx = db.transaction(IMPORT_TEMP_STORE_NAME_ACU, 'readwrite');
     const done = idbTransactionDone_ACU(tx);
+    // 预挂空 handler：request 自身失败时函数体会提前抛出返回，done 无人再 await；
+    // 随后事务 abort 会让 done 拒绝，若不预挂就成了未处理拒绝（被全局错误捕获误记一条）。G11-01。
+    done.catch(() => {});
     const store = tx.objectStore(IMPORT_TEMP_STORE_NAME_ACU);
     await idbRequestToPromise_ACU(store.put(value, key));
     await done;
@@ -81,6 +84,8 @@ export async function idbDel_ACU(key: string): Promise<void> {
     if (!db) return;
     const tx = db.transaction(IMPORT_TEMP_STORE_NAME_ACU, 'readwrite');
     const done = idbTransactionDone_ACU(tx);
+    // 预挂空 handler：见 idbSet_ACU，防止 request 失败时 done 成为未处理拒绝。G11-01。
+    done.catch(() => {});
     const store = tx.objectStore(IMPORT_TEMP_STORE_NAME_ACU);
     await idbRequestToPromise_ACU(store.delete(key));
     await done;

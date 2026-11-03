@@ -76,11 +76,6 @@ async function mountDataMgmtPage(chatFileIdentifier = 'chat-data', initialMixedD
     isolationKey: settings.dataIsolationCode,
     presetName: 'chat-template',
   }));
-  const switchIsolation = vi.fn(async (code: string) => {
-    settings.dataIsolationCode = code;
-    settings.dataIsolationEnabled = !!code;
-    if (code && !isolationHistory.includes(code)) isolationHistory.unshift(code);
-  });
   const removeHistory = vi.fn((code: string) => {
     const index = isolationHistory.indexOf(code);
     if (index >= 0) isolationHistory.splice(index, 1);
@@ -214,7 +209,6 @@ async function mountDataMgmtPage(chatFileIdentifier = 'chat-data', initialMixedD
     getDataIsolationHistory_ACU: () => [...isolationHistory],
     removeDataIsolationHistory_ACU: removeHistory,
     saveSettings_ACU: saveSettings,
-    switchIsolationProfile_ACU: switchIsolation,
     applyCombinedSettingsImport_ACU: vi.fn(() => ['charCardPrompt']),
   }));
   vi.doMock('../../../src/service/chat/chat-service', async () => {
@@ -292,7 +286,6 @@ async function mountDataMgmtPage(chatFileIdentifier = 'chat-data', initialMixedD
     settings,
     applyTemplateScope,
     saveSettings,
-    switchIsolation,
     removeHistory,
     deleteGenerated,
     deleteLocalDataWithScope,

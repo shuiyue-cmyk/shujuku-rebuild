@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   outdated: false,
   configValid: true,
   globalMeta: { summaryVectorIndexModeGlobal: true } as any,
+  chatIdentity: 'chat-a',
 }));
 
 function deferred<T>() { let resolve!: (value: T) => void; let reject!: (reason?: unknown) => void; const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; }); return { promise, resolve, reject }; }
@@ -41,6 +42,11 @@ vi.mock('../../../src/data/repositories/profile-repo', () => ({
 }));
 vi.mock('../../../src/presentation/theme/toast', () => ({ showToastr_ACU: h.toast }));
 vi.mock('../../../src/presentation/theme/custom-confirm', () => ({ showCustomConfirm_ACU: h.confirm }));
+// G12-02：重建确认的聊天身份复核走真实的 chat-action-scope，只把身份源（state-manager）换成可控值
+vi.mock('../../../src/service/runtime/state-manager', () => ({
+  get currentChatFileIdentifier_ACU() { return h.chatIdentity; },
+  getCurrentIsolationKey_ACU: () => '',
+}));
 
 import {
   processSummaryVectorIndexBeforeGenerationWithUI_ACU,
@@ -50,6 +56,7 @@ import {
 describe('summary vector index UI recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.chatIdentity = 'chat-a';
     h.toast.mockReturnValue({ closest: () => ({ remove: h.remove }) });
     h.confirm.mockResolvedValue(true);
     h.process.mockResolvedValue({ success: false, skipped: true, reason: 'legacy_vector_scheme_rebuild_required' });
@@ -166,6 +173,17 @@ describe('summary vector index UI recovery', () => {
 
     expect(h.rebuild).not.toHaveBeenCalled();
     expect(result).toMatchObject({ skipped: true, reason: 'legacy_vector_scheme_rebuild_required' });
+  });
+
+  it('G12-02：重建确认期间聊天被切换：放弃重建并提示，不在别的聊天上白烧 embedding', async () => {
+    h.confirm.mockImplementationOnce(async () => { h.chatIdentity = 'chat-b'; return true; });
+
+    const result = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
+
+    expect(h.rebuild).not.toHaveBeenCalled();
+    // 沿用首轮的 rebuild_required 跳过结果：发送层的租约复检会因切聊天停掉这次生成
+    expect(result).toMatchObject({ skipped: true, reason: 'legacy_vector_scheme_rebuild_required' });
+    expect(h.toast).toHaveBeenCalledWith('warning', expect.stringContaining('已切换'));
   });
 
   it('宿主原生 confirm 不可靠（TT 2.3.0 返回 Promise 被当成「确定」）：只认插件确认框的结果', async () => {

@@ -72,7 +72,7 @@ describe('StageExecutionEngine_ACU', () => {
       planner: planner as any,
     });
 
-    const prepared = await engine.prepareCurrentTurnInstruction(() => true, undefined, async () => {
+    const prepared = await engine.prepareCurrentTurnInstruction(() => true, async () => {
       current = envelope();
       return { op: 'create', requiresReview: false, stopped: null, summary: '已创建' };
     });
@@ -93,32 +93,5 @@ describe('StageExecutionEngine_ACU', () => {
     });
 
     await expect(engine.prepareCurrentTurnInstruction(() => current)).rejects.toThrow('stale');
-  });
-
-  it('正文重试轮沿用既有身份且不注入大纲操作回调', async () => {
-    const planner = { plan: vi.fn(async (request: any) => {
-      expect(request.applyOutline).toBeUndefined();
-      return { instruction: '重试文本', attempts: 1, apiPreset: { presetName: '', source: 'current', reason: 'current_configuration' } };
-    }) };
-    const engine = new StageExecutionEngine_ACU({
-      readEnvelope: envelope as any, getChatIdentity: () => 'chat-a', allocateId: prefix => `${prefix}-a`,
-      planner: planner as any,
-    });
-    const existing = { chatIdentity: 'chat-a', taskId: 'task-a', stageId: 'stage-a', revision: 1, nodeId: 'node-a', turnId: 'turn-1', attemptId: 'attempt-retry' };
-
-    const prepared = await engine.prepareCurrentTurnInstruction(() => true, existing, async () => ({ op: 'revise', requiresReview: false, stopped: null, summary: '' }));
-    expect(prepared.identity).toEqual(existing);
-  });
-
-  it('正文重试身份与当前游标不符时立即判失效', async () => {
-    const planner = { plan: vi.fn() };
-    const engine = new StageExecutionEngine_ACU({
-      readEnvelope: envelope as any, getChatIdentity: () => 'chat-a', allocateId: prefix => `${prefix}-a`,
-      planner: planner as any,
-    });
-    const stale = { chatIdentity: 'chat-a', taskId: 'task-a', stageId: 'stage-a', revision: 2, nodeId: 'node-a', turnId: 'turn-1', attemptId: 'attempt-old' };
-
-    await expect(engine.prepareCurrentTurnInstruction(() => true, stale)).rejects.toMatchObject({ error: { code: 'CONTINUATION_INTERNAL_REQUEST_STALE' } });
-    expect(planner.plan).not.toHaveBeenCalled();
   });
 });

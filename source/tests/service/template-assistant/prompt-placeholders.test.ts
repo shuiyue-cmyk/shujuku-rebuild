@@ -67,6 +67,18 @@ vi.mock('../../../src/service/table/schema-migration-preflight', () => ({
   preflightSchemaMigrations_ACU: mockPreflightSchemaMigrations,
 }));
 
+// G09-07 保存路径测试用：直接执行变更并返回成功（不触真实宿主保存）
+vi.mock('../../../src/service/settings/settings-write-service', () => ({
+  withSettingsWrite_ACU: (_keys: unknown, mutate: () => void) => {
+    try {
+      mutate();
+      return { ok: true };
+    } catch (error: any) {
+      return { ok: false, message: String(error?.message || error) };
+    }
+  },
+}));
+
 import {
   applyTemplateAssistantPlaceholders_ACU,
   buildAssistantPlaceholderContext_ACU,
@@ -535,6 +547,78 @@ describe('resolveAssistantSystemPrompt_ACU 核心协议卡按协议版本分支'
     const content = resolved[0]?.content || '';
     // 标记只出现一次（用户自带，未再追加）
     expect(content.match(/\[ACU 改表助手核心协议\]/g)).toHaveLength(1);
+  });
+});
+
+describe('v2 存量提示词段 + v3 请求（G09-07）', () => {
+  it('v3 请求组包：存量 v2 协议卡换成 v3 文案，用户自定义卡保留，结构指纹不丢', () => {
+    const legacy = buildPseudoRoleTemplateAssistantPromptSegments_ACU(2) as any[];
+    const customCard = { role: 'SYSTEM', content: '我的自定义要求：语气简洁。', deletable: true, pinned: false };
+    settings_ACU.templateAssistantPromptSegments = [...legacy.slice(0, 3), customCard, ...legacy.slice(3)] as any;
+
+    const messages = buildTemplateAssistantMessages_ACU({ ...buildInput_ACU(), protocolVersion: 3 } as any, 'acu-struct:fp');
+    const joined = messages.map((m) => m.content).join('\n');
+
+    // 矛盾指令消失：整个请求里不再有 v2 协议文案
+    expect(joined).not.toContain('protocolVersion=2');
+    expect(joined).not.toContain('modify_current_template_incremental');
+    expect(joined).not.toContain('操作白名单');
+    // v3 协议文案在场，且结构指纹仍经迁移后协议卡的 $3 占位符注入（未因迁移丢失）
+    expect(joined).toContain('protocolVersion=3');
+    expect(joined).toContain('acu-struct:fp');
+    // 用户自定义卡原样保留
+    expect(joined).toContain('我的自定义要求：语气简洁。');
+    // 其余卡未动：v2 时代的预填充卡仍是原文（迁移只碰协议卡）
+    expect(messages.filter((m) => m.content.includes('现在直接输出完整的 draft 标签与 JSON：')).length).toBe(1);
+  });
+
+  it('显式 v2 请求不迁移：v2 卡与 v2 请求保持自洽（现存仅测试使用该口径）', () => {
+    settings_ACU.templateAssistantPromptSegments = buildPseudoRoleTemplateAssistantPromptSegments_ACU(2) as any;
+
+    const messages = buildTemplateAssistantMessages_ACU(buildInput_ACU() as any, 'acu-struct:fp');
+    const joined = messages.map((m) => m.content).join('\n');
+
+    expect(joined).toContain('protocolVersion=2');
+    expect(joined).not.toContain('protocolVersion=3');
+  });
+
+  it('migrateLegacyV2ProtocolSegments_ACU 原位替换、保留卡属性与自定义卡，且幂等', async () => {
+    const { migrateLegacyV2ProtocolSegments_ACU } = await import('../../../src/service/template-assistant/service');
+    const legacy = buildPseudoRoleTemplateAssistantPromptSegments_ACU(2) as any[];
+    const custom = { role: 'USER', content: '记住：所有新表都要加备注列。', deletable: true, pinned: false };
+    const input = [...legacy, custom];
+
+    const once = migrateLegacyV2ProtocolSegments_ACU(input);
+    const twice = migrateLegacyV2ProtocolSegments_ACU(once);
+
+    expect(twice).toEqual(once);
+    expect(once).toHaveLength(input.length);
+    // 用户自定义卡原样保留
+    expect(once[once.length - 1]).toEqual(custom);
+    // v2 信封卡 → v3 信封卡（role/pinned/deletable 与消息顺序不变）
+    expect(once[0].role).toBe('SYSTEM');
+    expect(once[0].pinned).toBe(true);
+    expect(once[0].deletable).toBe(false);
+    expect(once[0].content).toContain('protocolVersion=3');
+    // v2 协议规则卡 → v3 协议规则卡（保留 $3/$4 占位符）
+    expect(once[2].content).toContain('result.action 只允许 replace / create / delete');
+    expect(once[2].content).toContain(TEMPLATE_ASSISTANT_PLACEHOLDER_PROTOCOL_ACU);
+    expect(once[2].content).toContain(TEMPLATE_ASSISTANT_REFERENCE_DOCS_PLACEHOLDER_ACU);
+  });
+
+  it('保存提示词时即迁移：写回设置的段不再含 v2 协议文案（一次性持久迁移）', async () => {
+    const { setTemplateAssistantPrompt_ACU } = await import('../../../src/service/template-assistant/service');
+    const legacy = buildPseudoRoleTemplateAssistantPromptSegments_ACU(2) as any[];
+
+    const result = setTemplateAssistantPrompt_ACU(legacy);
+
+    expect(result.ok).toBe(true);
+    const saved = (settings_ACU.templateAssistantPromptSegments || []) as any[];
+    const joined = saved.map((seg) => String(seg?.content || '')).join('\n');
+    expect(saved).toHaveLength(legacy.length);
+    expect(joined).not.toContain('protocolVersion=2');
+    expect(joined).not.toContain('操作白名单');
+    expect(joined).toContain('protocolVersion=3');
   });
 });
 

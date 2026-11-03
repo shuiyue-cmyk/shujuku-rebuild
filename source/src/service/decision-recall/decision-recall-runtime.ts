@@ -25,7 +25,6 @@ import {
 import {
   buildDecisionRecallBatchBody_ACU,
   buildDecisionRecallState_ACU,
-  DECISION_RECALL_LEVELS_ACU,
   interpretDecisionRecallBatchResponse_ACU,
   type DecisionRecallRow_ACU,
   type DecisionRecallScore_ACU,
@@ -99,10 +98,6 @@ type GroupOutcome_ACU =
 /** 整次召回的总时限：判定几次就放宽几倍。 */
 export function resolveDecisionRecallTotalTimeoutMs_ACU(judgeRuns: number): number {
   return DECISION_RECALL_TOTAL_TIMEOUT_MS_ACU * Math.max(1, Math.floor(judgeRuns) || 1);
-}
-
-function nearestLevelLabel_ACU(score: number): string {
-  return DECISION_RECALL_LEVELS_ACU.reduce((best, level) => (Math.abs(level.score - score) < Math.abs(best.score - score) ? level : best)).label;
 }
 
 function retryDelayMs_ACU(attempt: number, rateLimited: boolean): number {
@@ -286,7 +281,7 @@ export async function runDecisionRecall_ACU(
         continue;
       }
       const score = answered.reduce((sum, entry) => sum + entry.score, 0) / answered.length;
-      scored.push({ row, score, choice: nearestLevelLabel_ACU(score) });
+      scored.push({ row, score });
     }
   });
   scored.sort((left, right) => (right.score - left.score) || (right.row.rowOrder - left.row.rowOrder));

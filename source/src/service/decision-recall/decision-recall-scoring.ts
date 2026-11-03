@@ -21,7 +21,6 @@ export interface DecisionRecallRow_ACU {
 
 export interface DecisionRecallScore_ACU {
   score: number;
-  choice: string;
 }
 
 /** 五档相关性，分值 1–5。顺序即选项顺序，从无关到强相关。 */
@@ -32,6 +31,14 @@ export const DECISION_RECALL_LEVELS_ACU: readonly { label: string; score: number
   { label: '较相关', score: 4, description: '会明显影响接下来的剧情，例如牵涉的人物关系、未了结的事件、承诺或线索' },
   { label: '强相关', score: 5, description: '接下来的剧情直接延续、回应或依赖这件事' },
 ];
+
+/**
+ * 分数 → 最近的档位标签（展示用，如「3.50 分 · 一般相关」）。
+ * 全库唯一出处（G01-03）：runtime 与决策召回页的测试输出都用这一份；平分取较低档。
+ */
+export function decisionRecallLevelLabel_ACU(score: number): string {
+  return DECISION_RECALL_LEVELS_ACU.reduce((best, level) => (Math.abs(level.score - score) < Math.abs(best.score - score) ? level : best)).label;
+}
 
 const LEVEL_SCORE_BY_LABEL_ACU = new Map(DECISION_RECALL_LEVELS_ACU.map(level => [level.label, level.score]));
 
@@ -93,9 +100,9 @@ function readRowScore_ACU(answer: any): DecisionRecallScore_ACU | null {
     weighted += probability * level.score;
     total += probability;
   }
-  if (total > 0) return { score: weighted / total, choice };
+  if (total > 0) return { score: weighted / total };
   const chosen = LEVEL_SCORE_BY_LABEL_ACU.get(choice);
-  return chosen === undefined ? null : { score: chosen, choice };
+  return chosen === undefined ? null : { score: chosen };
 }
 
 /** 读出本组每条纪要的得分；漏答或答了不认识档位的纪要不在结果里。 */

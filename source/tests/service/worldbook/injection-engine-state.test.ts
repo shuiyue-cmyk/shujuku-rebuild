@@ -314,6 +314,15 @@ describe('resetScriptStateForNewChat_ACU', () => {
     expect(mockSetPendingFinalGenerationGreenlights).toHaveBeenCalledWith([]);
   });
 
+  it('启动阶段首个 chat_changed 到达（identifier 仍为空串）：不算切聊天，不清掉刷新前保留的绿灯（G08-06）', async () => {
+    mockCurrentChatFileIdentifier.value = '';
+    await resetScriptStateForNewChat_ACU('恢复的聊天', { reason: 'chat_changed' });
+
+    expect(mockSetCurrentChatFileIdentifier).toHaveBeenCalledWith('恢复的聊天');
+    expect(mockReleaseGreenlightsForChatSwitch).not.toHaveBeenCalled();
+    expect(mockSetPendingFinalGenerationGreenlights).not.toHaveBeenCalled();
+  });
+
   it('同一聊天重复 CHAT_CHANGED、启动恢复：不收回绿灯（保留本聊天上一轮的放行，供重新生成使用）', async () => {
     mockCurrentChatFileIdentifier.value = 'same-chat';
     await resetScriptStateForNewChat_ACU('same-chat', { reason: 'chat_changed' });

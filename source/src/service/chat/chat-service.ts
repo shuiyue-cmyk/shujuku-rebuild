@@ -25,7 +25,7 @@ import { collectMvuUpdateBlockRanges_ACU, stripMvuUpdateBlocks_ACU } from '../..
 import { getLastOptimizationBase_ACU, setLastOptimizationBase_ACU } from '../optimization/content-optimization';
 import { settings_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
 import { sanitizeSheetForStorage_ACU } from '../template/chat-scope';
-import { MESSAGE_TABLE_FIELDS_ACU, clearTableFieldsForIsolation_ACU, collectSheetIdentityAliasesForPurge_ACU, isLegacyMatchForIsolation_ACU, purgeSheetKeysFromMessage_ACU, purgeSheetKeysFromMessageForIsolation_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
+import { MESSAGE_TABLE_FIELDS_ACU, clearTableFieldsForIsolation_ACU, collectSheetIdentityAliasesForPurge_ACU, ensureWritableIsolatedDataContainer_ACU, isLegacyMatchForIsolation_ACU, purgeSheetKeysFromMessageForIsolation_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
 import { MAX_CHECKPOINT_RISK_DETAILS_ACU } from '../../data/repositories/target-keys-diagnostics';
 import { LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU } from '../../data/storage/chat-history';
 import { peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
@@ -995,11 +995,11 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
         const data = replay.data;
 
         const anchorMsg = chat[boundaryAnchorIndex];
-        if (!anchorMsg.TavernDB_ACU_IsolatedData || typeof anchorMsg.TavernDB_ACU_IsolatedData !== 'object' || Array.isArray(anchorMsg.TavernDB_ACU_IsolatedData)) {
-            anchorMsg.TavernDB_ACU_IsolatedData = {};
-        }
+        // G05-01：遗留字符串形态容器不得未经解析就置空——那会把该楼全部隔离标签槽的数据
+        // 静默删掉并随 strict save 落盘。统一走 repo 层规范化：先解析保留其他标签槽，按对象形态写回。
+        const anchorContainer: Record<string, any> = ensureWritableIsolatedDataContainer_ACU(anchorMsg);
 
-        const existingTagData = anchorMsg.TavernDB_ACU_IsolatedData[isolationKey];
+        const existingTagData = anchorContainer[isolationKey];
         const checkpoint = {
             kind: 'full' as const,
             createdAt: Date.now(),
@@ -1077,9 +1077,12 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
         if (transitionRef || replay.requiresCheckpointConvergence || replay.compatibilityRepairs?.length) {
             const candidateChat = structuredClone(chat);
             const candidateAnchor = candidateChat[boundaryAnchorIndex];
-            const candidateExistingTagData = candidateAnchor?.TavernDB_ACU_IsolatedData?.[isolationKey];
+            // G14-08：候选楼的容器可能仍是遗留字符串形态——裸展开会产出字符下标垃圾键
+            // （{0:'{',1:'"',…}）并丢失其他标签槽，先经 repo 层规范化为对象容器再展开。
+            const candidateContainer = ensureWritableIsolatedDataContainer_ACU(candidateAnchor);
+            const candidateExistingTagData = candidateContainer[isolationKey];
             candidateAnchor.TavernDB_ACU_IsolatedData = {
-                ...(candidateAnchor.TavernDB_ACU_IsolatedData || {}),
+                ...candidateContainer,
                 [isolationKey]: {
                     ...(candidateExistingTagData || {}),
                     storageFrame: frame,
@@ -1109,7 +1112,8 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
             }
         }
 
-        anchorMsg.TavernDB_ACU_IsolatedData[isolationKey] = {
+        // anchorContainer 即规范化后的 anchorMsg.TavernDB_ACU_IsolatedData（同一引用），就地写槽位。
+        anchorContainer[isolationKey] = {
             ...(existingTagData || {}),
             storageFrame: frame,
             _acu_storage_version: 2,
@@ -2592,14 +2596,14 @@ export async function commitManualRefillSheetSnapshotInRangeAtomic_ACU(
             const candidateChat = cloneCandidateChat_ACU(chat);
             const createdAt = Date.now();
             const rootMessage = candidateChat[rootMessageIndex];
-            rootMessage.TavernDB_ACU_IsolatedData = rootMessage.TavernDB_ACU_IsolatedData && typeof rootMessage.TavernDB_ACU_IsolatedData === 'object' && !Array.isArray(rootMessage.TavernDB_ACU_IsolatedData)
-                ? rootMessage.TavernDB_ACU_IsolatedData : {};
-            const rootTagData = rootMessage.TavernDB_ACU_IsolatedData[options.isolationKey];
+            // G05-01：遗留字符串形态容器先经 repo 层解析再写（直接置 {} 会丢掉其他标签槽的数据），统一按对象形态回写。
+            const rootContainer: Record<string, any> = ensureWritableIsolatedDataContainer_ACU(rootMessage);
+            const rootTagData = rootContainer[options.isolationKey];
             const rootFrame: TableStorageFrameV2_ACU = isV2TagData_ACU(rootTagData)
                 ? rootTagData.storageFrame
                 : { version: 2, logEntries: [] };
             if (!isV2TagData_ACU(rootTagData)) {
-                rootMessage.TavernDB_ACU_IsolatedData[options.isolationKey] = { ...(rootTagData && typeof rootTagData === 'object' ? rootTagData : {}), _acu_storage_version: 2, storageFrame: rootFrame };
+                rootContainer[options.isolationKey] = { ...(rootTagData && typeof rootTagData === 'object' ? rootTagData : {}), _acu_storage_version: 2, storageFrame: rootFrame };
             }
             if (fallbackRequired) {
                 const checkpointBuild = buildCanonicalFullCheckpoint_ACU({
@@ -2624,14 +2628,14 @@ export async function commitManualRefillSheetSnapshotInRangeAtomic_ACU(
             }
 
             const finalMessage = candidateChat[completedMessageIndex];
-            finalMessage.TavernDB_ACU_IsolatedData = finalMessage.TavernDB_ACU_IsolatedData && typeof finalMessage.TavernDB_ACU_IsolatedData === 'object' && !Array.isArray(finalMessage.TavernDB_ACU_IsolatedData)
-                ? finalMessage.TavernDB_ACU_IsolatedData : {};
-            const finalTagData = finalMessage.TavernDB_ACU_IsolatedData[options.isolationKey];
+            // G05-01：同上，字符串形态容器先解析再写，统一按对象形态回写。
+            const finalContainer: Record<string, any> = ensureWritableIsolatedDataContainer_ACU(finalMessage);
+            const finalTagData = finalContainer[options.isolationKey];
             const finalFrame: TableStorageFrameV2_ACU = isV2TagData_ACU(finalTagData)
                 ? finalTagData.storageFrame
                 : { version: 2, logEntries: [] };
             if (!isV2TagData_ACU(finalTagData)) {
-                finalMessage.TavernDB_ACU_IsolatedData[options.isolationKey] = { ...(finalTagData && typeof finalTagData === 'object' ? finalTagData : {}), _acu_storage_version: 2, storageFrame: finalFrame };
+                finalContainer[options.isolationKey] = { ...(finalTagData && typeof finalTagData === 'object' ? finalTagData : {}), _acu_storage_version: 2, storageFrame: finalFrame };
             }
             const perSheetCheckpoints = { ...(finalFrame.perSheetCheckpoints || {}) };
             const afterSeq = getMaxFrameSequence_ACU(finalFrame);
@@ -2782,15 +2786,14 @@ export async function establishManualRefillTemplateRoot_ACU(options: {
     try {
         const candidateChat = cloneCandidateChat_ACU(chat);
         const rootMessage = candidateChat[rootMessageIndex];
-        rootMessage.TavernDB_ACU_IsolatedData = rootMessage.TavernDB_ACU_IsolatedData && typeof rootMessage.TavernDB_ACU_IsolatedData === 'object' && !Array.isArray(rootMessage.TavernDB_ACU_IsolatedData)
-            ? rootMessage.TavernDB_ACU_IsolatedData
-            : {};
-        const rootTagData = rootMessage.TavernDB_ACU_IsolatedData[isolationKey];
+        // G05-01：遗留字符串形态容器先经 repo 层解析再写（直接置 {} 会丢掉其他标签槽的数据），统一按对象形态回写。
+        const rootContainer: Record<string, any> = ensureWritableIsolatedDataContainer_ACU(rootMessage);
+        const rootTagData = rootContainer[isolationKey];
         const rootFrame: TableStorageFrameV2_ACU = isV2TagData_ACU(rootTagData)
             ? rootTagData.storageFrame
             : { version: 2, logEntries: [] };
         if (!isV2TagData_ACU(rootTagData)) {
-            rootMessage.TavernDB_ACU_IsolatedData[isolationKey] = { ...(rootTagData && typeof rootTagData === 'object' ? rootTagData : {}), _acu_storage_version: 2, storageFrame: rootFrame };
+            rootContainer[isolationKey] = { ...(rootTagData && typeof rootTagData === 'object' ? rootTagData : {}), _acu_storage_version: 2, storageFrame: rootFrame };
         }
         rootFrame.checkpoint = checkpointBuild.checkpoint;
         writeMessageIdentity_ACU(rootMessage, { enabled: settings_ACU.dataIsolationEnabled, code: settings_ACU.dataIsolationCode });
@@ -2983,10 +2986,6 @@ export async function rollbackManualRefillRangeSnapshotAtomic_ACU(
             return { success: false, restoredCount, skippedIndexes, error: error?.message || String(error || '手动重填清理回滚保存失败。') };
         }
     });
-}
-
-function purgeTargetSheetKeysFromMessage_ACU(msg: any, targetSheetKeys: string[], _messageIndex: number): boolean {
-    return purgeSheetKeysFromMessage_ACU(msg, targetSheetKeys);
 }
 
 /**

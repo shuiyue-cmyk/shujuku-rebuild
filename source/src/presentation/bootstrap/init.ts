@@ -1087,9 +1087,13 @@ export   function mainInitialize_ACU() {
             try {
             if (shouldProcessSummaryVectorIndex) {
               try {
+                // G14-10：「继续」类发送末楼是 AI 楼且发送框为空时兜底取宿主 params.prompt——它可能是
+                // 整段格式化提示词（文本补全后端可达数万字符）甚至非字符串，直接当用户输入向量化会
+                // 失真并白烧 token。只接受字符串形态并截尾 500 字符，否则视为无用户输入（走 empty_user_input 跳过）。
+                const promptFallbackText = typeof params?.prompt === 'string' ? params.prompt.slice(-500) : '';
                 const lastUserText = lastAtStart?.is_user
                   ? String(lastAtStart.mes || '')
-                  : String(pendingTextInBox || params?.prompt || '');
+                  : String(pendingTextInBox || promptFallbackText);
                 if (shouldBeginPlotPendingDisguise_ACU({
                   disguiseEnabled: pendingDisguiseEnabled,
                   generationType: type,

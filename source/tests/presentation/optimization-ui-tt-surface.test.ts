@@ -87,17 +87,10 @@ vi.mock('../../src/shared/html-helpers', () => ({
   renderToastActionButton_ACU: () => '',
 }));
 
-vi.mock('../../src/service/plot/plot-state', () => ({
-  _set_currentEditablePlotPresetState_ACU: vi.fn(),
-  _set_activePlotEditorSettings_ACU: vi.fn(),
-  _set_currentPlotTaskEditorId_ACU: vi.fn(),
-}));
-
 vi.mock('../../src/service/optimization/content-optimization', () => ({
   cancelContentOptimization_ACU: vi.fn(() => ({ cancelled: false, reason: '' })),
   optimizationProgressToast_ACU: null,
   _set_optimizationProgressToast_ACU: vi.fn(),
-  _set_contentOptimizationAbortRequested_ACU: vi.fn(),
 }));
 
 // optimization-ui-diff 顶部循环 import exec；打桩切断 exec 的重依赖链
@@ -117,7 +110,8 @@ import {
   showOptimizationResultToast_ACU,
 } from '../../src/presentation/components/optimization-ui/optimization-ui-diff';
 import { showHostSurfaceToast_ACU } from '../../src/presentation/theme/toast';
-import { _set_jQuery_API_ACU } from '../../src/shared/host-api';
+import { _set_jQuery_API_ACU, _set_SillyTavern_API_ACU } from '../../src/shared/host-api';
+import { _set_currentChatFileIdentifier_ACU } from '../../src/service/runtime/state-manager';
 
 function makeResult(currentLoop: number, totalLoops: number) {
   return {
@@ -137,6 +131,9 @@ describe('optimization-ui TT surface 打标', () => {
     document.body.innerHTML = '';
     document.getElementById('acu-host-dialog-styles')?.remove();
     _set_jQuery_API_ACU(miniJQuery_ACU as any);
+    // G01-01：结果 toast 出现时会同步捕获楼层身份快照（聊天数组 + 聊天标识），这里备好可读的目标楼
+    _set_SillyTavern_API_ACU({ chat: [{}, {}, {}, { is_user: false, mes: '内容', message_id: 9, swipe_id: 0 }] } as any);
+    _set_currentChatFileIdentifier_ACU('chat-a');
   });
 
   it('优化遮罩 #acu-optimization-overlay 声明为 backdrop', () => {

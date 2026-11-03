@@ -20,6 +20,12 @@ import { validateSummaryVectorIndexConfig_ACU } from '../../service/vector/vecto
 import { globalMeta_ACU } from '../../data/repositories/profile-repo';
 import { showToastr_ACU } from '../theme/toast';
 import { showCustomConfirm_ACU } from '../theme/custom-confirm';
+// G12-02：重建确认是异步弹框，复用 V2 既有的聊天作用域快照守卫（R10A-01 同款），确认后复核聊天身份
+import {
+  CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU,
+  captureChatActionScope_ACU,
+  isChatActionScopeCurrent_ACU,
+} from '../../presentation-v2/composables/chat-action-scope';
 
 const SUMMARY_VECTOR_REBUILD_REQUIRED_REASONS_ACU = new Set([
   'legacy_vector_scheme_rebuild_required',
@@ -179,8 +185,15 @@ export async function processSummaryVectorIndexBeforeGenerationWithUI_ACU(
 
   if (shouldRebuildSummaryVectorIndexWithUI_ACU(result.reason)) {
     // 不用原生 confirm：TauriTavern 2.3.0 的原生 confirm 返回 Promise，会被当成「确定」直接执行
+    // G12-02：确认期间聊天可能被程序化切换；不复核会在另一个聊天上白烧一次 embedding 重建，
+    // 旧聊天下次发送仍会提示重建。进确认框前捕获聊天身份，确认后不一致即放弃（发送层租约随后停发）。
+    const chatScope = captureChatActionScope_ACU();
     const confirmed = await showCustomConfirm_ACU('交火索引需要重建', SUMMARY_VECTOR_SCHEME_REBUILD_CONFIRM_ACU, { confirmLabel: '重建' });
     if (!confirmed) return result;
+    if (!isChatActionScopeCurrent_ACU(chatScope)) {
+      showToastr_ACU('warning', CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU);
+      return result;
+    }
     let rebuilt = false;
     try {
       const rebuildResult = await rebuildCurrentSummaryVectorIndexWithUI_ACU();

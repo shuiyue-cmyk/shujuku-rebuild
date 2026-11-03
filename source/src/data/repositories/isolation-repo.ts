@@ -1,13 +1,10 @@
 /**
  * 数据隔离（Isolation）相关函数
  *
- * 管理数据隔离标识的历史记录、Profile 创建和切换。
+ * 管理数据隔离标识的历史记录（Profile 创建/切换编排已随隔离码 UI 下线删除）。
  */
 
-import { logWarn_ACU } from '../../shared/utils';
-import { normalizeIsolationCode_ACU } from '../../shared/data-constants';
-import { globalMeta_ACU, saveGlobalMeta_ACU, readProfileSettingsFromStorage_ACU, writeProfileSettingsToStorage_ACU, readProfileTemplateFromStorage_ACU, writeProfileTemplateToStorage_ACU, sanitizeSettingsForProfileSave_ACU } from './profile-repo';
-import { TABLE_TEMPLATE_ACU, DEFAULT_TABLE_TEMPLATE_ACU } from '../../shared/defaults-json.js';
+import { globalMeta_ACU, saveGlobalMeta_ACU } from './profile-repo';
 
 
 export const MAX_DATA_ISOLATION_HISTORY = 20;
@@ -52,20 +49,5 @@ export function removeDataIsolationHistory_ACU(code: string, { save = true } = {
     if (save) saveGlobalMeta_ACU();
 }
 
-export function ensureProfileExists_ACU(code: string, { seedFromCurrent = true, settings = {} as any } = {}): void {
-    const c = normalizeIsolationCode_ACU(code);
-    const hasSettings = !!readProfileSettingsFromStorage_ACU(c);
-    const hasTemplate = !!readProfileTemplateFromStorage_ACU(c);
-
-    if (!hasSettings) {
-        const seed = seedFromCurrent ? sanitizeSettingsForProfileSave_ACU(settings) : {};
-        seed.dataIsolationCode = c;
-        try { writeProfileSettingsToStorage_ACU(c, seed); } catch (e) { logWarn_ACU('[Profile] seed settings failed:', e); }
-    }
-    if (!hasTemplate) {
-        const seedTemplate = seedFromCurrent ? (TABLE_TEMPLATE_ACU || DEFAULT_TABLE_TEMPLATE_ACU) : DEFAULT_TABLE_TEMPLATE_ACU;
-        try { writeProfileTemplateToStorage_ACU(c, seedTemplate); } catch (e) { logWarn_ACU('[Profile] seed template failed:', e); }
-    }
-}
-
-// [已移到 service/settings/settings-service.ts] switchIsolationProfile_ACU（业务编排）
+// ensureProfileExists_ACU 与 switchIsolationProfile_ACU（业务编排）已一并删除：
+// 隔离码切换 UI 已下线，全库无任何调用方（第二轮复审 G11 跨组线索 1 坐实的死代码群）。

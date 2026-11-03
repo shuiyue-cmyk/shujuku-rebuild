@@ -2,6 +2,9 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// G12-02：「确认期间切聊天」用例需要在确认途中改聊天身份（state-manager 被 mock，经 getter 读取）
+let currentChatIdentity = 'chat-a';
+
 async function importTrigger() {
   vi.resetModules();
   const showCustomConfirm_ACU = vi.fn();
@@ -15,6 +18,7 @@ async function importTrigger() {
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
     settings_ACU: { manualUpdateContextDepth: 3, skipUpdateFloors: 0 },
     currentJsonTableData_ACU: { sheet_0: { name: '物品表' } },
+    get currentChatFileIdentifier_ACU() { return currentChatIdentity; },
     getCurrentIsolationKey_ACU: vi.fn(() => ''),
     _set_wasStoppedByUser_ACU: vi.fn(),
     _set_isAutoUpdatingCard_ACU: vi.fn(),
@@ -66,6 +70,7 @@ async function importTrigger() {
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  currentChatIdentity = 'chat-a';
 });
 
 describe('handleManualUpdate_ACU destructive refill confirmation', () => {
@@ -139,6 +144,16 @@ describe('handleManualUpdate_ACU destructive refill confirmation', () => {
     await handleManualUpdate_ACU();
 
     expect(showToastr_ACU).toHaveBeenCalledWith('error', '清理后重填失败');
+  });
+
+  it('G12-02：确认期间聊天被切换时放弃破坏性重填，orchestrator 不被调用', async () => {
+    const { handleManualUpdate_ACU, showCustomConfirm_ACU, showToastr_ACU, orchestrateManualUpdate_ACU } = await importTrigger();
+    showCustomConfirm_ACU.mockImplementationOnce(async () => { currentChatIdentity = 'chat-b'; return true; });
+
+    await handleManualUpdate_ACU();
+
+    expect(orchestrateManualUpdate_ACU).not.toHaveBeenCalled();
+    expect(showToastr_ACU).toHaveBeenCalledWith('warning', expect.stringContaining('已切换'));
   });
 });
 

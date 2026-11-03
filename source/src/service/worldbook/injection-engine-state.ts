@@ -145,8 +145,13 @@ import {
     // 直接使用有效的 chatFileName，不再需要调用 /getchatname 或其他回退逻辑。
     const previousChatFileIdentifier_ACU = String(currentChatFileIdentifier_ACU || '');
     _set_currentChatFileIdentifier_ACU(cleanChatName_ACU(chatFileName));
-    // 同一聊天重复 CHAT_CHANGED、启动恢复不算离开：保留本聊天上一轮的放行，重新生成还要用
-    const switchedToAnotherChat_ACU = reason === 'chat_changed' && previousChatFileIdentifier_ACU !== cleanChatName_ACU(chatFileName);
+    // 同一聊天重复 CHAT_CHANGED、启动恢复不算离开：保留本聊天上一轮的放行，重新生成还要用。
+    // identifier 为空串 = 本会话还没确立过任何聊天（启动阶段宿主在 startup_restore 之前补发
+    // CHAT_CHANGED，或无聊天清空后首开）：不存在「上一聊天」可收回，同样不算切换，
+    // 否则会把刷新前物理保留的上一轮绿灯误清掉（G08-06）。
+    const switchedToAnotherChat_ACU = reason === 'chat_changed'
+      && previousChatFileIdentifier_ACU !== ''
+      && previousChatFileIdentifier_ACU !== cleanChatName_ACU(chatFileName);
 
     // [FIX] Reload all settings to ensure template is not stale for new chats.
     // MUST be called AFTER setting currentChatFileIdentifier_ACU so it loads the correct character settings.

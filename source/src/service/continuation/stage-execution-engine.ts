@@ -43,7 +43,7 @@ export interface StageExecutionEngineDependencies_ACU {
   planner: ContinuationAgentTurnPlanner_ACU;
 }
 
-function fail_ACU(code: 'CONTINUATION_TASK_NOT_FOUND' | 'CONTINUATION_TASK_STATE_INVALID' | 'CONTINUATION_INTERNAL_REQUEST_STALE', message: string): never {
+function fail_ACU(code: 'CONTINUATION_TASK_NOT_FOUND' | 'CONTINUATION_TASK_STATE_INVALID', message: string): never {
   throw new ContinuationValidationError_ACU(createContinuationError_ACU(code, 'turn_call', message, false));
 }
 
@@ -108,15 +108,15 @@ export class StageExecutionEngine_ACU {
    * 跑一轮 Agent 循环并铸造宿主归属身份。
    * 身份在循环结束后按当时游标铸造：循环内的大纲创建/维护/继续会改变游标，
    * 循环期间的内部调用只校验「租约 + 聊天 + 任务在跑」，不绑 revision。
+   * 正文重试不再走这里（宿主 regenerate 复用旧楼，见 host-generation-bridge），
+   * 因此没有「沿用既有身份」的入参。
    * @param isLeaseCurrent 租约有效性检查
-   * @param existingAttempt 正文重试轮的既有身份；提供时禁止大纲操作且游标必须原样
    * @param applyOutline 大纲操作回调，由编排器在租约内执行
    * @param signal 中断信号；用户停止或插话时用于真正取消在途的内部 AI 请求
    * @returns 最终身份与写作指导
    */
   async prepareCurrentTurnInstruction(
     isLeaseCurrent: () => boolean = () => true,
-    existingAttempt?: TurnAttemptIdentity_ACU,
     applyOutline?: (instruction: string) => Promise<AgentOutlineOpResult_ACU>,
     signal?: AbortSignal | null,
     adjustProgress?: (action: AgentAdjustProgressAction_ACU) => Promise<AgentAdjustProgressReceipt_ACU>,
@@ -124,8 +124,6 @@ export class StageExecutionEngine_ACU {
     const chatIdentity = this.dependencies.getChatIdentity();
     const initial = currentAgentContext_ACU(this.dependencies.readEnvelope());
     const taskId = initial.task.taskId;
-    if (existingAttempt) this.assertAttemptMatchesCursor_ACU(existingAttempt, chatIdentity);
-
     const isCurrent = (candidate: ContinuationInternalAiRequestIdentity_ACU): boolean => {
       if (!isLeaseCurrent() || candidate.chatIdentity !== chatIdentity || candidate.taskId !== taskId) return false;
       if (this.dependencies.getChatIdentity() !== chatIdentity) return false;
@@ -133,7 +131,7 @@ export class StageExecutionEngine_ACU {
       return !!task && task.taskId === taskId && task.status === 'running' && task.stopReason === null;
     };
 
-    const attemptId = existingAttempt?.attemptId ?? this.dependencies.allocateId('attempt');
+    const attemptId = this.dependencies.allocateId('attempt');
     const readContext = () => currentAgentContext_ACU(this.dependencies.readEnvelope());
     const instruction = await this.dependencies.planner.plan({
       settings: initial.envelope.settings,
@@ -153,17 +151,13 @@ export class StageExecutionEngine_ACU {
         };
       },
       isInternalRequestCurrent: isCurrent,
-      applyOutline: existingAttempt ? undefined : applyOutline,
-      adjustProgress: existingAttempt ? undefined : adjustProgress,
+      applyOutline,
+      adjustProgress,
       signal,
     });
 
     // 循环结束后按最终游标铸造身份：finalize 已由循环保证游标存在，这里的严格快照是最后防线。
     const snapshot = currentSnapshot_ACU(this.dependencies.readEnvelope());
-    if (existingAttempt) {
-      this.assertAttemptMatchesCursor_ACU(existingAttempt, chatIdentity);
-      return { identity: existingAttempt, instruction };
-    }
     return {
       identity: {
         chatIdentity, taskId: snapshot.task.taskId, stageId: snapshot.stage.stageId,
@@ -213,14 +207,5 @@ export class StageExecutionEngine_ACU {
       isInternalRequestCurrent: isCurrent,
       signal,
     });
-  }
-
-  private assertAttemptMatchesCursor_ACU(attempt: TurnAttemptIdentity_ACU, chatIdentity: string): void {
-    const snapshot = currentSnapshot_ACU(this.dependencies.readEnvelope());
-    if (attempt.chatIdentity !== chatIdentity || attempt.taskId !== snapshot.task.taskId
-      || attempt.stageId !== snapshot.stage.stageId || attempt.revision !== snapshot.revision.revision
-      || attempt.nodeId !== snapshot.node.id || attempt.turnId !== snapshot.turn.id) {
-      fail_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', '正文重试身份已不属于当前阶段游标');
-    }
   }
 }

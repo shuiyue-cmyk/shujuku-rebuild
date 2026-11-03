@@ -36,6 +36,7 @@ vi.mock('../../../src/service/runtime/helpers-remaining', () => ({
 }));
 
 import { compileTemplateAssistantDraft_ACU } from '../../../src/service/template-assistant/compiler';
+import { validateDDLTextAgainstHeaders_ACU } from '../../../src/shared/ddl-utils';
 
 function buildTempData_ACU() {
   return {
@@ -99,6 +100,30 @@ describe('compileTemplateAssistantDraft_ACU', () => {
     expect(result.candidateData[addedKey].sourceData.initNode).toContain('初始化');
     expect(result.candidateData[addedKey].sourceData.insertNode).toContain('新增');
     expect(result.focusSheetKey).toBe(addedKey);
+    // G09-06：新建表本地必产 DDL（对齐 v3），中文表头映射为 ASCII 物理列名 + `-- 中文表头` 注释
+    const ddl = String(result.candidateData[addedKey].sourceData.ddl || '');
+    expect(ddl).toContain('CREATE TABLE');
+    expect(ddl).toContain('row_id INTEGER PRIMARY KEY');
+    expect(ddl).toContain('-- 物品');
+    expect(ddl).toContain('-- 品质');
+  });
+
+  it('add_sheet 生成的 DDL 与表头逐列匹配（G09-06 对齐 v3 口径）', () => {
+    const result = compileTemplateAssistantDraft_ACU({
+      tempData: buildTempData_ACU(),
+      sheetOrder: ['sheet_a', 'sheet_b', 'sheet_summary'],
+      currentSheetKey: 'sheet_a',
+      draft: {
+        protocolVersion: 2,
+        operations: [
+          { op: 'add_sheet', sheetName: '角色关系表', headers: ['角色A', '角色B', '关系'] },
+        ],
+      },
+    });
+    const addedKey = result.diff.addedSheets[0].sheetKey;
+    const ddl = String(result.candidateData[addedKey].sourceData.ddl || '');
+    const validation = validateDDLTextAgainstHeaders_ACU(ddl, ['row_id', '角色A', '角色B', '关系']);
+    expect(validation.valid).toBe(true);
   });
 
   it('add_sheet 拒绝与现有表 canonical 重名的名称', () => {
@@ -263,10 +288,12 @@ describe('compileTemplateAssistantDraft_ACU', () => {
 
     expect(result.diff.patchedContentSheets[0]?.changes.join('；')).toContain('改单元格');
     expect(result.diff.patchedContentSheets[0]?.changes.join('；')).toContain('新增 1 行');
-    expect(result.candidateData.sheet_a.content).toEqual([
-      ['row_id', '姓名', '备注'],
-      [null, '乙', '第二行'],
-    ]);
+    const content = result.candidateData.sheet_a.content;
+    expect(content[0]).toEqual(['row_id', '姓名', '备注']);
+    // G09-06：AI 新增行分配编辑器同款临时 row_id（此前写 null，保存链会把空 row_id 行按「已删除」静默移除）
+    expect(typeof content[1][0]).toBe('string');
+    expect(String(content[1][0])).toMatch(/^__acu_vis_tmp_row_/);
+    expect(content[1].slice(1)).toEqual(['乙', '第二行']);
   });
 
   it('patch_sheet_schema 支持结构修改并标记高风险', () => {

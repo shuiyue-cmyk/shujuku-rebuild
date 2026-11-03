@@ -2162,6 +2162,101 @@ describe('ensureV2BoundaryCheckpointForRetainedBuffer_ACU', () => {
     }));
   });
 
+  // ═══ G05-01 / G14-08：遗留字符串形态隔离容器的统一加固 ═══
+
+  /** 25 个 AI 楼：#0 带 init full；#23（锚点）是旧时代遗留的字符串形态容器（只有 tagA 槽）。 */
+  function buildStringContainerBoundaryChat() {
+    return Array.from({ length: 25 }, (_, index) => {
+      if (index === 23) {
+        return {
+          is_user: false,
+          TavernDB_ACU_IsolatedData: JSON.stringify({
+            tagA: {
+              independentData: { sheet_9: { name: '旧标签表', content: [['row_id', '值'], ['1', 'x']] } },
+              modifiedKeys: [],
+              updateGroupKeys: [],
+            },
+          }),
+        };
+      }
+      return {
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            storageFrame: {
+              version: 2,
+              ...(index === 0
+                ? {
+                    checkpoint: {
+                      kind: 'full',
+                      createdAt: 1,
+                      reason: 'init',
+                      data: { sheet_0: { name: '物品表', content: [['row_id', '物品名'], ['1', '剑']] } },
+                    },
+                  }
+                : {}),
+              logEntries: [],
+            },
+            _acu_storage_version: 2,
+          },
+        },
+      };
+    });
+  }
+
+  it('G05-01：边界锚点楼是字符串形态容器时先解析再写——旧标签槽原样保留，不被置空', async () => {
+    mockSettings.retainRecentLayers = 2;
+    const chat = buildStringContainerBoundaryChat();
+    mockGetChatArray.mockReturnValue(chat);
+
+    const result = await ensureV2BoundaryCheckpointForRetainedBuffer_ACU({ reason: 'manual_refill', save: true });
+
+    expect(result).toEqual(expect.objectContaining({ success: true, changed: true, anchorIndex: 23 }));
+    const container = chat[23].TavernDB_ACU_IsolatedData;
+    // 修复前：字符串容器被整体置 {}，tagA 槽（该楼其它标签的全部数据）被静默删除并落盘。
+    expect(typeof container).toBe('object');
+    expect(container.tagA.independentData.sheet_9.name).toBe('旧标签表');
+    // 当前隔离键照常拿到边界 full checkpoint
+    expect(container[''].storageFrame.checkpoint).toEqual(expect.objectContaining({
+      kind: 'full',
+      reason: 'compaction',
+    }));
+    expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
+  });
+
+  it('G14-08：收敛验证分支的候选楼字符串容器不再裸展开产字符下标垃圾键，旧标签槽随容器进入验证', async () => {
+    mockSettings.retainRecentLayers = 2;
+    const chat = buildStringContainerBoundaryChat();
+    mockGetChatArray.mockReturnValue(chat);
+    // 首次 replay 报「需要收敛」→ 走候选克隆验证分支；候选的严格回放落回默认收敛结果（指纹一致）。
+    mockLoadTableStateFromFramesV2Detailed.mockResolvedValueOnce({
+      baseKind: 'full_checkpoint',
+      data: { sheet_0: { name: '物品表', content: [['row_id', '物品名'], ['1', '剑']] } },
+      requiresCheckpointConvergence: true,
+    });
+
+    const result = await ensureV2BoundaryCheckpointForRetainedBuffer_ACU({ reason: 'manual_refill', save: true });
+
+    expect(result).toEqual(expect.objectContaining({ success: true, changed: true, anchorIndex: 23 }));
+    // 候选验证收到的是 structuredClone 的聊天（非 live 引用），从中取候选锚点楼
+    const candidateCall = mockLoadTableStateFromFramesV2Detailed.mock.calls
+      .find(call => Array.isArray(call[0]) && call[0] !== chat && call[0][23]);
+    expect(candidateCall).toBeDefined();
+    const candidateContainer = candidateCall![0][23].TavernDB_ACU_IsolatedData;
+    expect(typeof candidateContainer).toBe('object');
+    // 修复前：字符串被裸展开成 {0:'{',1:'"',…} 字符下标垃圾键；规范化后不得有任何数字键
+    expect(Object.keys(candidateContainer).filter(key => /^\d+$/.test(key))).toEqual([]);
+    expect(candidateContainer.tagA.independentData.sheet_9.name).toBe('旧标签表');
+    expect(candidateContainer['']._acu_storage_version).toBe(2);
+    expect(candidateContainer[''].storageFrame.version).toBe(2);
+    // live 回写走同一规范化口径
+    expect(chat[23].TavernDB_ACU_IsolatedData.tagA.independentData.sheet_9.name).toBe('旧标签表');
+    expect(chat[23].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toEqual(expect.objectContaining({
+      kind: 'full',
+      reason: 'compaction',
+    }));
+  });
+
 });
 
 
@@ -2913,6 +3008,60 @@ describe('commitManualRefillSheetSnapshotInRangeAtomic_ACU', () => {
         name: '纪要表',
         content: [['row_id', '事件'], ['1', '重填事件'], ['30', '重填末层事件']],
       },
+    }));
+    expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
+  });
+
+  it('G05-01：末端楼是字符串形态容器时先解析再写——旧标签槽保留，rebase 照常落到默认槽', async () => {
+    const chat = [
+      makeFrameMessage({
+        version: 2,
+        checkpoint: {
+          kind: 'full',
+          reason: 'compaction',
+          createdAt: 20,
+          data: {
+            mate: { type: 'acu' },
+            sheet_0: { name: '纪要表', content: [['row_id', '事件'], ['20', '旧事件']] },
+          },
+        },
+        logEntries: [],
+      }),
+      { is_user: true },
+      {
+        is_user: false,
+        // 旧时代遗留楼层：容器是 JSON 字符串，只有 tagA 槽、没有当前 '' 槽
+        TavernDB_ACU_IsolatedData: JSON.stringify({
+          tagA: {
+            independentData: { sheet_9: { name: '旧标签表', content: [['row_id', '值'], ['1', 'x']] } },
+            modifiedKeys: [],
+            updateGroupKeys: [],
+          },
+        }),
+      },
+    ];
+    mockGetChatArray.mockReturnValue(chat);
+
+    const result = await commitManualRefillSheetSnapshotInRangeAtomic_ACU({
+      isolationKey: '',
+      targetMessageIndices: [0, 1, 2],
+      targetSheetKeys: ['sheet_0'],
+      snapshotData: {
+        sheet_0: {
+          name: '纪要表',
+          content: [['row_id', '事件'], ['1', '重填事件']],
+        },
+      },
+    });
+
+    expect(result).toEqual(expect.objectContaining({ success: true, targetMessageIndex: 0, checkpointCount: 1 }));
+    // 修复前：字符串容器被三目整体置 {}，tagA 槽被静默删除并随 apply+strict save 落到 live。
+    const finalContainer = chat[2].TavernDB_ACU_IsolatedData;
+    expect(typeof finalContainer).toBe('object');
+    expect(finalContainer.tagA.independentData.sheet_9.name).toBe('旧标签表');
+    expect(finalContainer[''].storageFrame.perSheetCheckpoints.sheet_0).toEqual(expect.objectContaining({
+      kind: 'sheet_full',
+      timeline: { kind: 'sheet_rebase', activateAtMessageIndex: 2, afterSeq: 0 },
     }));
     expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
   });

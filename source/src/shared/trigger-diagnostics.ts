@@ -95,25 +95,6 @@ export function logAutoFillSkip_ACU(
   reason: AutoFillSkipReason_ACU,
   context: AutoFillSkipContext_ACU = {},
 ): void {
-  const {
-    eventType,
-    messageId,
-    eventMessageId,
-    chatKey,
-    isolationKey,
-    liveIsolationKey,
-    lastGenerationType,
-    aiFloorCount,
-    capturedChatLength,
-    capturedAiFloorCount,
-    liveChatLength,
-    liveAiFloorCount,
-    resolvedMessageIndex,
-    candidateIndexes,
-    inFlight,
-    preconditionReason,
-    latestAiMessageId,
-  } = context;
   const log = AUTO_FILL_SKIP_WARN_REASONS_ACU.has(reason) ? logWarn_ACU : logDebug_ACU;
   log('[AutoFill] Trigger skipped', {
     reason,

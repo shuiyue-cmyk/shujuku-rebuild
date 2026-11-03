@@ -7,6 +7,7 @@ import {
   DECISION_RECALL_LEVELS_ACU,
   buildDecisionRecallBatchBody_ACU,
   buildDecisionRecallState_ACU,
+  decisionRecallLevelLabel_ACU,
   interpretDecisionRecallBatchResponse_ACU,
   type DecisionRecallRow_ACU,
 } from '../../../src/service/decision-recall/decision-recall-scoring';
@@ -34,6 +35,17 @@ describe('DECISION_RECALL_LEVELS_ACU', () => {
     expect(DECISION_RECALL_LEVELS_ACU.map(level => level.score)).toEqual([1, 2, 3, 4, 5]);
     expect(DECISION_RECALL_LEVELS_ACU[0].label).toBe('无关');
     expect(DECISION_RECALL_LEVELS_ACU[4].label).toBe('强相关');
+  });
+});
+
+describe('decisionRecallLevelLabel_ACU（分数 → 档位标签的唯一出处，G01-03）', () => {
+  it('取最近的档位标签；平分取较低档', () => {
+    expect(decisionRecallLevelLabel_ACU(5)).toBe('强相关');
+    expect(decisionRecallLevelLabel_ACU(4.6)).toBe('强相关');
+    expect(decisionRecallLevelLabel_ACU(4)).toBe('较相关');
+    expect(decisionRecallLevelLabel_ACU(3.5)).toBe('一般相关');
+    expect(decisionRecallLevelLabel_ACU(2)).toBe('弱相关');
+    expect(decisionRecallLevelLabel_ACU(1.2)).toBe('无关');
   });
 });
 
@@ -102,7 +114,6 @@ describe('interpretDecisionRecallBatchResponse_ACU', () => {
     }, rows);
     expect(scores.get('k-AM0001')?.score).toBeCloseTo(5);
     expect(scores.get('k-AM0002')?.score).toBeCloseTo(1);
-    expect(scores.get('k-AM0001')?.choice).toBe('强相关');
   });
 
   it('概率在两档之间时得到中间值，便于排序', () => {

@@ -22,7 +22,7 @@ import {
   runDecisionRecall_ACU,
   type DecisionRecallRunResult_ACU,
 } from '../../service/decision-recall/decision-recall-runtime';
-import { DECISION_RECALL_LEVELS_ACU } from '../../service/decision-recall/decision-recall-scoring';
+import { decisionRecallLevelLabel_ACU } from '../../service/decision-recall/decision-recall-scoring';
 import {
   SILICONFLOW_DECISION_MODELS_ACU,
   fetchDecisionModels_ACU,
@@ -77,11 +77,6 @@ function persistOrRollback_ACU(snapshot: unknown, rollback?: () => void): boolea
   return false;
 }
 
-function levelLabel_ACU(score: number): string {
-  const nearest = DECISION_RECALL_LEVELS_ACU.reduce((best, level) => (Math.abs(level.score - score) < Math.abs(best.score - score) ? level : best));
-  return nearest.label;
-}
-
 /** 测试结果的可读文本：摘要一行，然后列出带上的纪要（固定 / 分数），再列分数最高的几条落选纪要。 */
 export function formatDecisionRecallTestOutput_ACU(result: DecisionRecallRunResult_ACU): string {
   if (result.status !== 'ok') return describeDecisionRecallResult_ACU(result).replace(/^\[决策召回\] /, '');
@@ -98,14 +93,14 @@ export function formatDecisionRecallTestOutput_ACU(result: DecisionRecallRunResu
   lines.push('', `带上 ${result.selected.length} 条（按表号顺序）：`);
   for (const row of result.selected) {
     const entry = scoreByKey.get(row.rowKey);
-    const tag = fixedKeys.has(row.rowKey) ? '固定' : entry ? `${entry.score.toFixed(2)} 分 · ${levelLabel_ACU(entry.score)}` : '未打分';
+    const tag = fixedKeys.has(row.rowKey) ? '固定' : entry ? `${entry.score.toFixed(2)} 分 · ${decisionRecallLevelLabel_ACU(entry.score)}` : '未打分';
     lines.push(`· ${row.indexCode}［${tag}］${row.summary}`);
   }
   const selectedKeys = new Set(result.selected.map(row => row.rowKey));
   const runnersUp = result.scored.filter(entry => !selectedKeys.has(entry.row.rowKey)).slice(0, 10);
   if (runnersUp.length > 0) {
     lines.push('', '落选里分数最高的几条：');
-    for (const entry of runnersUp) lines.push(`· ${entry.row.indexCode}［${entry.score.toFixed(2)} 分 · ${levelLabel_ACU(entry.score)}］${entry.row.summary}`);
+    for (const entry of runnersUp) lines.push(`· ${entry.row.indexCode}［${entry.score.toFixed(2)} 分 · ${decisionRecallLevelLabel_ACU(entry.score)}］${entry.row.summary}`);
   }
   return lines.join('\n');
 }

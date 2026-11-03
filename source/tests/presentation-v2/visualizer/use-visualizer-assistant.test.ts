@@ -35,6 +35,8 @@ vi.mock('../../../src/service/template-assistant/service', () => ({
   ],
   createTemplateAssistantSessionGuard_ACU: mockCreateGuard,
   getTemplateAssistantApplyBaselineFingerprint_ACU: mockGetBaselineFingerprint,
+  // 迁移逻辑本体在 prompt-placeholders.test.ts 用真实现覆盖；这里保持透传，只验证 UI 接线不报错。
+  migrateLegacyV2ProtocolSegments_ACU: (segments: any[]) => (Array.isArray(segments) ? segments : []),
   hasTemplateAssistantApplicableDraft_ACU: (draft: any) =>
     Array.isArray(draft?.operations) && draft.operations.length > 0 || draft?.protocolVersion === 3 && ['replace', 'create', 'delete'].includes(draft?.result?.action),
   resolveAssistantSystemPrompt_ACU: (segments: any[]) => (Array.isArray(segments) && segments.length
@@ -219,6 +221,44 @@ describe('useVisualizerAssistant', () => {
     expect(visualizer.sheetOrder).toEqual(['sheet_a', 'sheet_b']);
     expect(visualizer.deletedSheetKeys).toContain('sheet_old');
     expect(visualizer.currentSheet.content[1][2]).toBe('警觉');
+  });
+
+  it('改名未提交窗口内，助手按已保存表名解析表级覆盖（G09-04）', async () => {
+    const { settings_ACU } = await import('../../../src/service/runtime/state-manager');
+    settings_ACU.apiPresets = [{ name: 'preset-beta' }] as any;
+    settings_ACU.tableApiPreset = 'preset-alpha';
+    // 覆盖挂在已保存名「背包表」上；「行囊表」是尚未提交的草稿改名，不该命中它上面的覆盖
+    settings_ACU.tableApiPresetOverridesByName = { 背包表: 'preset-beta', 行囊表: 'preset-wrong' };
+
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');
+    const visualizer = useVisualizerStore();
+    visualizer.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: {
+        uid: 'sheet_a',
+        name: '背包表',
+        orderNo: 0,
+        content: [['row_id', '物品'], ['1', '干粮']],
+      },
+    }, ['sheet_a']);
+    // 草稿改名（未提交模板保存）：草稿名「行囊表」，已保存名仍是「背包表」
+    (visualizer.tempData as any).sheet_a.name = '行囊表';
+
+    mockRunSession.mockImplementation(async (input: any) => buildResult(input));
+
+    const assistant = useVisualizerAssistant();
+    expect(assistant.tableApiPreset.value).toBe('preset-beta');
+
+    assistant.userRequest.value = '整理物品';
+    await assistant.run();
+
+    expect(mockRunSession).toHaveBeenCalledWith(expect.objectContaining({
+      tableApiPreset: 'preset-beta',
+      templateBaseData: expect.objectContaining({
+        sheet_a: expect.objectContaining({ name: '背包表' }),
+      }),
+    }));
   });
 
   it('应用 AI 单元格候选会生成可保存的行级 pending op', async () => {

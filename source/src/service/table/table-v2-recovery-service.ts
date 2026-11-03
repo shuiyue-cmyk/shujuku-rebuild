@@ -205,8 +205,17 @@ function hasSamePlanScope_ACU(left: RecoveryPlan_ACU, right: RecoveryPlan_ACU): 
 }
 
 function createPlan_ACU(plan: Omit<RecoveryPlan_ACU, 'planId'>): V2RecoverySummary_ACU {
+  const next = plan as RecoveryPlan_ACU;
   for (const [existingPlanId, existingPlan] of plans_ACU) {
-    if (hasSamePlanScope_ACU(existingPlan, plan as RecoveryPlan_ACU)) plans_ACU.delete(existingPlanId);
+    // 同 scope 旧计划：直接替换（原有语义）。
+    // 跨 scope（chat 引用或 chatKey 与当前不符）的旧计划：无条件淘汰。被放弃的诊断计划
+    // 持有整个 chat 数组的强引用与 candidateData 全量克隆，跨聊天来回诊断会累积占用内存
+    // 且永不清理（计划本就要求同 scope 才能提交，跨聊天保留无用途）。G04-05。
+    if (hasSamePlanScope_ACU(existingPlan, next)
+      || existingPlan.chat !== next.chat
+      || existingPlan.chatKey !== next.chatKey) {
+      plans_ACU.delete(existingPlanId);
+    }
   }
   const planId = buildPlanId_ACU();
   plans_ACU.set(planId, { ...plan, planId });
@@ -309,6 +318,8 @@ function buildRecoveredCandidateChat_ACU(plan: RecoveryPlan_ACU): any[] {
       // data_replace 是完整替换语义，必须排在原日志之后且 seq 大于所有原日志，
       // 否则会被回放当成“替换基底之前的普通日志”而重新应用，破坏替换语义。
       const fallbackSeq = originalEntries.reduce((max, entry) => Math.max(max, entry.seq || 0), 0) + 1;
+      // 导入声明的覆盖楼层必须随降级一起保留（对齐 chat-service 轮转降级与 downgrade 工具，上游 issue #18 第五条）。
+      const declaredRestoreFloor = Number((originalCheckpoint as any)?.restoreUpToAiFloor);
       const fallbackEntry = {
         seq: fallbackSeq,
         entryId: `redundant-full-fallback-${messageIndex}`,
@@ -316,6 +327,7 @@ function buildRecoveredCandidateChat_ACU(plan: RecoveryPlan_ACU): any[] {
         source: 'system' as const,
         targetMessageIndex: messageIndex,
         aiFloor: countAiFloorInChat_ACU(plan.chat, messageIndex),
+        ...(Number.isInteger(declaredRestoreFloor) && declaredRestoreFloor > 0 ? { restoreUpToAiFloor: declaredRestoreFloor } : {}),
         filledSheetKeys: originalCheckpoint?.event?.filledSheetKeys ?? [],
         changedSheetKeys: originalCheckpoint?.event?.changedSheetKeys ?? [],
         groupKeys: originalCheckpoint?.event?.groupKeys ?? [],

@@ -1875,6 +1875,9 @@ describe('executeCardUpdateCore_ACU', () => {
     expect(result.postCommitWarnings![0].message).toContain('表格已保存');
     expect(result.postCommitWarnings![0].message).toContain('世界书写入超时');
     expect(result.postCommitWarnings![0].message).toContain('无需重新填表');
+    // G14-09：与统一路径同口径——世界书刷新失败时 legacy 路径同样跳过向量收尾
+    // （fire-and-forget 的调用点是同步发起的，无需额外 flush）。
+    expect(mockEnsureSummaryVectorMirrorAfterTableFill).not.toHaveBeenCalled();
   });
 
   it('世界书刷新正常时不带告警', async () => {
@@ -1888,6 +1891,8 @@ describe('executeCardUpdateCore_ACU', () => {
 
     expect(result.success).toBe(true);
     expect(result.postCommitWarnings).toBeUndefined();
+    // G14-09 对照组：世界书刷新正常时向量收尾照常执行，对齐不改变成功路径。
+    expect(mockEnsureSummaryVectorMirrorAfterTableFill).toHaveBeenCalledTimes(1);
   });
 
   it('import 模式不保存到聊天记录', async () => {
@@ -5644,6 +5649,8 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
     expect(mockSaveIndependentTable).not.toHaveBeenCalled();
     expect(mockRunTableUpdateApplyWithScopeLock).not.toHaveBeenCalled();
     expect(mockEnqueueSummaryVectorIndexFlush).not.toHaveBeenCalled();
+    // G14-09 对照组：世界书刷新正常时统一路径的向量收尾照常执行（非纪要表只到 ensure，不入队 flush）。
+    expect(mockEnsureSummaryVectorMirrorAfterTableFill).toHaveBeenCalledTimes(1);
     expect(mockUpdateReadableLorebookEntry).toHaveBeenCalledTimes(1);
     expect(baseSnapshot.sheet_0.content).toEqual([['row_id', '值'], ['1', 'base-a']]);
     expect(baseSnapshot.sheet_1.content).toEqual([['row_id', '值'], ['1', 'base-b']]);
@@ -5665,6 +5672,8 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
     expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
     expect(result.postCommitWarnings).toEqual([expect.objectContaining({ code: 'worldbook_sync_failed' })]);
     expect(result.postCommitWarnings![0].message).toContain('宿主世界书不可用');
+    // G14-09：统一路径世界书刷新失败时跳过向量收尾（legacy 路径已对齐同一条件）。
+    expect(mockEnsureSummaryVectorMirrorAfterTableFill).not.toHaveBeenCalled();
   });
 
   it('规范化后的空模板首次填表可通过 snapshot 提交', async () => {
@@ -8819,7 +8828,8 @@ describe('executeAutoFillStagingGroups_ACU', () => {
     indices,
     batchSize: 2,
     sheetKeys: ['sheet_0'],
-    requestOptions: { skipProfileSwitch: true, forceDirectApi: true },
+    // G02-04：原 { skipProfileSwitch, forceDirectApi } 死参数已随调用方一并清除。
+    requestOptions: null,
   });
 
   it('无 full checkpoint 时退化为普通分组执行，不冻结 scope 也不汇合', async () => {
@@ -8831,6 +8841,18 @@ describe('executeAutoFillStagingGroups_ACU', () => {
     expect(mockCommitStagedSheetsAtFullBoundaryAtomic).not.toHaveBeenCalled();
     // 普通持久化路径：persist 被调用
     expect(mockPersistTablesToChatMessage).toHaveBeenCalled();
+  });
+
+  // G03-06：返回类型声明的 postCommitWarnings 必须是真契约——退化普通执行分支
+  // 透传 processGroupedRuntimeChunkCore 收集的告警，调度层按有值消费。
+  it('退化普通执行分支把段级 postCommitWarnings 按契约带回给调度层', async () => {
+    const { executeAutoFillStagingGroups_ACU } = await import('../../../src/service/table/update-orchestrator');
+    mockUpdateReadableLorebookEntry.mockRejectedValueOnce(new Error('世界书写入超时'));
+    const result = await executeAutoFillStagingGroups_ACU([stagingGroup([1])], 'auto_independent', {
+      boundary: { fullCheckpointIndices: [], requiresBoundaryStaging: true },
+    });
+    expect(result.success).toBe(true);
+    expect(result.postCommitWarnings).toEqual([expect.objectContaining({ code: 'worldbook_sync_failed' })]);
   });
 
   it('纯 pre-boundary 组：stage_only 提交不写聊天帧，收尾原子汇合回原根', async () => {

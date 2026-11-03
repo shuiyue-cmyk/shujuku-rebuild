@@ -42,6 +42,30 @@ describe('写拒绝消息构造与识别', () => {
     expect(isCompatReadonlyWriteRejection_ACU(message)).toBe(true);
   });
 
+  // G13-02：指引与真实 UI/行为对齐——不存在「固化兼容回放为过渡根」按钮；
+  // 无身份归并 → 后台自动固化（重载聊天后重试）；含身份归并 → 指向真实的
+  // 「历史恢复诊断」入口并说明当前版本无法自助修复。
+  it('兼容只读拒绝的指引按是否含身份归并分支，不再指向不存在的按钮', () => {
+    const plain = buildCompatReadonlyWriteRejectionMessage_ACU('V2 写入前', {
+      legacyToleranceDiagnosis: { tolerances: [], strictError: 'boom', identityRemaps: [] },
+    });
+    expect(plain).toContain('重新加载聊天时由后台自动固化为过渡根');
+    expect(plain).not.toContain('固化兼容回放为过渡根');
+    expect(plain).not.toContain('诊断 V2 数据恢复');
+
+    const remapped = buildCompatReadonlyWriteRejectionMessage_ACU('V2 写入前', {
+      legacyToleranceDiagnosis: {
+        tolerances: ['identity_remap'],
+        strictError: 'boom',
+        identityRemaps: [{ fromKey: 'sheet_old', toKey: 'sheet_new', canonicalName: '表', overriddenRows: 1, appendedRows: 0 } as any],
+      },
+    });
+    expect(remapped).toContain('历史恢复诊断');
+    expect(remapped).toContain('无法自助修复');
+    expect(remapped).not.toContain('执行 V2 恢复（身份归一化）');
+    expect(isCompatReadonlyWriteRejection_ACU(remapped)).toBe(true);
+  });
+
   it('写时探针拒绝文案带统一关键短语，可被谓词识别', () => {
     const message = buildAppendedOperationsWriteRejectionMessage_ACU('UNIQUE constraint failed: t.row_id');
     expect(message).toContain(V2_WRITE_GUARD_MARKER_ACU);

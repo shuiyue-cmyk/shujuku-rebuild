@@ -128,15 +128,39 @@ function isSensitiveLogKey(key: string): boolean {
   return LOG_SENSITIVE_KEYS.test(key) || LOG_SENSITIVE_SUFFIX.test(key);
 }
 
+/**
+ * 文本级敏感形态脱敏的唯一实现（G02-02 收敛）：日志写入（normalizeLogArg_ACU /
+ * maskSensitiveInLogValue）、展示侧 maskSensitiveText_ACU、上游错误体展示脱敏
+ * （service/ai/api-call）与填表重试反馈脱敏（service/table/update-orchestrator）
+ * 共用这一份规则，不再各维护一份覆盖互有长短的清单。
+ */
+function maskSensitiveStringPatterns_ACU(text: string): string {
+  return text
+    // [L1] Authorization 头（Bearer / Basic）；proxy-authorization 等复合头名按子串同样命中
+    .replace(/(Authorization\s*:\s*(?:Bearer|Basic)\s+)([^\s"',}\n]+)/gi, '$1***')
+    // [L2] Bearer + sk- 形态密钥
+    .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
+    // [L3] 裸 bearer/basic + 长令牌（JWT、base64 凭据等，无头名前缀）；
+    // 16 位阈值避免误伤英文词（如 "basic authentication"）
+    .replace(/\b(bearer|basic)\s+[a-z0-9._~+/=-]{16,}/gi, '$1 ***')
+    // [L3b] JSON 引号键名形态："apiKey":"xxx" 等
+    .replace(/("[A-Za-z0-9_-]*(?:api[_-]?key|apikey|authorization|token|password|passwd|secret|auth|bearer|accessToken|access_token|cookie)"\s*:\s*")([^"]+)(")/gi, '$1***$3')
+    // [L4] 裸形态脱敏：apiKey=xxx / token: xxx / embeddingApiKey=xxx / cookie=xxx（日志形态），
+    // 值支持带引号（api_key="SECRET"）与不带引号两种；值以 bearer/basic 开头的
+    // （如 Authorization: Bearer xxx）交由上方既有规则处理，避免双重掩码。
+    .replace(/\b([A-Za-z0-9_]*(?:api[_-]?key|apikey|authorization|token|password|passwd|secret|auth|bearer|accessToken|access_token|cookie))\b(\s*[:=]\s*)("[^"]*"|'[^']*|(?!bearer\b|basic\b)[^\s"',;}\n]+)/gi, '$1$2***')
+    // [L5] URL 查询参数形态：Gemini 转接以 ?key= 发出密钥，上游/中转可能把请求 URL 回显进错误体。
+    // 只认紧跟 ? 或 & 的参数名，避免误伤裸 key/auth 词（keyboard、authority 之类）。
+    .replace(/([?&](?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|authorization|auth|token|secret|password|passwd|proxy[_-]?password|cookie|key)\s*=\s*)([^&#\s"',;}<>\\]+)/gi, '$1***')
+    // [L6] 无前缀独立出现的 sk- 开头密钥串（长度阈值避免误伤普通词）
+    .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, 'sk-***')
+    // [L7] Gemini 密钥裸回显（AIza 前缀 + 长随机串），与裸 sk- 同阈值口径
+    .replace(/\bAIza[A-Za-z0-9_-]{16,}/g, 'AIza***');
+}
+
 function maskSensitiveInLogValue(value: any, depth = 0, seen = new WeakSet()): any {
   if (typeof value === 'string') {
-    return value
-      .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
-      .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
-      .replace(/("[A-Za-z0-9_-]*(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3')
-      // 与 normalizeLogArg_ACU 的 [L4] 规则对齐：Error 分支走本函数，此前缺裸 key=value 与独立 sk- 形态
-      .replace(/\b([A-Za-z0-9_]*(?:api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token))\b(\s*[:=]\s*)(?!["']|bearer\b)[^\s"',;}\n]+/gi, '$1$2***')
-      .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, 'sk-***');
+    return maskSensitiveStringPatterns_ACU(value);
   }
   if (depth > 6 || value === null || value === undefined) return depth > 6 ? '[Truncated]' : value;
   if (typeof value === 'object') {
@@ -162,15 +186,8 @@ function normalizeLogArg_ACU(arg: any): string {
   if (arg === null) return 'null';
   if (arg === undefined) return 'undefined';
   if (typeof arg === 'string') {
-    return arg
-      .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
-      .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
-      .replace(/\"([A-Za-z0-9_-]*(?:api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token))\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"')
-      // [L4] 裸形态脱敏：apiKey=xxx / token: xxx / embeddingApiKey=xxx（键与值均不带引号的日志形态）。
-      // 值若以 bearer 开头（如 Authorization: Bearer xxx）交由上方既有规则处理，避免双重掩码。
-      .replace(/\b([A-Za-z0-9_]*(?:api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token))\b(\s*[:=]\s*)(?!["']|bearer\b)[^\s"',;}\n]+/gi, '$1$2***')
-      // [L4] 无前缀独立出现的 sk- 开头密钥串（长度阈值避免误伤普通词）
-      .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, 'sk-***');
+    // 与 maskSensitiveInLogValue / maskSensitiveText_ACU 共用同一份脱敏规则（G02-02 收敛）
+    return maskSensitiveStringPatterns_ACU(arg);
   }
   if (typeof arg === 'number' || typeof arg === 'boolean' || typeof arg === 'bigint') return String(arg);
   if (typeof arg === 'symbol') return String(arg);
@@ -226,6 +243,9 @@ export function formatArgs(args: any[]): string {
  * 对一段面向用户可见面的文本做敏感信息脱敏（toast、错误提示、诊断文案）。
  * 与日志写入侧同规则：日志缓冲的 Error 分支已掩码，但 toast/上游回显原文是旁路，
  * 上游把请求头回显进错误体时会绕过日志脱敏直达 UI，故展示前必须过这一层。
+ * G02-02：本函数是全库文本脱敏的唯一规则源（maskSensitiveStringPatterns_ACU），
+ * 上游错误体展示（api-call）与填表重试反馈（update-orchestrator）都在此基础上
+ * 叠加各自的专用处理，不再各自维护平行的密钥形态清单。
  */
 export function maskSensitiveText_ACU(value: unknown): string {
   return normalizeLogArg_ACU(value);

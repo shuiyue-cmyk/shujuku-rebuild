@@ -170,6 +170,24 @@ describe('callAIWithPreset_ACU', () => {
     expect(error.message.length).toBeLessThanOrEqual(2100);
   });
 
+  // G02-02：展示脱敏的形态缺口——Gemini 转接把密钥放进 ?key= 查询参数，
+  // 上游/中转可能把请求 URL 或密钥原文回显进错误体；裸 sk-/AIza 回显同样要挡住。
+  it('上游错误体回显 ?key= 查询参数与裸 sk-/AIza 密钥时同样脱敏', async () => {
+    const leakedBody = [
+      'POST https://relay.example.com/v1beta/models?key=AIzaSyD-REAL-LOOKING-SECRET-abcdef → 403',
+      'Incorrect API key provided: sk-abcdefghijklmnopqrstuvwxyz0123456789',
+    ].join('\n');
+    mockFetch.mockResolvedValue({ ok: false, status: 403, text: () => Promise.resolve(leakedBody) });
+
+    const error = await postChatCompletion_ACU({ stream: false }).catch(e => e);
+
+    expect(error).toBeInstanceOf(AgentApiHttpError_ACU);
+    expect(error.message).not.toContain('AIzaSyD-REAL-LOOKING-SECRET-abcdef');
+    expect(error.message).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123456789');
+    expect(error.message).toContain('key=***');
+    expect(error.message).toContain('sk-***');
+  });
+
   it('postChatCompletionTurn_ACU 取回正文与 tool_calls（填表工具调用可选项）', async () => {
     mockFetch.mockResolvedValue({
       ok: true,

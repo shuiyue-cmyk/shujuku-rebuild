@@ -6,6 +6,8 @@ import {
   buildVectorIndexSingleSnapshotV2ScopeToken_ACU,
   buildVectorIndexStableDirectory_ACU,
   decodeVectorIndexScopeFromPath_ACU,
+  deleteRegisteredVectorIndexFilesWhere_ACU,
+  deleteVectorIndexFile_ACU,
   extractVectorIndexContentPackScopeTokenFromPath_ACU,
   extractVectorIndexV2ScopeTokenFromPath_ACU,
   isFallbackVectorIndexChecksum_ACU,
@@ -547,5 +549,124 @@ describe('isFallbackVectorIndexChecksum_ACU 弱哈希判别（fix6）', () => {
     expect(isFallbackVectorIndexChecksum_ACU(null)).toBe(false);
     expect(isFallbackVectorIndexChecksum_ACU(undefined)).toBe(false);
     expect(isFallbackVectorIndexChecksum_ACU(42)).toBe(false);
+  });
+});
+
+describe('G05-05 外置文件删除的存在性探测（只有明确 404 才视为不存在）', () => {
+  const targetPath = 'TavernDB_ACU_vector_pack_target';
+
+  function jsonResponse(status: number, data: any) {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: `HTTP ${status}`,
+      json: async () => data,
+      text: async () => JSON.stringify(data),
+    };
+  }
+
+  function stubFetchForDelete(routes: {
+    deleteStatus: number;
+    probe: 'notFound' | 'serverError' | 'networkError' | 'present';
+    registryFiles?: any[];
+  }) {
+    const fetchMock = vi.fn(async (input: any, init: any) => {
+      const url = String(input);
+      if (url.startsWith('/api/files/delete')) {
+        return { ok: false, status: routes.deleteStatus, statusText: 'Not Found', text: async () => 'no such file' };
+      }
+      if (url.includes('TavernDB_ACU_vector_registry')) {
+        return jsonResponse(200, { version: 1, updatedAt: 'now', files: routes.registryFiles ?? [] });
+      }
+      if (url.includes(targetPath)) {
+        if (routes.probe === 'networkError') throw new Error('network down');
+        if (routes.probe === 'serverError') return { ok: false, status: 503, statusText: 'Service Unavailable', text: async () => 'backend down' };
+        if (routes.probe === 'present') return jsonResponse(200, { anything: true });
+        return { ok: false, status: 404, statusText: 'Not Found', text: async () => 'gone' };
+      }
+      throw new Error(`意外请求: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('delete 全 404 + 探测明确 404：文件确已不在，按删除成功处理（既有语义保留）', async () => {
+    stubFetchForDelete({ deleteStatus: 404, probe: 'notFound' });
+    const result = await deleteVectorIndexFile_ACU(targetPath);
+    expect(result).toEqual({ ok: true, path: targetPath });
+  });
+
+  it('delete 全 404 + 探测 5xx：证据不足，如实报删除失败（修复前会误报成功）', async () => {
+    stubFetchForDelete({ deleteStatus: 404, probe: 'serverError' });
+    const result = await deleteVectorIndexFile_ACU(targetPath);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('探测证据不足');
+  });
+
+  it('delete 全 404 + 探测网络错误：证据不足，如实报删除失败', async () => {
+    stubFetchForDelete({ deleteStatus: 404, probe: 'networkError' });
+    const result = await deleteVectorIndexFile_ACU(targetPath);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('探测证据不足');
+  });
+
+  it('delete 全 404 + 探测确认文件仍在：报删除失败并注明文件仍存在', async () => {
+    stubFetchForDelete({ deleteStatus: 404, probe: 'present' });
+    const result = await deleteVectorIndexFile_ACU(targetPath);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('文件仍存在');
+  });
+
+  it('探测证据不足时 registry 条目保留交下轮 GC，不发生注销上传', async () => {
+    const fetchMock = stubFetchForDelete({
+      deleteStatus: 404,
+      probe: 'serverError',
+      registryFiles: [{
+        role: 'pack', path: targetPath, byteSize: 1, checksum: 'c', createdAt: '', updatedAt: '', status: 'ready',
+        scope: { chatKey: 'a', isolationKey: '', sourceTableKey: 's' },
+      }],
+    });
+
+    const deleted = await deleteRegisteredVectorIndexFilesWhere_ACU(file => file.path === targetPath);
+
+    // 修复前：探测 5xx 被当「不存在」→ ok:true → 条目被注销 → 泄漏文件从此永久失管。
+    expect(deleted).toEqual([]);
+    const uploadCalls = fetchMock.mock.calls.filter(call => String(call[0]).startsWith('/api/files/upload'));
+    expect(uploadCalls).toEqual([]);
+  });
+
+  it('探测明确 404 时 registry 条目照常注销（既有 GC 语义保留）', async () => {
+    class FakeFileReader {
+      result: string | null = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsDataURL(): void {
+        this.result = 'data:application/json;base64,e30=';
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    vi.stubGlobal('FileReader', FakeFileReader);
+    const registryEntry = {
+      role: 'pack', path: targetPath, byteSize: 1, checksum: 'c', createdAt: '', updatedAt: '', status: 'ready',
+      scope: { chatKey: 'a', isolationKey: '', sourceTableKey: 's' },
+    };
+    const fetchMock = vi.fn(async (input: any, _init: any) => {
+      const url = String(input);
+      if (url.startsWith('/api/files/upload')) return jsonResponse(200, { ok: true });
+      if (url.startsWith('/api/files/delete')) return { ok: false, status: 404, statusText: 'Not Found', text: async () => 'no such file' };
+      if (url.includes('TavernDB_ACU_vector_registry')) {
+        return jsonResponse(200, { version: 1, updatedAt: 'now', files: [registryEntry] });
+      }
+      if (url.includes(targetPath)) return { ok: false, status: 404, statusText: 'Not Found', text: async () => 'gone' };
+      throw new Error(`意外请求: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const deleted = await deleteRegisteredVectorIndexFilesWhere_ACU(file => file.path === targetPath);
+
+    expect(deleted).toEqual([targetPath]);
+    // 注销写回 registry：恰好一次上传
+    const uploadCalls = fetchMock.mock.calls.filter(call => String(call[0]).startsWith('/api/files/upload'));
+    expect(uploadCalls.length).toBe(1);
   });
 });

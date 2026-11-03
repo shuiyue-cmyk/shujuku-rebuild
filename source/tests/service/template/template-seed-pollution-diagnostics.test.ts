@@ -1,60 +1,84 @@
-import { describe, expect, it } from 'vitest';
-import { diagnoseSheetSeedPools_ACU } from '../../../src/service/template/template-seed-pollution-diagnostics';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-function sheetWithDdl(overrides: any = {}) {
-  return {
-    uid: 'sheet_x',
-    name: '测试表',
-    content: [['row_id', 'code', 'name']],
-    sourceData: {
-      ddl: `CREATE TABLE t ( -- 测试表\n  row_id INTEGER PRIMARY KEY, -- 行号\n  code TEXT UNIQUE, -- 编码\n  name TEXT -- 名称\n);`,
+const { mockListNames, mockGetPreset } = vi.hoisted(() => ({
+  mockListNames: vi.fn<() => string[]>(() => []),
+  mockGetPreset: vi.fn<(name: string) => { templateStr?: string } | null>(() => null),
+}));
+
+vi.mock('../../../src/service/template/template-preset-service', () => ({
+  listTemplatePresetNames_ACU: mockListNames,
+  getTemplatePreset_ACU: mockGetPreset,
+}));
+
+vi.mock('../../../src/service/template/chat-scope', () => ({
+  getCurrentChatTemplateScopeState_ACU: () => null,
+  getChatSheetGuideDataForIsolationKey_ACU: () => null,
+}));
+
+vi.mock('../../../src/service/runtime/state-manager', () => ({
+  currentJsonTableData_ACU: null,
+  getCurrentIsolationKey_ACU: () => 'iso-key',
+}));
+
+vi.mock('../../../src/data/storage/chat-history', () => ({
+  CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU: '__acu_chatSheetGuideSeedRows',
+}));
+
+vi.mock('../../../src/service/template/template-data-preflight', () => ({
+  extractBusinessKeyColumns_ACU: () => [],
+}));
+
+import { scanSeedPollution_ACU } from '../../../src/service/template/template-seed-pollution-diagnostics';
+
+function buildPollutedPresetTemplateStr(): string {
+  return JSON.stringify({
+    sheet_a: {
+      uid: 'sheet_a',
+      name: 'A表',
+      content: [['row_id', '姓名'], ['1', '甲']],
+      __acu_chatSheetGuideSeedRows: [['2', '乙'], ['2', '丙']],
     },
-    ...overrides,
-  };
+  });
 }
 
-describe('diagnoseSheetSeedPools_ACU', () => {
-  it('content 与 seedRows 同 UNIQUE 业务键时报告 content_seed_duplicate', () => {
-    const sheet = sheetWithDdl({
-      content: [['row_id', 'code', 'name'], ['1', 'C1', '铁剑']],
-      seedRows: [['1', 'C1', '铁剑']],
-    });
-    const diags = diagnoseSheetSeedPools_ACU(sheet, { source: 'runtime', sheetKey: 'sheet_x', sheetName: '测试表' });
-    expect(diags.some(d => d.code === 'content_seed_duplicate' && d.conflictingKeys.includes('C1'))).toBe(true);
+describe('scanSeedPollution_ACU 的 global preset 扫描面（G09-05）', () => {
+  beforeEach(() => {
+    mockListNames.mockReset();
+    mockGetPreset.mockReset();
+    mockListNames.mockReturnValue([]);
   });
 
-  it('guide seedRows 与 runtime 同业务键时报告 guide_seed_duplicate', () => {
-    const sheet = sheetWithDdl({
-      content: [['row_id', 'code', 'name']],
-      seedRows: [['1', 'C1', '铁剑']],
-    });
-    const runtimeRows = [['1', 'C1', '铁剑']];
-    const runtimeHeader = ['row_id', 'code', 'name'];
-    const diags = diagnoseSheetSeedPools_ACU(sheet, {
-      source: 'guide', sheetKey: 'sheet_x', sheetName: '测试表',
-      runtimeRows, runtimeHeader,
-    });
-    expect(diags.some(d => d.code === 'guide_seed_duplicate')).toBe(true);
+  it('按 listTemplatePresetNames_ACU 枚举真实预设库并计入 scanned.globalPresets', () => {
+    mockListNames.mockReturnValue(['我的预设']);
+    mockGetPreset.mockImplementation((name: string) => (
+      name === '我的预设' ? { templateStr: buildPollutedPresetTemplateStr() } : null
+    ));
+
+    const result = scanSeedPollution_ACU();
+
+    expect(result.scanned.globalPresets).toBe(1);
+    expect(mockGetPreset).toHaveBeenCalledWith('我的预设');
+    const conflict = result.diagnostics.find(item => item.code === 'seed_row_id_conflict');
+    expect(conflict?.source).toBe('global_preset');
+    expect(conflict?.sheetKey).toBe('sheet_a');
+    expect(conflict?.conflictingKeys).toEqual(['2']);
   });
 
-  it('seedRows 池内重复 row_id 报告 seed_row_id_conflict', () => {
-    const sheet = sheetWithDdl({
-      content: [['row_id', 'code', 'name']],
-      seedRows: [['1', 'C1', '铁剑'], ['1', 'C2', '卷轴']],
-    });
-    const diags = diagnoseSheetSeedPools_ACU(sheet, { source: 'runtime', sheetKey: 'sheet_x', sheetName: '测试表' });
-    expect(diags.some(d => d.code === 'seed_row_id_conflict')).toBe(true);
+  it('预设库为空时扫描 0 个预设，不再探测「默认模板/标准模板」固定名', () => {
+    mockListNames.mockReturnValue([]);
+
+    const result = scanSeedPollution_ACU();
+
+    expect(result.scanned.globalPresets).toBe(0);
+    expect(mockGetPreset).not.toHaveBeenCalled();
   });
 
-  it('无 UNIQUE 约束的表不做业务键对比（只报告 info）', () => {
-    const sheet = {
-      uid: 'sheet_y', name: '无键表',
-      content: [['row_id', 'value'], ['1', 'v1']],
-      sourceData: { ddl: `CREATE TABLE y ( -- 无键表\n  row_id INTEGER PRIMARY KEY, -- 行号\n  value TEXT -- 值\n);` },
-      seedRows: [['1', 'v1']],
-    };
-    const diags = diagnoseSheetSeedPools_ACU(sheet, { source: 'runtime', sheetKey: 'sheet_y', sheetName: '无键表' });
-    expect(diags.every(d => d.code === 'info_no_issue')).toBe(true);
+  it('枚举预设名抛错时按空库处理（只读诊断不因存储异常中断）', () => {
+    mockListNames.mockImplementation(() => { throw new Error('存储不可用'); });
+
+    const result = scanSeedPollution_ACU();
+
+    expect(result.scanned.globalPresets).toBe(0);
+    expect(result.diagnostics).toEqual([]);
   });
 });
-

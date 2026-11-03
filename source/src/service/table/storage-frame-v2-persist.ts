@@ -1,6 +1,6 @@
 import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
 import { advanceProvisionalBridgeCommitProgress_ACU, authorizeManualCatchUpBucketWrite_ACU, readActiveProvisionalBridge_ACU } from './manual-catch-up-provisional-bridge';
-import { cloneIsolatedData_ACU, collectSheetIdentityAliasesForPurge_ACU, purgeManualRefillIncrementalSheetKeysFromStorageFrameV2_ACU, purgeSheetKeysFromMessage_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
+import { cloneIsolatedData_ACU, collectSheetIdentityAliasesForPurge_ACU, ensureWritableIsolatedDataContainer_ACU, purgeManualRefillIncrementalSheetKeysFromStorageFrameV2_ACU, purgeSheetKeysFromMessage_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
 import { getActiveChatStorageIdentity_ACU, peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
 import type { Sheet_ACU, TableDataObject_ACU } from '../../shared/models/table-data';
 import type { StorageMode } from '../../shared/table-storage-provider';
@@ -953,8 +953,12 @@ export function writeInitFullCheckpointFrameV2_ACU(options: {
   if (checkpoint?.kind !== 'full' || checkpoint.reason !== 'init') {
     throw new Error(`初始化 checkpoint 写入口只接受 reason:'init' 的 full checkpoint（收到 kind=${checkpoint?.kind}, reason=${(checkpoint as any)?.reason}）。`);
   }
+  // G14-04：目标楼容器可能是遗留字符串形态——裸展开会产出 {0:'{',1:'"',…} 字符下标
+  // 垃圾键并丢失其他隔离键数据；先经 repo 层解析规范化为对象容器，再换字段写入
+  // （契约见上：「目标楼同一消息上其他隔离键的数据原样保留」）。
+  const targetContainer = ensureWritableIsolatedDataContainer_ACU(target);
   target.TavernDB_ACU_IsolatedData = {
-    ...(target.TavernDB_ACU_IsolatedData || {}),
+    ...targetContainer,
     [isolationKey]: { _acu_storage_version: 2, storageFrame: { version: 2, checkpoint, logEntries: [] } },
   };
   const violation = assertSingleActiveFullCheckpointV2_ACU(chat, isolationKey, 'init_reset');

@@ -54,6 +54,9 @@ export function downgradeOtherFullCheckpoints_ACU(chat: any[], isolationKey: str
     // 降级若一律改写成 checkpoint_fallback + source:'system'，删除 checkpoint 后这一帧在两个
     // 守卫眼里都退化成普通历史增量，破坏性重填会静默覆盖导入数据（V2-b 高危）。
     const isImportCheckpoint = checkpoint.reason === 'import';
+    // 导入声明的覆盖楼层必须随降级一起保留：丢掉它等于把追平前沿退回该帧楼层，
+    // 「已追平」的误报会在下一次边界轮转后复现（对齐 chat-service 轮转降级，上游 issue #18 第五条）。
+    const declaredRestoreFloor = Number((checkpoint as any).restoreUpToAiFloor);
     frame.logEntries = [{
       seq,
       entryId: `downgraded-checkpoint-${index}-${checkpoint.createdAt || Date.now()}`,
@@ -61,6 +64,7 @@ export function downgradeOtherFullCheckpoints_ACU(chat: any[], isolationKey: str
       source: isImportCheckpoint ? 'import' : 'system',
       targetMessageIndex: index,
       aiFloor: aiFloor_ACU(chat, index),
+      ...(Number.isInteger(declaredRestoreFloor) && declaredRestoreFloor > 0 ? { restoreUpToAiFloor: declaredRestoreFloor } : {}),
       filledSheetKeys: sheetKeys,
       changedSheetKeys: sheetKeys,
       groupKeys: [],

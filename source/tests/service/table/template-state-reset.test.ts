@@ -113,6 +113,40 @@ describe('resetCurrentChatTableStateFromTemplate_ACU', () => {
     expect(mocks.saveStrict).toHaveBeenCalledOnce();
   });
 
+  it('G14-04 同源加固：遗留字符串形态容器同样清掉当前隔离键旧槽并按对象形态回写；损坏串原样保留', async () => {
+    const corruptedRaw = '{损坏的字符串';
+    mocks.chat = [
+      { is_user: true, mes: 'u' },
+      {
+        is_user: false,
+        mes: 'ai-1',
+        // 旧时代遗留楼层：容器是 JSON 字符串，既有当前 '' 槽的旧数据，也有别的标签槽
+        TavernDB_ACU_IsolatedData: JSON.stringify({
+          '': { independentData: { sheet_old: { name: '旧默认槽表' } }, modifiedKeys: [], updateGroupKeys: [] },
+          tagA: { independentData: { sheet_a: { name: '别的标签表' } }, modifiedKeys: [], updateGroupKeys: [] },
+        }),
+      },
+      { is_user: false, mes: 'ai-2', TavernDB_ACU_IsolatedData: corruptedRaw },
+    ];
+
+    const result = await resetCurrentChatTableStateFromTemplate_ACU({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_random: { uid: 'sheet_random', name: 'Role', content: [['row_id', 'name'], ['', '助手']] },
+    });
+
+    expect(result).toMatchObject({ saved: true, messageIndex: 1 });
+    const floor1 = mocks.chat[1].TavernDB_ACU_IsolatedData;
+    // 修复前：reset 循环只处理对象形态，字符串容器整个逃过清理——当前标签的旧槽数据在「游戏初始化」后原样残留。
+    expect(typeof floor1).toBe('object');
+    // 当前隔离键的旧槽已清掉，init frame 由 persist 写入口落到 '' 槽
+    expect(floor1[''].independentData).toBeUndefined();
+    expect(floor1[''].storageFrame.checkpoint).toBeDefined();
+    // 其他标签槽原样保留
+    expect(floor1.tagA.independentData.sheet_a.name).toBe('别的标签表');
+    // 解析失败的损坏串不静默销毁，原样保留
+    expect(mocks.chat[2].TavernDB_ACU_IsolatedData).toBe(corruptedRaw);
+  });
+
   it('缺失整列 row_id 的有数据模板在写入前规范化，并将同一候选用于 checkpoint、guide、runtime 与结果', async () => {
     const input = {
       mate: { type: 'chatSheets', version: 1 },

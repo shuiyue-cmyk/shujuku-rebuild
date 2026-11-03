@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   settings: {} as Record<string, any>,
-  save: vi.fn(() => ({ saved: true })),
+  // 返回形状即 SaveSettingsResult_ACU；测试里按需要 mock 成功 / storage_error / 抛异常三档。
+  save: vi.fn((): any => ({ saved: true })),
   character: { name: '艾琳', avatar: 'Erin.png' } as { name: string; avatar: string } | null,
   books: new Map<string, any>(),
   saved: [] as Array<{ name: string; data: any }>,
@@ -56,7 +57,7 @@ beforeEach(() => {
 
 describe('常用世界书名单', () => {
   it('去空白、去重后存进设置并保存', () => {
-    expect(writeFavoriteWorldbookNames_ACU([' 战斗技能 ', '地理百科', '战斗技能', '', 3 as any])).toEqual(['战斗技能', '地理百科']);
+    expect(writeFavoriteWorldbookNames_ACU([' 战斗技能 ', '地理百科', '战斗技能', '', 3 as any])).toEqual({ names: ['战斗技能', '地理百科'], saved: true });
     expect(h.settings.agentFavoriteWorldbooks).toEqual(['战斗技能', '地理百科']);
     expect(h.save).toHaveBeenCalledTimes(1);
     expect(readFavoriteWorldbookNames_ACU()).toEqual(['战斗技能', '地理百科']);
@@ -66,6 +67,26 @@ describe('常用世界书名单', () => {
     expect(readFavoriteWorldbookNames_ACU()).toEqual([]);
     h.settings.agentFavoriteWorldbooks = '战斗技能';
     expect(readFavoriteWorldbookNames_ACU()).toEqual([]);
+  });
+
+  it('落盘失败（storage_error）时回滚内存名单并如实返回原因', () => {
+    writeFavoriteWorldbookNames_ACU(['战斗技能']);
+    h.save.mockReturnValueOnce({ saved: false, storageType: 'memory', code: 'storage_error', error: '保存设置到存储失败。' });
+
+    const result = writeFavoriteWorldbookNames_ACU(['战斗技能', '地理百科']);
+
+    expect(result).toEqual({ names: ['战斗技能'], saved: false, error: '保存设置到存储失败。' });
+    expect(h.settings.agentFavoriteWorldbooks).toEqual(['战斗技能']);
+    expect(readFavoriteWorldbookNames_ACU()).toEqual(['战斗技能']);
+  });
+
+  it('保存抛异常时同样回滚，不留下「面板已改、刷新丢失」的脏写', () => {
+    h.save.mockImplementationOnce(() => { throw new Error('宿主设置通道异常'); });
+
+    const result = writeFavoriteWorldbookNames_ACU(['战斗技能']);
+
+    expect(result).toEqual({ names: [], saved: false, error: '宿主设置通道异常' });
+    expect(h.settings.agentFavoriteWorldbooks).toEqual([]);
   });
 });
 

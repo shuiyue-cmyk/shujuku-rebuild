@@ -56,7 +56,6 @@ vi.mock('../../../src/shared/defaults-json.js', () => ({
 import {
   addDataIsolationHistory_ACU,
   removeDataIsolationHistory_ACU,
-  ensureProfileExists_ACU,
 } from '../../../src/data/repositories/isolation-repo';
 
 beforeEach(() => {
@@ -88,21 +87,4 @@ describe('removeDataIsolationHistory_ACU', () => {
   });
 });
 
-// ═══ ensureProfileExists_ACU ═══
-describe('ensureProfileExists_ACU', () => {
-  it('已有 settings 和 template 时不覆盖', () => {
-    mockReadProfileSettings.mockReturnValue({ theme: 'dark' });
-    mockReadProfileTemplate.mockReturnValue('{"sheet_0":{}}');
-    ensureProfileExists_ACU('code_1');
-    expect(mockWriteProfileSettings).not.toHaveBeenCalled();
-    expect(mockWriteProfileTemplate).not.toHaveBeenCalled();
-  });
-
-  it('写入失败时不抛错', () => {
-    mockReadProfileSettings.mockReturnValue(null);
-    mockReadProfileTemplate.mockReturnValue(null);
-    mockWriteProfileSettings.mockImplementationOnce(() => { throw new Error('写入失败'); });
-    expect(() => ensureProfileExists_ACU('code_1')).not.toThrow();
-    expect(mockLogWarn).toHaveBeenCalled();
-  });
-});
+// ensureProfileExists_ACU 已随隔离码切换死代码群删除（G11-02 关联清理），其专属用例一并移除。

@@ -63,9 +63,22 @@ export async function addAuxWorldbookToCurrentCharacter_ACU(
 ): Promise<AuxWorldbookBindResult_ACU> {
     const helper: any = (getHostWindow() as any)?.TavernHelper;
     if (helper && typeof helper.rebindCharWorldbooks === 'function' && typeof helper.getCharWorldbookNames === 'function') {
+        // G05-06：TavernHelper 的 'current' 绑定的是「执行时刻」的角色卡，而 character 是
+        // 挂载流程入口捕获的——期间用户切换角色卡后确认，副本会被静默挂到另一张卡上。
+        // 绑定前核对当前角色身份（avatar 与 name 都必须一致；当前为群聊/未选角色同样视为不一致），
+        // 不一致返回 'unavailable'，由调用方的「手动挂载」兜底文案接管。
+        const isSameCharacter = (): boolean => {
+            const currentCharacter = getCurrentSingleCharacter_ACU();
+            return !!currentCharacter
+                && currentCharacter.avatar === character.avatar
+                && currentCharacter.name === character.name;
+        };
+        if (!isSameCharacter()) return 'unavailable';
         const current = await helper.getCharWorldbookNames('current');
         const additional: string[] = Array.isArray(current?.additional) ? current.additional : [];
         if (current?.primary === bookName || additional.includes(bookName)) return 'already';
+        // getCharWorldbookNames 的 await 窗口内也可能切卡，重绑（真正的写入）前再核对一次。
+        if (!isSameCharacter()) return 'unavailable';
         await helper.rebindCharWorldbooks('current', { primary: current?.primary ?? null, additional: [...additional, bookName] });
         return 'bound';
     }

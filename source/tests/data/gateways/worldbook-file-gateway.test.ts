@@ -86,4 +86,46 @@ describe('挂成附加世界书', () => {
     h.hostModule = null;
     expect(await addAuxWorldbookToCurrentCharacter_ACU(erin, '艾琳-战斗技能')).toBe('unavailable');
   });
+
+  // G05-06：helper 路径的 'current' 绑定的是「执行时刻」的角色卡，必须与传入 character 核对。
+  it('G05-06：捕获后切换了角色卡时，helper 路径拒绝绑定并返回 unavailable（不误挂到新卡）', async () => {
+    const helper = {
+      getCharWorldbookNames: vi.fn(async () => ({ primary: '摩根自带', additional: [] })),
+      rebindCharWorldbooks: vi.fn(async () => undefined),
+    };
+    (window as any).TavernHelper = helper;
+    // 挂载流程入口捕获的是艾琳；确认框期间用户切到了摩根
+    h.ctx.characters = [{ name: '摩根', avatar: 'Morgan.png' }];
+    h.ctx.characterId = '0';
+
+    expect(await addAuxWorldbookToCurrentCharacter_ACU(erin, '艾琳-战斗技能')).toBe('unavailable');
+    expect(helper.rebindCharWorldbooks).not.toHaveBeenCalled();
+  });
+
+  it('G05-06：getCharWorldbookNames 等待期间切卡，重绑前二次核对同样拒绝', async () => {
+    const helper = {
+      getCharWorldbookNames: vi.fn(async () => {
+        // 读名单的 await 窗口内用户切了卡
+        h.ctx.characters = [{ name: '摩根', avatar: 'Morgan.png' }];
+        return { primary: '艾琳自带', additional: [] };
+      }),
+      rebindCharWorldbooks: vi.fn(async () => undefined),
+    };
+    (window as any).TavernHelper = helper;
+
+    expect(await addAuxWorldbookToCurrentCharacter_ACU(erin, '艾琳-战斗技能')).toBe('unavailable');
+    expect(helper.rebindCharWorldbooks).not.toHaveBeenCalled();
+  });
+
+  it('G05-06：当前是群聊/未选角色（拿不到单一角色）时，helper 路径同样返回 unavailable', async () => {
+    const helper = {
+      getCharWorldbookNames: vi.fn(async () => ({ primary: null, additional: [] })),
+      rebindCharWorldbooks: vi.fn(async () => undefined),
+    };
+    (window as any).TavernHelper = helper;
+    h.ctx.groupId = 'group-1';
+
+    expect(await addAuxWorldbookToCurrentCharacter_ACU(erin, '艾琳-战斗技能')).toBe('unavailable');
+    expect(helper.rebindCharWorldbooks).not.toHaveBeenCalled();
+  });
 });

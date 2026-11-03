@@ -7,6 +7,7 @@ import {
   createTemplateAssistantSessionGuard_ACU,
   hasTemplateAssistantApplicableDraft_ACU,
   getTemplateAssistantApplyBaselineFingerprint_ACU,
+  migrateLegacyV2ProtocolSegments_ACU,
   runTemplateAssistantSession_ACU,
   setTemplateAssistantPrompt_ACU,
   TemplateAssistantSessionStoppedError_ACU,
@@ -23,6 +24,7 @@ import {
 } from '../../../service/visualizer/visualizer-data-ops';
 import { useToastStore } from '../../stores/toast-store';
 import { downloadJsonToHost_ACU } from '../../bootstrap/host-download';
+import { persistedSheetNameForOverrides_ACU } from './table-api-preset-rename';
 import {
   useVisualizerStore,
   type VisualizerAssistantTurnState,
@@ -80,7 +82,14 @@ function joinChanges(changes: unknown): string {
 
 function resolveEffectiveTableApiPreset(visualizer = useVisualizerStore()): string {
   const currentSheet = visualizer.currentSheet;
-  const currentTableName = String(currentSheet?.name || '').trim();
+  // G09-04：与结构页面板（R10A-14 修复后）同一口径——表级覆盖按「已保存表名」查，
+  // 草稿改名未提交的窗口内，助手与面板命中同一份覆盖，不再按草稿名查空后静默回落到整体配置。
+  // 新建未保存的表（templateBaseData 里没有）才回退草稿名。
+  const currentTableName = persistedSheetNameForOverrides_ACU(
+    visualizer.templateBaseData,
+    visualizer.currentSheetKey,
+    currentSheet?.name,
+  );
   const overrides = settings_ACU.tableApiPresetOverridesByName;
   if (
     currentTableName
@@ -529,12 +538,14 @@ export function useVisualizerAssistant() {
   function loadPromptSegments(): void {
     const saved = settings_ACU.templateAssistantPromptSegments;
     if (Array.isArray(saved) && saved.length > 0) {
-      promptSegments.value = saved.map((seg: any) => ({
+      // G09-07：v2 时代保存的存量段先做协议卡迁移再展示——编辑器里不再显示过期的
+      // 「严格使用 protocolVersion=2」文案；用户自定义卡原样保留。
+      promptSegments.value = migrateLegacyV2ProtocolSegments_ACU(saved.map((seg: any) => ({
         role: String(seg?.role || 'SYSTEM'),
         content: String(seg?.content ?? ''),
         deletable: seg?.deletable !== false,
         pinned: seg?.pinned === true,
-      }));
+      })));
     } else {
       promptSegments.value = buildPseudoRoleTemplateAssistantPromptSegments_ACU();
     }
@@ -700,6 +711,8 @@ export function useVisualizerAssistant() {
     try {
       const result = await runTemplateAssistantSession_ACU({
         tempData: cloneData(visualizer.tempData),
+        // G09-04：把已保存基线一并传给 service，端上兜底解析表级覆盖时与助手同口径（按已保存表名）。
+        templateBaseData: visualizer.templateBaseData,
         currentSheetKey: visualizer.currentSheetKey,
         sheetOrder: [...visualizer.sheetOrder],
         userRequest: request,

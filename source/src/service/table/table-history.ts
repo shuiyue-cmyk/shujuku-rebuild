@@ -231,6 +231,8 @@ export function getLatestAiMessageIndexFromChat_ACU(chat: ACUMessage[] | any[]):
 function hasAppendableTableDataFrame_ACU(msg: any, isolationKey: string, settings: any): boolean {
     const tagData = readIsolatedTagData_ACU(msg, isolationKey) as any;
     if (isV2TagData_ACU(tagData) && tagData.storageFrame) return true;
+    // isolationKey 原样显式传入：`''`（隔离关闭时的默认槽）按 container[''] 直读，
+    // 不得退化成「任意标签有数据即真」的容器级检查（G05-08）。
     return hasAnyTableData_ACU(msg, isolationKey, {
         enabled: !!settings?.dataIsolationEnabled,
         code: String(settings?.dataIsolationCode || ''),
