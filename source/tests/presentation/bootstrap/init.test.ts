@@ -335,6 +335,32 @@ describe('mainInitialize_ACU 聊天变更防抖', () => {
   });
 });
 
+describe('mainInitialize_ACU 大聊天存盘合并的页面隐藏补存', () => {
+  it('填表运行中暂缓的存盘，在页面转入后台时立即补存', async () => {
+    const gateway = await import('../../../src/data/gateways/chat-gateway');
+    gateway.resetChatSaveCoalescerForTests_ACU();
+    const hostSave = vi.fn().mockResolvedValue(undefined);
+    const previousSave = m.api.saveChat;
+    m.api.saveChat = hostSave;
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    try {
+      gateway.beginChatSaveCoalescing_ACU();
+      await gateway.saveChatToHostCoalesced_ACU();
+      expect(hostSave).not.toHaveBeenCalled();
+      document.dispatchEvent(new Event('visibilitychange'));
+      // 监听里是 fire-and-forget：等真存盘被调用且其完成后覆盖掉待存改动
+      await vi.waitFor(() => {
+        expect(hostSave).toHaveBeenCalledTimes(1);
+        expect(gateway.hasPendingCoalescedChatSave_ACU()).toBe(false);
+      });
+    } finally {
+      visibility.mockRestore();
+      m.api.saveChat = previousSave;
+      gateway.resetChatSaveCoalescerForTests_ACU();
+    }
+  });
+});
+
 describe('mainInitialize_ACU 宿主事件桥接线注册', () => {
   // V4-e：mock eventTypes 此前只有 3 个事件，init.ts 的 GENERATION_*/MESSAGE_SENT/
   // CHAT_DELETED/SETTINGS_READY 接线分支在测试里整段不可达——回归零感知。

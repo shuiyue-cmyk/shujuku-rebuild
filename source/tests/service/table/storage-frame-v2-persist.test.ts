@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   chat: [] as any[],
   saveChat: vi.fn().mockResolvedValue(undefined),
+  saveChatCoalesced: vi.fn(),
   saveChatStrict: vi.fn().mockResolvedValue(undefined),
   settings: { dataIsolationEnabled: false, dataIsolationCode: '' },
   collectSummary: vi.fn(() => ({ sheet_a: { lastFilledAiFloor: 7, lastChangedAiFloor: 6 } })),
@@ -21,6 +22,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../../src/data/gateways/chat-gateway', () => ({
   getChatArray_ACU: vi.fn(() => mocks.chat),
   saveChatToHost_ACU: mocks.saveChat,
+  // 运行窗口外合并存盘与直接存盘等价：共用 saveChat 计数，另记一笔区分走的是哪条入口
+  saveChatToHostCoalesced_ACU: (...args: any[]) => { mocks.saveChatCoalesced(...args); return mocks.saveChat(...args); },
   saveChatToHostStrict_ACU: mocks.saveChatStrict,
 }));
 vi.mock('../../../src/data/repositories/chat-message-data-repo', async importOriginal => ({
@@ -194,6 +197,7 @@ describe('manualRefillProgress V2 validation', () => {
 
   it('仅更新新版手动追平进度时不追加 mutation entry 或创建 checkpoint', async () => {
     mocks.saveChat.mockClear();
+    mocks.saveChatCoalesced.mockClear();
     mocks.saveChatStrict.mockClear();
     const { persistTableMutationLogV2_ACU } = await import('../../../src/service/table/storage-frame-v2-persist');
     const message = seedFrame();
@@ -230,6 +234,8 @@ describe('manualRefillProgress V2 validation', () => {
     expect(frameAfter.checkpoint).toEqual(frameBefore.checkpoint);
     expect(frameAfter.headRevision).toBe(frameBefore.headRevision);
     expect(mocks.saveChat).toHaveBeenCalledTimes(1);
+    // 非 strict 的填表持久化走合并存盘入口（填表运行窗口内暂缓、窗口外立即存）
+    expect(mocks.saveChatCoalesced).toHaveBeenCalledTimes(1);
     expect(mocks.saveChatStrict).not.toHaveBeenCalled();
   });
 

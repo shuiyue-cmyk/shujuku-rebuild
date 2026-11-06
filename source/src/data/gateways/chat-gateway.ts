@@ -58,6 +58,96 @@ function notifyPostChatSaveListeners_ACU(): void {
 }
 
 /**
+ * ═══ 填表运行期的宿主全量存盘合并 ═══（参考上游 PR #70，按我方口径重写）
+ *
+ * 宿主 saveChat 每次都把整个聊天序列化后写盘，并排进宿主的串行保存队列。前端美化让楼层体积很大时，
+ * 一次存盘就要好几秒；填表一轮 N 批就是 N 次全量存盘，期间用户发消息（宿主自己也要存一次）只能排队等。
+ * 批与批之间隔着 AI 请求（远长于存盘），在途合并命中不了，所以在填表运行窗口内：
+ * - 非 strict 的填表批存盘只记下「有改动待存」立即返回，窗口结束（最外层）时补存一次；
+ * - 我方任何一次全量存盘（strict 或普通）成功都覆盖已记下的改动，之后不再重复存；
+ * - 用改动计数判定覆盖范围：存盘进行中才记下的改动不算被那次存盘覆盖（宿主可能已在序列化），之后仍会补存；
+ * - 兜底：窗口持续超过上限没有真存盘时强制补存一次；页面转入后台 / 关闭时立即补存；
+ * - 改动归属聊天：宿主 saveChat 只能存当前聊天，冲洗时已切到别的聊天就作废旧改动（不把新聊天白存一遍）。
+ * 白名单制：只有填表批持久化的非 strict 分支走这里；strict 存盘、回滚对、其余存盘点一律照旧直存。
+ * 代价：窗口内的改动在补存前只在内存里，此时应用被杀掉或中途切换聊天，要重新填这几批
+ * （不会留下半截数据：盘上仍是上一次完整存盘）。不可逆外置副作用一律在 strict 存盘之后，而 strict 会一并写盘暂缓的改动。
+ */
+
+/** 窗口持续超过这个时长没有真存盘时，兜底定时器强制补存一次。 */
+export const CHAT_SAVE_COALESCE_DEFER_MAX_MS_ACU = 120_000;
+
+let chatSaveCoalesceDepth_ACU = 0;
+/** 记下的改动计数；已被成功存盘覆盖到的计数。前者大于后者即有改动待存。 */
+let chatSaveDirtySeq_ACU = 0;
+let chatSaveCoveredSeq_ACU = 0;
+/** 待存改动归属的聊天（null=宿主不暴露聊天 id，按同一聊天处理）。 */
+let chatSaveDirtyChatKey_ACU: string | null = null;
+let chatSaveInFlight_ACU: Promise<void> | null = null;
+let chatSaveLastRealSaveAt_ACU = 0;
+let chatSaveDeferTimer_ACU: ReturnType<typeof setTimeout> | null = null;
+
+function currentChatSaveKey_ACU(): string | null {
+    const api = SillyTavern_API_ACU as any;
+    try {
+        const viaGetter = typeof api?.getCurrentChatId === 'function' ? api.getCurrentChatId() : undefined;
+        const key = viaGetter ?? api?.chatId ?? api?.this_chid;
+        return key === undefined || key === null || String(key) === '' ? null : String(key);
+    } catch {
+        return null;
+    }
+}
+
+function hasChatSaveDirty_ACU(): boolean {
+    return chatSaveDirtySeq_ACU > chatSaveCoveredSeq_ACU;
+}
+
+function clearChatSaveDirty_ACU(): void {
+    chatSaveCoveredSeq_ACU = chatSaveDirtySeq_ACU;
+    chatSaveDirtyChatKey_ACU = null;
+}
+
+function markChatSaveDirty_ACU(): void {
+    const key = currentChatSaveKey_ACU();
+    if (hasChatSaveDirty_ACU() && chatSaveDirtyChatKey_ACU !== null && key !== null && key !== chatSaveDirtyChatKey_ACU) {
+        logWarn_ACU('[ChatGateway] 存盘合并：聊天已切换，上一聊天尚未补存的改动作废。');
+        clearChatSaveDirty_ACU();
+    }
+    if (!hasChatSaveDirty_ACU()) chatSaveDirtyChatKey_ACU = key;
+    chatSaveDirtySeq_ACU += 1;
+}
+
+/** 待存改动仍属当前聊天则返回 true；已切到别的聊天就作废旧改动并返回 false。 */
+function keepChatSaveDirtyIfSameChat_ACU(scene: string): boolean {
+    if (chatSaveDirtyChatKey_ACU === null) return true;
+    const key = currentChatSaveKey_ACU();
+    if (key === null || key === chatSaveDirtyChatKey_ACU) return true;
+    logWarn_ACU(`[ChatGateway] 存盘合并：${scene}时聊天已切换，上一聊天尚未补存的改动作废。`);
+    clearChatSaveDirty_ACU();
+    return false;
+}
+
+/**
+ * 一次我方全量存盘：开始前记下改动计数，成功后只把这之前的改动记为已覆盖。
+ * 存的是当前聊天：待存改动属于别的聊天时不算覆盖（交给冲洗点作废）。
+ */
+async function runTrackedFullChatSave_ACU(save: () => Promise<void>): Promise<void> {
+    const coveredSeq = chatSaveDirtySeq_ACU;
+    const sameChat = chatSaveDirtyChatKey_ACU === null || currentChatSaveKey_ACU() === null
+        || currentChatSaveKey_ACU() === chatSaveDirtyChatKey_ACU;
+    await save();
+    chatSaveLastRealSaveAt_ACU = Date.now();
+    if (sameChat && coveredSeq > chatSaveCoveredSeq_ACU) {
+        chatSaveCoveredSeq_ACU = coveredSeq;
+        if (!hasChatSaveDirty_ACU()) chatSaveDirtyChatKey_ACU = null;
+    }
+}
+
+async function saveChatToHostRaw_ACU(): Promise<void> {
+    await SillyTavern_API_ACU.saveChat();
+    notifyPostChatSaveListeners_ACU();
+}
+
+/**
  * 触发聊天保存到宿主平台
  * 内置存在性检查，saveChat 不可用时静默跳过
  */
@@ -66,8 +156,148 @@ export async function saveChatToHost_ACU(): Promise<void> {
         logWarn_ACU('[ChatGateway] saveChat 不可用，跳过保存');
         return;
     }
-    await SillyTavern_API_ACU.saveChat();
-    notifyPostChatSaveListeners_ACU();
+    await runTrackedFullChatSave_ACU(saveChatToHostRaw_ACU);
+}
+
+/** 合并真存盘环：存到没有新改动为止；整环只排一次宿主队列入口，重复调用复用在途的环。失败时改动保留。 */
+function startCoalescedRealChatSave_ACU(): Promise<void> {
+    if (chatSaveInFlight_ACU) return chatSaveInFlight_ACU;
+    const run: Promise<void> = (async () => {
+        while (hasChatSaveDirty_ACU()) {
+            if (!keepChatSaveDirtyIfSameChat_ACU('补存')) break;
+            await runTrackedFullChatSave_ACU(saveChatToHostRaw_ACU);
+        }
+    })().finally(() => {
+        if (chatSaveInFlight_ACU === run) chatSaveInFlight_ACU = null;
+    });
+    chatSaveInFlight_ACU = run;
+    return run;
+}
+
+function armChatSaveDeferTimer_ACU(): void {
+    if (chatSaveDeferTimer_ACU !== null) return;
+    const delay = Math.max(0, CHAT_SAVE_COALESCE_DEFER_MAX_MS_ACU - (Date.now() - chatSaveLastRealSaveAt_ACU));
+    chatSaveDeferTimer_ACU = setTimeout(() => {
+        chatSaveDeferTimer_ACU = null;
+        if (!hasChatSaveDirty_ACU() || chatSaveInFlight_ACU) return;
+        if (!keepChatSaveDirtyIfSameChat_ACU('兜底定时器')) return;
+        void startCoalescedRealChatSave_ACU().catch((error: any) => {
+            logWarn_ACU('[ChatGateway] 存盘合并兜底补存失败:', error?.message || error);
+        });
+    }, delay);
+}
+
+/**
+ * 开启填表运行窗口（可嵌套：并发分组、外层编排各开一层）。开窗时把节流时钟拨到当前，
+ * 窗口内的第一批也走延迟，而不是因为距上次存盘已久立刻真存。
+ */
+export function beginChatSaveCoalescing_ACU(): void {
+    if (chatSaveCoalesceDepth_ACU === 0) chatSaveLastRealSaveAt_ACU = Math.max(chatSaveLastRealSaveAt_ACU, Date.now());
+    chatSaveCoalesceDepth_ACU += 1;
+}
+
+/** 结束一层运行窗口；最外层结束时补存窗口内记下的改动（永不抛）。 */
+export async function endChatSaveCoalescing_ACU(): Promise<void> {
+    if (chatSaveCoalesceDepth_ACU > 0) chatSaveCoalesceDepth_ACU -= 1;
+    if (chatSaveCoalesceDepth_ACU === 0) await forceFlushChatSave_ACU();
+}
+
+/**
+ * 填表批持久化专用的合并存盘：
+ * - 宿主 saveChat 不可用 → 与 saveChatToHost_ACU 同样静默跳过并告警；
+ * - 运行窗口内且距上次真存盘未到上限 → 记下改动、挂兜底定时器、立即返回（不占批与批之间的时间；
+ *   此时若恰有兜底 / 隐藏补存在途，那个补存环会循环到没有新改动为止，把这次也存上）；
+ * - 其余情况 → 立即真存并等待完成；已有补存环在途时复用它（失败会抛给调用方，与直接存盘一致）。
+ */
+export async function saveChatToHostCoalesced_ACU(): Promise<void> {
+    if (typeof SillyTavern_API_ACU?.saveChat !== 'function') {
+        logWarn_ACU('[ChatGateway] saveChat 不可用，跳过保存');
+        return;
+    }
+    markChatSaveDirty_ACU();
+    if (chatSaveCoalesceDepth_ACU > 0 && Date.now() - chatSaveLastRealSaveAt_ACU < CHAT_SAVE_COALESCE_DEFER_MAX_MS_ACU) {
+        armChatSaveDeferTimer_ACU();
+        return;
+    }
+    await startCoalescedRealChatSave_ACU();
+}
+
+/**
+ * 冲洗点：等在途的环；仍有属于当前聊天的待存改动就真存一次。永不抛——冲洗点在用户路径上
+ * （运行收尾、页面隐藏），失败只告警，改动留给下一个冲洗点。
+ */
+export async function forceFlushChatSave_ACU(): Promise<void> {
+    try {
+        if (chatSaveDeferTimer_ACU !== null) {
+            clearTimeout(chatSaveDeferTimer_ACU);
+            chatSaveDeferTimer_ACU = null;
+        }
+        if (chatSaveInFlight_ACU) {
+            try { await chatSaveInFlight_ACU; } catch { /* 下面按剩余改动重试 */ }
+        }
+        if (hasChatSaveDirty_ACU() && keepChatSaveDirtyIfSameChat_ACU('冲洗') && typeof SillyTavern_API_ACU?.saveChat === 'function') {
+            await startCoalescedRealChatSave_ACU();
+        }
+    } catch (error: any) {
+        logWarn_ACU('[ChatGateway] 存盘合并补存失败，改动保留到下一次:', error?.message || error);
+    }
+}
+
+/** 是否还有运行窗口里记下、尚未存盘的改动（诊断 / 测试用）。 */
+export function hasPendingCoalescedChatSave_ACU(): boolean {
+    return hasChatSaveDirty_ACU();
+}
+
+/**
+ * 页面转入后台（visibilitychange→hidden）或关闭（pagehide）时尽力补存。
+ * 手机上切到后台是应用最常被系统杀掉的时刻；没有待存改动时什么都不做。
+ */
+export async function flushChatSaveOnPageHidden_ACU(reason: 'visibilitychange' | 'pagehide'): Promise<void> {
+    if (!hasChatSaveDirty_ACU() && !chatSaveInFlight_ACU) return;
+    logDebug_ACU(`[ChatGateway] 页面${reason === 'pagehide' ? '关闭' : '转入后台'}，补存填表运行中记下的改动。`);
+    await forceFlushChatSave_ACU();
+}
+
+let chatSavePageHideFlushInstalled_ACU = false;
+
+/**
+ * 注册页面转入后台 / 关闭时的补存（幂等）。visibilitychange 只在转为 hidden 时触发补存；
+ * pagehide 覆盖桌面端关页 / 刷新。宿主环境缺 document / window 时静默跳过。
+ */
+export function installChatSavePageHideFlush_ACU(): void {
+    if (chatSavePageHideFlushInstalled_ACU) return;
+    const g: any = globalThis as any;
+    const doc = g?.document;
+    const win = g?.window;
+    let installed = false;
+    try {
+        if (typeof doc?.addEventListener === 'function') {
+            doc.addEventListener('visibilitychange', () => {
+                if (doc.visibilityState === 'hidden') void flushChatSaveOnPageHidden_ACU('visibilitychange');
+            });
+            installed = true;
+        }
+        if (typeof win?.addEventListener === 'function') {
+            win.addEventListener('pagehide', () => { void flushChatSaveOnPageHidden_ACU('pagehide'); });
+            installed = true;
+        }
+    } catch (error: any) {
+        logWarn_ACU('[ChatGateway] 注册页面隐藏补存失败:', error?.message || error);
+    }
+    chatSavePageHideFlushInstalled_ACU = installed;
+}
+
+/** 仅供测试隔离：清空合并调度的全部状态。 */
+export function resetChatSaveCoalescerForTests_ACU(): void {
+    if (chatSaveDeferTimer_ACU !== null) clearTimeout(chatSaveDeferTimer_ACU);
+    chatSaveDeferTimer_ACU = null;
+    chatSaveCoalesceDepth_ACU = 0;
+    chatSaveDirtySeq_ACU = 0;
+    chatSaveCoveredSeq_ACU = 0;
+    chatSaveDirtyChatKey_ACU = null;
+    chatSaveInFlight_ACU = null;
+    chatSaveLastRealSaveAt_ACU = 0;
+    chatSavePageHideFlushInstalled_ACU = false;
 }
 
 /**
@@ -100,7 +330,8 @@ export async function saveChatToHostStrict_ACU(): Promise<void> {
         try { win.addEventListener('pagehide', markUnloading); } catch { /* 忽略 */ }
     }
     try {
-        await SillyTavern_API_ACU.saveChat();
+        // strict 全量存盘同样覆盖填表运行窗口里记下的改动（见上方合并调度）
+        await runTrackedFullChatSave_ACU(() => SillyTavern_API_ACU.saveChat());
     } finally {
         for (const win of listenTargets) {
             try { win.removeEventListener('pagehide', markUnloading); } catch { /* 忽略 */ }

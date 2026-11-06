@@ -1,4 +1,4 @@
-import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
+import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostCoalesced_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
 import { advanceProvisionalBridgeCommitProgress_ACU, authorizeManualCatchUpBucketWrite_ACU, readActiveProvisionalBridge_ACU } from './manual-catch-up-provisional-bridge';
 import { cloneIsolatedData_ACU, collectSheetIdentityAliasesForPurge_ACU, ensureWritableIsolatedDataContainer_ACU, purgeManualRefillIncrementalSheetKeysFromStorageFrameV2_ACU, purgeSheetKeysFromMessage_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
 import { getActiveChatStorageIdentity_ACU, peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
@@ -2796,7 +2796,8 @@ async function persistTableMutationLogV2Core_ACU(
     if (options.strictSave || replacement || temporaryBaselineUpgrade || provisionalConvergenceReplay) {
       await saveChatToHostStrict_ACU();
     } else {
-      await saveChatToHost_ACU();
+      // 填表批的普通存盘走合并调度：填表运行窗口内只记下改动，窗口结束补存一次；窗口外与直接存盘等价。
+      await saveChatToHostCoalesced_ACU();
     }
   } catch (error) {
     for (const state of previousMessageState) {

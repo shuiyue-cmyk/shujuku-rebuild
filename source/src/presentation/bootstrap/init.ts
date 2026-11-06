@@ -92,7 +92,8 @@ import {
   loadAllChatMessages_ACU
 } from '../../service/worldbook/pipeline';
 import {
-  emitMessageUpdated_ACU
+  emitMessageUpdated_ACU,
+  installChatSavePageHideFlush_ACU
 } from '../../data/gateways/chat-gateway';
 import { scanAiFloorSignature_ACU, toAiFloorSignatureEx_ACU } from '../../service/table/auto-fill-echo-guard';
 import { abortTableFillRequestsWithStaleTarget_ACU } from '../../service/table/table-fill-target-watch';
@@ -775,6 +776,8 @@ export   function mainInitialize_ACU() {
       installCheckpointDeleteGuard_ACU();
       // TT 帧架构：续写基线跟随表格 checkpoint 落层 + 删楼恢复适配（与删楼守卫并列，函数幂等）。
       installMaterialCheckpointScheduler_ACU();
+      // 大聊天存盘合并：填表运行中暂缓的全量存盘，页面转入后台（手机）/ 关闭时立即补存。
+      installChatSavePageHideFlush_ACU();
       // Register the bridge before generation events are subscribed. Runtime
       // migration remains page-owned so no chat persistence is touched at startup.
       getContinuationRuntime_ACU();

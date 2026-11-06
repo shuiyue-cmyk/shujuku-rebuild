@@ -6,7 +6,7 @@
  * - resolveUpdateMode_ACU / loadBatchBaseData_ACU / buildBatchMergeBase_ACU 是纯/浅依赖函数，直接测试
  * - processUpdatesBatch_ACU / executeCardUpdateCore_ACU / orchestrateManualUpdate_ACU 通过 mock 回调测试编排逻辑
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ensureStableRowIdsForSheetContent_ACU } from '../../../src/service/template/chat-scope';
 
 // ═══════════════════════════════════════════════════════════════
@@ -1387,6 +1387,67 @@ describe('processUpdatesBatch_ACU', () => {
 // ═══════════════════════════════════════════════════════════════
 // executeCardUpdateCore_ACU
 // ═══════════════════════════════════════════════════════════════
+describe('processUpdatesBatch_ACU — 大聊天存盘合并窗口', () => {
+  const hostSave = vi.fn();
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mockIsAutoUpdating = false;
+    mockSettings = { ...mockSettings, autoUpdateTokenThreshold: 0, toastMuteEnabled: false };
+    const gateway = await import('../../../src/data/gateways/chat-gateway');
+    gateway.resetChatSaveCoalescerForTests_ACU();
+    const { _set_SillyTavern_API_ACU } = await import('../../../src/shared/host-api');
+    hostSave.mockReset().mockResolvedValue(undefined);
+    _set_SillyTavern_API_ACU({ saveChat: hostSave } as any);
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true }, { is_user: false, mes: '一' }, { is_user: true }, { is_user: false, mes: '二' },
+    ]);
+    mockCurrentJsonTableData = { sheet_0: { name: '测试' } };
+  });
+
+  afterEach(async () => {
+    const { _set_SillyTavern_API_ACU } = await import('../../../src/shared/host-api');
+    _set_SillyTavern_API_ACU(undefined);
+    const gateway = await import('../../../src/data/gateways/chat-gateway');
+    gateway.resetChatSaveCoalescerForTests_ACU();
+  });
+
+  it('一轮多批的普通存盘在运行中只记下改动，整轮结束时真存一次', async () => {
+    const gateway = await import('../../../src/data/gateways/chat-gateway');
+    const realSavesSeenByBatch: number[] = [];
+    const mockExecute = vi.fn().mockImplementation(async () => {
+      await gateway.saveChatToHostCoalesced_ACU();
+      realSavesSeenByBatch.push(hostSave.mock.calls.length);
+      return { success: true, modifiedKeys: ['sheet_0'] } as CardUpdateResult;
+    });
+
+    const result = await processUpdatesBatch_ACU([1, 3], 'auto_independent', { batchSize: 1 }, mockExecute);
+
+    expect(result.success).toBe(true);
+    expect(mockExecute).toHaveBeenCalledTimes(2);
+    expect(realSavesSeenByBatch).toEqual([0, 0]);
+    expect(hostSave).toHaveBeenCalledTimes(1);
+    expect(gateway.hasPendingCoalescedChatSave_ACU()).toBe(false);
+  });
+
+  it('中途批次失败也在收尾补存已完成批次的改动', async () => {
+    const gateway = await import('../../../src/data/gateways/chat-gateway');
+    const mockExecute = vi.fn()
+      .mockImplementationOnce(async () => {
+        await gateway.saveChatToHostCoalesced_ACU();
+        return { success: true, modifiedKeys: ['sheet_0'] } as CardUpdateResult;
+      })
+      .mockResolvedValueOnce({ success: false, modifiedKeys: [], error: '第二批失败' } as CardUpdateResult);
+
+    const result = await processUpdatesBatch_ACU([1, 3], 'auto_independent', { batchSize: 1 }, mockExecute);
+
+    expect(result.success).toBe(false);
+    expect(hostSave).toHaveBeenCalledTimes(1);
+    expect(gateway.hasPendingCoalescedChatSave_ACU()).toBe(false);
+  });
+});
+
 describe('executeCardUpdateCore_ACU', () => {
   beforeEach(async () => {
     const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
@@ -3411,6 +3472,93 @@ describe('orchestrateManualUpdate_ACU', () => {
       targetMessageIndices: [0, 2, 4],
     }));
     expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(3);
+  });
+  it('手动重填各层的普通存盘合并到收尾真存一次（大聊天存盘合并窗口）', async () => {
+    const { getChatArray_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU } = await import('../../../src/service/chat/chat-service');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+      mate: { type: 'acu' },
+      sheet_0: { name: '测试表A', updateConfig: { groupId: 0 }, content: [['row_id', '值A']] },
+    });
+    const chat = [
+      {
+        is_user: false,
+        mes: 'AI回复1',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: undefined,
+              logEntries: [{
+                seq: 1,
+                entryId: 'fallback-without-full',
+                createdAt: 1,
+                source: 'manual_refill_baseline',
+                targetMessageIndex: 0,
+                aiFloor: 1,
+                filledSheetKeys: ['sheet_0'],
+                changedSheetKeys: ['sheet_0'],
+                groupKeys: [],
+                operations: [{
+                  kind: 'data_replace',
+                  reason: 'checkpoint_fallback',
+                  data: { sheet_0: { name: '测试表A', content: [['row_id', '值A'], ['fallback', '不允许恢复']] } },
+                }],
+              }],
+            },
+          },
+        },
+      },
+      { is_user: true, mes: '用户2' },
+      { is_user: false, mes: 'AI回复3' },
+      { is_user: true, mes: '用户4' },
+      {
+        is_user: false,
+        mes: 'AI回复5',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: { version: 2, logEntries: [], checkpoint: { kind: 'full', reason: 'init', createdAt: 2, data: { sheet_0: { name: '测试表A', content: [['row_id', '值A'], ['later', '目标层基底']] } } } },
+          },
+        },
+      },
+    ];
+    vi.mocked(getChatArray_ACU).mockReturnValue(chat);
+    mockClearManualRefillSheetDataInRange.mockImplementationOnce(async () => {
+      chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.logEntries = [];
+      return 1;
+    });
+    mockSettings.maxConcurrentGroups = 1;
+    mockSettings.manualUpdateContextDepth = 0;
+    mockSettings.manualUpdateBatchSize = 1;
+    mockCurrentJsonTableData = { sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A'], ['1', '旧A']] } };
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+    mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
+
+    const gateway = await import('../../../src/data/gateways/chat-gateway');
+    const { _set_SillyTavern_API_ACU } = await import('../../../src/shared/host-api');
+    gateway.resetChatSaveCoalescerForTests_ACU();
+    const hostSave = vi.fn().mockResolvedValue(undefined);
+    _set_SillyTavern_API_ACU({ saveChat: hostSave } as any);
+    const realSavesSeenByPersist: number[] = [];
+    mockPersistTablesToChatMessage.mockImplementation(async () => {
+      await gateway.saveChatToHostCoalesced_ACU();
+      realSavesSeenByPersist.push(hostSave.mock.calls.length);
+      return { saved: true, messageIndex: 3 };
+    });
+    try {
+      const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockRefreshData, { clearBeforeUpdate: true });
+
+      expect(result.success).toBe(true);
+      expect(realSavesSeenByPersist).toEqual([0, 0, 0]);
+      expect(hostSave).toHaveBeenCalledTimes(1);
+      expect(gateway.hasPendingCoalescedChatSave_ACU()).toBe(false);
+    } finally {
+      _set_SillyTavern_API_ACU(undefined);
+      gateway.resetChatSaveCoalescerForTests_ACU();
+      mockPersistTablesToChatMessage.mockReset().mockResolvedValue({ saved: true, messageIndex: 3 });
+    }
   });
   it('跨根 staging 的 pre 段失败时不继续 post 段写入，不回滚保留已清理状态', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
@@ -8521,6 +8669,33 @@ describe('orchestrateManualCatchUp_ACU', () => {
     ))?.[0]).toEqual(expect.objectContaining({ workingDataMode: 'none' }));
     expect(mockUpdateReadableLorebookEntry).not.toHaveBeenCalled();
     expect(refreshData).toHaveBeenCalledTimes(1);
+  });
+
+  it('手动追平各 bucket 的普通存盘合并到收尾真存一次（大聊天存盘合并窗口）', async () => {
+    mockGetChatArray_ACU.mockReturnValue(createCatchUpChat(1, 2) as any);
+    const gateway = await import('../../../src/data/gateways/chat-gateway');
+    const { _set_SillyTavern_API_ACU } = await import('../../../src/shared/host-api');
+    gateway.resetChatSaveCoalescerForTests_ACU();
+    const hostSave = vi.fn().mockResolvedValue(undefined);
+    _set_SillyTavern_API_ACU({ saveChat: hostSave } as any);
+    const realSavesSeenByPersist: number[] = [];
+    mockPersistTablesToChatMessage.mockReset().mockImplementation(async () => {
+      await gateway.saveChatToHostCoalesced_ACU();
+      realSavesSeenByPersist.push(hostSave.mock.calls.length);
+      return { saved: true, messageIndex: 5 };
+    });
+    try {
+      const result = await orchestrateManualCatchUp_ACU(['sheet_a', 'sheet_b'], vi.fn().mockResolvedValue({ degraded: false }));
+
+      expect(result).toEqual(expect.objectContaining({ success: true, outcome: 'complete' }));
+      expect(realSavesSeenByPersist.length).toBeGreaterThanOrEqual(2);
+      expect(realSavesSeenByPersist.every(count => count === 0)).toBe(true);
+      expect(hostSave).toHaveBeenCalledTimes(1);
+      expect(gateway.hasPendingCoalescedChatSave_ACU()).toBe(false);
+    } finally {
+      _set_SillyTavern_API_ACU(undefined);
+      gateway.resetChatSaveCoalescerForTests_ACU();
+    }
   });
 
   it('全部已追平时返回 no_work，且不调用 AI、保存或刷新', async () => {

@@ -11,10 +11,15 @@ const { mockChat, mockSettings, mockCurrentJsonTableDataRef } = vi.hoisted(() =>
   mockCurrentJsonTableDataRef: { value: null as any },
 }));
 
-vi.mock('../../src/data/gateways/chat-gateway', () => ({
-  getChatArray_ACU: vi.fn(() => mockChat),
-  saveChatToHost_ACU: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('../../src/data/gateways/chat-gateway', () => {
+  // 填表批的普通存盘改走合并调度；运行窗口外与直接存盘等价，测试里共用同一个 mock 计数
+  const save = vi.fn().mockResolvedValue(undefined);
+  return {
+    getChatArray_ACU: vi.fn(() => mockChat),
+    saveChatToHost_ACU: save,
+    saveChatToHostCoalesced_ACU: save,
+  };
+});
 vi.mock('../../src/shared/utils', () => ({
   cloneScopedConfigData_ACU: (v, f = null) => v === undefined ? f : JSON.parse(JSON.stringify(v)),
   deepClone_ACU: (v) => v == null ? v : JSON.parse(JSON.stringify(v)),

@@ -97,6 +97,7 @@ import { applySpecialIndexSequenceToSummaryTables_ACU } from '../runtime/helpers
 import { isSameSheetHeader_ACU } from '../template/guide-metadata-overlay';
 import { captureTableRuntimeRevisionForWriteSet_ACU } from './table-write-transaction';
 import { runTableUpdateCommit_ACU, type TableUpdateCommitErrorCategory_ACU } from './table-update-commit';
+import { beginChatSaveCoalescing_ACU, endChatSaveCoalescing_ACU } from '../../data/gateways/chat-gateway';
 import { flushRuntimeOnlyPendingChanges_ACU } from './runtime-only-pending-flush';
 import { commitPreparedV2Recovery_ACU, prepareV2Recovery_ACU } from './table-v2-recovery-service';
 import { isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-strategy-resolver';
@@ -3967,6 +3968,9 @@ export async function processUpdatesBatch_ACU(
     }
 
     const postCommitWarnings: TableUpdatePostCommitWarning_ACU[] = [];
+    // 宿主全量存盘合并窗口：本轮各批的普通存盘只记下改动，结束（最外层窗口）时补存一次，
+    // 避免大聊天 N 批 = N 次全量存盘、用户发消息时排在后面等。所有退出路径由 finally 收口。
+    beginChatSaveCoalescing_ACU();
     try {
         const isSummaryMode = (mode && (mode.includes('summary') || mode === 'manual_summary')) || false;
         const batchSize = specificBatchSize || (settings_ACU.updateBatchSize || 2);
@@ -4096,6 +4100,7 @@ export async function processUpdatesBatch_ACU(
 
         return { success: true, ...(postCommitWarnings.length ? { postCommitWarnings } : {}) };
     } finally {
+        await endChatSaveCoalescing_ACU();
         if (ownsAutoUpdatingFlag) {
             _set_isAutoUpdatingCard_ACU(false);
             _set_wasStoppedByUser_ACU(false);
@@ -4791,6 +4796,8 @@ export async function orchestrateManualCatchUp_ACU(
     // must not silently cross inside a single persisted batch.
     const schemaBoundaries = collectV2SchemaBoundaryIndices_ACU(getChatArray_ACU(), getCurrentIsolationKey_ACU());
 
+    // 手动追平与填表同族（bucket 串行、每个 bucket 一次全量存盘）：同样开存盘合并窗口，finally 收口补存。
+    beginChatSaveCoalescing_ACU();
     try {
         for (let waveIndex = 0; waveIndex < plan.waves.length; waveIndex += 1) {
             activeWaveIndex = waveIndex;
@@ -5121,6 +5128,7 @@ export async function orchestrateManualCatchUp_ACU(
             terminalProgressSaved: !terminalError,
         };
     } finally {
+        await endChatSaveCoalescing_ACU();
         _set_isAutoUpdatingCard_ACU(false);
     }
 }
@@ -5334,6 +5342,8 @@ export async function orchestrateManualUpdate_ACU(
         return { ok: true };
     };
 
+    // 手动填表 / 重填同样逐组逐批全量存盘：开存盘合并窗口，finally 收口补存（破坏性清理与回滚走 strict，照旧直存）。
+    beginChatSaveCoalescing_ACU();
     try {
         if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
             return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
@@ -6105,6 +6115,7 @@ export async function orchestrateManualUpdate_ACU(
         // 清理已开始：零提交时由 failManualRefillSession 回滚清理，已提交时按已提交事实对齐运行时。
         return await failManualRefillSession(failureError);
     } finally {
+        await endChatSaveCoalescing_ACU();
         _set_manualExtraHint_ACU('');
         _set_isAutoUpdatingCard_ACU(false);
         // 失败/异常路径 stagingSession 未走 settle 收尾：这里幂等释放（discard 内部
