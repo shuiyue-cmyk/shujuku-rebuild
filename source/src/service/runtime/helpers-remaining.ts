@@ -15,6 +15,7 @@ import { logDebug_ACU, logError_ACU } from '../../shared/utils';
 import { parseRandomTags_ACU, replaceRandomVariables_ACU, parseCalcTags_ACU, parseMaxTags_ACU, parseMinTags_ACU, replaceCalcVariables_ACU, replaceMaxVariables_ACU, replaceMinVariables_ACU, parseIfBlockRecursive_ACU, getLatestAIMessageContent_ACU, getLatestUserMessageContent_ACU, composeSeedMatchContent_ACU, replaceDbSqlVariables } from './template-vars';
 import { getPlotFromHistory_ACU, getWorldbookContentForPlot_ACU, getAgentControlledWorldbookEntriesForFinalPrompt_ACU } from './plot-runtime';
 import { ensurePlotAgentWorldbookSnapshotHydrated_ACU, isWorldbookTakeoverActive_ACU } from '../agent/agent-worldbook-takeover';
+import { isAgentWorldbookNativeFallback_ACU, isAgentWorldbookRuntimeControlLoaded_ACU, isAgentWorldbookRuntimeEnabled_ACU } from '../agent/agent-worldbook-runtime-state';
 
 // ═══ 上下文标签提取/过滤 ═══
 export {
@@ -216,8 +217,12 @@ export {
       return;
     }
     const finalGenerationGreenlights = Array.isArray(pendingFinalGenerationGreenlights_ACU) ? [...pendingFinalGenerationGreenlights_ACU] : [];
-    let shouldHandleAgentWorldbookFinalPrompt = isWorldbookTakeoverActive_ACU() || finalGenerationGreenlights.length > 0;
-    if (!shouldHandleAgentWorldbookFinalPrompt) {
+    // 上游 1.3.6：确认没开 Agent，或本轮 Agent 失败已恢复原生世界书时，不再过滤正文里的原生条目。
+    // 开关还没读到时保持原行为（接管可能仍在生效）。
+    const agentWorldbookEnabled = !isAgentWorldbookNativeFallback_ACU()
+      && (!isAgentWorldbookRuntimeControlLoaded_ACU() || isAgentWorldbookRuntimeEnabled_ACU());
+    let shouldHandleAgentWorldbookFinalPrompt = agentWorldbookEnabled && (isWorldbookTakeoverActive_ACU() || finalGenerationGreenlights.length > 0);
+    if (agentWorldbookEnabled && !shouldHandleAgentWorldbookFinalPrompt) {
       // 页面刷新后内存快照为空，接管可能仍在持久账本中活跃；水合一次后复判，
       // 否则冷启动首轮生成会跳过接管条目过滤。水合失败按未接管处理（内部已告警）。
       await ensurePlotAgentWorldbookSnapshotHydrated_ACU();

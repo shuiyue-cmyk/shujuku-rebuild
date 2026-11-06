@@ -135,6 +135,12 @@ vi.mock('../../../src/service/runtime/helpers-data-merge', () => ({
 }));
 
 import { handleChatCompletionReady_ACU } from '../../../src/service/runtime/helpers-remaining';
+import {
+  getAgentWorldbookRuntimeRevision_ACU,
+  resetAgentWorldbookRuntime_ACU,
+  setAgentWorldbookNativeFallback_ACU,
+  setLoadedAgentWorldbookControl_ACU,
+} from '../../../src/service/agent/agent-worldbook-runtime-state';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -153,9 +159,50 @@ beforeEach(() => {
   mockIsWorldbookTakeoverActive.mockReturnValue(false);
   mockGetWorldbookContentForPlot.mockResolvedValue('');
   mockGetAgentControlledWorldbookEntriesForFinalPrompt.mockResolvedValue([]);
+  resetAgentWorldbookRuntime_ACU();
 });
 
 describe('handleChatCompletionReady_ACU', () => {
+
+  // ── 上游 1.3.6：Agent 未开启 / 本轮已回退原生时不过滤正文里的原生条目 ──
+  describe('Agent 世界书运行期开关', () => {
+    const blockedEntry = { bookName: '世界书', uid: 'controlled', comment: '受控条目', content: '受控条目正文' };
+    const makeData = () => ({
+      messages: [
+        { role: 'system', content: '系统提示\n\n# 受控条目\n受控条目正文\n\n其他系统提示' },
+        { role: 'user', content: '当前输入' },
+      ],
+    });
+    const original = makeData().messages;
+
+    beforeEach(() => {
+      mockIsWorldbookTakeoverActive.mockReturnValue(true);
+      mockGetAgentControlledWorldbookEntriesForFinalPrompt.mockResolvedValue([blockedEntry]);
+    });
+
+    it('确认没开 Agent 时不过滤正文原生条目，也不去水合接管快照', async () => {
+      setLoadedAgentWorldbookControl_ACU({ enabled: false, mode: 'disabled' } as any, getAgentWorldbookRuntimeRevision_ACU());
+      const data = makeData();
+      await handleChatCompletionReady_ACU(data);
+      expect(data.messages).toEqual(original);
+      expect(mockGetAgentControlledWorldbookEntriesForFinalPrompt).not.toHaveBeenCalled();
+      expect(mockEnsureHydrated).not.toHaveBeenCalled();
+    });
+
+    it('本轮 Agent 失败已回退原生世界书时不过滤正文原生条目', async () => {
+      setLoadedAgentWorldbookControl_ACU({ enabled: true, mode: 'agent' } as any, getAgentWorldbookRuntimeRevision_ACU());
+      setAgentWorldbookNativeFallback_ACU(true);
+      const data = makeData();
+      await handleChatCompletionReady_ACU(data);
+      expect(data.messages).toEqual(original);
+    });
+
+    it('开关还没读到时保持原行为：接管活跃就过滤', async () => {
+      const data = makeData();
+      await handleChatCompletionReady_ACU(data);
+      expect(data.messages[0].content).toBe('系统提示\n\n其他系统提示');
+    });
+  });
 
   it('seed 匹配内容组合用户+AI 输入（e6f8ef38：AI-only 会漏用户触发的 seed 条件）', async () => {
     const { getLatestUserMessageContent_ACU } = await import('../../../src/service/runtime/template-vars');

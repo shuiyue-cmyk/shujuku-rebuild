@@ -64,6 +64,8 @@ import {
 import {
   resetPlotAgentWorldbookSessionSnapshot_ACU
 } from '../../service/agent/agent-worldbook-takeover';
+import { loadAgentWorldbookRuntimeControl_ACU } from '../../service/agent/agent-worldbook-config-meta';
+import { getAgentWorldbookRuntimeRevision_ACU } from '../../service/agent/agent-worldbook-runtime-state';
 import {
   reloadStorageProvider,
   disposeStorageProvider,
@@ -563,6 +565,8 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
     }
 
     await resetScriptStateForNewChat_ACU(chatFileName, { reason: 'chat_changed' });
+    // reset 已作废上一会话的 Agent 开关缓存；记下本会话 revision，预加载迟到时自行放弃（上游 1.3.6）。
+    const agentRuntimeRevision_ACU = getAgentWorldbookRuntimeRevision_ACU();
 
     // [触发门控] generationGate 重置已搬到 service 层的 resetScriptStateForNewChat_ACU 中
 
@@ -571,6 +575,8 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
 
     // [剧情推进] 切换聊天时加载预设
     await loadPresetAndCleanCharacterData_ACU();
+    // Agent 世界书功能开关：只读开关、不扫描候选；失败只关本会话 Agent，剧情推进开跑前会再补读。
+    void loadAgentWorldbookRuntimeControl_ACU(agentRuntimeRevision_ACU);
 
     // [新增] 切换角色卡（聊天）时，强制从新聊天记录的本地数据读取最新的表格并刷新UI
     logDebug_ACU('ACU: Chat changed, forcing reload of table data from new chat history.');
@@ -663,12 +669,14 @@ export async function runStartupChatInit_ACU(chatId: string): Promise<void> {
   lastDelayedRebuildRefreshOk_ACU = false; // [M3]
   logDebug_ACU(`ACU: Initializing with current chat on load: ${chatId}`);
   await resetScriptStateForNewChat_ACU(chatId, { reason: 'startup_restore' });
+  const agentRuntimeRevision_ACU = getAgentWorldbookRuntimeRevision_ACU();
   // R9-10：与 CHAT_CHANGED 链一致，每个 await 之后复核聊天身份；切了聊天就停下，
   // 交给随后补跑的 CHAT_CHANGED 链，避免把旧聊天的表以新聊天身份 hydrate / 发布。
   const scheduledChatIdentifier_ACU = String(currentChatFileIdentifier_ACU || '');
   const abortedMidRun = (stage: string, epoch?: number) => shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier_ACU, epoch, `initWithChatId ${stage}`);
   await loadPresetAndCleanCharacterData_ACU();
   if (abortedMidRun('预设加载后')) return;
+  void loadAgentWorldbookRuntimeControl_ACU(agentRuntimeRevision_ACU);
   
   // 再次强制刷新数据和UI，确保初始加载时表格显示正确
   await loadAllChatMessages_ACU();

@@ -781,6 +781,11 @@ export async function runAgentDecisionForPlot_ACU(params: {
   sharedContext: Record<string, any>;
   enabledTasks: any[];
   requireTaskPlan?: boolean;
+  /**
+   * 剧情推进专用（上游 1.3.6）：任一分片失败、任务计划不合法或决策异常都抛错，不返回部分选择。
+   * 部分选择会让失败分片那批书的受控条目继续关着、正文里静默缺内容；由调用方改走原生世界书恢复。
+   */
+  requireCompleteDecision?: boolean;
   signal?: AbortSignal | null;
 }): Promise<AgentDecisionResult_ACU> {
   const originalTasks = Array.isArray(params.enabledTasks) ? params.enabledTasks : [];
@@ -830,6 +835,10 @@ export async function runAgentDecisionForPlot_ACU(params: {
       maxAiAttempts,
       signal: params.signal,
     })));
+    if (params.requireCompleteDecision) {
+      const rejected = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (rejected) throw rejected.reason;
+    }
     const successfulShards = settled
       .filter((result): result is PromiseFulfilledResult<AgentDecisionShardResult_ACU> => result.status === 'fulfilled')
       .map(result => result.value)
@@ -851,7 +860,10 @@ export async function runAgentDecisionForPlot_ACU(params: {
     const normalizedPlan = params.requireTaskPlan === false || !authority
       ? { plan: [] as AgentTaskPlanItem_ACU[], effectiveTasks: originalTasks }
       : normalizeTaskPlan_ACU(authority.parsed.taskPlan, agentDecidableTasks, userOrderedTasks);
-    if (authority && params.requireTaskPlan !== false && normalizedPlan.reason) return emptyDecision_ACU(originalTasks, normalizedPlan.reason);
+    if (authority && params.requireTaskPlan !== false && normalizedPlan.reason) {
+      if (params.requireCompleteDecision) throw new Error(normalizedPlan.reason);
+      return emptyDecision_ACU(originalTasks, normalizedPlan.reason);
+    }
     const effectivePlan = normalizedPlan.reason
       ? { plan: [] as AgentTaskPlanItem_ACU[], effectiveTasks: originalTasks }
       : normalizedPlan;
@@ -904,6 +916,7 @@ export async function runAgentDecisionForPlot_ACU(params: {
       effectiveTasks: effectivePlan.effectiveTasks,
     };
   } catch (error) {
+    if (params.requireCompleteDecision) throw error;
     logWarn_ACU('[Agent决策] 决策失败，回退原剧情推进逻辑:', error);
     return emptyDecision_ACU(originalTasks, 'agent_decision_error');
   }

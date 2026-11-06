@@ -31,13 +31,15 @@ import {
 import type { StrictLorebookReadContext_ACU } from '../worldbook/pipeline';
 import { getAgentRuntimeLorebookEntries_ACU } from './agent-worldbook-runtime-read';
 import { settings_ACU } from '../runtime/state-manager';
-import { logWarn_ACU } from '../../shared/utils';
+import { logError_ACU, logWarn_ACU } from '../../shared/utils';
 import {
   normalizeAgentContextSettings_ACU,
   normalizeEditablePromptSegments_ACU,
 } from './agent-prompt-template';
 import { saveSettings_ACU } from '../settings/settings-service';
 import { runExclusiveAgentWorldbookOperation_ACU } from './agent-worldbook-operation-lock';
+import { getAgentWorldbookRuntimeRevision_ACU, setLoadedAgentWorldbookControl_ACU } from './agent-worldbook-runtime-state';
+import { summarizeLorebookRuntimeError_ACU } from '../../shared/lorebook-read-error';
 
 export const AGENT_WORLDBOOK_CONFIG_COMMENT_ACU = 'TavernDB-ACU-AgentWorldbookConfig';
 
@@ -638,7 +640,12 @@ export async function readAgentWorldbookStateFromWorldbooks_ACU(readContext?: St
 }
 
 export async function readAgentWorldbookControlFromWorldbooks_ACU(readContext?: StrictLorebookReadContext_ACU): Promise<AgentWorldbookControlReadResult_ACU> {
+  const revision = getAgentWorldbookRuntimeRevision_ACU();
   const state = await readAgentWorldbookStateFromWorldbooks_ACU(readContext);
+  // 无请求上下文的读取（启动预加载、设置页读取）顺带刷新运行期开关；剧情推进内带上下文的读取不改缓存。
+  if (!readContext) {
+    setLoadedAgentWorldbookControl_ACU(state.source === 'worldbook' ? state.control : null, revision);
+  }
   return {
     control: state.control,
     source: state.source,
@@ -648,6 +655,26 @@ export async function readAgentWorldbookControlFromWorldbooks_ACU(readContext?: 
     writableBookName: state.writableBookName,
     reason: state.reason,
   };
+}
+
+/**
+ * 加载运行期功能开关（切换会话 / 启动时调用；剧情推进发现尚未加载时补读）。
+ * 失败只归属 Agent：本次不运行 Agent，不抛给聊天或剧情初始化，并保持未加载以便下次补读。
+ */
+export async function loadAgentWorldbookRuntimeControl_ACU(
+  revision = getAgentWorldbookRuntimeRevision_ACU(),
+): Promise<void> {
+  await runExclusiveAgentWorldbookOperation_ACU(async () => {
+    if (revision !== getAgentWorldbookRuntimeRevision_ACU()) return;
+    try {
+      await readAgentWorldbookControlFromWorldbooks_ACU();
+    } catch (error) {
+      if (!setLoadedAgentWorldbookControl_ACU(null, revision, false, false)) return;
+      logError_ACU('[Agent世界书] 功能配置加载失败，本次不运行 Agent。', {
+        phase: 'load_control', error: summarizeLorebookRuntimeError_ACU(error) || { category: 'unknown' },
+      });
+    }
+  });
 }
 
 export async function writeAgentWorldbookStateToWorldbook_ACU(patch: {
@@ -841,7 +868,12 @@ export function writeAgentWorldbookControlToWorldbook_ACU(
 async function writeAgentWorldbookControlToWorldbookExclusive_ACU(
   controlPatch: Partial<AgentWorldbookControl_ACU>,
 ): Promise<AgentWorldbookControlWriteResult_ACU> {
+  const revision = getAgentWorldbookRuntimeRevision_ACU();
   const result = await writeAgentWorldbookStateToWorldbook_ACU({ control: controlPatch });
+  // 保存成功立即刷新开关，并作废保存前发起、尚未返回的读取（上游 1.3.6）。
+  if (result.updated) {
+    setLoadedAgentWorldbookControl_ACU(result.control, revision, true);
+  }
   return {
     updated: result.updated,
     bookName: result.bookName,

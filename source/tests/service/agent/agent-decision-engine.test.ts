@@ -541,6 +541,34 @@ describe('runAgentDecisionForPlot_ACU', () => {
     expect(result.finalGenerationGreenlights.map(ref => ref.uid)).toEqual([1, 3]);
   });
 
+  // 移植上游 1.3.6：剧情推进要求完整决策——部分分片成功的选择会让失败分片那批书的条目继续关着、内容静默缺失
+  it('要求完整决策时任一分片失败都拒绝返回部分选择', async () => {
+    mockRefreshPlotAgentWorldbookSnapshot.mockResolvedValueOnce({
+      active: true, selectionSignature: 'scope', createdAt: 1,
+      books: { 剧情书: [{ uid: 1 }, { uid: 2 }] },
+    });
+    const skillMeta = '<!-- ACU_SKILL_META_START\n{"version":1,"description":"分片候选","triggerWhen":"继续剧情","tk":12}\nACU_SKILL_META_END -->';
+    mockGetLorebookEntries.mockResolvedValueOnce([1, 2].map(uid => ({
+      uid, enabled: true, comment: `条目${uid}\n${skillMeta}`, keys: [`关键词${uid}`], content: `内容${uid}`,
+    })));
+    mockCallAIWithPreset
+      .mockResolvedValueOnce(JSON.stringify({
+        taskPlan: [], plotGreenlights: {},
+        finalGenerationGreenlights: [{ entries: [1], reason: '成功分片选择' }], fallbackMode: false,
+      }))
+      .mockRejectedValueOnce(new Error('分片请求失败'));
+
+    await expect(runAgentDecisionForPlot_ACU({
+      plotSettings: { agentWorldbookControl: {
+        enabled: true, mode: 'agent', agentDecisionConcurrency: 2,
+        contextSettings: { agentAiMaxRetries: 1, decisionWorldbookCandidateLimit: 2 },
+      } },
+      userMessage: '继续', sharedContext: {}, enabledTasks: [],
+      requireTaskPlan: false, requireCompleteDecision: true,
+    } as any)).rejects.toThrow('agent_decision_shard_2_failed');
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(2);
+  });
+
   it('uses configured concurrency above the former limit while avoiding empty decision shards', async () => {
     mockRefreshPlotAgentWorldbookSnapshot.mockResolvedValueOnce({
       active: true,

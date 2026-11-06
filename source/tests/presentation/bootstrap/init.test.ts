@@ -40,7 +40,7 @@ const m = vi.hoisted(() => ({
   gate: { lastUserMessageId: 7 as any, lastUserMessageText: 'stale', lastUserMessageAt: 1, lastUserSendIntentAt: 2, lastGeneration: { stale: true } as any, generationSeq: 0, activeGenerations: [] as any[] },
   resetTakeover: vi.fn(), releaseGreenlights: vi.fn(), dispose: vi.fn(), setData: vi.fn(), setTables: vi.fn(), setMessages: vi.fn(), setTotal: vi.fn(), setChat: vi.fn(),
   setChatMutationTimer: vi.fn(),
-  notify: vi.fn(), resetScript: vi.fn(), loadPreset: vi.fn(), loadMessages: vi.fn(), refresh: vi.fn(),
+  notify: vi.fn(), resetScript: vi.fn(), loadPreset: vi.fn(), loadAgentControl: vi.fn(async () => undefined), loadMessages: vi.fn(), refresh: vi.fn(),
   preload: vi.fn(), shouldRebuild: vi.fn(), rebuild: vi.fn(), restoreFlush: vi.fn(),
   processBeforeGen: vi.fn(),
   orchestrate: vi.fn(),
@@ -106,6 +106,7 @@ vi.mock('../../../src/service/continuation/host-generation-bridge-registry', () 
 }));
 vi.mock('../../../src/service/continuation/internal-ai-events', () => ({ bindContinuationInternalAiGenerationStarted_ACU: vi.fn(), consumeContinuationInternalAiGenerationEnded_ACU: vi.fn(() => null) }));
 vi.mock('../../../src/service/agent/agent-worldbook-takeover', () => ({ resetPlotAgentWorldbookSessionSnapshot_ACU: m.resetTakeover }));
+vi.mock('../../../src/service/agent/agent-worldbook-config-meta', () => ({ loadAgentWorldbookRuntimeControl_ACU: m.loadAgentControl }));
 vi.mock('../../../src/service/table/table-storage-strategy', () => ({ reloadStorageProvider: vi.fn(), disposeStorageProvider: m.dispose }));
 vi.mock('../../../src/service/table/storage-mode', () => ({ isSqliteMode: vi.fn(() => false) }));
 vi.mock('../../../src/service/worldbook/pipeline', () => ({ loadAllChatMessages_ACU: m.loadMessages }));
@@ -250,6 +251,9 @@ describe('mainInitialize_ACU CHAT_CHANGED 无活动聊天早退', () => {
     expect(m.dispose).not.toHaveBeenCalled();
     expect(m.resetScript).toHaveBeenCalledWith('', { reason: 'chat_changed' });
     expect(m.loadPreset).toHaveBeenCalledOnce();
+    // 上游 1.3.6：切换聊天后预加载本会话的 Agent 世界书开关（带 reset 之后的 revision）
+    await vi.waitFor(() => expect(m.loadAgentControl).toHaveBeenCalledOnce());
+    expect(m.loadAgentControl).toHaveBeenCalledWith(expect.any(Number));
   });
 });
 
