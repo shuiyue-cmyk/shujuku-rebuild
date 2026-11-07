@@ -2,12 +2,10 @@
  * 模板变更的「破坏性确认后重提」唯一实现（R10A-04 / R10A-23；原先三处复制）。
  *
  * 流程：不带确认标志提交（单次 stale 重试）→ 若被「删除表/列需要显式确认」拦下则弹确认 →
- * 确认后先核对所属聊天未切换、再不带确认标志重算一次，待删的表/列与用户看到的完全一致
- * 才带 destructiveChangeConfirmed 提交。否则不执行删除，返回失败结果交给调用方提示。
+ * 确认后核对所属聊天未切换，即带 destructiveChangeConfirmed 提交。
+ * 不再为「确认弹窗期间删除清单被别处改了」整轮重算：弹窗是模态的，模板结构只由用户操作改动。
  */
 import { CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU, captureChatActionScope_ACU, isChatActionScopeCurrent_ACU } from './chat-action-scope';
-
-export const DESTRUCTIVE_BLOCKERS_CHANGED_MESSAGE_ACU = '确认期间待删除的表或列发生变化，本次未执行删除；请重新操作并确认。';
 
 export function isStaleRevisionConflict_ACU(result: unknown): boolean {
   return !!result
@@ -23,12 +21,6 @@ export function extractDestructiveTemplateBlockers_ACU(result: any): string[] | 
     typeof blocker === 'string' && /删除(?:表|列).+需要显式确认/.test(blocker)
   ));
   return blockers.length > 0 ? blockers : null;
-}
-
-function sameBlockerSet(left: string[], right: string[]): boolean {
-  const a = [...new Set(left)].sort();
-  const b = [...new Set(right)].sort();
-  return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 export async function applyTemplateWithDestructiveConfirm_ACU(
@@ -54,13 +46,6 @@ export async function applyTemplateWithDestructiveConfirm_ACU(
   if (!(await options.confirm(confirmedBlockers))) return firstResult;
   if (!isChatActionScopeCurrent_ACU(scope)) {
     return { saved: false, error: CHAT_ACTION_SCOPE_CHANGED_MESSAGE_ACU, blockers: [] };
-  }
-  // 用户确认的是弹窗里那份删除清单；确认期间计划可能变了（模板被别处改动），重算核对。
-  const recheck = await applyWithSingleStaleRetry(false);
-  const currentBlockers = extractDestructiveTemplateBlockers_ACU(recheck);
-  if (!currentBlockers) return recheck;
-  if (!sameBlockerSet(currentBlockers, confirmedBlockers)) {
-    return { ...recheck, error: DESTRUCTIVE_BLOCKERS_CHANGED_MESSAGE_ACU };
   }
   return applyWithSingleStaleRetry(true);
 }

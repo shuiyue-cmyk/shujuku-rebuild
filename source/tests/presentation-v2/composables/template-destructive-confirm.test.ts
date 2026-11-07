@@ -24,13 +24,13 @@ describe('applyTemplateWithDestructiveConfirm_ACU（R10A-04 / R10A-23）', () =>
     expect(apply).toHaveBeenCalledTimes(1);
   });
 
-  it('确认后核对待删表/列与确认时一致才带确认标志提交', async () => {
+  it('确认后直接带确认标志提交，不再整轮重算核对', async () => {
     const apply = vi.fn(async (confirmed: boolean) => (confirmed ? { saved: true } : { saved: false, blockers: [DESTRUCTIVE] }));
     const confirm = vi.fn(async () => true);
 
     await expect(applyTemplateWithDestructiveConfirm_ACU(apply, { confirm })).resolves.toEqual({ saved: true });
     expect(confirm).toHaveBeenCalledWith([DESTRUCTIVE]);
-    expect(apply.mock.calls.map(call => call[0])).toEqual([false, false, true]);
+    expect(apply.mock.calls.map(call => call[0])).toEqual([false, true]);
   });
 
   it('确认期间切换聊天时不带确认标志重提', async () => {
@@ -42,21 +42,6 @@ describe('applyTemplateWithDestructiveConfirm_ACU（R10A-04 / R10A-23）', () =>
     expect(result).toMatchObject({ saved: false });
     expect(String(result.error)).toContain('切换');
     expect(apply.mock.calls.map(call => call[0])).toEqual([false]);
-  });
-
-  it('确认期间待删除的表或列变了时不执行删除', async () => {
-    let round = 0;
-    const apply = vi.fn(async (confirmed: boolean) => {
-      if (confirmed) return { saved: true };
-      round += 1;
-      return { saved: false, blockers: [round === 1 ? DESTRUCTIVE : '删除列「金币」需要显式确认'] };
-    });
-
-    const result = await applyTemplateWithDestructiveConfirm_ACU(apply, { confirm: vi.fn(async () => true) });
-
-    expect(result).toMatchObject({ saved: false });
-    expect(String(result.error)).toContain('发生变化');
-    expect(apply.mock.calls.map(call => call[0])).toEqual([false, false]);
   });
 
   it('用户取消时返回首次的 blockers 结果', async () => {

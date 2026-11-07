@@ -196,6 +196,8 @@ export interface CommitCurrentFloorTemplateScopeOnlyOptions_ACU {
   expectedChatIdentity?: string;
   expectedFirstMessage?: unknown;
   signal?: AbortSignal;
+  /** 调用方读取基线之前取的版本号；期间有其他写入时以 stale_revision_conflict 拒绝提交。 */
+  baseRevision?: string | null;
   /**
    * pristine 会话（无任何实质表格数据）专用：允许 baseline 与 candidate 的持久化投影不一致。
    * 语义是「该会话尚无数据帧，模板结构只需落到聊天级配置层」，
@@ -205,6 +207,11 @@ export interface CommitCurrentFloorTemplateScopeOnlyOptions_ACU {
   pristineOverride?: boolean;
 }
 
+/**
+ * 模板提交期间宿主可能切换聊天（宿主复用同一个 chat 数组，旧引用会指向新聊天的楼层）。
+ * 只需在「事务开始」与「每次 await 之后、写入聊天或聊天级配置之前」各核对一次；
+ * 两次核对之间全是同步计算时不必重复。
+ */
 function assertTemplateCommitChatContext_ACU(expectedChat: unknown[], options: { expectedChatIdentity?: string; expectedFirstMessage?: unknown; signal?: AbortSignal }): void {
   if (options.signal?.aborted) throw new Error('模板提交已取消。');
   const activeChat = getChatArray_ACU();
@@ -214,6 +221,19 @@ function assertTemplateCommitChatContext_ACU(expectedChat: unknown[], options: {
   }
   if (options.expectedChatIdentity && getActiveChatStorageIdentity_ACU(activeChat) !== options.expectedChatIdentity) {
     throw new Error('目标聊天已切换，已取消模板提交。');
+  }
+}
+
+/**
+ * 回滚前判断：失败时是否仍在原聊天。已切到别的聊天时，旧聊天的改动只在内存里、盘上没动，
+ * 聊天级配置的写入口按「当前聊天」落位——此时回写会把旧聊天的模板配置写进新聊天，必须跳过。
+ */
+function templateCommitChatStillCurrent_ACU(expectedChat: unknown[], options: { expectedChatIdentity?: string; expectedFirstMessage?: unknown }): boolean {
+  try {
+    assertTemplateCommitChatContext_ACU(expectedChat, { expectedChatIdentity: options.expectedChatIdentity, expectedFirstMessage: options.expectedFirstMessage });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -3494,12 +3514,12 @@ export async function commitCurrentFloorTemplateScopeOnly_ACU(
       isolationKey,
       writeSet: [{ kind: 'all' }],
       maintenanceMode: 'exclusive',
+      ...(options.baseRevision !== undefined ? { baseRevision: options.baseRevision } : {}),
     }, async transactionContext => transactionContext.runCommit(async () => {
       const chat = getChatArray_ACU();
       if (!Array.isArray(chat) || chat.length === 0) throw new Error('chat history is empty');
       assertTemplateCommitChatContext_ACU(chat, options);
       transactionContext.assertFresh?.('commitCurrentFloorTemplateScopeOnly:before_commit');
-      assertTemplateCommitChatContext_ACU(chat, options);
       const previousScopeContainer = cloneOptionalJson_ACU(peekChatScopedConfigContainer_ACU(chat));
       const previousGuideContainer = cloneOptionalJson_ACU(peekChatSheetGuideContainer_ACU(chat));
       try {
@@ -3515,6 +3535,7 @@ export async function commitCurrentFloorTemplateScopeOnly_ACU(
         await saveChatToHostStrict_ACU();
         return { saved: true, mode: 'scope_only' as const };
       } catch (error: any) {
+        if (!templateCommitChatStillCurrent_ACU(chat, options)) throw error;
         setChatScopedConfigContainer_ACU(chat, previousScopeContainer);
         setChatSheetGuideContainer_ACU(chat, previousGuideContainer);
         try {
@@ -3526,7 +3547,9 @@ export async function commitCurrentFloorTemplateScopeOnly_ACU(
       }
     }, []));
   } catch (error: any) {
-    return { saved: false, error: error?.message || String(error) };
+    const message = error?.message || String(error);
+    if (/runtime revision conflict/i.test(message)) return { saved: false, error: `V2 stale_revision_conflict: ${message}` };
+    return { saved: false, error: message };
   }
 }
 
@@ -3802,10 +3825,6 @@ export async function commitCurrentFloorTemplateChanges_ACU(
     }
 
     transactionContext.assertFresh?.('commitCurrentFloorTemplateChanges:before_commit');
-    assertTemplateCommitChatContext_ACU(chat, options);
-    if (chat[target.index] !== target.message || target.message.is_user) {
-      throw new Error('target AI message changed before template commit; abort stale table write.');
-    }
 
     if (storageState.kind === 'pristine_without_checkpoint') {
       if (!isObjectRecord_ACU(options.templateSource)) {
@@ -3898,11 +3917,11 @@ export async function commitCurrentFloorTemplateChanges_ACU(
           updatedAt: createdAt,
         });
         if (!guideUpdated) throw new Error('预填表模板提交无法原子写入 guideData 与 template scope。');
-        assertTemplateCommitChatContext_ACU(chat, options);
         await saveChatToHostStrict_ACU();
         return { saved: true, mode: 'v2_commit', messageIndex: target.index, checkpoints: initialSheetCheckpoints, removedNullRowCount: 0 };
       } catch (error: any) {
         restoreTemplateDeleteMessageSnapshots_ACU(messageSnapshots);
+        if (!templateCommitChatStillCurrent_ACU(chat, options)) throw error;
         setChatScopedConfigContainer_ACU(chat, previousScopeContainer);
         setChatSheetGuideContainer_ACU(chat, previousGuideContainer);
         try {
@@ -4111,7 +4130,6 @@ export async function commitCurrentFloorTemplateChanges_ACU(
           preferredHideCheckpoint,
           revealCheckpointSources.get(change.sheetKey),
         );
-        assertTemplateCommitChatContext_ACU(chat, options);
         if (revealSource.status === 'resolved') {
           // 能定位到可信历史可见数据 → 曾被隐藏的表，reveal 恢复"离开时最新状态"（语义1）。
           logDebug_ACU(`[V2 Persist] reveal_source_resolved: requestId=${options.requestId || 'unknown'}, sheetKey=${change.sheetKey}, sourceKind=${revealSource.sourceKind}, sourceMessageIndex=${revealSource.messageIndex}。`);
@@ -4171,7 +4189,6 @@ export async function commitCurrentFloorTemplateChanges_ACU(
         preferredHideCheckpoint,
         revealCheckpointSources.get(change.sheetKey),
       );
-      assertTemplateCommitChatContext_ACU(chat, options);
       if (revealSource.status === 'resolved') {
         logDebug_ACU(`[V2 Persist] reveal_source_resolved: requestId=${options.requestId || 'unknown'}, sheetKey=${change.sheetKey}, sourceKind=${revealSource.sourceKind}, sourceMessageIndex=${revealSource.messageIndex}。`);
         revealDataBySheet.set(change.sheetKey, revealSource.sheetData);
@@ -4278,7 +4295,6 @@ export async function commitCurrentFloorTemplateChanges_ACU(
       } else {
         hideSource = await resolveRevealSource_ACU(chat, isolationKey, target.index, sheetKey);
       }
-      assertTemplateCommitChatContext_ACU(chat, options);
       if (hideSource.status === 'indeterminate') {
         throw new Error(`V2 sheet hide 数据来源无法确认：sheetKey=${sheetKey}，reason=${hideSource.reason}。`);
       }
@@ -4341,8 +4357,6 @@ export async function commitCurrentFloorTemplateChanges_ACU(
       };
     })();
 
-      // 所有异步准备完成后，在第一次内存写入前重新核验当前活动聊天与取消状态。
-      assertTemplateCommitChatContext_ACU(chat, options);
       let persistedCheckpoints = checkpoints;
       if (deletedSheetKeys.length > 0) {
         // data_replace 是完整历史状态，不能靠从旧 payload 局部删除 key 来伪造历史。
@@ -4417,6 +4431,7 @@ export async function commitCurrentFloorTemplateChanges_ACU(
         if (candidateValidationError) throw new Error(candidateValidationError);
         transactionContext.assertFresh?.('commitCurrentFloorTemplateChanges:before_convergence_save');
       }
+      // 所有异步准备完成后，在第一次写入真实聊天前核对当前活动聊天与取消状态。
       assertTemplateCommitChatContext_ACU(chat, options);
       sharedStateMutated = true;
       purgedMessageCount = deletedSheetKeys.length === 0 ? 0 : messageSnapshots.reduce((count, snapshot) => (
@@ -4443,7 +4458,6 @@ export async function commitCurrentFloorTemplateChanges_ACU(
         updatedAt: createdAt,
       });
       if (!guideUpdated) throw new Error('当前楼层模板提交无法写入 guideData。');
-      assertTemplateCommitChatContext_ACU(chat, options);
       primarySaveAttempted = true;
       await saveChatToHostStrict_ACU();
       logDebug_ACU(`[V2 Persist] 当前楼层模板提交完成: requestId=${options.requestId || 'unknown'}, messageIndex=${target.index}, checkpoints=${checkpoints.length}, checkpointTimelines=${checkpoints.map(checkpoint => `${checkpoint.sheetKey}:${checkpoint.timeline?.kind || 'none'}@${checkpoint.timeline?.afterSeq ?? 'none'}`).join(',') || 'none'}, operations=${operations.length}, baseRevision=${options.baseRevision ?? transactionContext.baseRevision ?? 'unknown'}, commitRevision=${frame.headRevision ?? 'unknown'}, isolationKey=${isolationKey}`);
@@ -4456,16 +4470,19 @@ export async function commitCurrentFloorTemplateChanges_ACU(
         ...(deletedSheetKeys.length > 0 ? { deletedSheetKeys, purgedMessageCount, hardDeleteCheckpointCreated } : {}),
       };
     } catch (error: any) {
+      const stillCurrentChat = templateCommitChatStillCurrent_ACU(chat, options);
       if (sharedStateMutated) {
         restoreTemplateDeleteMessageSnapshots_ACU(messageSnapshots);
         if (convergenceRootSnapshot) {
           if (convergenceRootSnapshot.hadIsolatedData) convergenceRootSnapshot.message.TavernDB_ACU_IsolatedData = convergenceRootSnapshot.isolatedData;
           else delete convergenceRootSnapshot.message.TavernDB_ACU_IsolatedData;
         }
-        setChatScopedConfigContainer_ACU(chat, previousScopeContainer);
-        setChatSheetGuideContainer_ACU(chat, previousGuideContainer);
+        if (stillCurrentChat) {
+          setChatScopedConfigContainer_ACU(chat, previousScopeContainer);
+          setChatSheetGuideContainer_ACU(chat, previousGuideContainer);
+        }
       }
-      if (primarySaveAttempted) {
+      if (primarySaveAttempted && stillCurrentChat) {
         try {
           await saveChatToHostStrict_ACU();
         } catch (rollbackError: any) {

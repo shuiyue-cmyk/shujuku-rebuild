@@ -30,6 +30,13 @@ function chatOf(...messages: any[]): any[] {
 }
 
 describe('resolveTemplateSwitchMode_ACU', () => {
+  it('调用方已派生的生命周期直接采用，不再自己扫描', () => {
+    const precomputed = { statusBySheetKey: {}, hiddenSheetKeys: ['sheet_old'], indeterminateSheetKeys: [] } as any;
+    expect(resolveTemplateSwitchMode_ACU([], isolationKey, precomputed).mode).toBe('inherit');
+    const indeterminate = { statusBySheetKey: {}, hiddenSheetKeys: [], indeterminateSheetKeys: ['sheet_x'] } as any;
+    expect(resolveTemplateSwitchMode_ACU([], isolationKey, indeterminate).mode).toBe('blocked');
+  });
+
   it('空会话 → pristine', () => {
     const mode = resolveTemplateSwitchMode_ACU([], isolationKey);
     expect(mode.mode).toBe('pristine');

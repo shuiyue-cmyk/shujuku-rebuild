@@ -1,7 +1,7 @@
 import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { hasLegacyTopLevelTableData_ACU, isLegacyV1TagData_ACU, isV2TagData_ACU } from './storage-strategy-resolver';
 import { deriveSheetLifecycleFromFramesV2_ACU } from './storage-frame-v2-replay';
-import type { TableStorageFrameV2_ACU } from './storage-frame-v2-types';
+import type { TableSheetLifecycleProjectionV2_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
 import { settings_ACU } from '../runtime/state-manager';
 
 /**
@@ -155,6 +155,8 @@ function scanFramesForSubstantialContent_ACU(
 export function resolveTemplateSwitchMode_ACU(
   chat: any[] | null | undefined,
   isolationKey: string,
+  /** 调用方已派生过同一聊天的生命周期时直接传入，避免重复扫描。 */
+  precomputedLifecycle?: TableSheetLifecycleProjectionV2_ACU,
 ): TemplateSwitchMode_ACU {
   const chatArray = Array.isArray(chat) ? chat : [];
 
@@ -164,7 +166,7 @@ export function resolveTemplateSwitchMode_ACU(
   }
 
   // 1. lifecycle 派生：indeterminate → blocked，hidden → inherit
-  const lifecycle = deriveSheetLifecycleFromFramesV2_ACU(chatArray, isolationKey);
+  const lifecycle = precomputedLifecycle ?? deriveSheetLifecycleFromFramesV2_ACU(chatArray, isolationKey);
   if (lifecycle.indeterminateSheetKeys.length > 0) {
     return {
       mode: 'blocked',

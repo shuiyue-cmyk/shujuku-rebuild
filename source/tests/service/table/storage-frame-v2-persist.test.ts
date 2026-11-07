@@ -1500,6 +1500,57 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
       expect(mocks.scopeContainer).toEqual(originalScope);
       expect(mocks.guideContainer).toEqual(originalGuide);
     });
+
+    it('把调用方读取前的版本号交给事务；基线过期时以 stale_revision_conflict 拒绝且不写任何东西', async () => {
+      mocks.chat.push({ is_user: false });
+      mocks.runTransaction.mockImplementationOnce(async (_options: any, task: any) => task({
+        baseRevision: 'runtime-v1:stale',
+        assertFresh: () => { throw new Error('runtime revision conflict: 全表基线已过期'); },
+        runCommit: mocks.runCommit,
+      }));
+
+      const result = await commitCurrentFloorTemplateScopeOnly_ACU({
+        baselineData: scopeOnlyData,
+        candidateData: JSON.parse(JSON.stringify(scopeOnlyData)),
+        guideData: { sheet_a: { name: 'A' }, sheet_b: { name: 'B' } },
+        templateSource: scopeOnlyData,
+        baseRevision: 'runtime-v1:stale',
+      });
+
+      expect(mocks.runTransaction).toHaveBeenCalledWith(expect.objectContaining({ baseRevision: 'runtime-v1:stale' }), expect.any(Function));
+      expect(result).toMatchObject({ saved: false, error: expect.stringMatching(/^V2 stale_revision_conflict: /) });
+      expect(mocks.setGuide).not.toHaveBeenCalled();
+      expect(mocks.saveChatStrict).not.toHaveBeenCalled();
+    });
+
+    it('存盘期间已切到别的聊天：失败回滚不把旧聊天的模板配置写进新聊天，也不补存', async () => {
+      const message = { is_user: false } as any;
+      mocks.chat.push(message);
+      mocks.setGuide.mockImplementation(() => {
+        mocks.scopeContainer = { version: 1, template: { '': { fromOldChat: true } } };
+        return true;
+      });
+      mocks.saveChatStrict.mockImplementationOnce(async () => {
+        // 宿主复用同一个 chat 数组：切聊天后旧引用指向新聊天的楼层
+        mocks.chat.splice(0, mocks.chat.length, { is_user: false, switched: true });
+        mocks.chatIdentity = 'chat-b';
+        mocks.scopeContainer = { version: 1, template: { '': { newChat: true } } };
+        throw new Error('host save failed');
+      });
+
+      const result = await commitCurrentFloorTemplateScopeOnly_ACU({
+        baselineData: scopeOnlyData,
+        candidateData: JSON.parse(JSON.stringify(scopeOnlyData)),
+        guideData: { sheet_a: { name: 'A' }, sheet_b: { name: 'B' } },
+        templateSource: scopeOnlyData,
+        expectedChatIdentity: 'chat-a',
+        expectedFirstMessage: message,
+      });
+
+      expect(result).toEqual({ saved: false, error: 'host save failed' });
+      expect(mocks.scopeContainer).toEqual({ version: 1, template: { '': { newChat: true } } });
+      expect(mocks.saveChatStrict).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('块 2B 复审 R2B-04：硬删表与重建其他表同批时，新基底带上重建后的真实数据而不是模板空壳', async () => {
@@ -1580,6 +1631,44 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
 
     expect(result).toMatchObject({ saved: false, error: expect.stringContaining('已取消') });
     expect(message.TavernDB_ACU_IsolatedData).toEqual(frameBefore);
+    expect(mocks.guideContainer).toEqual(guideBefore);
+    expect(mocks.scopeContainer).toEqual(scopeBefore);
+    expect(mocks.setGuide).not.toHaveBeenCalled();
+    expect(mocks.saveChatStrict).not.toHaveBeenCalled();
+  });
+
+  it('structural commit 在最后一次异步校验期间切换聊天：写入前的总核对拦下，新聊天不被改写也不存盘', async () => {
+    const message = seedFrame({ logEntries: [] });
+    const frameBefore = JSON.parse(JSON.stringify(message.TavernDB_ACU_IsolatedData));
+    const switchedMessage = { is_user: false, switched: true, TavernDB_ACU_IsolatedData: JSON.parse(JSON.stringify(frameBefore)) };
+    const guideBefore = JSON.parse(JSON.stringify(mocks.guideContainer));
+    const scopeBefore = JSON.parse(JSON.stringify(mocks.scopeContainer));
+    const replayData = { mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: sheetB };
+    mocks.loadReplayDetailed
+      .mockResolvedValueOnce({ baseKind: 'full_checkpoint', data: replayData })
+      // 第二次读取是硬删候选校验：这期间宿主切到了别的聊天（复用同一个 chat 数组）
+      .mockImplementationOnce(async () => {
+        mocks.chat.splice(0, mocks.chat.length, switchedMessage);
+        mocks.chatIdentity = 'chat-b';
+        return { baseKind: 'full_checkpoint', data: { mate: { type: 'acu' }, sheet_a: sheetA } };
+      });
+
+    const result = await commitCurrentFloorTemplateChanges_ACU({
+      isolationKey: '',
+      sheetChanges: [{
+        kind: 'operations', sheetKey: 'sheet_a', targetSheetData: sheetA,
+        operations: [{ kind: 'meta_update', sheetKey: 'sheet_a', meta: { name: 'A' } }],
+      }],
+      deletedSheetKeys: ['sheet_b'],
+      guideData: { sheet_a: { name: 'A' } },
+      templateSource: { mate: { type: 'acu' }, sheet_a: sheetA },
+      expectedChatIdentity: 'chat-a',
+      expectedFirstMessage: message,
+    });
+
+    expect(mocks.loadReplayDetailed).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ saved: false, error: expect.stringContaining('目标聊天已切换') });
+    expect(switchedMessage.TavernDB_ACU_IsolatedData).toEqual(frameBefore);
     expect(mocks.guideContainer).toEqual(guideBefore);
     expect(mocks.scopeContainer).toEqual(scopeBefore);
     expect(mocks.setGuide).not.toHaveBeenCalled();
