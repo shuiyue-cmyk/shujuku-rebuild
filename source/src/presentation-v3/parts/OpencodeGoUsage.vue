@@ -5,14 +5,33 @@
       <template v-else-if="!usage">查询中…</template>
       <template v-else>OpenCode Go 订阅已用的比例，每轮填表结束后刷新。</template>
     </template>
-    <UbStats v-if="usage" class="ub-go-usage" :items="statsItems">
-      <template v-for="item in statsItems" :key="item.key" #[item.key]>
-        <span class="ub-go-usage__pct" :class="{ 'is-limited': usage[item.key].limited }">{{ formatPercent(usage[item.key].percent) }}</span>
-        <span class="ub-go-usage__reset" :class="{ 'is-limited': usage[item.key].limited }">
+    <!-- 上一行并排 5 小时 / 本周，下一行通栏本月总额度 -->
+    <div v-if="usage" class="ub-go-usage">
+      <div
+        v-for="item in meters"
+        :key="item.key"
+        class="ub-go-usage__meter"
+        :class="{ 'is-wide': item.wide, 'is-high': usage[item.key].percent >= 80, 'is-limited': usage[item.key].limited }"
+      >
+        <div class="ub-go-usage__head">
+          <span class="ub-go-usage__label">{{ item.label }}</span>
+          <span class="ub-go-usage__pct">{{ formatPercent(usage[item.key].percent) }}</span>
+        </div>
+        <div
+          class="ub-go-usage__track"
+          role="progressbar"
+          :aria-label="`${item.label}已用`"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="usage[item.key].percent"
+        >
+          <div class="ub-go-usage__fill" :style="{ width: `${Math.min(100, Math.max(0, usage[item.key].percent))}%` }" />
+        </div>
+        <div class="ub-go-usage__reset">
           {{ usage[item.key].limited ? '已限流，' : '' }}{{ formatResetAt(usage[item.key].resetsAt) }} 重置
-        </span>
-      </template>
-    </UbStats>
+        </div>
+      </div>
+    </div>
   </UbRow>
 </template>
 
@@ -29,16 +48,15 @@ import {
 } from '../../service/ai/opencode-go-usage';
 import { onTableFillRunEnded_ACU } from '../../service/runtime/state-manager';
 import UbRow from '../ui/UbRow.vue';
-import UbStats, { type UbStatsItem } from '../ui/UbStats.vue';
 
 const props = defineProps<{ url: string; apiKey: string }>();
 
 const QUERY_DEBOUNCE_MS = 500;
 
-const statsItems: Array<UbStatsItem & { key: keyof OpencodeGoUsage_ACU }> = [
+const meters: Array<{ key: keyof OpencodeGoUsage_ACU; label: string; wide?: boolean }> = [
   { key: 'rolling', label: '5 小时' },
   { key: 'weekly', label: '本周' },
-  { key: 'monthly', label: '本月' },
+  { key: 'monthly', label: '本月总额度', wide: true },
 ];
 
 const usage = ref<OpencodeGoUsage_ACU | null>(null);
@@ -100,29 +118,78 @@ function formatResetAt(ms: number): string {
   );
   if (dayDiff === 0) return `今天 ${hm}`;
   if (dayDiff === 1) return `明天 ${hm}`;
-  return `${at.getMonth() + 1}月${at.getDate()}日 ${hm}`;
+  // 短格式：手机宽度下半宽一格也放得下「已限流，11/16 08:00 重置」
+  return `${at.getMonth() + 1}/${at.getDate()} ${hm}`;
 }
 </script>
 
 <style scoped>
 .ub-go-usage {
-  border: 1px solid var(--ub-line-soft);
-  border-radius: var(--ub-r-card);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ub-s4);
+}
+
+.ub-go-usage__meter {
+  min-width: 0;
+}
+
+.ub-go-usage__meter.is-wide {
+  grid-column: 1 / -1;
+}
+
+.ub-go-usage__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ub-s2);
+}
+
+.ub-go-usage__label {
+  color: var(--ub-text-2);
+  font-size: var(--ub-fs-xs);
+  font-weight: 600;
 }
 
 .ub-go-usage__pct {
+  color: var(--ub-text);
   font-size: var(--ub-fs-md);
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ub-go-usage__track {
+  height: 6px;
+  margin-top: var(--ub-s1);
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--ub-sunken);
+  box-shadow: inset 0 0 0 1px var(--ub-line-soft);
+}
+
+.ub-go-usage__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ub-accent);
+  transition: width 0.3s ease;
 }
 
 .ub-go-usage__reset {
-  display: block;
+  margin-top: var(--ub-s1);
   color: var(--ub-text-3);
   font-size: var(--ub-fs-2xs);
 }
 
-.ub-go-usage__pct.is-limited,
-.ub-go-usage__reset.is-limited {
+.ub-go-usage__meter.is-high .ub-go-usage__fill {
+  background: var(--ub-warn);
+}
+
+.ub-go-usage__meter.is-limited .ub-go-usage__fill {
+  background: var(--ub-danger);
+}
+
+.ub-go-usage__meter.is-limited .ub-go-usage__pct,
+.ub-go-usage__meter.is-limited .ub-go-usage__reset {
   color: var(--ub-danger);
 }
 </style>
