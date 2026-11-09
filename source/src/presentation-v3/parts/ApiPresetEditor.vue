@@ -79,6 +79,7 @@
         <UbRow label="端点（基础 URL）" stack>
           <UbInput v-model="draft.url" placeholder="https://example.com/v1" aria-label="端点" />
         </UbRow>
+        <OpencodeGoUsage :url="draft.url" :api-key="draft.apiKey" />
         <UbRow label="API 密钥" stack>
           <UbInput v-model="draft.apiKey" type="password" autocomplete="off" aria-label="API 密钥" />
         </UbRow>
@@ -247,6 +248,7 @@ import UbSection from '../ui/UbSection.vue';
 import UbSelect, { type UbSelectOption } from '../ui/UbSelect.vue';
 import UbSwitch from '../ui/UbSwitch.vue';
 import UbTextarea from '../ui/UbTextarea.vue';
+import OpencodeGoUsage from './OpencodeGoUsage.vue';
 
 withDefaults(defineProps<{ idPrefix?: string }>(), { idPrefix: 'api' });
 

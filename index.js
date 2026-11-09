@@ -95603,7 +95603,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261107-1915"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261109-1254"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95622,7 +95622,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261107-1915";
+        const stamp = "20261109-1254";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -105452,10 +105452,31 @@ function _set_currentAbortController_ACU(v) { currentAbortController_ACU = v; }
 function _set_isAutoUpdatingCard_ACU(v) {
     if (v && !isAutoUpdatingCard_ACU)
         fillRunSeq_ACU += 1;
+    const runEnded = !v && !!isAutoUpdatingCard_ACU;
     // 本轮结束（「正在填表」被持有者放开）才解除终止锁存
     if (!v)
         tableFillStopLatched_ACU = false;
     isAutoUpdatingCard_ACU = v;
+    if (runEnded)
+        notifyTableFillRunEnded_ACU();
+}
+// 一轮填表结束的订阅（自动填表、手动填表、追平都经「正在填表」标志收口）。
+const tableFillRunEndedListeners_ACU = new Set();
+/** 订阅「一轮填表结束」，返回取消订阅函数。 */
+function onTableFillRunEnded_ACU(listener) {
+    tableFillRunEndedListeners_ACU.add(listener);
+    return () => { tableFillRunEndedListeners_ACU.delete(listener); };
+}
+function notifyTableFillRunEnded_ACU() {
+    // 复位发生在编排器的 finally 里：订阅者出错不能打断收尾、改写填表结果
+    for (const listener of [...tableFillRunEndedListeners_ACU]) {
+        try {
+            listener();
+        }
+        catch (error) {
+            logWarn_ACU('[状态管理] 填表结束订阅者出错:', error);
+        }
+    }
 }
 // 「终止填表」锁存：wasStoppedByUser_ACU 会被新一轮填表开跑、宿主新生成复位，单靠它，被终止的那轮
 // 可能在批次 / 分组 / 重试之间「复活」。锁存只在本轮结束时解除。
@@ -157574,7 +157595,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261107-1915";
+        const stamp = "20261109-1254";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -179599,7 +179620,7 @@ function useVisualizerSave(interactions = {}) {
     };
 }
 
-var _sfc_main$11 = /*@__PURE__*/ defineComponent({
+var _sfc_main$12 = /*@__PURE__*/ defineComponent({
     __name: 'UbBadge',
     props: {
         variant: { default: 'neutral' }
@@ -179623,7 +179644,7 @@ var _export_sfc = (sfc, props) => {
   return target;
 };
 
-function _sfc_render$10(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$11(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"span",
 		{ class: normalizeClass(["ub-badge", `ub-badge--${$props.variant}`]) },
@@ -179632,9 +179653,9 @@ function _sfc_render$10(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbBadge = /* @__PURE__ */ _export_sfc(_sfc_main$11, [["render", _sfc_render$10], ["__scopeId", "data-v-5a041c45"]]);
+var UbBadge = /* @__PURE__ */ _export_sfc(_sfc_main$12, [["render", _sfc_render$11], ["__scopeId", "data-v-5a041c45"]]);
 
-var _sfc_main$10 = /*@__PURE__*/ defineComponent({
+var _sfc_main$11 = /*@__PURE__*/ defineComponent({
     __name: 'UbButton',
     props: {
         variant: { default: 'default' },
@@ -179678,7 +179699,7 @@ const _hoisted_5$y = {
 	key: 2,
 	class: "ub-btn__label"
 };
-function _sfc_render$$(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$10(_ctx, _cache, $props, $setup, $data, $options) {
 	return $props.href ? (openBlock(), createElementBlock("a", {
 		key: 0,
 		class: normalizeClass(["ub-btn", [
@@ -179726,9 +179747,9 @@ function _sfc_render$$(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	)) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_5$y, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_3$K));
 }
-var UbButton = /* @__PURE__ */ _export_sfc(_sfc_main$10, [["render", _sfc_render$$], ["__scopeId", "data-v-3521ab51"]]);
+var UbButton = /* @__PURE__ */ _export_sfc(_sfc_main$11, [["render", _sfc_render$10], ["__scopeId", "data-v-3521ab51"]]);
 
-var _sfc_main$$ = /*@__PURE__*/ defineComponent({
+var _sfc_main$10 = /*@__PURE__*/ defineComponent({
     __name: 'UbCallout',
     props: {
         kind: { default: 'info' }
@@ -179753,7 +179774,7 @@ var UbCallout_vue_vue_type_style_index_0_scoped_a3348fcd_lang = null;
 
 const _hoisted_1$V = ["role"];
 const _hoisted_2$O = { class: "ub-callout__body" };
-function _sfc_render$_(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$$(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", {
 		class: normalizeClass(["ub-callout", `ub-callout--${$props.kind}`]),
 		role: $props.kind === "error" ? "alert" : "status"
@@ -179768,9 +179789,9 @@ function _sfc_render$_(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	), createBaseVNode("div", _hoisted_2$O, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])], 10, _hoisted_1$V);
 }
-var UbCallout = /* @__PURE__ */ _export_sfc(_sfc_main$$, [["render", _sfc_render$_], ["__scopeId", "data-v-a3348fcd"]]);
+var UbCallout = /* @__PURE__ */ _export_sfc(_sfc_main$10, [["render", _sfc_render$$], ["__scopeId", "data-v-a3348fcd"]]);
 
-var _sfc_main$_ = /*@__PURE__*/ defineComponent({
+var _sfc_main$$ = /*@__PURE__*/ defineComponent({
     __name: 'UbIconButton',
     props: {
         icon: {},
@@ -179796,7 +179817,7 @@ const _hoisted_1$U = [
 	"title",
 	"aria-label"
 ];
-function _sfc_render$Z(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$_(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("button", {
 		type: "button",
 		class: normalizeClass(["ub-icon-btn", [`ub-icon-btn--${$props.variant}`, `ub-icon-btn--${$props.size}`]]),
@@ -179814,9 +179835,9 @@ function _sfc_render$Z(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	)], 10, _hoisted_1$U);
 }
-var UbIconButton = /* @__PURE__ */ _export_sfc(_sfc_main$_, [["render", _sfc_render$Z], ["__scopeId", "data-v-09c99ba6"]]);
+var UbIconButton = /* @__PURE__ */ _export_sfc(_sfc_main$$, [["render", _sfc_render$_], ["__scopeId", "data-v-09c99ba6"]]);
 
-var _sfc_main$Z = /*@__PURE__*/ defineComponent({
+var _sfc_main$_ = /*@__PURE__*/ defineComponent({
     __name: 'UbSegmented',
     props: {
         options: {},
@@ -179851,7 +179872,7 @@ const _hoisted_2$N = [
 	"disabled",
 	"onClick"
 ];
-function _sfc_render$Y(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$Z(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", {
 		class: normalizeClass(["ub-seg", {
 			"ub-seg--sm": $props.size === "sm",
@@ -179891,10 +179912,10 @@ function _sfc_render$Y(_ctx, _cache, $props, $setup, $data, $options) {
 		/* KEYED_FRAGMENT */
 	))], 10, _hoisted_1$T);
 }
-var UbSegmented = /* @__PURE__ */ _export_sfc(_sfc_main$Z, [["render", _sfc_render$Y], ["__scopeId", "data-v-a4a2b8e5"]]);
+var UbSegmented = /* @__PURE__ */ _export_sfc(_sfc_main$_, [["render", _sfc_render$Z], ["__scopeId", "data-v-a4a2b8e5"]]);
 
 const LEAVE_MS$1 = 180;
-var _sfc_main$Y = /*@__PURE__*/ defineComponent({
+var _sfc_main$Z = /*@__PURE__*/ defineComponent({
     __name: 'UbSheet',
     props: {
         isOpen: { type: Boolean },
@@ -179985,7 +180006,7 @@ const _hoisted_8$m = {
 	key: 0,
 	class: "ub-sheet__foot"
 };
-function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$Y(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock(Teleport, {
 		defer: "",
 		to: "#ub-portal"
@@ -180034,7 +180055,7 @@ function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
 		_ctx.$slots.footer ? (openBlock(), createElementBlock("footer", _hoisted_8$m, [renderSlot(_ctx.$slots, "footer", {}, undefined, true)])) : createCommentVNode("v-if", true)
 	], 12, _hoisted_2$M)], 42, _hoisted_1$S)) : createCommentVNode("v-if", true)]);
 }
-var UbSheet = /* @__PURE__ */ _export_sfc(_sfc_main$Y, [["render", _sfc_render$X], ["__scopeId", "data-v-34c6aa88"]]);
+var UbSheet = /* @__PURE__ */ _export_sfc(_sfc_main$Z, [["render", _sfc_render$Y], ["__scopeId", "data-v-34c6aa88"]]);
 
 function clone_ACU$1(value) {
     if (value === undefined)
@@ -184048,7 +184069,7 @@ function useVisualizerAssistant() {
     };
 }
 
-var _sfc_main$X = /*@__PURE__*/ defineComponent({
+var _sfc_main$Y = /*@__PURE__*/ defineComponent({
     __name: 'UbFileButton',
     props: {
         accept: { default: undefined },
@@ -184086,7 +184107,7 @@ injectSfcStyle("\n.ub-file[data-v-2a899a2f] {\r\n  display: inline-flex;\r\n  fl
 var UbFileButton_vue_vue_type_style_index_0_scoped_2a899a2f_lang = null;
 
 const _hoisted_1$R = ["accept"];
-function _sfc_render$W(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"span",
 		{ class: normalizeClass(["ub-file", { "ub-file--block": $props.block }]) },
@@ -184131,9 +184152,9 @@ function _sfc_render$W(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbFileButton = /* @__PURE__ */ _export_sfc(_sfc_main$X, [["render", _sfc_render$W], ["__scopeId", "data-v-2a899a2f"]]);
+var UbFileButton = /* @__PURE__ */ _export_sfc(_sfc_main$Y, [["render", _sfc_render$X], ["__scopeId", "data-v-2a899a2f"]]);
 
-var _sfc_main$W = /*@__PURE__*/ defineComponent({
+var _sfc_main$X = /*@__PURE__*/ defineComponent({
     __name: 'UbSelect',
     props: {
         options: {},
@@ -184191,7 +184212,7 @@ const _hoisted_1$Q = [
 const _hoisted_2$L = ["label"];
 const _hoisted_3$I = ["value"];
 const _hoisted_4$D = ["value"];
-function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$W(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"span",
 		{ class: normalizeClass(["ub-select", {
@@ -184269,9 +184290,9 @@ function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbSelect = /* @__PURE__ */ _export_sfc(_sfc_main$W, [["render", _sfc_render$V], ["__scopeId", "data-v-4fd7ac21"]]);
+var UbSelect = /* @__PURE__ */ _export_sfc(_sfc_main$X, [["render", _sfc_render$W], ["__scopeId", "data-v-4fd7ac21"]]);
 
-var _sfc_main$V = /*@__PURE__*/ defineComponent({
+var _sfc_main$W = /*@__PURE__*/ defineComponent({
     __name: 'UbSwitch',
     props: {
         modelValue: { type: Boolean },
@@ -184296,7 +184317,7 @@ const _hoisted_1$P = [
 	"aria-label",
 	"disabled"
 ];
-function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("button", {
 		type: "button",
 		role: "switch",
@@ -184316,9 +184337,9 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CACHED */
 	)])], 10, _hoisted_1$P);
 }
-var UbSwitch = /* @__PURE__ */ _export_sfc(_sfc_main$V, [["render", _sfc_render$U], ["__scopeId", "data-v-97e8c2ad"]]);
+var UbSwitch = /* @__PURE__ */ _export_sfc(_sfc_main$W, [["render", _sfc_render$V], ["__scopeId", "data-v-97e8c2ad"]]);
 
-var _sfc_main$U = /*@__PURE__*/ defineComponent({
+var _sfc_main$V = /*@__PURE__*/ defineComponent({
     __name: 'UbTextarea',
     props: {
         modelValue: {},
@@ -184386,7 +184407,7 @@ const _hoisted_2$K = [
 	"readonly",
 	"aria-label"
 ];
-function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"label",
 		{ class: normalizeClass(["ub-textarea", { "ub-textarea--mono": $props.mono }]) },
@@ -184412,7 +184433,7 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbTextarea = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$T], ["__scopeId", "data-v-29d0f7ce"]]);
+var UbTextarea = /* @__PURE__ */ _export_sfc(_sfc_main$V, [["render", _sfc_render$U], ["__scopeId", "data-v-29d0f7ce"]]);
 
 const DEFAULT_ROLE_OPTIONS = [
     { value: 'SYSTEM', label: 'SYSTEM' },
@@ -184424,7 +184445,7 @@ const DEFAULT_SLOT_OPTIONS = [
     { value: 'A', label: '主插槽 A' },
     { value: 'B', label: '主插槽 B' },
 ];
-var _sfc_main$T = /*@__PURE__*/ defineComponent({
+var _sfc_main$U = /*@__PURE__*/ defineComponent({
     __name: 'UbPromptSegments',
     props: {
         segments: {},
@@ -184474,7 +184495,7 @@ const _hoisted_8$l = {
 	key: 0,
 	class: "ub-segs__empty"
 };
-function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$N, [
 		createVNode($setup["UbButton"], {
 			size: "sm",
@@ -184638,9 +184659,9 @@ function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
 		})
 	]);
 }
-var UbPromptSegments = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$S], ["__scopeId", "data-v-f68c779d"]]);
+var UbPromptSegments = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$T], ["__scopeId", "data-v-f68c779d"]]);
 
-var _sfc_main$S = /*@__PURE__*/ defineComponent({
+var _sfc_main$T = /*@__PURE__*/ defineComponent({
     __name: 'PromptSegmentsSheet',
     props: {
         isOpen: { type: Boolean },
@@ -184686,7 +184707,7 @@ var _sfc_main$S = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-pss__spacer[data-v-9a55233b] {\r\n  flex: 1 1 auto;\n}\r\n", "src/presentation-v3/parts/PromptSegmentsSheet.vue#style-0-9a55233b");
 var PromptSegmentsSheet_vue_vue_type_style_index_0_scoped_9a55233b_lang = null;
 
-function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSheet"], {
 		"is-open": $props.isOpen,
 		title: $props.title,
@@ -184790,9 +184811,9 @@ function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
 		"subtitle"
 	]);
 }
-var PromptSegmentsSheet = /* @__PURE__ */ _export_sfc(_sfc_main$S, [["render", _sfc_render$R], ["__scopeId", "data-v-9a55233b"]]);
+var PromptSegmentsSheet = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$S], ["__scopeId", "data-v-9a55233b"]]);
 
-var _sfc_main$R = /*@__PURE__*/ defineComponent({
+var _sfc_main$S = /*@__PURE__*/ defineComponent({
     __name: 'UbCheck',
     props: {
         modelValue: { type: Boolean },
@@ -184819,7 +184840,7 @@ const _hoisted_3$G = {
 	key: 0,
 	class: "ub-check__label"
 };
-function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("label", {
 		class: normalizeClass(["ub-check", {
 			"is-on": $props.modelValue,
@@ -184851,9 +184872,9 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 		)], true)])) : createCommentVNode("v-if", true)
 	], 10, _hoisted_1$M);
 }
-var UbCheck = /* @__PURE__ */ _export_sfc(_sfc_main$R, [["render", _sfc_render$Q], ["__scopeId", "data-v-58a3daf7"]]);
+var UbCheck = /* @__PURE__ */ _export_sfc(_sfc_main$S, [["render", _sfc_render$R], ["__scopeId", "data-v-58a3daf7"]]);
 
-var _sfc_main$Q = /*@__PURE__*/ defineComponent({
+var _sfc_main$R = /*@__PURE__*/ defineComponent({
     __name: 'UbDisclosure',
     props: {
         label: {},
@@ -184883,7 +184904,7 @@ const _hoisted_3$F = {
 	class: "ub-disc__meta"
 };
 const _hoisted_4$B = ["id"];
-function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"div",
 		{ class: normalizeClass(["ub-disc", {
@@ -184934,9 +184955,9 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbDisclosure = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$P], ["__scopeId", "data-v-8841c368"]]);
+var UbDisclosure = /* @__PURE__ */ _export_sfc(_sfc_main$R, [["render", _sfc_render$Q], ["__scopeId", "data-v-8841c368"]]);
 
-var _sfc_main$P = /*@__PURE__*/ defineComponent({
+var _sfc_main$Q = /*@__PURE__*/ defineComponent({
     __name: 'VizAssistantView',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -185030,7 +185051,7 @@ const _hoisted_19$5 = {
 };
 const _hoisted_20$5 = { class: "ub-vai__docs-note" };
 const _hoisted_21$5 = { class: "ub-vai__docs" };
-function _sfc_render$O(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"div",
 		_hoisted_1$K,
@@ -185491,9 +185512,9 @@ function _sfc_render$O(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_PATCH */
 	);
 }
-var VizAssistantView = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$O], ["__scopeId", "data-v-549c1194"]]);
+var VizAssistantView = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$P], ["__scopeId", "data-v-549c1194"]]);
 
-var _sfc_main$O = /*@__PURE__*/ defineComponent({
+var _sfc_main$P = /*@__PURE__*/ defineComponent({
     __name: 'UbInput',
     props: {
         modelValue: {},
@@ -185559,7 +185580,7 @@ const _hoisted_1$J = [
 	"aria-label",
 	"inputmode"
 ];
-function _sfc_render$N(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$O(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"span",
 		{ class: normalizeClass(["ub-field", {
@@ -185596,9 +185617,9 @@ function _sfc_render$N(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbInput = /* @__PURE__ */ _export_sfc(_sfc_main$O, [["render", _sfc_render$N], ["__scopeId", "data-v-17f68171"]]);
+var UbInput = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$O], ["__scopeId", "data-v-17f68171"]]);
 
-var _sfc_main$N = /*@__PURE__*/ defineComponent({
+var _sfc_main$O = /*@__PURE__*/ defineComponent({
     __name: 'UbRow',
     props: {
         label: { default: undefined },
@@ -185638,7 +185659,7 @@ const _hoisted_5$u = {
 	key: 1,
 	class: "ub-row__control"
 };
-function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$N(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", {
 		class: normalizeClass(["ub-row", {
 			"ub-row--stack": $props.stack,
@@ -185655,9 +185676,9 @@ function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
 		/* TEXT */
 	)], true)])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("div", _hoisted_5$u, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_1$I);
 }
-var UbRow = /* @__PURE__ */ _export_sfc(_sfc_main$N, [["render", _sfc_render$M], ["__scopeId", "data-v-085151b3"]]);
+var UbRow = /* @__PURE__ */ _export_sfc(_sfc_main$O, [["render", _sfc_render$N], ["__scopeId", "data-v-085151b3"]]);
 
-var _sfc_main$M = /*@__PURE__*/ defineComponent({
+var _sfc_main$N = /*@__PURE__*/ defineComponent({
     __name: 'UbSection',
     props: {
         id: { default: undefined },
@@ -185704,7 +185725,7 @@ const _hoisted_7$o = {
 	key: 1,
 	class: "ub-section__lead"
 };
-function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", {
 		id: $props.id,
 		class: "ub-section",
@@ -185744,9 +185765,9 @@ function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
 		)
 	], 8, _hoisted_1$H);
 }
-var UbSection = /* @__PURE__ */ _export_sfc(_sfc_main$M, [["render", _sfc_render$L], ["__scopeId", "data-v-ce2a775d"]]);
+var UbSection = /* @__PURE__ */ _export_sfc(_sfc_main$N, [["render", _sfc_render$M], ["__scopeId", "data-v-ce2a775d"]]);
 
-var _sfc_main$L = /*@__PURE__*/ defineComponent({
+var _sfc_main$M = /*@__PURE__*/ defineComponent({
     __name: 'VizPlacement',
     props: {
         title: {},
@@ -185771,7 +185792,7 @@ const _hoisted_1$G = { class: "ub-vplace" };
 const _hoisted_2$D = { class: "ub-vplace__cell ub-vplace__cell--pos" };
 const _hoisted_3$B = { class: "ub-vplace__cell" };
 const _hoisted_4$x = { class: "ub-vplace__cell" };
-function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbRow"], {
 		label: $props.title,
 		hint: $props.hint,
@@ -185825,10 +185846,10 @@ function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["label", "hint"]);
 }
-var VizPlacement = /* @__PURE__ */ _export_sfc(_sfc_main$L, [["render", _sfc_render$K], ["__scopeId", "data-v-989a4ff8"]]);
+var VizPlacement = /* @__PURE__ */ _export_sfc(_sfc_main$M, [["render", _sfc_render$L], ["__scopeId", "data-v-989a4ff8"]]);
 
 const sqlInjectionPlaceholder = '留空则使用默认表格内容。支持 {[sql "SELECT ..."]} / {[db.表名.where(...).get(...)]}，会原样写入世界书并在发送前展开。';
-var _sfc_main$K = /*@__PURE__*/ defineComponent({
+var _sfc_main$L = /*@__PURE__*/ defineComponent({
     __name: 'VizConfigView',
     emits: ["request-add-column", "request-delete-column"],
     setup(__props, { expose: __expose, emit: __emit }) {
@@ -185929,7 +185950,7 @@ const _hoisted_6$p = {
 	class: "ub-vconf__muted"
 };
 const _hoisted_7$n = { class: "ub-vconf__modes" };
-function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$F, [
 		createVNode($setup["UbSection"], {
 			title: "基本信息",
@@ -186389,7 +186410,7 @@ function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var VizConfigView = /* @__PURE__ */ _export_sfc(_sfc_main$K, [["render", _sfc_render$J], ["__scopeId", "data-v-2658197b"]]);
+var VizConfigView = /* @__PURE__ */ _export_sfc(_sfc_main$L, [["render", _sfc_render$K], ["__scopeId", "data-v-2658197b"]]);
 
 /** 数据库编辑器（v3）数据视图的纯布局计算：短字段并排、分页窗口。 */
 const VIZ_PAGE_SIZE = 30;
@@ -186425,7 +186446,7 @@ function pageWindow(rowCount, requestedPage, pageSize = VIZ_PAGE_SIZE) {
     return { page, pageCount, start, end: Math.min(rowCount, start + pageSize) };
 }
 
-var _sfc_main$J = /*@__PURE__*/ defineComponent({
+var _sfc_main$K = /*@__PURE__*/ defineComponent({
     __name: 'VizDataView',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -186725,7 +186746,7 @@ const _hoisted_17$5 = [
 	"onClick",
 	"onKeydown"
 ];
-function _sfc_render$I(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"div",
 		{
@@ -186983,9 +187004,9 @@ function _sfc_render$I(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION, NEED_PATCH */
 	);
 }
-var VizDataView = /* @__PURE__ */ _export_sfc(_sfc_main$J, [["render", _sfc_render$I], ["__scopeId", "data-v-2b80fc88"]]);
+var VizDataView = /* @__PURE__ */ _export_sfc(_sfc_main$K, [["render", _sfc_render$J], ["__scopeId", "data-v-2b80fc88"]]);
 
-var _sfc_main$I = /*@__PURE__*/ defineComponent({
+var _sfc_main$J = /*@__PURE__*/ defineComponent({
     __name: 'VizManageView',
     props: {
         sheetItems: {}
@@ -187022,7 +187043,7 @@ const _hoisted_8$i = {
 	key: 1,
 	class: "ub-vmanage__empty"
 };
-function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$I(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$D, [createVNode($setup["UbSection"], {
 		title: "表格顺序",
 		description: "调整整套数据库的表格顺序，新增或删除表格。改动只进编辑器草稿，保存之前都可以放弃。"
@@ -187129,9 +187150,9 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var VizManageView = /* @__PURE__ */ _export_sfc(_sfc_main$I, [["render", _sfc_render$H], ["__scopeId", "data-v-c5bedf6c"]]);
+var VizManageView = /* @__PURE__ */ _export_sfc(_sfc_main$J, [["render", _sfc_render$I], ["__scopeId", "data-v-c5bedf6c"]]);
 
-var _sfc_main$H = /*@__PURE__*/ defineComponent({
+var _sfc_main$I = /*@__PURE__*/ defineComponent({
     __name: 'VizTableNav',
     props: {
         sheetItems: {},
@@ -187187,7 +187208,7 @@ const _hoisted_8$h = {
 	key: 0,
 	class: "ub-vnav__empty"
 };
-function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("nav", _hoisted_1$C, [
 		createBaseVNode(
 			"p",
@@ -187274,9 +187295,9 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 		)
 	]);
 }
-var VizTableNav = /* @__PURE__ */ _export_sfc(_sfc_main$H, [["render", _sfc_render$G], ["__scopeId", "data-v-cbdbabef"]]);
+var VizTableNav = /* @__PURE__ */ _export_sfc(_sfc_main$I, [["render", _sfc_render$H], ["__scopeId", "data-v-cbdbabef"]]);
 
-var _sfc_main$G = /*@__PURE__*/ defineComponent({
+var _sfc_main$H = /*@__PURE__*/ defineComponent({
     __name: 'VisualizerSurface',
     emits: ["close"],
     setup(__props, { expose: __expose, emit: __emit }) {
@@ -187523,7 +187544,7 @@ const _hoisted_21$4 = {
 	"aria-label": "保存"
 };
 const _hoisted_22$4 = { class: "ub-viz__save" };
-function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$B, [
 		createBaseVNode("aside", _hoisted_2$y, [createBaseVNode("div", _hoisted_3$w, [_cache[5] || (_cache[5] = createBaseVNode(
 			"span",
@@ -187850,7 +187871,7 @@ function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 		}, 8, ["is-open", "subtitle"])
 	]);
 }
-var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$G, [["render", _sfc_render$F], ["__scopeId", "data-v-e4f3077e"]]);
+var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$H, [["render", _sfc_render$G], ["__scopeId", "data-v-e4f3077e"]]);
 
 /**
  * presentation-v2/composables/debug-issue-link.ts — Debug 面板「前往 GitHub 提交 issue」链接
@@ -189291,7 +189312,7 @@ const advancedToolsCopy = {
     },
 };
 
-var _sfc_main$F = /*@__PURE__*/ defineComponent({
+var _sfc_main$G = /*@__PURE__*/ defineComponent({
     __name: 'UbPage',
     props: {
         lead: { default: undefined },
@@ -189336,7 +189357,7 @@ const _hoisted_2$x = {
 };
 const _hoisted_3$v = ["onClick"];
 const _hoisted_4$r = { class: "ub-page__body" };
-function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"div",
 		{
@@ -189371,9 +189392,9 @@ function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbPage = /* @__PURE__ */ _export_sfc(_sfc_main$F, [["render", _sfc_render$E], ["__scopeId", "data-v-2ff73a0a"]]);
+var UbPage = /* @__PURE__ */ _export_sfc(_sfc_main$G, [["render", _sfc_render$F], ["__scopeId", "data-v-2ff73a0a"]]);
 
-var _sfc_main$E = /*@__PURE__*/ defineComponent({
+var _sfc_main$F = /*@__PURE__*/ defineComponent({
     __name: 'AdvancedToolsPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -189496,7 +189517,7 @@ const _hoisted_23$2 = { class: "ub-at__log-tag" };
 const _hoisted_24$2 = { class: "ub-at__log-msg" };
 const _hoisted_25$2 = ["data-hint-id"];
 const _hoisted_26$2 = { class: "ub-at__row" };
-function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		sections: $setup.sections,
 		wide: ""
@@ -190020,7 +190041,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$E, [["render", _sfc_render$D], ["__scopeId", "data-v-1f0a7747"]]);
+var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$F, [["render", _sfc_render$E], ["__scopeId", "data-v-1f0a7747"]]);
 
 function buildWorldbookSnapshotEntryIndexByBook_ACU(snapshot) {
     const result = new Map();
@@ -191877,7 +191898,7 @@ function useWorldbookSelector() {
     return { names, charPrimary, status, error, refresh };
 }
 
-var _sfc_main$D = /*@__PURE__*/ defineComponent({
+var _sfc_main$E = /*@__PURE__*/ defineComponent({
     __name: 'AgentAdvancedSheet',
     props: {
         open: { type: Boolean },
@@ -192053,7 +192074,7 @@ injectSfcStyle("\n.ub-agadv__prompt-head[data-v-2ccfbde7] {\r\n  display: flex;\
 var AgentAdvancedSheet_vue_vue_type_style_index_0_scoped_2ccfbde7_lang = null;
 
 const _hoisted_1$y = { class: "ub-agadv__prompt-head" };
-function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSheet"], {
 		"is-open": $props.open,
 		title: $setup.copy.advanced.title,
@@ -192315,10 +192336,10 @@ function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
 		"subtitle"
 	]);
 }
-var AgentAdvancedSheet = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$C], ["__scopeId", "data-v-2ccfbde7"]]);
+var AgentAdvancedSheet = /* @__PURE__ */ _export_sfc(_sfc_main$E, [["render", _sfc_render$D], ["__scopeId", "data-v-2ccfbde7"]]);
 
 const PAGE_SIZE = 200;
-var _sfc_main$C = /*@__PURE__*/ defineComponent({
+var _sfc_main$D = /*@__PURE__*/ defineComponent({
     __name: 'WorldbookEntries',
     props: {
         groups: {},
@@ -192496,7 +192517,7 @@ const _hoisted_12$7 = {
 	class: "ub-wbe__skill"
 };
 const _hoisted_13$6 = { class: "ub-wbe__skill-actions" };
-function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$x, [createBaseVNode("div", _hoisted_2$v, [createVNode($setup["UbInput"], {
 		class: "ub-wbe__search",
 		"model-value": $props.filter,
@@ -192759,9 +192780,9 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 		/* KEYED_FRAGMENT */
 	))]))]);
 }
-var WorldbookEntries = /* @__PURE__ */ _export_sfc(_sfc_main$C, [["render", _sfc_render$B], ["__scopeId", "data-v-63ba3c51"]]);
+var WorldbookEntries = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$C], ["__scopeId", "data-v-63ba3c51"]]);
 
-var _sfc_main$B = /*@__PURE__*/ defineComponent({
+var _sfc_main$C = /*@__PURE__*/ defineComponent({
     __name: 'WorldbookSourcePicker',
     props: {
         source: {},
@@ -192820,7 +192841,7 @@ const _hoisted_5$l = {
 	key: 1,
 	class: "ub-wbsrc__error"
 };
-function _sfc_render$A(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$w, [
 		createVNode($setup["UbSegmented"], {
 			options: $setup.sourceOptions,
@@ -192889,9 +192910,9 @@ function _sfc_render$A(_ctx, _cache, $props, $setup, $data, $options) {
 		)) : createCommentVNode("v-if", true)
 	]);
 }
-var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$B, [["render", _sfc_render$A], ["__scopeId", "data-v-fa1a6bea"]]);
+var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$C, [["render", _sfc_render$B], ["__scopeId", "data-v-fa1a6bea"]]);
 
-var _sfc_main$A = /*@__PURE__*/ defineComponent({
+var _sfc_main$B = /*@__PURE__*/ defineComponent({
     __name: 'AgentPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -193144,7 +193165,7 @@ const _hoisted_8$d = [
 const _hoisted_9$a = { class: "ub-agent-fav__add" };
 const _hoisted_10$9 = { class: "ub-agent-fav__mount" };
 const _hoisted_11$8 = { class: "ub-agent__current" };
-function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$A(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		lead: "独立管理 Agent 的世界书范围、Skill 元数据和接管状态。",
 		sections: $setup.sections
@@ -193568,7 +193589,7 @@ function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$A, [["render", _sfc_render$z], ["__scopeId", "data-v-f0fd1638"]]);
+var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$B, [["render", _sfc_render$A], ["__scopeId", "data-v-f0fd1638"]]);
 
 const apiCopy = {
     panels: {
@@ -193925,7 +193946,7 @@ function apiPresetFromDraft(draft) {
     };
 }
 
-var _sfc_main$z = /*@__PURE__*/ defineComponent({
+var _sfc_main$A = /*@__PURE__*/ defineComponent({
     __name: 'UbPresetPicker',
     props: {
         items: {},
@@ -194012,7 +194033,7 @@ const _hoisted_15$4 = {
 	key: 0,
 	class: "ub-picker-panel__empty"
 };
-function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"div",
 		{ class: normalizeClass(["ub-picker", { "is-disabled": $props.disabled }]) },
@@ -194124,9 +194145,288 @@ function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbPresetPicker = /* @__PURE__ */ _export_sfc(_sfc_main$z, [["render", _sfc_render$y], ["__scopeId", "data-v-2ea232e6"]]);
+var UbPresetPicker = /* @__PURE__ */ _export_sfc(_sfc_main$A, [["render", _sfc_render$z], ["__scopeId", "data-v-2ea232e6"]]);
 
+// service/ai/opencode-go-usage.ts — OpenCode Go 订阅用量（5 小时 / 本周 / 本月）
+//
+// 接口与 OpenCode 官方客户端读取 Go 额度用的同一个（anomalyco/opencode PR #16513，
+// 官方文档未列出）：GET {origin}/zen/go/v1/usage，Bearer 用同一把 API 密钥，不消耗额度。
+// 返回 { usage: { rolling|weekly|monthly: { status: 'ok'|'rate-limited', percent, resetsAt } } }，
+// 只有百分比，没有美元数；未订阅 Go 回 403。接口允许跨域，浏览器里直接请求。
+/** Go 端点对应的用量接口地址；非 Go 端点返回 null（不查）。 */
+function opencodeGoUsageUrl_ACU(endpointUrl) {
+    if (!isOpencodeGoEndpoint_ACU(endpointUrl))
+        return null;
+    return `${new URL(String(endpointUrl)).origin}/zen/go/v1/usage`;
+}
+function parseMeter_ACU(raw) {
+    const percent = Number(raw?.percent);
+    const resetsAt = Date.parse(String(raw?.resetsAt ?? ''));
+    if (!Number.isFinite(percent) || !Number.isFinite(resetsAt))
+        return null;
+    return { percent, limited: raw?.status === 'rate-limited', resetsAt };
+}
+async function fetchOpencodeGoUsage_ACU(endpointUrl, apiKey) {
+    const url = opencodeGoUsageUrl_ACU(endpointUrl);
+    if (!url)
+        throw new Error('不是 OpenCode Go 端点');
+    const response = await fetch(url, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+    });
+    if (response.status === 401)
+        throw new Error('API 密钥无效');
+    if (response.status === 403)
+        throw new Error('这个密钥所在的账号没有订阅 OpenCode Go');
+    if (!response.ok)
+        throw new Error(`查询失败（HTTP ${response.status}）`);
+    const body = await response.json().catch(() => null);
+    const rolling = parseMeter_ACU(body?.usage?.rolling);
+    const weekly = parseMeter_ACU(body?.usage?.weekly);
+    const monthly = parseMeter_ACU(body?.usage?.monthly);
+    if (!rolling || !weekly || !monthly)
+        throw new Error('返回格式无法识别，接口可能已变更');
+    return { rolling, weekly, monthly };
+}
+
+var _sfc_main$z = /*@__PURE__*/ defineComponent({
+    __name: 'UbStats',
+    props: {
+        items: {},
+        mono: { type: Boolean, default: false }
+    },
+    setup(__props, { expose: __expose }) {
+        __expose();
+        const props = __props;
+        const root = ref(null);
+        /**
+         * 网格当前是否多列。列数由 auto-fill 按宽度决定，CSS 无法据此切换 span：
+         * 单列时 span 2 会凭空多出一条隐式列，后面的项被自动放进去。只在有宽项时才观察。
+         */
+        const multiColumn = ref(false);
+        let observer = null;
+        function measureColumns() {
+            const el = root.value;
+            const view = el?.ownerDocument?.defaultView;
+            if (!el || !view)
+                return;
+            const tracks = String(view.getComputedStyle(el).gridTemplateColumns || '').trim();
+            multiColumn.value = tracks !== '' && tracks !== 'none' && tracks.split(/\s+/).length >= 2;
+        }
+        onMounted(() => {
+            if (!props.items.some(item => item.wide))
+                return;
+            measureColumns();
+            const Observer = root.value?.ownerDocument?.defaultView?.ResizeObserver ?? globalThis.ResizeObserver;
+            if (!Observer || !root.value)
+                return;
+            observer = new Observer(() => measureColumns());
+            observer.observe(root.value);
+        });
+        onBeforeUnmount(() => {
+            observer?.disconnect();
+            observer = null;
+        });
+        const __returned__ = { props, root, multiColumn, get observer() { return observer; }, set observer(v) { observer = v; }, measureColumns };
+        Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
+        return __returned__;
+    }
+});
+
+injectSfcStyle("\n/*\n * 分隔线由每格自己在右侧、下方各画 1px（外投影不占布局），网格外缘那一圈被 overflow 裁掉。\n * 不用「gap + 线色背景」：那样网格末行的空位会露出一整块线色底。\n * 各格不铺底色，否则后面的格子会盖住前一格画在外侧的分隔线。\n */\n.ub-stats[data-v-05d62386] {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--ub-u) * 180)), 1fr));\n  grid-auto-flow: row dense;\n  margin: 0;\n  overflow: hidden;\n}\n.ub-stats__item[data-v-05d62386] {\n  min-width: 0;\n  padding: var(--ub-s2) var(--ub-s4);\n  box-shadow: 1px 0 0 var(--ub-line-soft), 0 1px 0 var(--ub-line-soft);\n}\n.ub-stats__item--wide[data-v-05d62386] {\n  grid-column: span 2;\n}\n.ub-stats__item dt[data-v-05d62386] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 700;\n}\n.ub-stats__item dd[data-v-05d62386] {\n  margin: 2px 0 0;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  font-variant-numeric: tabular-nums;\n  overflow-wrap: anywhere;\n}\n.ub-stats--mono .ub-stats__item dd[data-v-05d62386] {\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n}\n", "src/presentation-v3/ui/UbStats.vue#style-0-05d62386");
+var UbStats_vue_vue_type_style_index_0_scoped_05d62386_lang = null;
+
+function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
+	return openBlock(), createElementBlock(
+		"dl",
+		{
+			ref: "root",
+			class: normalizeClass(["ub-stats", { "ub-stats--mono": $props.mono }])
+		},
+		[(openBlock(true), createElementBlock(
+			Fragment,
+			null,
+			renderList($props.items, (item) => {
+				return openBlock(), createElementBlock(
+					"div",
+					{
+						key: item.key ?? item.label,
+						class: normalizeClass(["ub-stats__item", { "ub-stats__item--wide": item.wide && $setup.multiColumn }])
+					},
+					[createBaseVNode(
+						"dt",
+						null,
+						toDisplayString(item.label),
+						1
+						/* TEXT */
+					), createBaseVNode("dd", null, [renderSlot(_ctx.$slots, item.key ?? item.label, { item }, () => [createTextVNode(
+						toDisplayString(item.value ?? "—"),
+						1
+						/* TEXT */
+					)], true)])],
+					2
+					/* CLASS */
+				);
+			}),
+			128
+			/* KEYED_FRAGMENT */
+		))],
+		2
+		/* CLASS */
+	);
+}
+var UbStats = /* @__PURE__ */ _export_sfc(_sfc_main$z, [["render", _sfc_render$y], ["__scopeId", "data-v-05d62386"]]);
+
+const QUERY_DEBOUNCE_MS = 500;
 var _sfc_main$y = /*@__PURE__*/ defineComponent({
+    __name: 'OpencodeGoUsage',
+    props: {
+        url: {},
+        apiKey: {}
+    },
+    setup(__props, { expose: __expose }) {
+        __expose();
+        /**
+         * OpenCode Go 用量：端点是 Go 且填了密钥时显示 5 小时 / 本周 / 本月三个周期。
+         * 地址或密钥改动后停手片刻再查（逐字输入密钥不连发请求）；一轮填表结束时刷新一次。
+         */
+        const props = __props;
+        const statsItems = [
+            { key: 'rolling', label: '5 小时' },
+            { key: 'weekly', label: '本周' },
+            { key: 'monthly', label: '本月' },
+        ];
+        const usage = ref(null);
+        const error = ref('');
+        /** 查询对象（用量地址 + 密钥）；非 Go 端点或没填密钥时为空，不显示也不查。 */
+        const queryKey = computed(() => {
+            const usageUrl = opencodeGoUsageUrl_ACU(props.url.trim());
+            const key = props.apiKey.trim();
+            return usageUrl && key ? `${usageUrl}\n${key}` : '';
+        });
+        // 每次发起查询换一代：迟到的旧结果（旧密钥、已卸载）不再落到界面上
+        let generation = 0;
+        let debounceTimer = null;
+        async function refresh() {
+            const current = ++generation;
+            if (!queryKey.value)
+                return;
+            try {
+                const result = await fetchOpencodeGoUsage_ACU(props.url.trim(), props.apiKey.trim());
+                if (current !== generation)
+                    return;
+                usage.value = result;
+                error.value = '';
+            }
+            catch (e) {
+                if (current !== generation)
+                    return;
+                usage.value = null;
+                error.value = String(e?.message || e || '未知错误');
+            }
+        }
+        watch(queryKey, () => {
+            generation += 1;
+            usage.value = null;
+            error.value = '';
+            if (debounceTimer)
+                clearTimeout(debounceTimer);
+            debounceTimer = queryKey.value ? setTimeout(() => { debounceTimer = null; void refresh(); }, QUERY_DEBOUNCE_MS) : null;
+        }, { immediate: true });
+        const offFillRunEnded = onTableFillRunEnded_ACU(() => { void refresh(); });
+        onBeforeUnmount(() => {
+            offFillRunEnded();
+            if (debounceTimer)
+                clearTimeout(debounceTimer);
+            generation += 1;
+        });
+        function formatPercent(percent) {
+            return `${Math.round(percent * 10) / 10}%`;
+        }
+        function formatResetAt(ms) {
+            const at = new Date(ms);
+            const now = new Date();
+            const hm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+            const dayDiff = Math.round((new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime()
+                - new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) / 86400000);
+            if (dayDiff === 0)
+                return `今天 ${hm}`;
+            if (dayDiff === 1)
+                return `明天 ${hm}`;
+            return `${at.getMonth() + 1}月${at.getDate()}日 ${hm}`;
+        }
+        const __returned__ = { props, QUERY_DEBOUNCE_MS, statsItems, usage, error, queryKey, get generation() { return generation; }, set generation(v) { generation = v; }, get debounceTimer() { return debounceTimer; }, set debounceTimer(v) { debounceTimer = v; }, refresh, offFillRunEnded, formatPercent, formatResetAt, UbRow, UbStats };
+        Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
+        return __returned__;
+    }
+});
+
+injectSfcStyle("\n.ub-go-usage[data-v-aab09f6a] {\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\n}\n.ub-go-usage__pct[data-v-aab09f6a] {\r\n  font-size: var(--ub-fs-md);\r\n  font-weight: 700;\n}\n.ub-go-usage__reset[data-v-aab09f6a] {\r\n  display: block;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-go-usage__pct.is-limited[data-v-aab09f6a],\r\n.ub-go-usage__reset.is-limited[data-v-aab09f6a] {\r\n  color: var(--ub-danger);\n}\r\n", "src/presentation-v3/parts/OpencodeGoUsage.vue#style-0-aab09f6a");
+var OpencodeGoUsage_vue_vue_type_style_index_0_scoped_aab09f6a_lang = null;
+
+function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
+	return $setup.queryKey ? (openBlock(), createBlock($setup["UbRow"], {
+		key: 0,
+		label: "Go 用量",
+		stack: ""
+	}, {
+		hint: withCtx(() => [$setup.error ? (openBlock(), createElementBlock(
+			Fragment,
+			{ key: 0 },
+			[createTextVNode(
+				"查不到用量：" + toDisplayString($setup.error),
+				1
+				/* TEXT */
+			)],
+			64
+			/* STABLE_FRAGMENT */
+		)) : !$setup.usage ? (openBlock(), createElementBlock(
+			Fragment,
+			{ key: 1 },
+			[createTextVNode("查询中…")],
+			64
+			/* STABLE_FRAGMENT */
+		)) : (openBlock(), createElementBlock(
+			Fragment,
+			{ key: 2 },
+			[createTextVNode("OpenCode Go 订阅已用的比例，每轮填表结束后刷新。")],
+			64
+			/* STABLE_FRAGMENT */
+		))]),
+		default: withCtx(() => [$setup.usage ? (openBlock(), createBlock(
+			$setup["UbStats"],
+			{
+				key: 0,
+				class: "ub-go-usage",
+				items: $setup.statsItems
+			},
+			createSlots({ _: 2 }, [renderList($setup.statsItems, (item) => {
+				return {
+					name: item.key,
+					fn: withCtx(() => [createBaseVNode(
+						"span",
+						{ class: normalizeClass(["ub-go-usage__pct", { "is-limited": $setup.usage[item.key].limited }]) },
+						toDisplayString($setup.formatPercent($setup.usage[item.key].percent)),
+						3
+						/* TEXT, CLASS */
+					), createBaseVNode(
+						"span",
+						{ class: normalizeClass(["ub-go-usage__reset", { "is-limited": $setup.usage[item.key].limited }]) },
+						toDisplayString($setup.usage[item.key].limited ? "已限流，" : "") + toDisplayString($setup.formatResetAt($setup.usage[item.key].resetsAt)) + " 重置 ",
+						3
+						/* TEXT, CLASS */
+					)])
+				};
+			})]),
+			1024
+			/* DYNAMIC_SLOTS */
+		)) : createCommentVNode("v-if", true)]),
+		_: 1
+	})) : createCommentVNode("v-if", true);
+}
+var OpencodeGoUsage = /* @__PURE__ */ _export_sfc(_sfc_main$y, [["render", _sfc_render$x], ["__scopeId", "data-v-aab09f6a"]]);
+
+var _sfc_main$x = /*@__PURE__*/ defineComponent({
     __name: 'ApiPresetEditor',
     props: {
         idPrefix: { default: 'api' }
@@ -194377,14 +194677,14 @@ var _sfc_main$y = /*@__PURE__*/ defineComponent({
             });
         });
         watch(() => store.activePresetName, () => syncActiveDraft(), { flush: 'sync' });
-        const __returned__ = { reasoningEffortOptions, sendChannelOptions, customApiFormatOptions, promptPostProcessingOptions, clientPresetOptions, store, dialogStore, toast, formMode, draft, draftOriginalName, draftSnapshot, draftError, connectionTesting, connectionResult, get connectionTestGeneration() { return connectionTestGeneration; }, set connectionTestGeneration(v) { connectionTestGeneration = v; }, clearConnectionResult, draftDirty, presetItems, modelSelectOptions, matchedClientPresetId, savedEndpoints, savedEndpointOptions, matchedSavedEndpointId, applySavedEndpoint, setPromptPostProcessing, applyClientPreset, get savingDraft() { return savingDraft; }, set savingDraft(v) { savingDraft = v; }, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, validateDraft, saveActiveDraft, saveValidatedDraft, formatElapsed, truncateReply, testConnectionForActive, loadModelsForActive, UbButton, UbCallout, UbIconButton, UbInput, UbPresetPicker, UbRow, UbSection, UbSelect, UbSwitch, UbTextarea };
+        const __returned__ = { reasoningEffortOptions, sendChannelOptions, customApiFormatOptions, promptPostProcessingOptions, clientPresetOptions, store, dialogStore, toast, formMode, draft, draftOriginalName, draftSnapshot, draftError, connectionTesting, connectionResult, get connectionTestGeneration() { return connectionTestGeneration; }, set connectionTestGeneration(v) { connectionTestGeneration = v; }, clearConnectionResult, draftDirty, presetItems, modelSelectOptions, matchedClientPresetId, savedEndpoints, savedEndpointOptions, matchedSavedEndpointId, applySavedEndpoint, setPromptPostProcessing, applyClientPreset, get savingDraft() { return savingDraft; }, set savingDraft(v) { savingDraft = v; }, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, validateDraft, saveActiveDraft, saveValidatedDraft, formatElapsed, truncateReply, testConnectionForActive, loadModelsForActive, UbButton, UbCallout, UbIconButton, UbInput, UbPresetPicker, UbRow, UbSection, UbSelect, UbSwitch, UbTextarea, OpencodeGoUsage };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-api[data-v-da3200a1],\n.ub-api__form[data-v-da3200a1] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s6);\n  min-width: 0;\n}\n.ub-api__picker[data-v-da3200a1] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-da3200a1] {\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-da3200a1] {\n  display: flex;\n  gap: var(--ub-s2);\n  width: 100%;\n}\n.ub-api__model[data-v-da3200a1] > :first-child {\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-da3200a1] {\n  color: var(--ub-danger);\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__test-result[data-v-da3200a1] {\n  display: block;\n  margin-top: var(--ub-s2);\n  font-size: var(--ub-fs-xs);\n  font-weight: 500;\n  overflow-wrap: anywhere;\n}\n.ub-api__test-result.is-ok[data-v-da3200a1] {\n  color: var(--ub-ok);\n}\n.ub-api__test-result.is-error[data-v-da3200a1] {\n  color: var(--ub-danger);\n}\n.ub-api__test-note[data-v-da3200a1] {\n  display: block;\n  color: var(--ub-text-2);\n}\n.ub-api__danger-hint[data-v-da3200a1] {\n  color: var(--ub-danger);\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-da3200a1] {\n  position: sticky;\n  bottom: var(--ub-s3);\n  z-index: 4;\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: 999px;\n  background: var(--ub-toast-bg);\n  box-shadow: var(--ub-overlay-shadow);\n  backdrop-filter: blur(12px);\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-da3200a1]:not(.is-dirty) {\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-da3200a1] {\n  flex: 1 1 auto;\n  min-width: 0;\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-da3200a1] {\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-da3200a1] {\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-da3200a1] {\n    flex-wrap: wrap;\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-da3200a1] {\n    flex-basis: 100%;\n}\n}\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-da3200a1");
-var ApiPresetEditor_vue_vue_type_style_index_0_scoped_da3200a1_lang = null;
+injectSfcStyle("\n.ub-api[data-v-807239ff],\n.ub-api__form[data-v-807239ff] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s6);\n  min-width: 0;\n}\n.ub-api__picker[data-v-807239ff] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-807239ff] {\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-807239ff] {\n  display: flex;\n  gap: var(--ub-s2);\n  width: 100%;\n}\n.ub-api__model[data-v-807239ff] > :first-child {\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-807239ff] {\n  color: var(--ub-danger);\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__test-result[data-v-807239ff] {\n  display: block;\n  margin-top: var(--ub-s2);\n  font-size: var(--ub-fs-xs);\n  font-weight: 500;\n  overflow-wrap: anywhere;\n}\n.ub-api__test-result.is-ok[data-v-807239ff] {\n  color: var(--ub-ok);\n}\n.ub-api__test-result.is-error[data-v-807239ff] {\n  color: var(--ub-danger);\n}\n.ub-api__test-note[data-v-807239ff] {\n  display: block;\n  color: var(--ub-text-2);\n}\n.ub-api__danger-hint[data-v-807239ff] {\n  color: var(--ub-danger);\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-807239ff] {\n  position: sticky;\n  bottom: var(--ub-s3);\n  z-index: 4;\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: 999px;\n  background: var(--ub-toast-bg);\n  box-shadow: var(--ub-overlay-shadow);\n  backdrop-filter: blur(12px);\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-807239ff]:not(.is-dirty) {\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-807239ff] {\n  flex: 1 1 auto;\n  min-width: 0;\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-807239ff] {\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-807239ff] {\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-807239ff] {\n    flex-wrap: wrap;\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-807239ff] {\n    flex-basis: 100%;\n}\n}\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-807239ff");
+var ApiPresetEditor_vue_vue_type_style_index_0_scoped_807239ff_lang = null;
 
 const _hoisted_1$t = { class: "ub-api" };
 const _hoisted_2$r = { class: "ub-api__picker" };
@@ -194405,7 +194705,7 @@ const _hoisted_7$e = {
 	key: 1,
 	class: "ub-api__test-note"
 };
-function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$t, [createVNode($setup["UbSection"], {
 		id: `${$props.idPrefix}-preset`,
 		title: "当前 API 预设",
@@ -194537,6 +194837,10 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					}),
+					createVNode($setup["OpencodeGoUsage"], {
+						url: $setup.draft.url,
+						"api-key": $setup.draft.apiKey
+					}, null, 8, ["url", "api-key"]),
 					createVNode($setup["UbRow"], {
 						label: "API 密钥",
 						stack: ""
@@ -194957,9 +195261,9 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION */
 	)) : createCommentVNode("v-if", true)]);
 }
-var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$y, [["render", _sfc_render$x], ["__scopeId", "data-v-da3200a1"]]);
+var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$w], ["__scopeId", "data-v-807239ff"]]);
 
-var _sfc_main$x = /*@__PURE__*/ defineComponent({
+var _sfc_main$w = /*@__PURE__*/ defineComponent({
     __name: 'ApiPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -194976,7 +195280,7 @@ var _sfc_main$x = /*@__PURE__*/ defineComponent({
     }
 });
 
-function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		lead: $setup.apiCopy.panels.preset.description,
 		sections: $setup.sections
@@ -194985,7 +195289,7 @@ function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["lead"]);
 }
-var ApiPage = /* @__PURE__ */ _export_sfc(_sfc_main$x, [["render", _sfc_render$w]]);
+var ApiPage = /* @__PURE__ */ _export_sfc(_sfc_main$w, [["render", _sfc_render$v]]);
 
 const basicConfigCopy = {
     nav: {
@@ -195621,7 +195925,7 @@ function sanitizeFilename_UB(value, fallback) {
         .slice(0, 48) || fallback;
 }
 
-var _sfc_main$w = /*@__PURE__*/ defineComponent({
+var _sfc_main$v = /*@__PURE__*/ defineComponent({
     __name: 'UbRulePairs',
     props: {
         modelValue: {},
@@ -195664,7 +195968,7 @@ const _hoisted_1$s = { class: "ub-rules" };
 const _hoisted_2$q = { class: "ub-rules__head" };
 const _hoisted_3$o = { class: "ub-rules__label" };
 const _hoisted_4$k = { class: "ub-rules__count" };
-function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$s, [
 		createBaseVNode("div", _hoisted_2$q, [createBaseVNode(
 			"span",
@@ -195746,9 +196050,9 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 		})
 	]);
 }
-var UbRulePairs = /* @__PURE__ */ _export_sfc(_sfc_main$w, [["render", _sfc_render$v], ["__scopeId", "data-v-17445fad"]]);
+var UbRulePairs = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$u], ["__scopeId", "data-v-17445fad"]]);
 
-var _sfc_main$v = /*@__PURE__*/ defineComponent({
+var _sfc_main$u = /*@__PURE__*/ defineComponent({
     __name: 'PlotTaskEditor',
     props: {
         task: {},
@@ -195809,7 +196113,7 @@ const _hoisted_3$n = {
 	key: 1,
 	class: "ub-pte__empty"
 };
-function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 	return $props.task ? (openBlock(), createElementBlock("div", _hoisted_1$r, [
 		createVNode($setup["UbSection"], {
 			title: "基本字段",
@@ -196072,9 +196376,9 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 		})
 	])) : (openBlock(), createElementBlock("p", _hoisted_3$n, "请先在上方选择一个任务。"));
 }
-var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$v, [["render", _sfc_render$u], ["__scopeId", "data-v-5bbd16c6"]]);
+var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$t], ["__scopeId", "data-v-5bbd16c6"]]);
 
-var _sfc_main$u = /*@__PURE__*/ defineComponent({
+var _sfc_main$t = /*@__PURE__*/ defineComponent({
     __name: 'PlotPresetSheet',
     props: {
         isOpen: { type: Boolean },
@@ -196147,7 +196451,7 @@ const _hoisted_13$4 = {
 	key: 0,
 	class: "ub-pps-empty"
 };
-function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$s(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSheet"], {
 		"is-open": $props.isOpen,
 		title: $props.title,
@@ -196473,9 +196777,9 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 		"before-close"
 	]);
 }
-var PlotPresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$t], ["__scopeId", "data-v-3b300f52"]]);
+var PlotPresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$t, [["render", _sfc_render$s], ["__scopeId", "data-v-3b300f52"]]);
 
-var _sfc_main$t = /*@__PURE__*/ defineComponent({
+var _sfc_main$s = /*@__PURE__*/ defineComponent({
     __name: 'PlotPresetSection',
     props: {
         id: { default: undefined },
@@ -196562,7 +196866,7 @@ var PlotPresetSection_vue_vue_type_style_index_0_scoped_0c48a73a_lang = null;
 
 const _hoisted_1$p = { class: "ub-plotp__facts" };
 const _hoisted_2$n = { class: "ub-plotp__picker" };
-function _sfc_render$s(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$r(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSection"], {
 		id: $props.id,
 		title: $setup.plotCopy.panels.preset.title,
@@ -196726,7 +197030,7 @@ function _sfc_render$s(_ctx, _cache, $props, $setup, $data, $options) {
 		"description"
 	]);
 }
-var PlotPresetSection = /* @__PURE__ */ _export_sfc(_sfc_main$t, [["render", _sfc_render$s], ["__scopeId", "data-v-0c48a73a"]]);
+var PlotPresetSection = /* @__PURE__ */ _export_sfc(_sfc_main$s, [["render", _sfc_render$r], ["__scopeId", "data-v-0c48a73a"]]);
 
 function buildTemplateRecoveryConfirmMessage_ACU(action, error) {
     const actionText = action === 'save-template' ? '保存这次聊天模板修改' : '切换并保存当前聊天模板';
@@ -197745,7 +198049,7 @@ const tableCopy = {
     worldbook: worldbookEntriesCopy,
 };
 
-var _sfc_main$s = /*@__PURE__*/ defineComponent({
+var _sfc_main$r = /*@__PURE__*/ defineComponent({
     __name: 'TablePresetSheet',
     props: {
         isOpen: { type: Boolean },
@@ -197785,7 +198089,7 @@ const _hoisted_7$c = {
 	key: 2,
 	class: "ub-plist__empty"
 };
-function _sfc_render$r(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$q(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSheet"], {
 		"is-open": $props.isOpen,
 		title: $props.title,
@@ -197918,9 +198222,9 @@ function _sfc_render$r(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["is-open", "title"]);
 }
-var TablePresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$s, [["render", _sfc_render$r], ["__scopeId", "data-v-aed3eab6"]]);
+var TablePresetSheet = /* @__PURE__ */ _export_sfc(_sfc_main$r, [["render", _sfc_render$q], ["__scopeId", "data-v-aed3eab6"]]);
 
-var _sfc_main$r = /*@__PURE__*/ defineComponent({
+var _sfc_main$q = /*@__PURE__*/ defineComponent({
     __name: 'TableTemplateSection',
     props: {
         id: { default: undefined }
@@ -197949,7 +198253,7 @@ var TableTemplateSection_vue_vue_type_style_index_0_scoped_4bb4a8a2_lang = null;
 const _hoisted_1$n = { class: "ub-tpl" };
 const _hoisted_2$l = { class: "ub-tpl__facts" };
 const _hoisted_3$k = { class: "ub-tpl__tools" };
-function _sfc_render$q(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSection"], {
 		id: $props.id,
 		title: $setup.tableCopy.panels.templatePreset.title,
@@ -198148,7 +198452,7 @@ function _sfc_render$q(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["id", "title"]);
 }
-var TableTemplateSection = /* @__PURE__ */ _export_sfc(_sfc_main$r, [["render", _sfc_render$q], ["__scopeId", "data-v-4bb4a8a2"]]);
+var TableTemplateSection = /* @__PURE__ */ _export_sfc(_sfc_main$q, [["render", _sfc_render$p], ["__scopeId", "data-v-4bb4a8a2"]]);
 
 const NUMBER_FIELD_META = [
     {
@@ -198714,7 +199018,7 @@ const formFillCopy = {
     },
 };
 
-var _sfc_main$q = /*@__PURE__*/ defineComponent({
+var _sfc_main$p = /*@__PURE__*/ defineComponent({
     __name: 'UpdateSettingsSection',
     props: {
         id: { default: undefined },
@@ -198835,7 +199139,7 @@ injectSfcStyle("\n.ub-upd__more[data-v-0e2c9095] {\r\n  display: flex;\r\n  alig
 var UpdateSettingsSection_vue_vue_type_style_index_0_scoped_0e2c9095_lang = null;
 
 const _hoisted_1$m = ["aria-expanded"];
-function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$o(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSection"], {
 		id: $props.id,
 		title: $setup.formFillCopy.panels.update.title,
@@ -198969,9 +199273,9 @@ function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
 		"description"
 	]);
 }
-var UpdateSettingsSection = /* @__PURE__ */ _export_sfc(_sfc_main$q, [["render", _sfc_render$p], ["__scopeId", "data-v-0e2c9095"]]);
+var UpdateSettingsSection = /* @__PURE__ */ _export_sfc(_sfc_main$p, [["render", _sfc_render$o], ["__scopeId", "data-v-0e2c9095"]]);
 
-var _sfc_main$p = /*@__PURE__*/ defineComponent({
+var _sfc_main$o = /*@__PURE__*/ defineComponent({
     __name: 'BasicConfigPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -198987,7 +199291,7 @@ var _sfc_main$p = /*@__PURE__*/ defineComponent({
     }
 });
 
-function _sfc_render$o(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		lead: "上手只需要这一页。按顺序配好 API、更新节奏、表格模板与剧情推进就能开始；需要更多功能时切到「高手模式」。",
 		sections: $setup.sections
@@ -199004,7 +199308,7 @@ function _sfc_render$o(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var BasicConfigPage = /* @__PURE__ */ _export_sfc(_sfc_main$p, [["render", _sfc_render$o]]);
+var BasicConfigPage = /* @__PURE__ */ _export_sfc(_sfc_main$o, [["render", _sfc_render$n]]);
 
 const contentReplaceCopy = {
     nav: {
@@ -199806,7 +200110,7 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
 });
 
 const DECISION_PROVIDER_SWITCH_HINT_ACU = '两家各存各的 Key 和模型，切换不会丢掉另一家的设置。';
-var _sfc_main$o = /*@__PURE__*/ defineComponent({
+var _sfc_main$n = /*@__PURE__*/ defineComponent({
     __name: 'ContentReplacePage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -200050,7 +200354,7 @@ const _hoisted_11$5 = {
 	class: "ub-cr__meta"
 };
 const _hoisted_12$4 = { class: "ub-cr__placeholders" };
-function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		lead: "正文生成后自动检查并润色 AI 回复。下面从上到下依次是：调用参数、替换方式、提示词、标签筛选与手动测试。",
 		sections: $setup.sections
@@ -200650,7 +200954,7 @@ function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$o, [["render", _sfc_render$n], ["__scopeId", "data-v-5e9dccf5"]]);
+var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$n, [["render", _sfc_render$m], ["__scopeId", "data-v-5e9dccf5"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;
@@ -201285,7 +201589,7 @@ function useContinuationSession() {
 }
 
 const FOLD_STEP = 40;
-var _sfc_main$n = /*@__PURE__*/ defineComponent({
+var _sfc_main$m = /*@__PURE__*/ defineComponent({
     __name: 'ContinuationSessionFeed',
     props: {
         entries: {},
@@ -201421,7 +201725,7 @@ const _hoisted_22$2 = {
 	key: 2,
 	class: "ub-feed__running"
 };
-function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"div",
 		_hoisted_1$k,
@@ -201593,9 +201897,9 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_PATCH */
 	);
 }
-var ContinuationSessionFeed = /* @__PURE__ */ _export_sfc(_sfc_main$n, [["render", _sfc_render$m], ["__scopeId", "data-v-be3d44d3"]]);
+var ContinuationSessionFeed = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$l], ["__scopeId", "data-v-be3d44d3"]]);
 
-var _sfc_main$m = /*@__PURE__*/ defineComponent({
+var _sfc_main$l = /*@__PURE__*/ defineComponent({
     __name: 'ContinuationChat',
     props: {
         task: {},
@@ -201681,7 +201985,7 @@ const _hoisted_5$d = { class: "ub-cchat__composer" };
 const _hoisted_6$b = ["value", "placeholder"];
 const _hoisted_7$9 = { class: "ub-cchat__actions" };
 const _hoisted_8$8 = { class: "ub-cchat__hint" };
-function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$k(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$j, [
 		createBaseVNode("div", _hoisted_2$i, [
 			createBaseVNode(
@@ -201793,7 +202097,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		}, 8, ["disabled"]))])])
 	]);
 }
-var ContinuationChat = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$l], ["__scopeId", "data-v-acb581a2"]]);
+var ContinuationChat = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$k], ["__scopeId", "data-v-acb581a2"]]);
 
 /**
  * 续写资料模块的显示名：资料面板、待修复卡片、保存提示共用这一份（R10B-18：曾有三份映射，
@@ -201986,7 +202290,7 @@ function buildMaterialCompletionCards_ACU(input) {
     });
 }
 
-var _sfc_main$l = /*@__PURE__*/ defineComponent({
+var _sfc_main$k = /*@__PURE__*/ defineComponent({
     __name: 'JsonDraftEditor',
     props: {
         draft: {},
@@ -202028,7 +202332,7 @@ const _hoisted_4$e = {
 	role: "alert"
 };
 const _hoisted_5$c = { class: "ub-jde__actions" };
-function _sfc_render$k(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$j(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"div",
 		{ class: normalizeClass(["ub-jde", { "is-open": $setup.open }]) },
@@ -202132,10 +202436,10 @@ function _sfc_render$k(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var JsonDraftEditor = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$k], ["__scopeId", "data-v-c21c1478"]]);
+var JsonDraftEditor = /* @__PURE__ */ _export_sfc(_sfc_main$k, [["render", _sfc_render$j], ["__scopeId", "data-v-c21c1478"]]);
 
 const OUTLINE_STALE_MESSAGE = '底稿已过期：编辑期间大纲已被更新，保存会覆盖新大纲。请放弃草稿后基于最新大纲重新编辑。';
-var _sfc_main$k = /*@__PURE__*/ defineComponent({
+var _sfc_main$j = /*@__PURE__*/ defineComponent({
     __name: 'ContinuationMaterials',
     props: {
         task: {},
@@ -202612,7 +202916,7 @@ const _hoisted_109 = {
 	class: "ub-cm__error",
 	role: "alert"
 };
-function _sfc_render$j(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$h, [
 		createBaseVNode("div", _hoisted_2$g, [
 			createVNode($setup["UbSegmented"], {
@@ -204348,10 +204652,10 @@ function _sfc_render$j(_ctx, _cache, $props, $setup, $data, $options) {
 		)) : createCommentVNode("v-if", true)
 	]);
 }
-var ContinuationMaterials = /* @__PURE__ */ _export_sfc(_sfc_main$k, [["render", _sfc_render$j], ["__scopeId", "data-v-72041ca5"]]);
+var ContinuationMaterials = /* @__PURE__ */ _export_sfc(_sfc_main$j, [["render", _sfc_render$i], ["__scopeId", "data-v-72041ca5"]]);
 
 const INHERIT_CHANNEL_VALUE = '__inherit__';
-var _sfc_main$j = /*@__PURE__*/ defineComponent({
+var _sfc_main$i = /*@__PURE__*/ defineComponent({
     __name: 'ContinuationPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -205055,7 +205359,7 @@ const _hoisted_9$4 = {
 	class: "ub-cont__meta"
 };
 const _hoisted_10$3 = { class: "ub-cont__actions" };
-function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		sections: $setup.sections,
 		wide: ""
@@ -206097,7 +206401,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["sections"]);
 }
-var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$j, [["render", _sfc_render$i], ["__scopeId", "data-v-57f4a57a"]]);
+var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$h], ["__scopeId", "data-v-57f4a57a"]]);
 
 const FLIGHT_MODE_BIG_SUMMARY_ENTRY_PLACEMENT_ACU = {
     position: 'at_depth_as_system',
@@ -207443,7 +207747,7 @@ function syncFeaturePageGates_UB(router, contentReplaceEnabled, plotEnabled) {
     router.syncFeatureGate(FEATURE_FLAG_PLOT_PAUSED, isDecisionRecallStandaloneActive_ACU(settings_ACU.decisionRecallSettings));
 }
 
-var _sfc_main$i = /*@__PURE__*/ defineComponent({
+var _sfc_main$h = /*@__PURE__*/ defineComponent({
     __name: 'DashboardPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -207562,7 +207866,7 @@ const _hoisted_5$9 = { class: "ub-health__head" };
 const _hoisted_6$8 = { class: "ub-health__title" };
 const _hoisted_7$6 = { class: "ub-health__summary" };
 const _hoisted_8$5 = ["onClick"];
-function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], { lead: $setup.dashboardCopy.panels.healthDescription }, {
 		default: withCtx(() => [
 			createBaseVNode("section", _hoisted_1$f, [(openBlock(true), createElementBlock(
@@ -207701,7 +208005,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["lead"]);
 }
-var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$h], ["__scopeId", "data-v-1ee4f1f2"]]);
+var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$h, [["render", _sfc_render$g], ["__scopeId", "data-v-1ee4f1f2"]]);
 
 /**
  * service/worldbook/worldbook-cleanup.ts — 世界书条目清理（service 层：纯业务逻辑）
@@ -209193,7 +209497,7 @@ function useDormantData() {
     };
 }
 
-var _sfc_main$h = /*@__PURE__*/ defineComponent({
+var _sfc_main$g = /*@__PURE__*/ defineComponent({
     __name: 'DormantDataSection',
     props: {
         id: { default: undefined }
@@ -209237,7 +209541,7 @@ const _hoisted_5$8 = {
 	class: "ub-dormant__blocked"
 };
 const _hoisted_6$7 = { class: "ub-dormant__group" };
-function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSection"], {
 		id: $props.id,
 		title: "休眠数据",
@@ -209412,9 +209716,9 @@ function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["id"]);
 }
-var DormantDataSection = /* @__PURE__ */ _export_sfc(_sfc_main$h, [["render", _sfc_render$g], ["__scopeId", "data-v-527fd598"]]);
+var DormantDataSection = /* @__PURE__ */ _export_sfc(_sfc_main$g, [["render", _sfc_render$f], ["__scopeId", "data-v-527fd598"]]);
 
-var _sfc_main$g = /*@__PURE__*/ defineComponent({
+var _sfc_main$f = /*@__PURE__*/ defineComponent({
     __name: 'DataMgmtPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -209680,7 +209984,7 @@ const _hoisted_8$4 = {
 const _hoisted_9$3 = { class: "ub-dm__danger" };
 const _hoisted_10$2 = { class: "ub-dm__text" };
 const _hoisted_11$2 = { class: "ub-dm__buttons" };
-function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], { sections: $setup.sections }, {
 		default: withCtx(() => [
 			$setup.flow.message.value ? (openBlock(), createBlock($setup["UbCallout"], {
@@ -210086,9 +210390,9 @@ function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["sections"]);
 }
-var DataMgmtPage = /* @__PURE__ */ _export_sfc(_sfc_main$g, [["render", _sfc_render$f], ["__scopeId", "data-v-847ff87c"]]);
+var DataMgmtPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-847ff87c"]]);
 
-var _sfc_main$f = /*@__PURE__*/ defineComponent({
+var _sfc_main$e = /*@__PURE__*/ defineComponent({
     __name: 'DecisionRecallPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -210265,7 +210569,7 @@ const _hoisted_6$5 = {
 	key: 0,
 	class: "ub-dr__output"
 };
-function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		lead: "发送前让决策模型给纪要打分，挑出与接下来剧情最相关的几条，连同最新几条按表号顺序带进本轮输入。",
 		sections: $setup.sections
@@ -210669,7 +210973,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$f, [["render", _sfc_render$e], ["__scopeId", "data-v-5ba6a7f4"]]);
+var DecisionRecallPage = /* @__PURE__ */ _export_sfc(_sfc_main$e, [["render", _sfc_render$d], ["__scopeId", "data-v-5ba6a7f4"]]);
 
 const developerCopy = {
     panels: {
@@ -210680,7 +210984,7 @@ const developerCopy = {
     },
 };
 
-var _sfc_main$e = /*@__PURE__*/ defineComponent({
+var _sfc_main$d = /*@__PURE__*/ defineComponent({
     __name: 'DeveloperPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -210691,7 +210995,7 @@ var _sfc_main$e = /*@__PURE__*/ defineComponent({
     }
 });
 
-function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], { lead: "面向开发与排障的选项。默认关闭，不建议无经验用户开启。" }, {
 		default: withCtx(() => [createVNode($setup["UbSection"], {
 			title: $setup.copy.panels.gatedFields.title,
@@ -210738,7 +211042,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$e, [["render", _sfc_render$d]]);
+var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$c]]);
 
 /** 宿主世界书 API 挂起时确认弹窗不能被无限期拖住，超过该时长即降级为提示文案。 */
 const INJECTION_TARGET_RESOLVE_TIMEOUT_MS = 1500;
@@ -211414,7 +211718,7 @@ function useManualUpdate() {
     };
 }
 
-var _sfc_main$d = /*@__PURE__*/ defineComponent({
+var _sfc_main$c = /*@__PURE__*/ defineComponent({
     __name: 'TablePicker',
     props: {
         sheetKeys: {},
@@ -211465,7 +211769,7 @@ const _hoisted_7$4 = [
 	"disabled",
 	"onClick"
 ];
-function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$b, [!$props.sheetKeys.length ? (openBlock(), createElementBlock(
 		"p",
 		_hoisted_2$a,
@@ -211563,9 +211867,9 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 		/* STABLE_FRAGMENT */
 	))]);
 }
-var TablePicker = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$c], ["__scopeId", "data-v-2e8b677d"]]);
+var TablePicker = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$b], ["__scopeId", "data-v-2e8b677d"]]);
 
-var _sfc_main$c = /*@__PURE__*/ defineComponent({
+var _sfc_main$b = /*@__PURE__*/ defineComponent({
     __name: 'FormFillPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -211637,7 +211941,7 @@ const _hoisted_13$1 = {
 };
 const _hoisted_14$1 = { class: "ub-ff-run" };
 const _hoisted_15$1 = { class: "ub-ff-run__buttons" };
-function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], { sections: $setup.sections }, {
 		default: withCtx(() => [
 			createVNode($setup["UbSection"], {
@@ -211938,7 +212242,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$b], ["__scopeId", "data-v-a2298782"]]);
+var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$a], ["__scopeId", "data-v-a2298782"]]);
 
 /**
  * usePlotWorldbookConfig — 剧情推进世界书配置（D23.1）
@@ -212225,7 +212529,7 @@ function usePlotWorldbookEntries() {
     };
 }
 
-var _sfc_main$b = /*@__PURE__*/ defineComponent({
+var _sfc_main$a = /*@__PURE__*/ defineComponent({
     __name: 'PlotPage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -212311,7 +212615,7 @@ var PlotPage_vue_vue_type_style_index_0_scoped_8e22c815_lang = null;
 const _hoisted_1$9 = ["inert"];
 const _hoisted_2$8 = ["inert"];
 const _hoisted_3$7 = { class: "ub-plot__current" };
-function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$9(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], { sections: $setup.sections }, {
 		default: withCtx(() => [
 			$setup.paused ? (openBlock(), createBlock($setup["UbCallout"], {
@@ -212465,7 +212769,7 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["sections"]);
 }
-var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$a], ["__scopeId", "data-v-8e22c815"]]);
+var PlotPage = /* @__PURE__ */ _export_sfc(_sfc_main$a, [["render", _sfc_render$9], ["__scopeId", "data-v-8e22c815"]]);
 
 /**
  * useFormFillInjectionTarget — 填表"注入目标世界书"（Component A，§4.2）
@@ -212888,7 +213192,7 @@ function useFormFillWorldbookEntries() {
     };
 }
 
-var _sfc_main$a = /*@__PURE__*/ defineComponent({
+var _sfc_main$9 = /*@__PURE__*/ defineComponent({
     __name: 'WorldbookTargetSelect',
     props: {
         modelValue: {},
@@ -212940,7 +213244,7 @@ const _hoisted_2$7 = {
 	key: 1,
 	class: "ub-wbt__error"
 };
-function _sfc_render$9(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$8, [
 		$props.filterable ? (openBlock(), createBlock($setup["UbInput"], {
 			key: 0,
@@ -212971,9 +213275,9 @@ function _sfc_render$9(_ctx, _cache, $props, $setup, $data, $options) {
 		)) : createCommentVNode("v-if", true)
 	]);
 }
-var WorldbookTargetSelect = /* @__PURE__ */ _export_sfc(_sfc_main$a, [["render", _sfc_render$9], ["__scopeId", "data-v-479991ba"]]);
+var WorldbookTargetSelect = /* @__PURE__ */ _export_sfc(_sfc_main$9, [["render", _sfc_render$8], ["__scopeId", "data-v-479991ba"]]);
 
-var _sfc_main$9 = /*@__PURE__*/ defineComponent({
+var _sfc_main$8 = /*@__PURE__*/ defineComponent({
     __name: 'TablePage',
     setup(__props, { expose: __expose }) {
         __expose();
@@ -213086,7 +213390,7 @@ const _hoisted_1$7 = { class: "ub-tbl__current" };
 const _hoisted_2$6 = { class: "ub-tbl__current" };
 const _hoisted_3$6 = { class: "ub-tbl__prompt" };
 const _hoisted_4$5 = { class: "ub-tbl__prompt-meta" };
-function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
+function _sfc_render$7(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], { sections: $setup.sections }, {
 		default: withCtx(() => [
 			createVNode($setup["UbSection"], {
@@ -213312,7 +213616,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$9, [["render", _sfc_render$8], ["__scopeId", "data-v-a5eb1b7f"]]);
+var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$8, [["render", _sfc_render$7], ["__scopeId", "data-v-a5eb1b7f"]]);
 
 const RERANK_BATCH_SIZE_LIMITS = {
     min: VECTOR_RERANK_MIN_BATCH_SIZE_ACU,
@@ -214005,94 +214309,6 @@ const vectorIndexCopy = {
         },
     },
 };
-
-var _sfc_main$8 = /*@__PURE__*/ defineComponent({
-    __name: 'UbStats',
-    props: {
-        items: {},
-        mono: { type: Boolean, default: false }
-    },
-    setup(__props, { expose: __expose }) {
-        __expose();
-        const props = __props;
-        const root = ref(null);
-        /**
-         * 网格当前是否多列。列数由 auto-fill 按宽度决定，CSS 无法据此切换 span：
-         * 单列时 span 2 会凭空多出一条隐式列，后面的项被自动放进去。只在有宽项时才观察。
-         */
-        const multiColumn = ref(false);
-        let observer = null;
-        function measureColumns() {
-            const el = root.value;
-            const view = el?.ownerDocument?.defaultView;
-            if (!el || !view)
-                return;
-            const tracks = String(view.getComputedStyle(el).gridTemplateColumns || '').trim();
-            multiColumn.value = tracks !== '' && tracks !== 'none' && tracks.split(/\s+/).length >= 2;
-        }
-        onMounted(() => {
-            if (!props.items.some(item => item.wide))
-                return;
-            measureColumns();
-            const Observer = root.value?.ownerDocument?.defaultView?.ResizeObserver ?? globalThis.ResizeObserver;
-            if (!Observer || !root.value)
-                return;
-            observer = new Observer(() => measureColumns());
-            observer.observe(root.value);
-        });
-        onBeforeUnmount(() => {
-            observer?.disconnect();
-            observer = null;
-        });
-        const __returned__ = { props, root, multiColumn, get observer() { return observer; }, set observer(v) { observer = v; }, measureColumns };
-        Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
-        return __returned__;
-    }
-});
-
-injectSfcStyle("\n/*\n * 分隔线由每格自己在右侧、下方各画 1px（外投影不占布局），网格外缘那一圈被 overflow 裁掉。\n * 不用「gap + 线色背景」：那样网格末行的空位会露出一整块线色底。\n * 各格不铺底色，否则后面的格子会盖住前一格画在外侧的分隔线。\n */\n.ub-stats[data-v-05d62386] {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--ub-u) * 180)), 1fr));\n  grid-auto-flow: row dense;\n  margin: 0;\n  overflow: hidden;\n}\n.ub-stats__item[data-v-05d62386] {\n  min-width: 0;\n  padding: var(--ub-s2) var(--ub-s4);\n  box-shadow: 1px 0 0 var(--ub-line-soft), 0 1px 0 var(--ub-line-soft);\n}\n.ub-stats__item--wide[data-v-05d62386] {\n  grid-column: span 2;\n}\n.ub-stats__item dt[data-v-05d62386] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 700;\n}\n.ub-stats__item dd[data-v-05d62386] {\n  margin: 2px 0 0;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  font-variant-numeric: tabular-nums;\n  overflow-wrap: anywhere;\n}\n.ub-stats--mono .ub-stats__item dd[data-v-05d62386] {\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n}\n", "src/presentation-v3/ui/UbStats.vue#style-0-05d62386");
-var UbStats_vue_vue_type_style_index_0_scoped_05d62386_lang = null;
-
-function _sfc_render$7(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock(
-		"dl",
-		{
-			ref: "root",
-			class: normalizeClass(["ub-stats", { "ub-stats--mono": $props.mono }])
-		},
-		[(openBlock(true), createElementBlock(
-			Fragment,
-			null,
-			renderList($props.items, (item) => {
-				return openBlock(), createElementBlock(
-					"div",
-					{
-						key: item.key ?? item.label,
-						class: normalizeClass(["ub-stats__item", { "ub-stats__item--wide": item.wide && $setup.multiColumn }])
-					},
-					[createBaseVNode(
-						"dt",
-						null,
-						toDisplayString(item.label),
-						1
-						/* TEXT */
-					), createBaseVNode("dd", null, [renderSlot(_ctx.$slots, item.key ?? item.label, { item }, () => [createTextVNode(
-						toDisplayString(item.value ?? "—"),
-						1
-						/* TEXT */
-					)], true)])],
-					2
-					/* CLASS */
-				);
-			}),
-			128
-			/* KEYED_FRAGMENT */
-		))],
-		2
-		/* CLASS */
-	);
-}
-var UbStats = /* @__PURE__ */ _export_sfc(_sfc_main$8, [["render", _sfc_render$7], ["__scopeId", "data-v-05d62386"]]);
 
 const FLUSH_ERROR_MAX_CHARS = 60;
 var _sfc_main$7 = /*@__PURE__*/ defineComponent({

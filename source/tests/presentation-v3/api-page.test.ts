@@ -249,4 +249,141 @@ describe('API 页', () => {
     await flush();
     expect(fetchModels).toHaveBeenCalledWith('https://beta.test', '', 'openai_compat', { force: true });
   });
+
+  describe('OpenCode Go 用量', () => {
+    function goSettings(): any {
+      const settings = createSettings();
+      const beta = settings.apiPresets.find((preset: any) => preset.name === 'beta');
+      beta.apiConfig.url = 'https://opencode.ai/zen/go/v1';
+      beta.apiConfig.apiKey = 'oc_sk_test';
+      return settings;
+    }
+
+    function usageBody(rollingPercent: number, weeklyStatus = 'ok'): any {
+      return {
+        usage: {
+          rolling: { status: 'ok', percent: rollingPercent, resetsAt: '2026-11-09T15:04:53.000Z' },
+          weekly: { status: weeklyStatus, percent: 64, resetsAt: '2026-11-16T00:00:00.000Z' },
+          monthly: { status: 'ok', percent: 93, resetsAt: '2026-11-09T19:38:32.000Z' },
+        },
+      };
+    }
+
+    /** 地址 / 密钥变动后停手片刻才查（含打开页面载入预设那一下）。 */
+    async function waitQuery(): Promise<void> {
+      await flush();
+      await new Promise(resolve => setTimeout(resolve, 700));
+      await flush();
+    }
+
+    function usageRow(page: () => HTMLElement): HTMLElement | null {
+      return page().querySelector<HTMLElement>('[data-ub-row="Go 用量"]');
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('端点是 Go、填了密钥：显示三个周期的用量；一轮填表结束后刷新一次', { timeout: 60_000 }, async () => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(usageBody(60)), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify(usageBody(72, 'rate-limited')), { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+      const { page } = await mountApiPage(goSettings());
+      await waitQuery();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe('https://opencode.ai/zen/go/v1/usage');
+      const row = usageRow(page)!;
+      expect(row).not.toBeNull();
+      expect(row.textContent).toContain('5 小时');
+      expect(row.textContent).toContain('60%');
+      expect(row.textContent).toContain('本周');
+      expect(row.textContent).toContain('本月');
+      expect(row.textContent).toContain('93%');
+
+      const state = await import('../../src/service/runtime/state-manager');
+      state._set_isAutoUpdatingCard_ACU(true);
+      await flush();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      state._set_isAutoUpdatingCard_ACU(false);
+      await flush();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(usageRow(page)!.textContent).toContain('72%');
+      expect(usageRow(page)!.textContent).toContain('已限流');
+    });
+
+    it('查询失败时在这一行说明原因', { timeout: 60_000 }, async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 403 })));
+      const { page } = await mountApiPage(goSettings());
+      await waitQuery();
+      expect(usageRow(page)!.textContent).toContain('没有订阅 OpenCode Go');
+    });
+
+    it('不是 Go 端点或没填密钥时不显示、不查询', { timeout: 60_000 }, async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const settings = goSettings();
+      settings.apiPresets.find((preset: any) => preset.name === 'beta').apiConfig.apiKey = '';
+      const { page, input } = await mountApiPage(settings);
+      await waitQuery();
+      expect(usageRow(page)).toBeNull();
+
+      typeValue(input('端点（基础 URL）'), 'https://opencode.ai/zen/v1');
+      typeValue(input('API 密钥'), 'oc_sk_test');
+      await waitQuery();
+      expect(usageRow(page)).toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      const state = await import('../../src/service/runtime/state-manager');
+      state._set_isAutoUpdatingCard_ACU(true);
+      state._set_isAutoUpdatingCard_ACU(false);
+      await flush();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('查询在途时切到别的预设：旧预设迟到的结果不显示', { timeout: 60_000 }, async () => {
+      let resolveFirst: ((value: Response) => void) | null = null;
+      const fetchMock = vi.fn()
+        .mockImplementationOnce(() => new Promise<Response>(resolve => { resolveFirst = resolve; }))
+        .mockImplementation(async () => new Response(JSON.stringify(usageBody(11)), { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+      const settings = goSettings();
+      const alpha = settings.apiPresets.find((preset: any) => preset.name === 'alpha');
+      alpha.apiConfig.url = 'https://opencode.ai/zen/go/v1';
+      alpha.apiConfig.apiKey = 'oc_sk_alpha';
+      const { page } = await mountApiPage(settings);
+      await waitQuery();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      page().querySelector<HTMLButtonElement>('.ub-picker__trigger')!.click();
+      await flush();
+      byText<HTMLElement>('.ub-picker-panel__item', 'alpha')!.click();
+      await waitQuery();
+      expect(usageRow(page)!.textContent).toContain('11%');
+
+      resolveFirst!(new Response(JSON.stringify(usageBody(60)), { status: 200 }));
+      await flush();
+      expect(usageRow(page)!.textContent).toContain('11%');
+      expect(usageRow(page)!.textContent).not.toContain('60%');
+    });
+
+    it('改了密钥：旧密钥的用量立即撤下，停手后按新密钥重新查', { timeout: 60_000 }, async () => {
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify(usageBody(60)), { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+      const { page, input } = await mountApiPage(goSettings());
+      await waitQuery();
+      expect(usageRow(page)!.textContent).toContain('60%');
+
+      typeValue(input('API 密钥'), 'oc_sk_other');
+      await flush();
+      expect(usageRow(page)!.textContent).not.toContain('60%');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await waitQuery();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect((fetchMock.mock.calls[1] as any[])[1].headers.Authorization).toBe('Bearer oc_sk_other');
+    });
+  });
 });

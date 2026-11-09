@@ -645,9 +645,27 @@ export function abortOnChatMutation_ACU() {
 export function _set_currentAbortController_ACU(v: any) { currentAbortController_ACU = v; }
 export function _set_isAutoUpdatingCard_ACU(v: any) {
   if (v && !isAutoUpdatingCard_ACU) fillRunSeq_ACU += 1;
+  const runEnded = !v && !!isAutoUpdatingCard_ACU;
   // 本轮结束（「正在填表」被持有者放开）才解除终止锁存
   if (!v) tableFillStopLatched_ACU = false;
   isAutoUpdatingCard_ACU = v;
+  if (runEnded) notifyTableFillRunEnded_ACU();
+}
+
+// 一轮填表结束的订阅（自动填表、手动填表、追平都经「正在填表」标志收口）。
+const tableFillRunEndedListeners_ACU = new Set<() => void>();
+
+/** 订阅「一轮填表结束」，返回取消订阅函数。 */
+export function onTableFillRunEnded_ACU(listener: () => void): () => void {
+  tableFillRunEndedListeners_ACU.add(listener);
+  return () => { tableFillRunEndedListeners_ACU.delete(listener); };
+}
+
+function notifyTableFillRunEnded_ACU(): void {
+  // 复位发生在编排器的 finally 里：订阅者出错不能打断收尾、改写填表结果
+  for (const listener of [...tableFillRunEndedListeners_ACU]) {
+    try { listener(); } catch (error) { logWarn_ACU('[状态管理] 填表结束订阅者出错:', error); }
+  }
 }
 
 // 「终止填表」锁存：wasStoppedByUser_ACU 会被新一轮填表开跑、宿主新生成复位，单靠它，被终止的那轮

@@ -698,6 +698,37 @@ describe('AbortController 管理', () => {
     }
   });
 
+  it('一轮填表结束（「正在填表」被放开）时通知订阅者一次；本来就没在填表的复位不通知；退订后不再通知', async () => {
+    const { onTableFillRunEnded_ACU } = await import('../../../src/service/runtime/state-manager');
+    const listener = vi.fn();
+    const failing = vi.fn(() => { throw new Error('listener boom'); });
+    const offFailing = onTableFillRunEnded_ACU(failing);
+    const off = onTableFillRunEnded_ACU(listener);
+    try {
+      _set_isAutoUpdatingCard_ACU(false);
+      expect(listener).not.toHaveBeenCalled();
+
+      _set_isAutoUpdatingCard_ACU(true);
+      _set_isAutoUpdatingCard_ACU(true);
+      expect(listener).not.toHaveBeenCalled();
+      // 订阅者出错不能打断填表收尾（复位在编排器的 finally 里）
+      expect(() => _set_isAutoUpdatingCard_ACU(false)).not.toThrow();
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(isAutoUpdatingCard_ACU).toBe(false);
+
+      _set_isAutoUpdatingCard_ACU(false);
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      off();
+      _set_isAutoUpdatingCard_ACU(true);
+      _set_isAutoUpdatingCard_ACU(false);
+      expect(listener).toHaveBeenCalledTimes(1);
+    } finally {
+      off();
+      offFailing();
+    }
+  });
+
   it('abortAllActiveRequests_ACU 中止失败不影响其他', () => {
     const c1 = { abort: vi.fn(() => { throw new Error('abort error'); }) };
     const c2 = { abort: vi.fn() };
