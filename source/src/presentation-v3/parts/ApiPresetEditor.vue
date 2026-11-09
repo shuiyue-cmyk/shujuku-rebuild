@@ -79,10 +79,10 @@
         <UbRow label="端点（基础 URL）" stack>
           <UbInput v-model="draft.url" placeholder="https://example.com/v1" aria-label="端点" />
         </UbRow>
-        <OpencodeGoUsage :url="draft.url" :api-key="draft.apiKey" />
         <UbRow label="API 密钥" stack>
           <UbInput v-model="draft.apiKey" type="password" autocomplete="off" aria-label="API 密钥" />
         </UbRow>
+        <OpencodeGoUsage :url="draft.url" :api-key="draft.apiKey" />
         <UbRow label="模型名" stack>
           <div class="ub-api__model">
             <UbInput v-model="draft.model" aria-label="模型名" />

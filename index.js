@@ -95603,7 +95603,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261109-1352"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261109-1409"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95622,7 +95622,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261109-1352";
+        const stamp = "20261109-1409";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -157595,7 +157595,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261109-1352";
+        const stamp = "20261109-1409";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -194646,8 +194646,8 @@ var _sfc_main$y = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-api[data-v-807239ff],\n.ub-api__form[data-v-807239ff] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s6);\n  min-width: 0;\n}\n.ub-api__picker[data-v-807239ff] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-807239ff] {\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-807239ff] {\n  display: flex;\n  gap: var(--ub-s2);\n  width: 100%;\n}\n.ub-api__model[data-v-807239ff] > :first-child {\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-807239ff] {\n  color: var(--ub-danger);\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__test-result[data-v-807239ff] {\n  display: block;\n  margin-top: var(--ub-s2);\n  font-size: var(--ub-fs-xs);\n  font-weight: 500;\n  overflow-wrap: anywhere;\n}\n.ub-api__test-result.is-ok[data-v-807239ff] {\n  color: var(--ub-ok);\n}\n.ub-api__test-result.is-error[data-v-807239ff] {\n  color: var(--ub-danger);\n}\n.ub-api__test-note[data-v-807239ff] {\n  display: block;\n  color: var(--ub-text-2);\n}\n.ub-api__danger-hint[data-v-807239ff] {\n  color: var(--ub-danger);\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-807239ff] {\n  position: sticky;\n  bottom: var(--ub-s3);\n  z-index: 4;\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: 999px;\n  background: var(--ub-toast-bg);\n  box-shadow: var(--ub-overlay-shadow);\n  backdrop-filter: blur(12px);\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-807239ff]:not(.is-dirty) {\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-807239ff] {\n  flex: 1 1 auto;\n  min-width: 0;\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-807239ff] {\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-807239ff] {\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-807239ff] {\n    flex-wrap: wrap;\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-807239ff] {\n    flex-basis: 100%;\n}\n}\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-807239ff");
-var ApiPresetEditor_vue_vue_type_style_index_0_scoped_807239ff_lang = null;
+injectSfcStyle("\n.ub-api[data-v-b64f6b1b],\r\n.ub-api__form[data-v-b64f6b1b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-b64f6b1b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-b64f6b1b] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-b64f6b1b] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-b64f6b1b] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-b64f6b1b] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__test-result[data-v-b64f6b1b] {\r\n  display: block;\r\n  margin-top: var(--ub-s2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 500;\r\n  overflow-wrap: anywhere;\n}\n.ub-api__test-result.is-ok[data-v-b64f6b1b] {\r\n  color: var(--ub-ok);\n}\n.ub-api__test-result.is-error[data-v-b64f6b1b] {\r\n  color: var(--ub-danger);\n}\n.ub-api__test-note[data-v-b64f6b1b] {\r\n  display: block;\r\n  color: var(--ub-text-2);\n}\n.ub-api__danger-hint[data-v-b64f6b1b] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-b64f6b1b] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-b64f6b1b]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-b64f6b1b] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-b64f6b1b] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-b64f6b1b] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-b64f6b1b] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-b64f6b1b] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-b64f6b1b");
+var ApiPresetEditor_vue_vue_type_style_index_0_scoped_b64f6b1b_lang = null;
 
 const _hoisted_1$t = { class: "ub-api" };
 const _hoisted_2$r = { class: "ub-api__picker" };
@@ -194800,10 +194800,6 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					}),
-					createVNode($setup["OpencodeGoUsage"], {
-						url: $setup.draft.url,
-						"api-key": $setup.draft.apiKey
-					}, null, 8, ["url", "api-key"]),
 					createVNode($setup["UbRow"], {
 						label: "API 密钥",
 						stack: ""
@@ -194817,6 +194813,10 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					}),
+					createVNode($setup["OpencodeGoUsage"], {
+						url: $setup.draft.url,
+						"api-key": $setup.draft.apiKey
+					}, null, 8, ["url", "api-key"]),
 					createVNode($setup["UbRow"], {
 						label: "模型名",
 						stack: ""
@@ -195224,7 +195224,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION */
 	)) : createCommentVNode("v-if", true)]);
 }
-var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$y, [["render", _sfc_render$x], ["__scopeId", "data-v-807239ff"]]);
+var ApiPresetEditor = /* @__PURE__ */ _export_sfc(_sfc_main$y, [["render", _sfc_render$x], ["__scopeId", "data-v-b64f6b1b"]]);
 
 var _sfc_main$x = /*@__PURE__*/ defineComponent({
     __name: 'ApiPage',
