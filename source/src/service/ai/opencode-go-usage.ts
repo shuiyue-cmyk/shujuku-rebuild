@@ -25,10 +25,15 @@ export interface OpencodeGoUsage_ACU {
     monthly: OpencodeGoUsageMeter_ACU;
 }
 
-/** Go 端点对应的用量接口地址；非 Go 端点返回 null（不查）。 */
+/**
+ * Go 端点对应的用量接口地址；非 Go 端点返回 null（不查）。
+ * 只认 https：用量查询在未保存的草稿上就会发，不经保存时的端点安全校验，http 会把密钥明文发出去。
+ */
 export function opencodeGoUsageUrl_ACU(endpointUrl: unknown): string | null {
     if (!isOpencodeGoEndpoint_ACU(endpointUrl)) return null;
-    return `${new URL(String(endpointUrl)).origin}/inference/go/v1/usage`;
+    const parsed = new URL(String(endpointUrl));
+    if (parsed.protocol !== 'https:') return null;
+    return `${parsed.origin}/inference/go/v1/usage`;
 }
 
 function parseMeter_ACU(raw: any): OpencodeGoUsageMeter_ACU | null {

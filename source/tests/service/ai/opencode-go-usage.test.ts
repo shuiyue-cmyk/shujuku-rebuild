@@ -32,6 +32,10 @@ describe('opencodeGoUsageUrl_ACU', () => {
     expect(opencodeGoUsageUrl_ACU('https://api.example.com/zen/go/v1')).toBeNull();
     expect(opencodeGoUsageUrl_ACU('')).toBeNull();
   });
+
+  it('http 明文地址不查：用量查询在未保存的草稿上就会发，不能绕过保存时的「远程地址须 https」', () => {
+    expect(opencodeGoUsageUrl_ACU('http://opencode.ai/zen/go/v1')).toBeNull();
+  });
 });
 
 describe('fetchOpencodeGoUsage_ACU', () => {
