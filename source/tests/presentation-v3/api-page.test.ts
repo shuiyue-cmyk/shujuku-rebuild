@@ -293,7 +293,7 @@ describe('API 页', () => {
       await waitQuery();
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock.mock.calls[0][0]).toBe('https://opencode.ai/zen/go/v1/usage');
+      expect(fetchMock.mock.calls[0][0]).toBe('https://opencode.ai/inference/go/v1/usage');
       const row = usageRow(page)!;
       expect(row).not.toBeNull();
       expect(row.textContent).toContain('5 小时');

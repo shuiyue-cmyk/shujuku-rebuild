@@ -22,8 +22,8 @@ afterEach(() => {
 
 describe('opencodeGoUsageUrl_ACU', () => {
   it('Go 端点（新旧两种路径）都指向同一个用量接口', () => {
-    expect(opencodeGoUsageUrl_ACU('https://opencode.ai/zen/go/v1')).toBe('https://opencode.ai/zen/go/v1/usage');
-    expect(opencodeGoUsageUrl_ACU('https://opencode.ai/inference/go/openai/v1/')).toBe('https://opencode.ai/zen/go/v1/usage');
+    expect(opencodeGoUsageUrl_ACU('https://opencode.ai/zen/go/v1')).toBe('https://opencode.ai/inference/go/v1/usage');
+    expect(opencodeGoUsageUrl_ACU('https://opencode.ai/inference/go/openai/v1/')).toBe('https://opencode.ai/inference/go/v1/usage');
   });
 
   it('Zen 等非 Go 端点、其他服务商、空值都不查', () => {
@@ -41,7 +41,7 @@ describe('fetchOpencodeGoUsage_ACU', () => {
 
     const usage = await fetchOpencodeGoUsage_ACU('https://opencode.ai/zen/go/v1', 'oc_sk_test');
 
-    expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/go/v1/usage', expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/inference/go/v1/usage', expect.objectContaining({
       method: 'GET',
       headers: expect.objectContaining({ Authorization: 'Bearer oc_sk_test', Accept: 'application/json' }),
     }));

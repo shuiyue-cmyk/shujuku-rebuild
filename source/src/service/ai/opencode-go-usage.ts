@@ -1,9 +1,12 @@
 // service/ai/opencode-go-usage.ts — OpenCode Go 订阅用量（5 小时 / 本周 / 本月）
 //
-// 接口与 OpenCode 官方客户端读取 Go 额度用的同一个（anomalyco/opencode PR #16513，
-// 官方文档未列出）：GET {origin}/zen/go/v1/usage，Bearer 用同一把 API 密钥，不消耗额度。
+// 接口即 OpenCode 官方客户端读取 Go 额度用的那个（anomalyco/opencode PR #16513，
+// 官方文档未列出），Bearer 用同一把 API 密钥，不消耗额度。
 // 返回 { usage: { rolling|weekly|monthly: { status: 'ok'|'rate-limited', percent, resetsAt } } }，
-// 只有百分比，没有美元数；未订阅 Go 回 403。接口允许跨域，浏览器里直接请求。
+// 只有百分比，没有美元数；未订阅 Go 回 403。
+// 必须走 /inference/go/v1/usage：带 Authorization 头的跨域请求先发 OPTIONS 预检，旧路径
+// /zen/go/v1/usage 对预检回 404，浏览器（WebKit 报 "Load failed"）直接拦下；官方客户端不走
+// 浏览器所以不受影响。新路径正常应答预检（2026-11-09 实测），酒馆后端又没有可借的通用代发通道。
 
 import { isOpencodeGoEndpoint_ACU } from './api-call';
 
@@ -25,7 +28,7 @@ export interface OpencodeGoUsage_ACU {
 /** Go 端点对应的用量接口地址；非 Go 端点返回 null（不查）。 */
 export function opencodeGoUsageUrl_ACU(endpointUrl: unknown): string | null {
     if (!isOpencodeGoEndpoint_ACU(endpointUrl)) return null;
-    return `${new URL(String(endpointUrl)).origin}/zen/go/v1/usage`;
+    return `${new URL(String(endpointUrl)).origin}/inference/go/v1/usage`;
 }
 
 function parseMeter_ACU(raw: any): OpencodeGoUsageMeter_ACU | null {

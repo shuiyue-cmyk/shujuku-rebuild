@@ -95603,7 +95603,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261109-1254"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261109-1311"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95622,7 +95622,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261109-1254";
+        const stamp = "20261109-1311";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -157595,7 +157595,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261109-1254";
+        const stamp = "20261109-1311";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -194149,15 +194149,18 @@ var UbPresetPicker = /* @__PURE__ */ _export_sfc(_sfc_main$A, [["render", _sfc_r
 
 // service/ai/opencode-go-usage.ts — OpenCode Go 订阅用量（5 小时 / 本周 / 本月）
 //
-// 接口与 OpenCode 官方客户端读取 Go 额度用的同一个（anomalyco/opencode PR #16513，
-// 官方文档未列出）：GET {origin}/zen/go/v1/usage，Bearer 用同一把 API 密钥，不消耗额度。
+// 接口即 OpenCode 官方客户端读取 Go 额度用的那个（anomalyco/opencode PR #16513，
+// 官方文档未列出），Bearer 用同一把 API 密钥，不消耗额度。
 // 返回 { usage: { rolling|weekly|monthly: { status: 'ok'|'rate-limited', percent, resetsAt } } }，
-// 只有百分比，没有美元数；未订阅 Go 回 403。接口允许跨域，浏览器里直接请求。
+// 只有百分比，没有美元数；未订阅 Go 回 403。
+// 必须走 /inference/go/v1/usage：带 Authorization 头的跨域请求先发 OPTIONS 预检，旧路径
+// /zen/go/v1/usage 对预检回 404，浏览器（WebKit 报 "Load failed"）直接拦下；官方客户端不走
+// 浏览器所以不受影响。新路径正常应答预检（2026-11-09 实测），酒馆后端又没有可借的通用代发通道。
 /** Go 端点对应的用量接口地址；非 Go 端点返回 null（不查）。 */
 function opencodeGoUsageUrl_ACU(endpointUrl) {
     if (!isOpencodeGoEndpoint_ACU(endpointUrl))
         return null;
-    return `${new URL(String(endpointUrl)).origin}/zen/go/v1/usage`;
+    return `${new URL(String(endpointUrl)).origin}/inference/go/v1/usage`;
 }
 function parseMeter_ACU(raw) {
     const percent = Number(raw?.percent);
