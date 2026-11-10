@@ -75,7 +75,7 @@ import {
   __clearPresetResolveCacheForTests_ACU,
 } from '../../../src/service/settings/api-preset-service';
 import { resolveContinuationApiPreset_ACU } from '../../../src/service/continuation/api-preset';
-import { SCOPE_GUARD_PROMPT_ACU, setScopeGuardPromptEnabled_ACU } from '../../../src/service/ai/scope-guard-prompt';
+import { SCOPE_GUARD_DEFAULT_TARGETS_ACU, SCOPE_GUARD_PROMPT_ACU, setScopeGuardPromptEnabled_ACU, setScopeGuardTargets_ACU } from '../../../src/service/ai/scope-guard-prompt';
 import { callContinuationInternalAi_ACU } from '../../../src/service/continuation/internal-ai-call';
 import {
   apiPresetDraftFromPreset,
@@ -94,6 +94,7 @@ beforeEach(() => {
   __clearPresetResolveCacheForTests_ACU();
   __clearComposeIncludeBodyCacheForTests_ACU();
   setScopeGuardPromptEnabled_ACU(false);
+  setScopeGuardTargets_ACU(SCOPE_GUARD_DEFAULT_TARGETS_ACU);
 });
 
 // ═══ resolveApiConfigByPreset_ACU memo ═══
@@ -300,7 +301,7 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(off.messages).toEqual([{ role: 'system', content: '你是助手' }, { role: 'user', content: '填表' }, { role: 'assistant', content: '收到' }]);
 
     setScopeGuardPromptEnabled_ACU(true);
-    const on = buildCustomApiRequestBody_ACU(messages, { url: 'https://api.example.com', model: 'm', apiKey: 'k' }, { nonPrefillSupport: true });
+    const on = buildCustomApiRequestBody_ACU(messages, { url: 'https://api.example.com', model: 'm', apiKey: 'k' }, { nonPrefillSupport: true, sessionNamespace: 'table-fill' });
     expect(on.messages).toEqual([
       { role: 'system', content: '你是助手' },
       { role: 'system', content: SCOPE_GUARD_PROMPT_ACU },
@@ -308,6 +309,17 @@ describe('buildCustomApiRequestBody_ACU', () => {
       { role: 'user', content: '助手：\n收到' },
     ]);
     expect(messages).toHaveLength(3);
+
+    // 按功能勾选：默认只勾填表；未勾选的功能、不带功能标识的连接测试都不附加
+    const plotDefault = buildCustomApiRequestBody_ACU(messages, { url: 'https://api.example.com', model: 'm', apiKey: 'k' }, { sessionNamespace: 'plot' });
+    expect(plotDefault.messages).toHaveLength(3);
+    setScopeGuardTargets_ACU({ fill: false, plot: true });
+    const unchecked = buildCustomApiRequestBody_ACU(messages, { url: 'https://api.example.com', model: 'm', apiKey: 'k' }, { sessionNamespace: 'table-fill' });
+    expect(unchecked.messages).toHaveLength(3);
+    const noNamespace = buildCustomApiRequestBody_ACU(messages, { url: 'https://api.example.com', model: 'm', apiKey: 'k' });
+    expect(noNamespace.messages).toHaveLength(3);
+    const plot = buildCustomApiRequestBody_ACU(messages, { url: 'https://api.example.com', model: 'm', apiKey: 'k' }, { sessionNamespace: 'plot' });
+    expect(plot.messages[1]).toEqual({ role: 'system', content: SCOPE_GUARD_PROMPT_ACU });
   });
 
   it('插件请求一律标为后台请求：宿主把上游错误作为 502 返回，而不是包成一条「助手回复」', () => {

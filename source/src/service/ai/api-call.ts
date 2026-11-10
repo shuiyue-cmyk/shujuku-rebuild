@@ -515,8 +515,8 @@ export function buildCustomApiRequestBody_ACU(
   // 时请求体省略该键，后端原样透传消息，保留提示词组中部 system 段的角色。
   const promptPostProcessing_ACU = normalizePromptPostProcessing_ACU(effectiveApiConfig.promptPostProcessing);
 
-  // 执行边界提示词（开发者选项，默认关）：全库 AI 请求的统一出口，开启时在开头 system 段之后附加一条。
-  const effectiveMessages_ACU = Array.isArray(messages) ? withScopeGuardPrompt_ACU([...messages]) : messages;
+  // 执行边界提示词（开发者选项，默认关）：全库 AI 请求的统一出口，开启且该功能被勾选时在开头 system 段之后附加一条。
+  const effectiveMessages_ACU = Array.isArray(messages) ? withScopeGuardPrompt_ACU([...messages], opts.sessionNamespace) : messages;
 
   const body: Record<string, any> = {
     // 统一将 messages 的 role 归一为小写（system / user / assistant）。

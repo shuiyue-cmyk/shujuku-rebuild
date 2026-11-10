@@ -196,6 +196,37 @@ describe('DeveloperPage', () => {
       mount.__resetAcuV2MountForTests();
     });
 
+    it('打开后才出现「附加到」勾选项：默认只勾填表，勾选立即生效并落盘', async () => {
+      const { mount } = await mountDeveloperPage();
+      const guard = await import('../../src/service/ai/scope-guard-prompt');
+      const targetChecks = () => [...document.querySelectorAll<HTMLInputElement>('[data-ub-main] [data-scope-guard-targets] input[type="checkbox"]')];
+
+      expect(targetChecks(), '开关关闭时不显示勾选项').toHaveLength(0);
+      findGuardToggle()!.click();
+      await new Promise(r => setTimeout(r, 0));
+
+      const checks = targetChecks();
+      expect(checks).toHaveLength(guard.SCOPE_GUARD_TARGET_KEYS_ACU.length);
+      expect(checks.map(c => c.checked), '默认只勾填表').toEqual(guard.SCOPE_GUARD_TARGET_KEYS_ACU.map(key => key === 'fill'));
+      const labels = [...document.querySelectorAll('[data-ub-main] [data-scope-guard-targets] label')].map(l => l.textContent?.trim());
+      expect(labels).toContain('剧情推进');
+
+      const plotIndex = guard.SCOPE_GUARD_TARGET_KEYS_ACU.indexOf('plot');
+      checks[plotIndex].click();
+      await new Promise(r => setTimeout(r, 0));
+      expect(guard.isScopeGuardTargetEnabled_ACU('plot')).toBe(true);
+      expect(guard.isScopeGuardTargetEnabled_ACU('fill')).toBe(true);
+      expect(JSON.parse(localStorage.getItem('acu_v2_ui_state') || '{}').devOptions.scopeGuardTargets.plot).toBe(true);
+      expect(targetChecks()[plotIndex].checked).toBe(true);
+
+      const fillIndex = guard.SCOPE_GUARD_TARGET_KEYS_ACU.indexOf('fill');
+      targetChecks()[fillIndex].click();
+      await new Promise(r => setTimeout(r, 0));
+      expect(guard.isScopeGuardTargetEnabled_ACU('fill'), '取消勾选填表后不再附加').toBe(false);
+
+      mount.__resetAcuV2MountForTests();
+    });
+
     it('已保存为开时：开关回显为开，请求附加', async () => {
       const { mount } = await mountDeveloperPage({ scopeGuardPrompt: true });
       const guard = await import('../../src/service/ai/scope-guard-prompt');

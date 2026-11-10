@@ -1869,28 +1869,38 @@ const ACU_V2_STORAGE_KEY = 'acu_v2_ui_state';
 const ACU_V2_DEV_OPTIONS_SECTION_KEY = 'devOptions';
 const WARN_LOG_ENABLED_KEY = 'warnLogEnabled';
 const SCOPE_GUARD_PROMPT_KEY = 'scopeGuardPrompt';
+const SCOPE_GUARD_TARGETS_KEY = 'scopeGuardTargets';
 /**
- * 在 Vue/Pinia 尚未挂载时读取一个开发者选项布尔开关（只认显式 true），
- * 保证启动阶段、没打开过面板时也遵守持久化设置。
+ * 在 Vue/Pinia 尚未挂载时读取一个开发者选项的原始值，
+ * 保证启动阶段、没打开过面板时也遵守持久化设置。读不到返回 undefined。
  */
-function readDevOptionFlag(key) {
+function readDevOptionValue(key) {
     try {
         if (typeof window === 'undefined' || !window.localStorage)
-            return false;
+            return undefined;
         const raw = window.localStorage.getItem(ACU_V2_STORAGE_KEY);
         if (!raw)
-            return false;
+            return undefined;
         const parsed = JSON.parse(raw);
         if (!parsed || typeof parsed !== 'object')
-            return false;
+            return undefined;
         const devOptions = parsed[ACU_V2_DEV_OPTIONS_SECTION_KEY];
         if (!devOptions || typeof devOptions !== 'object')
-            return false;
-        return devOptions[key] === true;
+            return undefined;
+        return devOptions[key];
     }
     catch {
-        return false;
+        return undefined;
     }
+}
+/** 布尔开关只认显式 true。 */
+function readDevOptionFlag(key) {
+    return readDevOptionValue(key) === true;
+}
+/** 执行边界提示词的「附加到」勾选原始记录；非布尔值由服务层按默认处理。 */
+function readScopeGuardTargets() {
+    const raw = readDevOptionValue(SCOPE_GUARD_TARGETS_KEY);
+    return raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...raw } : {};
 }
 function readWarnLogEnabled() {
     return readDevOptionFlag(WARN_LOG_ENABLED_KEY);
@@ -88296,12 +88306,37 @@ async function sendChatCompletionBody_ACU(body, signal) {
  *
  * 背景：MiniMax M3.1 Flash 这类主观能动性过强的模型，越界集中在规则留了解释空间的地方——
  * 楼层里没发生什么也要改写几条记录、用户只要求改一处仍按默认规则把整轮表都更新一遍。
- * 开启后，数据库发出的每一次 AI 请求都附加这段固定约束。默认关闭；关闭时请求逐字不变。
- * 文本与压测数据见 docs/SCOPE-GUARD-PROMPT.md（第二版，第 4 条专压「没新信息也要写」）。
+ * 开启后，勾选了的功能发出的 AI 请求都附加这段固定约束。默认关闭；关闭时请求逐字不变。
+ * 文本与压测数据见 docs/SCOPE-GUARD-PROMPT.md（第三版：第 4 条专压「没新信息也要写」，第 6 条只在指令没要求时禁止续写）。
  *
  * 位置：插在开头连续的 system 段之后、作为一条独立 system。开头是固定前缀，不破坏提示词缓存，
  * 也能被 Claude / Gemini 协议收进系统提示字段；压测里效果不差于放末尾，且不用绕开结尾预填充。
+ *
+ * 按功能勾选：靠各调用点组包时传的 x-opencode-session 命名空间区分功能（全库每条 AI 调用都带）。
+ * 未勾选的功能、没有命名空间的请求（API 连接测试）不附加。
+ * 默认只勾填表：压测只在填表上验证过效果；智能续写、外部脚本本身要写正文，用户自行决定是否勾选。
  */
+/** 「附加到」勾选项，顺序即界面顺序。 */
+const SCOPE_GUARD_TARGET_KEYS_ACU = ['fill', 'plot', 'continuation', 'agent', 'optimize', 'template', 'summary', 'worldbook'];
+/** 没保存过（或保存值不是布尔）的勾选项按此默认。 */
+const SCOPE_GUARD_DEFAULT_TARGETS_ACU = Object.freeze(Object.fromEntries(SCOPE_GUARD_TARGET_KEYS_ACU.map(key => [key, key === 'fill'])));
+const NAMESPACE_TARGETS_ACU = {
+    'table-fill': 'fill',
+    plot: 'plot',
+    'agent-decision': 'agent',
+    'agent-skillify': 'agent',
+    'content-replace': 'optimize',
+    'template-assistant': 'template',
+    summary: 'summary',
+    'worldbook-ai': 'worldbook',
+};
+/** 组包命名空间 → 勾选项；续写的命名空间按会话动态生成，统一以 cont- 开头。认不出的返回 null。 */
+function resolveScopeGuardTarget_ACU(namespace) {
+    const value = typeof namespace === 'string' ? namespace : '';
+    if (value.startsWith('cont-'))
+        return 'continuation';
+    return Object.prototype.hasOwnProperty.call(NAMESPACE_TARGETS_ACU, value) ? NAMESPACE_TARGETS_ACU[value] : null;
+}
 const SCOPE_GUARD_PROMPT_ACU = `【执行边界】
 你正在执行一项由程序自动调用的后台任务，输出会被程序直接解析。完成任务时，额外遵守以下边界：
 1. 只做指令明确要求的事。指令没有要求的步骤、内容、改动一律不做，不主动"顺便"多做。
@@ -88309,7 +88344,7 @@ const SCOPE_GUARD_PROMPT_ACU = `【执行边界】
 3. 指令限定了范围（只改某张表、某个字段、某几处、某类内容）时，只在范围内操作，范围外的内容保持原样。
 4. 资料没有带来新的事实时，不改动已有内容：不为了"有所作为"去改写、扩写或换个说法重写原有记录。一笔带过、没有后续影响的小动作（擦拭、整理、看一眼、想起某事），以及只被提到或回忆、本身没有新经历的人和物，都不算发生了变化。
 5. 拿不准某项操作是否必要、是否在要求范围内时，不做这项操作。
-6. 严格按指令规定的输出格式输出：格式之外不加说明、建议、总结、追问，也不续写剧情、不替任何角色发言或行动。`;
+6. 严格按指令规定的输出格式输出：格式之外不加说明、建议、总结、追问；指令没有要求时，不续写剧情、不替任何角色发言或行动。`;
 // 启动即读持久化值：不打开面板、刷新页面后的自动填表也要遵守开关。之后由开发者选项 store 推送变化。
 let scopeGuardPromptEnabled_ACU = readScopeGuardPromptEnabled();
 function setScopeGuardPromptEnabled_ACU(enabled) {
@@ -88318,9 +88353,30 @@ function setScopeGuardPromptEnabled_ACU(enabled) {
 function isScopeGuardPromptEnabled_ACU() {
     return scopeGuardPromptEnabled_ACU;
 }
-/** 开关打开时返回插入了执行边界提示词的新数组；关闭时原样返回同一个数组。 */
-function withScopeGuardPrompt_ACU(messages) {
+// 只记用户显式选过的项，其余按 SCOPE_GUARD_DEFAULT_TARGETS_ACU。
+let scopeGuardTargets_ACU = readScopeGuardTargets();
+/** 合并更新勾选项（只认布尔值）。 */
+function setScopeGuardTargets_ACU(targets) {
+    const next = { ...scopeGuardTargets_ACU };
+    for (const key of SCOPE_GUARD_TARGET_KEYS_ACU) {
+        if (typeof targets[key] === 'boolean')
+            next[key] = targets[key];
+    }
+    scopeGuardTargets_ACU = next;
+}
+function isScopeGuardTargetEnabled_ACU(target) {
+    const value = scopeGuardTargets_ACU[target];
+    return typeof value === 'boolean' ? value : SCOPE_GUARD_DEFAULT_TARGETS_ACU[target] === true;
+}
+/**
+ * 总开关打开、且命名空间对应的功能被勾选时，返回插入了执行边界提示词的新数组；
+ * 否则原样返回同一个数组。
+ */
+function withScopeGuardPrompt_ACU(messages, namespace) {
     if (!scopeGuardPromptEnabled_ACU)
+        return messages;
+    const target = resolveScopeGuardTarget_ACU(namespace);
+    if (!target || !isScopeGuardTargetEnabled_ACU(target))
         return messages;
     let insertAt = 0;
     while (insertAt < messages.length && String(messages[insertAt]?.role ?? '').toLowerCase() === 'system')
@@ -88811,8 +88867,8 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
     // 提示词后处理（预设级可配）：缺省 strict 与历史写死行为一致；显式「未选择」（''）
     // 时请求体省略该键，后端原样透传消息，保留提示词组中部 system 段的角色。
     const promptPostProcessing_ACU = normalizePromptPostProcessing_ACU(effectiveApiConfig.promptPostProcessing);
-    // 执行边界提示词（开发者选项，默认关）：全库 AI 请求的统一出口，开启时在开头 system 段之后附加一条。
-    const effectiveMessages_ACU = Array.isArray(messages) ? withScopeGuardPrompt_ACU([...messages]) : messages;
+    // 执行边界提示词（开发者选项，默认关）：全库 AI 请求的统一出口，开启且该功能被勾选时在开头 system 段之后附加一条。
+    const effectiveMessages_ACU = Array.isArray(messages) ? withScopeGuardPrompt_ACU([...messages], opts.sessionNamespace) : messages;
     const body = {
         // 统一将 messages 的 role 归一为小写（system / user / assistant）。
         //
@@ -95649,7 +95705,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261110-0957"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261110-1017"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95668,7 +95724,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261110-0957";
+        const stamp = "20261110-1017";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -157641,7 +157697,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261110-0957";
+        const stamp = "20261110-1017";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -175792,12 +175848,20 @@ function useChatChangedListener() {
  *   所以停止 Debug 不会关掉这里显式打开的常驻采集，本 store 也不会被 Debug 改写。
  * - apiReconfirm：API 预设变更后，其他使用 API 预设的位置是否标黄提醒二次确认。
  *   默认打开（保持现有行为）；关闭后全库不再标黄。缺省（老版本存量）视为打开。
- * - scopeGuardPrompt：执行边界提示词。开启后数据库的每次 AI 请求附加一段约束提示词，默认关闭。
+ * - scopeGuardPrompt：执行边界提示词。开启后数据库的 AI 请求附加一段约束提示词，默认关闭。
+ * - scopeGuardTargets：执行边界提示词附加到哪些功能，缺省只勾填表。
  *   服务层启动时自读持久化值（不打开面板也生效），本 store 只在切换 / refresh 时推送变化。
  *
  * 新 UI 自有持久化，物理隔离于 settings_ACU。
  */
 const SECTION_KEY$2 = 'devOptions';
+function normalizeScopeGuardTargets(raw) {
+    const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    return Object.fromEntries(SCOPE_GUARD_TARGET_KEYS_ACU.map(key => [
+        key,
+        typeof source[key] === 'boolean' ? source[key] : SCOPE_GUARD_DEFAULT_TARGETS_ACU[key],
+    ]));
+}
 function loadFromStorage$1() {
     const raw = readSection(SECTION_KEY$2) ?? {};
     return {
@@ -175806,6 +175870,7 @@ function loadFromStorage$1() {
         warnLogEnabled: raw.warnLogEnabled === true,
         apiReconfirm: raw.apiReconfirm !== false,
         scopeGuardPrompt: raw.scopeGuardPrompt === true,
+        scopeGuardTargets: normalizeScopeGuardTargets(raw.scopeGuardTargets),
     };
 }
 function persist$2(state) {
@@ -175815,6 +175880,7 @@ function persist$2(state) {
         warnLogEnabled: state.warnLogEnabled,
         apiReconfirm: state.apiReconfirm,
         scopeGuardPrompt: state.scopeGuardPrompt,
+        scopeGuardTargets: { ...state.scopeGuardTargets },
     });
 }
 const useDevOptionsStore = defineStore('acu-v2-dev-options', {
@@ -175846,6 +175912,13 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
             setScopeGuardPromptEnabled_ACU(this.scopeGuardPrompt);
             persist$2(this.$state);
         },
+        setScopeGuardTarget(target, enabled) {
+            if (!SCOPE_GUARD_TARGET_KEYS_ACU.includes(target))
+                return;
+            this.scopeGuardTargets = { ...this.scopeGuardTargets, [target]: !!enabled };
+            setScopeGuardTargets_ACU(this.scopeGuardTargets);
+            persist$2(this.$state);
+        },
         refresh() {
             const next = loadFromStorage$1();
             this.developerOptionsEnabled = next.developerOptionsEnabled;
@@ -175853,8 +175926,10 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
             this.warnLogEnabled = next.warnLogEnabled;
             this.apiReconfirm = next.apiReconfirm;
             this.scopeGuardPrompt = next.scopeGuardPrompt;
+            this.scopeGuardTargets = next.scopeGuardTargets;
             setWarnLogEnabledByDevOption_ACU(this.warnLogEnabled);
             setScopeGuardPromptEnabled_ACU(this.scopeGuardPrompt);
+            setScopeGuardTargets_ACU(this.scopeGuardTargets);
         },
     },
 });
@@ -175866,7 +175941,7 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
  */
 function useDevOptions() {
     const store = useDevOptionsStore();
-    const { developerOptionsEnabled, plotAdvanced, warnLogEnabled, apiReconfirm, scopeGuardPrompt, } = storeToRefs(store);
+    const { developerOptionsEnabled, plotAdvanced, warnLogEnabled, apiReconfirm, scopeGuardPrompt, scopeGuardTargets, } = storeToRefs(store);
     return {
         developerOptionsEnabled,
         setDeveloperOptionsEnabled: (enabled) => store.setDeveloperOptionsEnabled(enabled),
@@ -175878,6 +175953,8 @@ function useDevOptions() {
         setApiReconfirm: (enabled) => store.setApiReconfirm(enabled),
         scopeGuardPrompt,
         setScopeGuardPrompt: (enabled) => store.setScopeGuardPrompt(enabled),
+        scopeGuardTargets,
+        setScopeGuardTarget: (target, enabled) => store.setScopeGuardTarget(target, enabled),
         refresh: () => store.refresh(),
     };
 }
@@ -179738,7 +179815,7 @@ var _sfc_main$11 = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-btn[data-v-3521ab51] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: var(--ub-s2);\r\n  /* 不参与 flex 收缩：与输入框（width:100%）或长说明并排时，按比例收缩会把文字挤成「加…」甚至只剩图标 */\r\n  flex-shrink: 0;\r\n  min-width: 0;\r\n  height: var(--ub-control-h);\r\n  padding: 0 var(--ub-s4);\r\n  border: 1px solid var(--ub-line);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-panel);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  line-height: 1;\r\n  white-space: nowrap;\r\n  text-decoration: none;\r\n  cursor: pointer;\r\n  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, transform 0.08s ease;\n}\n.ub-btn[data-v-3521ab51]:hover:not(:disabled) {\r\n  background: var(--ub-hover-strong);\n}\n.ub-btn[data-v-3521ab51]:active:not(:disabled) {\r\n  transform: scale(0.98);\n}\n.ub-btn[data-v-3521ab51]:focus-visible {\r\n  outline: 2px solid var(--ub-accent);\r\n  outline-offset: 2px;\n}\n.ub-btn[data-v-3521ab51]:disabled {\r\n  opacity: 0.45;\r\n  cursor: not-allowed;\n}\n.ub-btn--busy[data-v-3521ab51]:disabled {\r\n  opacity: 0.8;\r\n  cursor: progress;\n}\n.ub-btn--sm[data-v-3521ab51] {\r\n  height: var(--ub-control-h-sm);\r\n  padding: 0 var(--ub-s3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-btn--block[data-v-3521ab51] {\r\n  display: flex;\r\n  flex-shrink: 1;\r\n  width: 100%;\n}\n.ub-btn--primary[data-v-3521ab51] {\r\n  border-color: transparent;\r\n  background: var(--ub-accent);\r\n  color: var(--ub-on-accent);\n}\n.ub-btn--primary[data-v-3521ab51]:hover:not(:disabled) {\r\n  background: var(--ub-accent-2);\n}\n.ub-btn--soft[data-v-3521ab51] {\r\n  border-color: transparent;\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-btn--soft[data-v-3521ab51]:hover:not(:disabled) {\r\n  background: var(--ub-accent-soft-2);\n}\n.ub-btn--ghost[data-v-3521ab51] {\r\n  border-color: transparent;\r\n  background: transparent;\r\n  color: var(--ub-text-2);\n}\n.ub-btn--ghost[data-v-3521ab51]:hover:not(:disabled) {\r\n  background: var(--ub-hover);\r\n  color: var(--ub-text);\n}\n.ub-btn--danger[data-v-3521ab51] {\r\n  border-color: transparent;\r\n  background: var(--ub-danger-soft);\r\n  color: var(--ub-danger);\n}\n.ub-btn--danger[data-v-3521ab51]:hover:not(:disabled) {\r\n  background: var(--ub-danger);\r\n  color: var(--ub-on-accent);\n}\n.ub-btn__icon[data-v-3521ab51] {\r\n  flex: 0 0 auto;\r\n  font-size: 0.95em;\n}\n.ub-btn__label[data-v-3521ab51] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\r\n", "src/presentation-v3/ui/UbButton.vue#style-0-3521ab51");
 var UbButton_vue_vue_type_style_index_0_scoped_3521ab51_lang = null;
 
-const _hoisted_1$X = ["href", "title"];
+const _hoisted_1$Y = ["href", "title"];
 const _hoisted_2$Q = {
 	key: 1,
 	class: "ub-btn__label"
@@ -179780,7 +179857,7 @@ function _sfc_render$10(_ctx, _cache, $props, $setup, $data, $options) {
 		null,
 		2
 		/* CLASS */
-	)) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_2$Q, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_1$X)) : (openBlock(), createElementBlock("button", {
+	)) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("span", _hoisted_2$Q, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_1$Y)) : (openBlock(), createElementBlock("button", {
 		key: 1,
 		type: $props.nativeType,
 		class: normalizeClass(["ub-btn", [
@@ -179831,7 +179908,7 @@ var _sfc_main$10 = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-callout[data-v-a3348fcd] {\r\n  display: flex;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-callout__icon[data-v-a3348fcd] {\r\n  flex: 0 0 auto;\r\n  margin-top: 0.22em;\r\n  color: var(--ub-text-3);\n}\n.ub-callout__body[data-v-a3348fcd] {\r\n  min-width: 0;\r\n  overflow-wrap: anywhere;\n}\n.ub-callout--success[data-v-a3348fcd] {\r\n  background: var(--ub-ok-soft);\n}\n.ub-callout--success .ub-callout__icon[data-v-a3348fcd] {\r\n  color: var(--ub-ok);\n}\n.ub-callout--warning[data-v-a3348fcd] {\r\n  background: var(--ub-warn-soft);\r\n  color: var(--ub-text);\n}\n.ub-callout--warning .ub-callout__icon[data-v-a3348fcd] {\r\n  color: var(--ub-warn);\n}\n.ub-callout--error[data-v-a3348fcd] {\r\n  background: var(--ub-danger-soft);\r\n  color: var(--ub-text);\n}\n.ub-callout--error .ub-callout__icon[data-v-a3348fcd] {\r\n  color: var(--ub-danger);\n}\r\n", "src/presentation-v3/ui/UbCallout.vue#style-0-a3348fcd");
 var UbCallout_vue_vue_type_style_index_0_scoped_a3348fcd_lang = null;
 
-const _hoisted_1$W = ["role"];
+const _hoisted_1$X = ["role"];
 const _hoisted_2$P = { class: "ub-callout__body" };
 function _sfc_render$$(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", {
@@ -179846,7 +179923,7 @@ function _sfc_render$$(_ctx, _cache, $props, $setup, $data, $options) {
 		null,
 		2
 		/* CLASS */
-	), createBaseVNode("div", _hoisted_2$P, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])], 10, _hoisted_1$W);
+	), createBaseVNode("div", _hoisted_2$P, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])], 10, _hoisted_1$X);
 }
 var UbCallout = /* @__PURE__ */ _export_sfc(_sfc_main$10, [["render", _sfc_render$$], ["__scopeId", "data-v-a3348fcd"]]);
 
@@ -179871,7 +179948,7 @@ var _sfc_main$$ = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-icon-btn[data-v-09c99ba6] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: var(--ub-control-h);\r\n  height: var(--ub-control-h);\r\n  padding: 0;\r\n  border: 0;\r\n  border-radius: var(--ub-r-control);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-md);\r\n  cursor: pointer;\r\n  transition: background 0.14s ease, color 0.14s ease;\n}\n.ub-icon-btn[data-v-09c99ba6]:hover:not(:disabled) {\r\n  background: var(--ub-hover);\r\n  color: var(--ub-text);\n}\n.ub-icon-btn[data-v-09c99ba6]:focus-visible {\r\n  outline: 2px solid var(--ub-accent);\r\n  outline-offset: 1px;\n}\n.ub-icon-btn[data-v-09c99ba6]:disabled {\r\n  opacity: 0.35;\r\n  cursor: not-allowed;\n}\n.ub-icon-btn--sm[data-v-09c99ba6] {\r\n  width: var(--ub-control-h-sm);\r\n  height: var(--ub-control-h-sm);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-icon-btn--accent[data-v-09c99ba6] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-icon-btn--danger[data-v-09c99ba6]:hover:not(:disabled) {\r\n  background: var(--ub-danger-soft);\r\n  color: var(--ub-danger);\n}\n.ub-icon-btn--solid[data-v-09c99ba6] {\r\n  border: 1px solid var(--ub-line);\r\n  background: var(--ub-panel);\n}\r\n", "src/presentation-v3/ui/UbIconButton.vue#style-0-09c99ba6");
 var UbIconButton_vue_vue_type_style_index_0_scoped_09c99ba6_lang = null;
 
-const _hoisted_1$V = [
+const _hoisted_1$W = [
 	"disabled",
 	"title",
 	"aria-label"
@@ -179892,7 +179969,7 @@ function _sfc_render$_(_ctx, _cache, $props, $setup, $data, $options) {
 		null,
 		2
 		/* CLASS */
-	)], 10, _hoisted_1$V);
+	)], 10, _hoisted_1$W);
 }
 var UbIconButton = /* @__PURE__ */ _export_sfc(_sfc_main$$, [["render", _sfc_render$_], ["__scopeId", "data-v-09c99ba6"]]);
 
@@ -179925,7 +180002,7 @@ var _sfc_main$_ = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-seg[data-v-a4a2b8e5] {\r\n  display: inline-flex;\r\n  align-items: stretch;\r\n  gap: 2px;\r\n  max-width: 100%;\r\n  padding: 3px;\r\n  border-radius: calc(var(--ub-r-control) + 3px);\r\n  background: var(--ub-sunken);\r\n  overflow-x: auto;\r\n  scrollbar-width: none;\n}\n.ub-seg--block[data-v-a4a2b8e5] {\r\n  display: flex;\r\n  width: 100%;\n}\n.ub-seg--block .ub-seg__item[data-v-a4a2b8e5] {\r\n  flex: 1 1 0;\n}\n.ub-seg__item[data-v-a4a2b8e5] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: var(--ub-s1);\r\n  min-height: calc(var(--ub-control-h) - 6px);\r\n  padding: 0 var(--ub-s3);\r\n  border: 0;\r\n  border-radius: var(--ub-r-control);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  white-space: nowrap;\r\n  cursor: pointer;\r\n  transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;\n}\n.ub-seg--sm .ub-seg__item[data-v-a4a2b8e5] {\r\n  min-height: calc(var(--ub-control-h-sm) - 6px);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-seg__item[data-v-a4a2b8e5]:hover:not(:disabled):not(.is-active) {\r\n  color: var(--ub-text);\n}\n.ub-seg__item.is-active[data-v-a4a2b8e5] {\r\n  background: var(--ub-panel);\r\n  color: var(--ub-text);\r\n  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 1px var(--ub-line-soft);\n}\n.ub-seg__item[data-v-a4a2b8e5]:disabled {\r\n  opacity: 0.4;\r\n  cursor: not-allowed;\n}\r\n", "src/presentation-v3/ui/UbSegmented.vue#style-0-a4a2b8e5");
 var UbSegmented_vue_vue_type_style_index_0_scoped_a4a2b8e5_lang = null;
 
-const _hoisted_1$U = ["aria-label"];
+const _hoisted_1$V = ["aria-label"];
 const _hoisted_2$O = [
 	"aria-checked",
 	"disabled",
@@ -179969,7 +180046,7 @@ function _sfc_render$Z(_ctx, _cache, $props, $setup, $data, $options) {
 		}),
 		128
 		/* KEYED_FRAGMENT */
-	))], 10, _hoisted_1$U);
+	))], 10, _hoisted_1$V);
 }
 var UbSegmented = /* @__PURE__ */ _export_sfc(_sfc_main$_, [["render", _sfc_render$Z], ["__scopeId", "data-v-a4a2b8e5"]]);
 
@@ -180051,7 +180128,7 @@ var _sfc_main$Z = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-sheet-layer[data-v-34c6aa88] {\r\n  --ub-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px));\r\n  position: fixed;\r\n  inset: 0;\r\n  z-index: 9300;\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  padding: var(--ub-safe-top) var(--ub-safe-right) var(--ub-safe-bottom) var(--ub-safe-left);\r\n  background: var(--ub-scrim);\r\n  animation: ub-fade-in 0.18s ease-out both;\n}\n.ub-sheet-layer.is-closing[data-v-34c6aa88] {\r\n  animation: ub-fade-out 0.18s ease-in both;\n}\n.ub-sheet[data-v-34c6aa88] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  width: min(var(--ub-sheet-width), 100%);\r\n  height: 100%;\r\n  min-height: 0;\r\n  background: var(--ub-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  animation: ub-sheet-in-right 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;\n}\n.is-closing .ub-sheet[data-v-34c6aa88] {\r\n  animation: ub-sheet-out-right 0.18s ease-in both;\n}\n.ub-sheet__head[data-v-34c6aa88] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s3) var(--ub-s3) var(--ub-s5);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-sheet__titles[data-v-34c6aa88] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-sheet__title[data-v-34c6aa88] {\r\n  margin: 0;\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-lg);\r\n  font-weight: 700;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-sheet__subtitle[data-v-34c6aa88] {\r\n  margin: 2px 0 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-sheet__body[data-v-34c6aa88] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s4);\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  padding: var(--ub-s5);\r\n  overflow-y: auto;\r\n  overscroll-behavior: contain;\n}\n.ub-sheet__foot[data-v-34c6aa88] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\r\n  flex-wrap: wrap;\r\n  padding: var(--ub-s3) var(--ub-s5);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-panel);\n}\n@media (max-width: 760px) {\n.ub-sheet[data-v-34c6aa88] {\r\n    width: 100%;\r\n    animation-name: ub-sheet-in-up;\n}\n.is-closing .ub-sheet[data-v-34c6aa88] {\r\n    animation-name: ub-sheet-out-down;\n}\n.ub-sheet__head[data-v-34c6aa88] {\r\n    padding-left: var(--ub-s4);\n}\n.ub-sheet__body[data-v-34c6aa88] {\r\n    padding: var(--ub-s4);\n}\n.ub-sheet__foot[data-v-34c6aa88] {\r\n    padding: var(--ub-s3) var(--ub-s4);\n}\n}\r\n", "src/presentation-v3/ui/UbSheet.vue#style-0-34c6aa88");
 var UbSheet_vue_vue_type_style_index_0_scoped_34c6aa88_lang = null;
 
-const _hoisted_1$T = ["onKeydown"];
+const _hoisted_1$U = ["onKeydown"];
 const _hoisted_2$N = ["aria-label"];
 const _hoisted_3$K = { class: "ub-sheet__head" };
 const _hoisted_4$F = { class: "ub-sheet__titles" };
@@ -180112,7 +180189,7 @@ function _sfc_render$Y(_ctx, _cache, $props, $setup, $data, $options) {
 		]),
 		createBaseVNode("div", _hoisted_7$r, [renderSlot(_ctx.$slots, "default", {}, undefined, true)]),
 		_ctx.$slots.footer ? (openBlock(), createElementBlock("footer", _hoisted_8$m, [renderSlot(_ctx.$slots, "footer", {}, undefined, true)])) : createCommentVNode("v-if", true)
-	], 12, _hoisted_2$N)], 42, _hoisted_1$T)) : createCommentVNode("v-if", true)]);
+	], 12, _hoisted_2$N)], 42, _hoisted_1$U)) : createCommentVNode("v-if", true)]);
 }
 var UbSheet = /* @__PURE__ */ _export_sfc(_sfc_main$Z, [["render", _sfc_render$Y], ["__scopeId", "data-v-34c6aa88"]]);
 
@@ -184165,7 +184242,7 @@ var _sfc_main$Y = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-file[data-v-2a899a2f] {\r\n  display: inline-flex;\r\n  flex-shrink: 0;\r\n  min-width: 0;\n}\n.ub-file--block[data-v-2a899a2f] {\r\n  display: flex;\r\n  flex-shrink: 1;\r\n  width: 100%;\n}\n.ub-file__input[data-v-2a899a2f] {\r\n  display: none;\n}\r\n", "src/presentation-v3/ui/UbFileButton.vue#style-0-2a899a2f");
 var UbFileButton_vue_vue_type_style_index_0_scoped_2a899a2f_lang = null;
 
-const _hoisted_1$S = ["accept"];
+const _hoisted_1$T = ["accept"];
 function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"span",
@@ -184206,7 +184283,7 @@ function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
 			accept: $props.accept,
 			tabindex: "-1",
 			onChange: $setup.onChange
-		}, null, 40, _hoisted_1$S)],
+		}, null, 40, _hoisted_1$T)],
 		2
 		/* CLASS */
 	);
@@ -184262,7 +184339,7 @@ var _sfc_main$X = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-select[data-v-4fd7ac21] {\r\n  position: relative;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  min-width: 0;\r\n  width: 100%;\r\n  max-width: 100%;\n}\n.ub-select__native[data-v-4fd7ac21] {\r\n  appearance: none;\r\n  -webkit-appearance: none;\r\n  width: 100%;\r\n  min-width: 0;\r\n  height: var(--ub-control-h);\r\n  padding: 0 calc(var(--ub-s3) * 2 + 10px) 0 var(--ub-s3);\r\n  border: 1px solid var(--ub-line);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  text-overflow: ellipsis;\r\n  cursor: pointer;\r\n  outline: none;\r\n  transition: border-color 0.14s ease, box-shadow 0.14s ease;\n}\n.ub-select--sm .ub-select__native[data-v-4fd7ac21] {\r\n  height: var(--ub-control-h-sm);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-select__native[data-v-4fd7ac21]:focus-visible {\r\n  border-color: var(--ub-accent);\r\n  box-shadow: 0 0 0 3px var(--ub-accent-soft);\n}\n.ub-select__native option[data-v-4fd7ac21],\r\n.ub-select__native optgroup[data-v-4fd7ac21] {\r\n  background: var(--ub-panel);\r\n  color: var(--ub-text);\n}\n.ub-select--placeholder .ub-select__native[data-v-4fd7ac21] {\r\n  color: var(--ub-text-3);\n}\n.ub-select--disabled .ub-select__native[data-v-4fd7ac21] {\r\n  opacity: 0.5;\r\n  cursor: not-allowed;\n}\n.ub-select__caret[data-v-4fd7ac21] {\r\n  position: absolute;\r\n  right: var(--ub-s3);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  pointer-events: none;\n}\r\n", "src/presentation-v3/ui/UbSelect.vue#style-0-4fd7ac21");
 var UbSelect_vue_vue_type_style_index_0_scoped_4fd7ac21_lang = null;
 
-const _hoisted_1$R = [
+const _hoisted_1$S = [
 	"value",
 	"disabled",
 	"aria-label",
@@ -184335,7 +184412,7 @@ function _sfc_render$W(_ctx, _cache, $props, $setup, $data, $options) {
 			}),
 			128
 			/* KEYED_FRAGMENT */
-		))], 40, _hoisted_1$R), _cache[0] || (_cache[0] = createBaseVNode(
+		))], 40, _hoisted_1$S), _cache[0] || (_cache[0] = createBaseVNode(
 			"i",
 			{
 				class: "fa-solid fa-chevron-down ub-select__caret",
@@ -184371,7 +184448,7 @@ var _sfc_main$W = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-switch[data-v-97e8c2ad] {\r\n  position: relative;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 44);\r\n  height: calc(var(--ub-u) * 26);\r\n  padding: 0;\r\n  border: 0;\r\n  border-radius: 999px;\r\n  background: var(--ub-switch-off);\r\n  cursor: pointer;\r\n  transition: background 0.18s ease;\n}\n.ub-switch.is-on[data-v-97e8c2ad] {\r\n  background: var(--ub-accent);\n}\n.ub-switch[data-v-97e8c2ad]:focus-visible {\r\n  outline: 2px solid var(--ub-accent);\r\n  outline-offset: 2px;\n}\n.ub-switch[data-v-97e8c2ad]:disabled {\r\n  opacity: 0.4;\r\n  cursor: not-allowed;\n}\n.ub-switch__thumb[data-v-97e8c2ad] {\r\n  position: absolute;\r\n  top: calc(var(--ub-u) * 3);\r\n  left: calc(var(--ub-u) * 3);\r\n  width: calc(var(--ub-u) * 20);\r\n  height: calc(var(--ub-u) * 20);\r\n  border-radius: 50%;\r\n  background: #fff;\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);\r\n  transition: transform 0.18s cubic-bezier(0.3, 0.7, 0.4, 1.2);\n}\n.ub-switch.is-on .ub-switch__thumb[data-v-97e8c2ad] {\r\n  transform: translateX(calc(var(--ub-u) * 18));\n}\r\n", "src/presentation-v3/ui/UbSwitch.vue#style-0-97e8c2ad");
 var UbSwitch_vue_vue_type_style_index_0_scoped_97e8c2ad_lang = null;
 
-const _hoisted_1$Q = [
+const _hoisted_1$R = [
 	"aria-checked",
 	"aria-label",
 	"disabled"
@@ -184394,7 +184471,7 @@ function _sfc_render$V(_ctx, _cache, $props, $setup, $data, $options) {
 		null,
 		-1
 		/* CACHED */
-	)])], 10, _hoisted_1$Q);
+	)])], 10, _hoisted_1$R);
 }
 var UbSwitch = /* @__PURE__ */ _export_sfc(_sfc_main$W, [["render", _sfc_render$V], ["__scopeId", "data-v-97e8c2ad"]]);
 
@@ -184454,7 +184531,7 @@ var _sfc_main$V = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-textarea[data-v-29d0f7ce] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  min-width: 0;\r\n  width: 100%;\n}\n.ub-textarea__label[data-v-29d0f7ce] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-textarea__input[data-v-29d0f7ce] {\r\n  width: 100%;\r\n  min-width: 0;\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border: 1px solid var(--ub-line);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.6;\r\n  resize: vertical;\r\n  outline: none;\r\n  transition: border-color 0.14s ease, box-shadow 0.14s ease;\n}\n.ub-textarea--mono .ub-textarea__input[data-v-29d0f7ce] {\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-textarea__input[data-v-29d0f7ce]:focus {\r\n  border-color: var(--ub-accent);\r\n  box-shadow: 0 0 0 3px var(--ub-accent-soft);\n}\n.ub-textarea__input[data-v-29d0f7ce]::placeholder {\r\n  color: var(--ub-text-3);\r\n  opacity: 1;\n}\n.ub-textarea__input[data-v-29d0f7ce]:disabled {\r\n  opacity: 0.5;\n}\r\n", "src/presentation-v3/ui/UbTextarea.vue#style-0-29d0f7ce");
 var UbTextarea_vue_vue_type_style_index_0_scoped_29d0f7ce_lang = null;
 
-const _hoisted_1$P = {
+const _hoisted_1$Q = {
 	key: 0,
 	class: "ub-textarea__label"
 };
@@ -184472,7 +184549,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 		{ class: normalizeClass(["ub-textarea", { "ub-textarea--mono": $props.mono }]) },
 		[$props.label ? (openBlock(), createElementBlock(
 			"span",
-			_hoisted_1$P,
+			_hoisted_1$Q,
 			toDisplayString($props.label),
 			1
 			/* TEXT */
@@ -184540,7 +184617,7 @@ var _sfc_main$U = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-segs[data-v-f68c779d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: var(--ub-s2);\n}\n.ub-segs__add[data-v-f68c779d] {\r\n  align-self: flex-start;\n}\n.ub-segs__list[data-v-f68c779d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  margin: 0;\r\n  padding: 0;\r\n  list-style: none;\n}\n.ub-segs__item[data-v-f68c779d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-left: 3px solid var(--ub-seg-tone, var(--ub-line));\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-panel);\n}\n.ub-segs__item--system[data-v-f68c779d] {\r\n  --ub-seg-tone: var(--ub-accent);\n}\n.ub-segs__item--user[data-v-f68c779d] {\r\n  --ub-seg-tone: var(--ub-ok);\n}\n.ub-segs__item--assistant[data-v-f68c779d] {\r\n  --ub-seg-tone: var(--ub-warn);\n}\n.ub-segs__head[data-v-f68c779d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  flex-wrap: wrap;\n}\n.ub-segs__index[data-v-f68c779d] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  min-width: 1.8em;\r\n  height: 1.8em;\r\n  border-radius: 999px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\r\n  font-variant-numeric: tabular-nums;\n}\n.ub-segs__role[data-v-f68c779d] {\r\n  width: calc(var(--ub-u) * 130);\n}\n.ub-segs__slot[data-v-f68c779d] {\r\n  width: calc(var(--ub-u) * 110);\n}\n.ub-segs__spacer[data-v-f68c779d] {\r\n  flex: 1 1 auto;\n}\n.ub-segs__item.is-disabled[data-v-f68c779d] >  .ub-textarea {\r\n  opacity: 0.5;\n}\n.ub-segs__enabled[data-v-f68c779d] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\n}\n.ub-segs__empty[data-v-f68c779d] {\r\n  padding: var(--ub-s5);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-control);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: center;\n}\r\n", "src/presentation-v3/ui/UbPromptSegments.vue#style-0-f68c779d");
 var UbPromptSegments_vue_vue_type_style_index_0_scoped_f68c779d_lang = null;
 
-const _hoisted_1$O = { class: "ub-segs" };
+const _hoisted_1$P = { class: "ub-segs" };
 const _hoisted_2$K = { class: "ub-segs__list" };
 const _hoisted_3$I = { class: "ub-segs__head" };
 const _hoisted_4$D = { class: "ub-segs__index" };
@@ -184555,7 +184632,7 @@ const _hoisted_8$l = {
 	class: "ub-segs__empty"
 };
 function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("div", _hoisted_1$O, [
+	return openBlock(), createElementBlock("div", _hoisted_1$P, [
 		createVNode($setup["UbButton"], {
 			size: "sm",
 			variant: "ghost",
@@ -184893,7 +184970,7 @@ var _sfc_main$S = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-check[data-v-58a3daf7] {\r\n  display: inline-flex;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.45;\r\n  cursor: pointer;\r\n  user-select: none;\n}\n.ub-check.is-disabled[data-v-58a3daf7] {\r\n  opacity: 0.45;\r\n  cursor: not-allowed;\n}\n.ub-check__native[data-v-58a3daf7] {\r\n  position: absolute;\r\n  opacity: 0;\r\n  width: 1px;\r\n  height: 1px;\r\n  pointer-events: none;\n}\n.ub-check__box[data-v-58a3daf7] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 18);\r\n  height: calc(var(--ub-u) * 18);\r\n  margin-top: 1px;\r\n  border: 1.5px solid var(--ub-line-strong);\r\n  border-radius: calc(var(--ub-u) * 5);\r\n  background: var(--ub-input-bg);\r\n  color: transparent;\r\n  font-size: calc(var(--ub-u) * 11);\r\n  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;\n}\n.ub-check.is-on .ub-check__box[data-v-58a3daf7] {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent);\r\n  color: var(--ub-on-accent);\n}\n.ub-check__native:focus-visible + .ub-check__box[data-v-58a3daf7] {\r\n  outline: 2px solid var(--ub-accent);\r\n  outline-offset: 2px;\n}\n.ub-check__label[data-v-58a3daf7] {\r\n  min-width: 0;\r\n  overflow-wrap: anywhere;\n}\r\n", "src/presentation-v3/ui/UbCheck.vue#style-0-58a3daf7");
 var UbCheck_vue_vue_type_style_index_0_scoped_58a3daf7_lang = null;
 
-const _hoisted_1$N = ["title"];
+const _hoisted_1$O = ["title"];
 const _hoisted_2$J = ["checked", "disabled"];
 const _hoisted_3$H = {
 	key: 0,
@@ -184929,7 +185006,7 @@ function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
 			1
 			/* TEXT */
 		)], true)])) : createCommentVNode("v-if", true)
-	], 10, _hoisted_1$N);
+	], 10, _hoisted_1$O);
 }
 var UbCheck = /* @__PURE__ */ _export_sfc(_sfc_main$S, [["render", _sfc_render$R], ["__scopeId", "data-v-58a3daf7"]]);
 
@@ -184956,7 +185033,7 @@ var _sfc_main$R = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-disc[data-v-8841c368] {\r\n  min-width: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-panel);\n}\n.ub-disc--flat[data-v-8841c368] {\r\n  border: 0;\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.ub-disc__head[data-v-8841c368] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\r\n  min-height: var(--ub-control-h);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-disc__head[data-v-8841c368]:hover {\r\n  background: var(--ub-hover);\n}\n.ub-disc__chevron[data-v-8841c368] {\r\n  flex: 0 0 auto;\r\n  color: var(--ub-text-3);\r\n  font-size: 0.75em;\r\n  transition: transform 0.16s ease;\n}\n.is-open > .ub-disc__head .ub-disc__chevron[data-v-8841c368] {\r\n  transform: rotate(90deg);\n}\n.ub-disc__label[data-v-8841c368] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-disc__meta[data-v-8841c368] {\r\n  flex: 0 0 auto;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 500;\n}\n.ub-disc__body[data-v-8841c368] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s1) var(--ub-s3) var(--ub-s3);\n}\r\n", "src/presentation-v3/ui/UbDisclosure.vue#style-0-8841c368");
 var UbDisclosure_vue_vue_type_style_index_0_scoped_8841c368_lang = null;
 
-const _hoisted_1$M = ["aria-expanded", "aria-controls"];
+const _hoisted_1$N = ["aria-expanded", "aria-controls"];
 const _hoisted_2$I = { class: "ub-disc__label" };
 const _hoisted_3$G = {
 	key: 0,
@@ -185001,7 +185078,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 				1
 				/* TEXT */
 			)) : createCommentVNode("v-if", true)
-		], 8, _hoisted_1$M), $props.expanded ? (openBlock(), createElementBlock("div", {
+		], 8, _hoisted_1$N), $props.expanded ? (openBlock(), createElementBlock("div", {
 			key: 0,
 			id: $props.bodyId,
 			class: "ub-disc__body",
@@ -185064,7 +185141,7 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-vai[data-v-549c1194] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s4);\r\n  min-width: 0;\r\n  min-height: 100%;\n}\n.ub-vai__intro[data-v-549c1194] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\n}\n.ub-vai__lead[data-v-549c1194] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.65;\n}\n.ub-vai__controls[data-v-549c1194] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: flex-end;\r\n  gap: var(--ub-s2) var(--ub-s3);\n}\n.ub-vai__preset[data-v-549c1194] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  flex: 1 1 calc(var(--ub-u) * 240);\r\n  min-width: 0;\r\n  max-width: calc(var(--ub-u) * 360);\n}\n.ub-vai__cap[data-v-549c1194] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\n}\n.ub-vai__feed[data-v-549c1194] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  flex: 1 1 auto;\n}\n.ub-vai__empty[data-v-549c1194],\r\n.ub-vai__running[data-v-549c1194] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-vai__empty[data-v-549c1194] {\r\n  padding: var(--ub-s5) var(--ub-s4);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-card);\n}\n.ub-vai__turn[data-v-549c1194] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\r\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\n}\n.ub-vai__turn--user[data-v-549c1194] {\r\n  align-self: flex-end;\r\n  max-width: min(100%, calc(var(--ub-u) * 560));\r\n  border-color: transparent;\r\n  background: var(--ub-accent-soft);\n}\n.ub-vai__turn--error[data-v-549c1194] {\r\n  border-color: color-mix(in srgb, var(--ub-warn) 50%, var(--ub-line-soft));\n}\n.ub-vai__turn-head[data-v-549c1194] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\n}\n.ub-vai__who[data-v-549c1194] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\n}\n.ub-vai__turn--user .ub-vai__who[data-v-549c1194] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-vai__spacer[data-v-549c1194] {\r\n  flex: 1 1 auto;\n}\n.ub-vai__text[data-v-549c1194] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.65;\r\n  white-space: pre-wrap;\r\n  overflow-wrap: anywhere;\n}\n.ub-vai__list[data-v-549c1194] {\r\n  margin: 0;\r\n  padding-left: 1.2em;\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-vai__diffs[data-v-549c1194] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\n}\n.ub-vai__diff[data-v-549c1194] {\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\n}\n.ub-vai__diff.is-warning[data-v-549c1194] {\r\n  box-shadow: inset 3px 0 0 var(--ub-warn);\n}\n.ub-vai__diff-title[data-v-549c1194] {\r\n  margin-bottom: var(--ub-s1);\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\n}\n.ub-vai__raw[data-v-549c1194] {\r\n  margin: 0;\r\n  color: var(--ub-text-2);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-2xs);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  overflow-wrap: anywhere;\n}\n.ub-vai__apply[data-v-549c1194] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s2);\n}\n.ub-vai__risks[data-v-549c1194] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  align-self: stretch;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-warn-soft);\n}\n.ub-vai__risks-title[data-v-549c1194] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\n}\n.ub-vai__reason[data-v-549c1194] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-vai__composer[data-v-549c1194] {\r\n  position: sticky;\r\n  bottom: 0;\r\n  display: flex;\r\n  align-items: flex-end;\r\n  gap: var(--ub-s2);\r\n  margin: 0 calc(var(--ub-s2) * -1);\r\n  padding: var(--ub-s3) var(--ub-s2);\r\n  background: linear-gradient(to bottom, transparent, var(--ub-bg) 30%);\n}\n.ub-vai__composer[data-v-549c1194] > :first-child {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-vai__docs-note[data-v-549c1194] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-vai__docs[data-v-549c1194] {\r\n  display: grid;\r\n  gap: var(--ub-s1) 0;\r\n  margin: var(--ub-s2) 0 0;\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-vai__docs dt[data-v-549c1194] {\r\n  color: var(--ub-text);\r\n  font-weight: 650;\n}\n.ub-vai__docs dd[data-v-549c1194] {\r\n  margin: 0 0 var(--ub-s2);\r\n  color: var(--ub-text-3);\n}\n.ub-vai code[data-v-549c1194] {\r\n  font-family: var(--ub-mono);\r\n  font-size: 0.95em;\n}\r\n", "src/presentation-v3/surfaces/visualizer/VizAssistantView.vue#style-0-549c1194");
 var VizAssistantView_vue_vue_type_style_index_0_scoped_549c1194_lang = null;
 
-const _hoisted_1$L = {
+const _hoisted_1$M = {
 	ref: "rootRef",
 	class: "ub-vai",
 	"data-ub-viz-assistant": ""
@@ -185113,7 +185190,7 @@ const _hoisted_21$5 = { class: "ub-vai__docs" };
 function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"div",
-		_hoisted_1$L,
+		_hoisted_1$M,
 		[
 			createBaseVNode("div", _hoisted_2$H, [
 				_cache[11] || (_cache[11] = createBaseVNode(
@@ -185627,7 +185704,7 @@ var _sfc_main$P = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-field[data-v-17f68171] {\r\n  position: relative;\r\n  display: flex;\r\n  align-items: center;\r\n  min-width: 0;\r\n  width: 100%;\n}\n.ub-field--number[data-v-17f68171] {\r\n  width: calc(var(--ub-u) * 112);\r\n  max-width: 100%;\n}\n.ub-field__icon[data-v-17f68171] {\r\n  position: absolute;\r\n  left: var(--ub-s3);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  pointer-events: none;\n}\n.ub-field__input[data-v-17f68171] {\r\n  width: 100%;\r\n  min-width: 0;\r\n  height: var(--ub-control-h);\r\n  padding: 0 var(--ub-s3);\r\n  border: 1px solid var(--ub-line);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  outline: none;\r\n  transition: border-color 0.14s ease, box-shadow 0.14s ease;\n}\n.ub-field__icon + .ub-field__input[data-v-17f68171] {\r\n  padding-left: calc(var(--ub-s3) * 2 + var(--ub-fs-sm));\n}\n.ub-field--number .ub-field__input[data-v-17f68171] {\r\n  text-align: right;\r\n  font-variant-numeric: tabular-nums;\n}\n.ub-field__input[data-v-17f68171]:focus {\r\n  border-color: var(--ub-accent);\r\n  box-shadow: 0 0 0 3px var(--ub-accent-soft);\n}\n.ub-field__input[data-v-17f68171]::placeholder {\r\n  color: var(--ub-text-3);\r\n  opacity: 1;\n}\n.ub-field--disabled .ub-field__input[data-v-17f68171] {\r\n  opacity: 0.5;\r\n  cursor: not-allowed;\n}\r\n", "src/presentation-v3/ui/UbInput.vue#style-0-17f68171");
 var UbInput_vue_vue_type_style_index_0_scoped_17f68171_lang = null;
 
-const _hoisted_1$K = [
+const _hoisted_1$L = [
 	"type",
 	"value",
 	"placeholder",
@@ -185671,7 +185748,7 @@ function _sfc_render$O(_ctx, _cache, $props, $setup, $data, $options) {
 			onInput: $setup.onInput,
 			onChange: $setup.onChange,
 			onWheel: $setup.onWheel
-		}, null, 40, _hoisted_1$K)],
+		}, null, 40, _hoisted_1$L)],
 		2
 		/* CLASS */
 	);
@@ -185701,7 +185778,7 @@ var _sfc_main$O = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-row[data-v-085151b3] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3) var(--ub-s4);\r\n  min-width: 0;\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-row + .ub-row[data-v-085151b3] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-row--stack[data-v-085151b3] {\r\n  flex-direction: column;\r\n  align-items: stretch;\n}\n.ub-row--flag[data-v-085151b3] {\r\n  background: var(--ub-warn-soft);\r\n  box-shadow: inset 3px 0 0 var(--ub-warn);\n}\n.ub-row__text[data-v-085151b3] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-row__label[data-v-085151b3] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.ub-row__hint[data-v-085151b3] {\r\n  margin-top: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.55;\n}\n.ub-row__control[data-v-085151b3] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\r\n  /* 控件区不随长说明按比例收缩（否则说明越长按钮越窄、只剩图标）；宽度上限交给 max-width */\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  max-width: 62%;\n}\n.ub-row--stack .ub-row__control[data-v-085151b3] {\r\n  justify-content: stretch;\r\n  max-width: none;\r\n  width: 100%;\n}\n.ub-row--stack .ub-row__control[data-v-085151b3] >  * {\r\n  flex: 1 1 auto;\n}\n@media (max-width: 560px) {\n.ub-row:not(.ub-row--stack) .ub-row__control[data-v-085151b3] {\r\n    max-width: 55%;\n}\n}\r\n", "src/presentation-v3/ui/UbRow.vue#style-0-085151b3");
 var UbRow_vue_vue_type_style_index_0_scoped_085151b3_lang = null;
 
-const _hoisted_1$J = ["data-ub-row"];
+const _hoisted_1$K = ["data-ub-row"];
 const _hoisted_2$G = {
 	key: 0,
 	class: "ub-row__text"
@@ -185733,7 +185810,7 @@ function _sfc_render$N(_ctx, _cache, $props, $setup, $data, $options) {
 		toDisplayString($props.hint),
 		1
 		/* TEXT */
-	)], true)])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("div", _hoisted_5$v, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_1$J);
+	)], true)])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true), _ctx.$slots.default ? (openBlock(), createElementBlock("div", _hoisted_5$v, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])) : createCommentVNode("v-if", true)], 10, _hoisted_1$K);
 }
 var UbRow = /* @__PURE__ */ _export_sfc(_sfc_main$O, [["render", _sfc_render$N], ["__scopeId", "data-v-085151b3"]]);
 
@@ -185762,7 +185839,7 @@ var _sfc_main$N = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-section[data-v-ce2a775d] {\r\n  min-width: 0;\r\n  scroll-margin-top: var(--ub-s5);\n}\n.ub-section__head[data-v-ce2a775d] {\r\n  display: flex;\r\n  align-items: flex-end;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s3);\r\n  margin: 0 var(--ub-s1) var(--ub-s2);\n}\n.ub-section__titles[data-v-ce2a775d] {\r\n  min-width: 0;\n}\n.ub-section__title[data-v-ce2a775d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  margin: 0;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-lg);\r\n  font-weight: 700;\r\n  line-height: 1.3;\r\n  letter-spacing: -0.01em;\n}\n.ub-section__icon[data-v-ce2a775d] {\r\n  color: var(--ub-accent-ink);\r\n  font-size: 0.9em;\n}\n.ub-section__desc[data-v-ce2a775d] {\r\n  margin: var(--ub-s1) 0 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-section__actions[data-v-ce2a775d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  flex: 0 0 auto;\n}\n.ub-section__lead[data-v-ce2a775d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  margin-bottom: var(--ub-s2);\n}\n.ub-section__card[data-v-ce2a775d] {\r\n  min-width: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  box-shadow: var(--ub-card-shadow);\r\n  overflow: hidden;\n}\n.ub-section__card.is-padded[data-v-ce2a775d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\r\n  overflow: visible;\n}\n.ub-section__card.is-bare[data-v-ce2a775d] {\r\n  border: 0;\r\n  background: transparent;\r\n  box-shadow: none;\r\n  overflow: visible;\n}\r\n", "src/presentation-v3/ui/UbSection.vue#style-0-ce2a775d");
 var UbSection_vue_vue_type_style_index_0_scoped_ce2a775d_lang = null;
 
-const _hoisted_1$I = ["id", "data-ub-section"];
+const _hoisted_1$J = ["id", "data-ub-section"];
 const _hoisted_2$F = {
 	key: 0,
 	class: "ub-section__head"
@@ -185822,7 +185899,7 @@ function _sfc_render$M(_ctx, _cache, $props, $setup, $data, $options) {
 			2
 			/* CLASS */
 		)
-	], 8, _hoisted_1$I);
+	], 8, _hoisted_1$J);
 }
 var UbSection = /* @__PURE__ */ _export_sfc(_sfc_main$N, [["render", _sfc_render$M], ["__scopeId", "data-v-ce2a775d"]]);
 
@@ -185847,7 +185924,7 @@ var _sfc_main$M = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-vplace[data-v-989a4ff8] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) minmax(0, 120px) minmax(0, 120px);\r\n  gap: var(--ub-s2);\n}\n.ub-vplace__cell[data-v-989a4ff8] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  min-width: 0;\n}\n.ub-vplace__cap[data-v-989a4ff8] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\n}\n@media (max-width: 560px) {\n.ub-vplace[data-v-989a4ff8] {\r\n    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);\n}\n.ub-vplace__cell--pos[data-v-989a4ff8] {\r\n    grid-column: 1 / -1;\n}\n}\r\n", "src/presentation-v3/surfaces/visualizer/VizPlacement.vue#style-0-989a4ff8");
 var VizPlacement_vue_vue_type_style_index_0_scoped_989a4ff8_lang = null;
 
-const _hoisted_1$H = { class: "ub-vplace" };
+const _hoisted_1$I = { class: "ub-vplace" };
 const _hoisted_2$E = { class: "ub-vplace__cell ub-vplace__cell--pos" };
 const _hoisted_3$C = { class: "ub-vplace__cell" };
 const _hoisted_4$y = { class: "ub-vplace__cell" };
@@ -185857,7 +185934,7 @@ function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
 		hint: $props.hint,
 		stack: ""
 	}, {
-		default: withCtx(() => [createBaseVNode("div", _hoisted_1$H, [
+		default: withCtx(() => [createBaseVNode("div", _hoisted_1$I, [
 			createBaseVNode("label", _hoisted_2$E, [_cache[3] || (_cache[3] = createBaseVNode(
 				"span",
 				{ class: "ub-vplace__cap" },
@@ -185990,7 +186067,7 @@ var _sfc_main$L = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-vconf[data-v-2658197b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-vconf__cols[data-v-2658197b] {\r\n  margin: 0;\r\n  padding: 0;\r\n  list-style: none;\n}\n.ub-vconf__col[data-v-2658197b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s2) var(--ub-s3) var(--ub-s2) var(--ub-s4);\n}\n.ub-vconf__col + .ub-vconf__col[data-v-2658197b] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vconf__col[data-v-2658197b] >  .ub-field {\r\n  flex: 1 1 auto;\n}\n.ub-vconf__col-no[data-v-2658197b] {\r\n  flex: 0 0 auto;\r\n  min-width: 1.6em;\r\n  color: var(--ub-text-3);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  text-align: right;\n}\n.ub-vconf__empty[data-v-2658197b],\r\n.ub-vconf__muted[data-v-2658197b] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-vconf__empty[data-v-2658197b] {\r\n  padding: var(--ub-s4);\n}\n.ub-vconf__num[data-v-2658197b] {\r\n  display: block;\r\n  width: calc(var(--ub-u) * 110);\n}\n.ub-vconf__modes[data-v-2658197b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\n}\n.ub-vconf__mode[data-v-2658197b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2) var(--ub-s3);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\n}\n.ub-vconf__mode[data-v-2658197b] >  .ub-select {\r\n  flex: 0 1 calc(var(--ub-u) * 220);\n}\r\n", "src/presentation-v3/surfaces/visualizer/VizConfigView.vue#style-0-2658197b");
 var VizConfigView_vue_vue_type_style_index_0_scoped_2658197b_lang = null;
 
-const _hoisted_1$G = {
+const _hoisted_1$H = {
 	class: "ub-vconf",
 	"data-ub-viz-config": ""
 };
@@ -186010,7 +186087,7 @@ const _hoisted_6$q = {
 };
 const _hoisted_7$n = { class: "ub-vconf__modes" };
 function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("div", _hoisted_1$G, [
+	return openBlock(), createElementBlock("div", _hoisted_1$H, [
 		createVNode($setup["UbSection"], {
 			title: "基本信息",
 			description: "AI 按表名和列名理解字段；填表找错字段时先检查这里。"
@@ -186765,7 +186842,7 @@ var _sfc_main$K = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-vdata[data-v-80ab025b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\n}\n.ub-vdata__bar[data-v-80ab025b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2) var(--ub-s3);\r\n  min-height: var(--ub-control-h-sm);\n}\n.ub-vdata__range[data-v-80ab025b] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\r\n  font-variant-numeric: tabular-nums;\n}\n.ub-vdata__pager[data-v-80ab025b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-vdata__pager-input[data-v-80ab025b] {\r\n  width: calc(var(--ub-u) * 64);\n}\n.ub-vdata__pager-text[data-v-80ab025b] {\r\n  white-space: nowrap;\n}\n.ub-vdata__empty[data-v-80ab025b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s5) var(--ub-s4);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-card);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-vdata__cards[data-v-80ab025b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  margin: 0;\r\n  padding: 0;\r\n  list-style: none;\n}\n.ub-vcard[data-v-80ab025b] {\r\n  min-width: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  box-shadow: var(--ub-card-shadow);\r\n  scroll-margin: var(--ub-s4);\n}\n.ub-vcard.is-locked[data-v-80ab025b] {\r\n  border-color: color-mix(in srgb, var(--ub-accent) 45%, var(--ub-line-soft));\n}\n.ub-vcard__head[data-v-80ab025b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-vcard__no[data-v-80ab025b] {\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 700;\n}\n.ub-vcard__spacer[data-v-80ab025b] {\r\n  flex: 1 1 auto;\n}\n.ub-vcard__fields[data-v-80ab025b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\n}\n.ub-vcard__line[data-v-80ab025b] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s3);\n}\n.ub-vcard__line.is-wide[data-v-80ab025b] {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.ub-vfield[data-v-80ab025b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  min-width: 0;\n}\n.ub-vfield__label[data-v-80ab025b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-height: var(--ub-control-h-sm);\n}\n.ub-vfield__name[data-v-80ab025b] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-vfield.is-locked .ub-vfield__name[data-v-80ab025b] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-vfield__locks[data-v-80ab025b] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  flex: 0 0 auto;\n}\n.ub-vfield__value[data-v-80ab025b],\r\n.ub-vfield__editor[data-v-80ab025b] {\r\n  width: 100%;\r\n  min-height: var(--ub-control-h);\r\n  padding: calc(var(--ub-u) * 7) var(--ub-s3);\r\n  border: 1px solid transparent;\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.6;\r\n  overflow-wrap: anywhere;\r\n  white-space: pre-wrap;\n}\n.ub-vfield__value[data-v-80ab025b] {\r\n  cursor: text;\r\n  transition: border-color 0.14s ease, background 0.14s ease;\n}\n.ub-vfield__value[data-v-80ab025b]:hover {\r\n  border-color: var(--ub-line);\n}\n.ub-vfield__value[data-v-80ab025b]:focus-visible {\r\n  border-color: var(--ub-accent);\r\n  outline: none;\n}\n.ub-vfield__value.is-empty[data-v-80ab025b] {\r\n  color: var(--ub-text-3);\r\n  font-style: italic;\n}\n.ub-vfield__editor[data-v-80ab025b] {\r\n  display: block;\r\n  resize: none;\r\n  overflow: hidden;\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-input-bg);\r\n  box-shadow: 0 0 0 3px var(--ub-accent-soft);\r\n  outline: none;\n}\n.ub-vdata__add[data-v-80ab025b] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\r\n  min-height: calc(var(--ub-u) * 48);\r\n  border: 1.5px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-card);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 650;\r\n  cursor: pointer;\r\n  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;\n}\n.ub-vdata__add[data-v-80ab025b]:hover {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n@media (max-width: 560px) {\n.ub-vcard__fields[data-v-80ab025b] {\r\n    padding: var(--ub-s3);\n}\n}\r\n", "src/presentation-v3/surfaces/visualizer/VizDataView.vue#style-0-80ab025b");
 var VizDataView_vue_vue_type_style_index_0_scoped_80ab025b_lang = null;
 
-const _hoisted_1$F = { class: "ub-vdata__bar" };
+const _hoisted_1$G = { class: "ub-vdata__bar" };
 const _hoisted_2$C = { class: "ub-vdata__range" };
 const _hoisted_3$A = {
 	key: 0,
@@ -186814,7 +186891,7 @@ function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
 			onPointerdownCapture: $setup.onPointerDownCapture
 		},
 		[
-			createBaseVNode("div", _hoisted_1$F, [createBaseVNode(
+			createBaseVNode("div", _hoisted_1$G, [createBaseVNode(
 				"span",
 				_hoisted_2$C,
 				toDisplayString($setup.rangeText),
@@ -187085,7 +187162,7 @@ var _sfc_main$J = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-vmanage[data-v-c5bedf6c] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-vmanage__list[data-v-c5bedf6c] {\r\n  margin: 0;\r\n  padding: 0;\r\n  list-style: none;\n}\n.ub-vmanage__item[data-v-c5bedf6c] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-vmanage__item + .ub-vmanage__item[data-v-c5bedf6c] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vmanage__no[data-v-c5bedf6c] {\r\n  flex: 0 0 auto;\r\n  min-width: 1.4em;\r\n  color: var(--ub-text-3);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  text-align: right;\n}\n.ub-vmanage__name[data-v-c5bedf6c] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border: 0;\r\n  border-radius: var(--ub-r-control);\r\n  background: transparent;\r\n  color: inherit;\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-vmanage__name[data-v-c5bedf6c]:hover {\r\n  background: var(--ub-hover);\n}\n.ub-vmanage__title[data-v-c5bedf6c] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 650;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-vmanage__meta[data-v-c5bedf6c] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-vmanage__ops[data-v-c5bedf6c] {\r\n  display: inline-flex;\r\n  gap: 2px;\r\n  flex: 0 0 auto;\n}\n.ub-vmanage__empty[data-v-c5bedf6c] {\r\n  padding: var(--ub-s4);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\r\n", "src/presentation-v3/surfaces/visualizer/VizManageView.vue#style-0-c5bedf6c");
 var VizManageView_vue_vue_type_style_index_0_scoped_c5bedf6c_lang = null;
 
-const _hoisted_1$E = {
+const _hoisted_1$F = {
 	class: "ub-vmanage",
 	"data-ub-viz-manage": ""
 };
@@ -187103,7 +187180,7 @@ const _hoisted_8$i = {
 	class: "ub-vmanage__empty"
 };
 function _sfc_render$I(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("div", _hoisted_1$E, [createVNode($setup["UbSection"], {
+	return openBlock(), createElementBlock("div", _hoisted_1$F, [createVNode($setup["UbSection"], {
 		title: "表格顺序",
 		description: "调整整套数据库的表格顺序，新增或删除表格。改动只进编辑器草稿，保存之前都可以放弃。"
 	}, {
@@ -187248,7 +187325,7 @@ var _sfc_main$I = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-vnav[data-v-cbdbabef] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  min-width: 0;\n}\n.ub-vnav__label[data-v-cbdbabef] {\r\n  margin: 0 var(--ub-s3) var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\r\n  letter-spacing: 0.06em;\n}\n.ub-vnav__list[data-v-cbdbabef] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  margin: 0;\r\n  padding: 0;\r\n  list-style: none;\n}\n.ub-vnav__item[data-v-cbdbabef] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  width: 100%;\r\n  min-height: calc(var(--ub-u) * 46);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border: 0;\r\n  border-radius: var(--ub-r-control);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.14s ease, color 0.14s ease;\n}\n.ub-vnav__item[data-v-cbdbabef]:hover {\r\n  background: var(--ub-hover);\r\n  color: var(--ub-text);\n}\n.ub-vnav__item.is-active[data-v-cbdbabef] {\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-vnav__icon[data-v-cbdbabef] {\r\n  flex: 0 0 auto;\r\n  width: 1.2em;\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: center;\r\n  opacity: 0.8;\n}\n.ub-vnav__text[data-v-cbdbabef] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\n}\n.ub-vnav__name[data-v-cbdbabef] {\r\n  overflow: hidden;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 650;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-vnav__meta[data-v-cbdbabef] {\r\n  overflow: hidden;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-vnav__item.is-active .ub-vnav__meta[data-v-cbdbabef] {\r\n  color: inherit;\r\n  opacity: 0.75;\n}\n.ub-vnav__empty[data-v-cbdbabef] {\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-vnav__sep[data-v-cbdbabef] {\r\n  height: 1px;\r\n  margin: var(--ub-s2) var(--ub-s3);\r\n  background: var(--ub-line-soft);\n}\r\n", "src/presentation-v3/surfaces/visualizer/VizTableNav.vue#style-0-cbdbabef");
 var VizTableNav_vue_vue_type_style_index_0_scoped_cbdbabef_lang = null;
 
-const _hoisted_1$D = {
+const _hoisted_1$E = {
 	class: "ub-vnav",
 	"data-ub-viz-nav": "",
 	"aria-label": "表格列表"
@@ -187268,7 +187345,7 @@ const _hoisted_8$h = {
 	class: "ub-vnav__empty"
 };
 function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("nav", _hoisted_1$D, [
+	return openBlock(), createElementBlock("nav", _hoisted_1$E, [
 		createBaseVNode(
 			"p",
 			_hoisted_2$A,
@@ -187556,7 +187633,7 @@ var _sfc_main$H = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-viz[data-v-e4f3077e] {\r\n  display: flex;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\n}\n.ub-viz__rail[data-v-e4f3077e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 0 0 var(--ub-rail-w);\r\n  width: var(--ub-rail-w);\r\n  min-height: 0;\r\n  padding: var(--ub-s5) var(--ub-s3) var(--ub-s3);\r\n  border-right: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-nav-bg);\n}\n.ub-viz__brand[data-v-e4f3077e] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\r\n  padding: 0 var(--ub-s2);\n}\n.ub-viz__mark[data-v-e4f3077e] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 36);\r\n  height: calc(var(--ub-u) * 36);\r\n  border-radius: 11px;\r\n  background: linear-gradient(140deg, var(--ub-accent), color-mix(in srgb, var(--ub-accent) 55%, var(--ub-text)));\r\n  color: var(--ub-on-accent);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-viz__brand-text[data-v-e4f3077e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\n}\n.ub-viz__brand-name[data-v-e4f3077e] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\r\n  font-weight: 800;\n}\n.ub-viz__brand-tag[data-v-e4f3077e] {\r\n  overflow: hidden;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-viz__rail-nav[data-v-e4f3077e] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  margin: var(--ub-s5) calc(var(--ub-s1) * -1) 0;\r\n  padding: 0 var(--ub-s1);\r\n  overflow-y: auto;\n}\n.ub-viz__main[data-v-e4f3077e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\n}\n.ub-viz__head[data-v-e4f3077e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2) var(--ub-s3);\r\n  flex: 0 0 auto;\r\n  min-height: calc(var(--ub-u) * 64);\r\n  padding: var(--ub-s2) var(--ub-s3) var(--ub-s2) var(--ub-page-pad);\n}\n.ub-viz__switcher[data-v-e4f3077e] {\r\n  display: none;\n}\n.ub-viz__titles[data-v-e4f3077e] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-viz__title[data-v-e4f3077e] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-xl);\r\n  font-weight: 800;\r\n  letter-spacing: -0.02em;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-viz__sub[data-v-e4f3077e] {\r\n  overflow: hidden;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-viz__conflict[data-v-e4f3077e] {\r\n  flex: 0 0 auto;\r\n  padding: 0 var(--ub-page-pad) var(--ub-s3);\n}\n.ub-viz__conflict-actions[data-v-e4f3077e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  margin-top: var(--ub-s2);\n}\n.ub-viz__scroll[data-v-e4f3077e] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  overflow-x: hidden;\r\n  overflow-y: auto;\r\n  overscroll-behavior: contain;\r\n  scrollbar-gutter: stable;\n}\n.ub-viz__page[data-v-e4f3077e] {\r\n  border: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-height: 100%;\r\n  max-width: calc(var(--ub-page-max) + var(--ub-page-pad) * 2);\r\n  margin: 0 auto;\r\n  padding: var(--ub-s2) var(--ub-page-pad) var(--ub-s8);\n}\n.ub-viz__state[data-v-e4f3077e] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s6) 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-viz__state--error[data-v-e4f3077e] {\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s3);\n}\n.ub-viz__footer[data-v-e4f3077e] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  flex: 0 0 auto;\r\n  padding: var(--ub-s3) var(--ub-page-pad);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-panel);\n}\n.ub-viz__status[data-v-e4f3077e] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-viz__status > i[data-v-e4f3077e] {\r\n  font-size: 0.85em;\r\n  color: var(--ub-ok);\n}\n.ub-viz__status.is-dirty[data-v-e4f3077e] {\r\n  color: var(--ub-text);\n}\n.ub-viz__status.is-dirty > i[data-v-e4f3077e] {\r\n  font-size: 0.6em;\r\n  color: var(--ub-warn);\n}\n.ub-viz__save[data-v-e4f3077e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n@media (max-width: 760px) {\n.ub-viz__rail[data-v-e4f3077e] {\r\n    display: none;\n}\n.ub-viz__head[data-v-e4f3077e] {\r\n    min-height: 0;\r\n    padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s3);\n}\n.ub-viz__titles[data-v-e4f3077e] {\r\n    display: none;\n}\n.ub-viz__switcher[data-v-e4f3077e] {\r\n    display: inline-flex;\r\n    align-items: center;\r\n    gap: var(--ub-s2);\r\n    flex: 1 1 auto;\r\n    min-width: 0;\r\n    min-height: calc(var(--ub-u) * 40);\r\n    padding: 0 var(--ub-s3);\r\n    border: 1px solid var(--ub-line-soft);\r\n    border-radius: var(--ub-r-control);\r\n    background: var(--ub-panel);\r\n    color: var(--ub-text);\r\n    font: inherit;\r\n    font-size: var(--ub-fs-md);\r\n    font-weight: 700;\r\n    text-align: left;\r\n    cursor: pointer;\n}\n.ub-viz__switcher > i[data-v-e4f3077e]:first-child {\r\n    color: var(--ub-accent-ink);\r\n    font-size: var(--ub-fs-sm);\n}\n.ub-viz__switcher-name[data-v-e4f3077e] {\r\n    flex: 1 1 auto;\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.ub-viz__switcher-chev[data-v-e4f3077e] {\r\n    color: var(--ub-text-3);\r\n    font-size: var(--ub-fs-xs);\n}\n.ub-viz__modes[data-v-e4f3077e] {\r\n    order: 10;\r\n    flex: 1 1 100%;\n}\n.ub-viz__modes[data-v-e4f3077e] .ub-seg__item {\r\n    flex: 1 1 0;\n}\n.ub-viz__footer[data-v-e4f3077e] {\r\n    flex-direction: column;\r\n    align-items: stretch;\r\n    gap: var(--ub-s2);\r\n    padding: var(--ub-s2) var(--ub-s3);\n}\n.ub-viz__status[data-v-e4f3077e] {\r\n    display: none;\n}\n.ub-viz__save[data-v-e4f3077e] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n}\n.ub-viz__save-main[data-v-e4f3077e] {\r\n    grid-column: 1 / -1;\n}\n.ub-viz__save[data-v-e4f3077e] .ub-btn__label {\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\n}\n}\r\n", "src/presentation-v3/surfaces/VisualizerSurface.vue#style-0-e4f3077e");
 var VisualizerSurface_vue_vue_type_style_index_0_scoped_e4f3077e_lang = null;
 
-const _hoisted_1$C = {
+const _hoisted_1$D = {
 	class: "ub-viz",
 	"data-ub-viz": ""
 };
@@ -187604,7 +187681,7 @@ const _hoisted_21$4 = {
 };
 const _hoisted_22$4 = { class: "ub-viz__save" };
 function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("div", _hoisted_1$C, [
+	return openBlock(), createElementBlock("div", _hoisted_1$D, [
 		createBaseVNode("aside", _hoisted_2$z, [createBaseVNode("div", _hoisted_3$x, [_cache[5] || (_cache[5] = createBaseVNode(
 			"span",
 			{
@@ -189405,7 +189482,7 @@ var _sfc_main$G = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-page[data-v-2ff73a0a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s4);\r\n  width: 100%;\r\n  max-width: var(--ub-page-max);\r\n  min-width: 0;\r\n  margin: 0 auto;\r\n  padding: var(--ub-s2) var(--ub-page-pad) calc(var(--ub-s8) + var(--ub-safe-bottom));\n}\n.ub-page--wide[data-v-2ff73a0a] {\r\n  max-width: var(--ub-page-max-wide);\n}\n.ub-page__lead[data-v-2ff73a0a] {\r\n  margin: 0;\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.65;\n}\n.ub-page__jump[data-v-2ff73a0a] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 5;\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  margin: 0 calc(var(--ub-page-pad) * -1);\r\n  padding: var(--ub-s2) var(--ub-page-pad);\r\n  overflow-x: auto;\r\n  background: linear-gradient(var(--ub-bg) 78%, transparent);\r\n  scrollbar-width: none;\n}\n.ub-page__jump[data-v-2ff73a0a]::-webkit-scrollbar {\r\n  display: none;\n}\n.ub-page__chip[data-v-2ff73a0a] {\r\n  flex: 0 0 auto;\r\n  padding: var(--ub-s1) var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-panel);\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\r\n  cursor: pointer;\r\n  transition: color 0.14s ease, border-color 0.14s ease;\n}\n.ub-page__chip[data-v-2ff73a0a]:hover {\r\n  border-color: var(--ub-accent);\r\n  color: var(--ub-accent-ink);\n}\n.ub-page__body[data-v-2ff73a0a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\r\n", "src/presentation-v3/ui/UbPage.vue#style-0-2ff73a0a");
 var UbPage_vue_vue_type_style_index_0_scoped_2ff73a0a_lang = null;
 
-const _hoisted_1$B = {
+const _hoisted_1$C = {
 	key: 0,
 	class: "ub-page__lead"
 };
@@ -189426,7 +189503,7 @@ function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 		[
 			$props.lead ? (openBlock(), createElementBlock(
 				"p",
-				_hoisted_1$B,
+				_hoisted_1$C,
 				toDisplayString($props.lead),
 				1
 				/* TEXT */
@@ -189530,7 +189607,7 @@ var _sfc_main$F = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-at__sql[data-v-7ec5eaaa],\r\n.ub-at__logs[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-at__row[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-at__spacer[data-v-7ec5eaaa] {\r\n  flex: 1 1 auto;\n}\n.ub-at__hint[data-v-7ec5eaaa] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__status[data-v-7ec5eaaa] {\r\n  margin-left: auto;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-at__status.is-success[data-v-7ec5eaaa] {\r\n  color: var(--ub-ok);\n}\n.ub-at__status.is-error[data-v-7ec5eaaa] {\r\n  color: var(--ub-danger);\n}\n.ub-at__result[data-v-7ec5eaaa] {\r\n  min-width: 0;\n}\n.ub-at__empty[data-v-7ec5eaaa] {\r\n  padding: var(--ub-s4);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: center;\n}\n.ub-at__error[data-v-7ec5eaaa] {\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-danger-soft);\r\n  color: var(--ub-danger);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  white-space: pre-wrap;\n}\n.ub-at__table-wrap[data-v-7ec5eaaa] {\r\n  max-height: calc(var(--ub-u) * 420);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  overflow: auto;\n}\n.ub-at__table[data-v-7ec5eaaa] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__table th[data-v-7ec5eaaa],\r\n.ub-at__table td[data-v-7ec5eaaa] {\r\n  max-width: 320px;\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border-bottom: 1px solid var(--ub-line-soft);\r\n  text-align: left;\r\n  vertical-align: top;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n.ub-at__table th[data-v-7ec5eaaa] {\r\n  position: sticky;\r\n  top: 0;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-weight: 700;\n}\n.ub-at__table td.is-null[data-v-7ec5eaaa] {\r\n  color: var(--ub-text-3);\r\n  font-style: italic;\n}\n.ub-at__meta[data-v-7ec5eaaa] {\r\n  margin-top: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__history[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  width: 100%;\r\n  padding: var(--ub-s2);\r\n  border: 0;\r\n  border-left: 3px solid var(--ub-ok);\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-at__history.is-fail[data-v-7ec5eaaa] {\r\n  border-left-color: var(--ub-danger);\n}\n.ub-at__history-meta[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-at__history code[data-v-7ec5eaaa] {\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  white-space: pre-wrap;\r\n  word-break: break-all;\n}\n.ub-at__filters[data-v-7ec5eaaa] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);\r\n  gap: var(--ub-s2);\n}\n.ub-at__switch[data-v-7ec5eaaa] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-at__loglist[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  max-height: calc(var(--ub-u) * 520);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  overflow-y: auto;\n}\n.ub-at__log[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-bottom: 1px solid var(--ub-line-soft);\r\n  border-left: 3px solid transparent;\n}\n.ub-at__log.is-error[data-v-7ec5eaaa] {\r\n  border-left-color: var(--ub-danger);\n}\n.ub-at__log.is-warn[data-v-7ec5eaaa] {\r\n  border-left-color: var(--ub-warn);\n}\n.ub-at__log-meta[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text-3);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-at__log-tag[data-v-7ec5eaaa] {\r\n  color: var(--ub-text-2);\r\n  font-weight: 700;\n}\n.ub-at__log-msg[data-v-7ec5eaaa] {\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n.ub-at__log-hint[data-v-7ec5eaaa] {\r\n  margin-top: var(--ub-s1);\r\n  padding: var(--ub-s2);\r\n  border-radius: 6px;\r\n  background: var(--ub-warn-soft);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__log-hint summary[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  cursor: pointer;\r\n  list-style: none;\n}\n.ub-at__log-hint summary i[data-v-7ec5eaaa] {\r\n  color: var(--ub-warn);\n}\n.ub-at__log-hint-toggle[data-v-7ec5eaaa] {\r\n  margin-left: auto;\r\n  color: var(--ub-accent-ink);\r\n  font-weight: 700;\n}\n.ub-at__log-hint ol[data-v-7ec5eaaa] {\r\n  margin: var(--ub-s2) 0 0;\r\n  padding-left: 1.4em;\n}\n.ub-at__steps[data-v-7ec5eaaa] {\r\n  margin: 0;\r\n  padding-left: 1.4em;\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.8;\n}\n@media (max-width: 640px) {\n.ub-at__filters[data-v-7ec5eaaa] {\r\n    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);\n}\n.ub-at__filters[data-v-7ec5eaaa] > :last-child {\r\n    grid-column: 1 / -1;\n}\n}\r\n", "src/presentation-v3/pages/AdvancedToolsPage.vue#style-0-7ec5eaaa");
 var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_7ec5eaaa_lang = null;
 
-const _hoisted_1$A = { class: "ub-at__sql" };
+const _hoisted_1$B = { class: "ub-at__sql" };
 const _hoisted_2$x = { class: "ub-at__row" };
 const _hoisted_3$v = { class: "ub-at__row" };
 const _hoisted_4$r = {
@@ -189596,7 +189673,7 @@ function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 					)]),
 					_: 1
 				}, 8, ["variant"])]),
-				default: withCtx(() => [createBaseVNode("div", _hoisted_1$A, [
+				default: withCtx(() => [createBaseVNode("div", _hoisted_1$B, [
 					createBaseVNode("div", _hoisted_2$x, [createVNode($setup["UbButton"], {
 						size: "sm",
 						variant: "ghost",
@@ -192132,7 +192209,7 @@ var _sfc_main$E = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-agadv__prompt-head[data-v-2ccfbde7] {\r\n  display: flex;\r\n  justify-content: flex-end;\n}\r\n", "src/presentation-v3/parts/AgentAdvancedSheet.vue#style-0-2ccfbde7");
 var AgentAdvancedSheet_vue_vue_type_style_index_0_scoped_2ccfbde7_lang = null;
 
-const _hoisted_1$z = { class: "ub-agadv__prompt-head" };
+const _hoisted_1$A = { class: "ub-agadv__prompt-head" };
 function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSheet"], {
 		"is-open": $props.open,
@@ -192354,7 +192431,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 								"aria-label": "提示词类别",
 								block: ""
 							}, null, 8, ["modelValue"]),
-							createBaseVNode("div", _hoisted_1$z, [createVNode($setup["UbButton"], {
+							createBaseVNode("div", _hoisted_1$A, [createVNode($setup["UbButton"], {
 								size: "sm",
 								variant: "ghost",
 								icon: "fa-solid fa-rotate-left",
@@ -192544,7 +192621,7 @@ var _sfc_main$D = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-wbe[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\n}\n.ub-wbe__toolbar[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-wbe__search[data-v-2ffd55d4] {\r\n  flex: 1 1 calc(var(--ub-u) * 200);\n}\n.ub-wbe__actions[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s1);\n}\n.ub-wbe__status[data-v-2ffd55d4] {\r\n  padding: var(--ub-s4);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-control);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: center;\n}\n.ub-wbe__status.is-error[data-v-2ffd55d4] {\r\n  border-color: var(--ub-danger);\r\n  color: var(--ub-danger);\n}\n.ub-wbe__groups[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\n}\n.ub-wbe__entry[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  padding: var(--ub-s1) 0;\n}\n.ub-wbe__entry + .ub-wbe__entry[data-v-2ffd55d4] {\r\n  border-top: 1px dashed var(--ub-line-soft);\r\n  padding-top: var(--ub-s2);\n}\n.ub-wbe__entry.is-disabled[data-v-2ffd55d4] {\r\n  opacity: 0.6;\n}\n.ub-wbe__entry-main[data-v-2ffd55d4] {\r\n  display: flex;\r\n  align-items: flex-start;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2);\n}\n.ub-wbe__label[data-v-2ffd55d4] {\r\n  min-width: 0;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  overflow-wrap: anywhere;\n}\n.ub-wbe__tags[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s1);\r\n  flex: 0 0 auto;\n}\n.ub-wbe__skill-row[data-v-2ffd55d4] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2);\r\n  padding-left: calc(var(--ub-u) * 26);\n}\n.ub-wbe__skill[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  margin-left: calc(var(--ub-u) * 26);\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\n}\n.ub-wbe__skill-actions[data-v-2ffd55d4] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\r\n", "src/presentation-v3/parts/WorldbookEntries.vue#style-0-2ffd55d4");
 var WorldbookEntries_vue_vue_type_style_index_0_scoped_2ffd55d4_lang = null;
 
-const _hoisted_1$y = { class: "ub-wbe" };
+const _hoisted_1$z = { class: "ub-wbe" };
 const _hoisted_2$w = { class: "ub-wbe__toolbar" };
 const _hoisted_3$u = { class: "ub-wbe__actions" };
 const _hoisted_4$q = {
@@ -192577,7 +192654,7 @@ const _hoisted_12$7 = {
 };
 const _hoisted_13$6 = { class: "ub-wbe__skill-actions" };
 function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("div", _hoisted_1$y, [createBaseVNode("div", _hoisted_2$w, [createVNode($setup["UbInput"], {
+	return openBlock(), createElementBlock("div", _hoisted_1$z, [createBaseVNode("div", _hoisted_2$w, [createVNode($setup["UbInput"], {
 		class: "ub-wbe__search",
 		"model-value": $props.filter,
 		icon: "fa-solid fa-magnifying-glass",
@@ -192882,7 +192959,7 @@ var _sfc_main$C = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-wbsrc[data-v-fa1a6bea] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\n}\n.ub-wbsrc__manual[data-v-fa1a6bea] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\n}\n.ub-wbsrc__list[data-v-fa1a6bea] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  max-height: calc(var(--ub-u) * 220);\r\n  padding: var(--ub-s1);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  overflow-y: auto;\n}\n.ub-wbsrc__list.is-loading[data-v-fa1a6bea] {\r\n  opacity: 0.6;\n}\n.ub-wbsrc__book[data-v-fa1a6bea] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-height: var(--ub-control-h-sm);\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border: 0;\r\n  border-radius: calc(var(--ub-r-control) - 3px);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-wbsrc__book[data-v-fa1a6bea]:hover {\r\n  background: var(--ub-hover);\n}\n.ub-wbsrc__book.is-on[data-v-fa1a6bea] {\r\n  color: var(--ub-text);\r\n  font-weight: 600;\n}\n.ub-wbsrc__book.is-on i[data-v-fa1a6bea] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-wbsrc__book span[data-v-fa1a6bea] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-wbsrc__empty[data-v-fa1a6bea] {\r\n  padding: var(--ub-s3);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  text-align: center;\n}\n.ub-wbsrc__error[data-v-fa1a6bea] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\r\n", "src/presentation-v3/parts/WorldbookSourcePicker.vue#style-0-fa1a6bea");
 var WorldbookSourcePicker_vue_vue_type_style_index_0_scoped_fa1a6bea_lang = null;
 
-const _hoisted_1$x = { class: "ub-wbsrc" };
+const _hoisted_1$y = { class: "ub-wbsrc" };
 const _hoisted_2$v = {
 	key: 0,
 	class: "ub-wbsrc__manual"
@@ -192901,7 +192978,7 @@ const _hoisted_5$m = {
 	class: "ub-wbsrc__error"
 };
 function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("div", _hoisted_1$x, [
+	return openBlock(), createElementBlock("div", _hoisted_1$y, [
 		createVNode($setup["UbSegmented"], {
 			options: $setup.sourceOptions,
 			"model-value": $props.source,
@@ -193202,7 +193279,7 @@ var _sfc_main$B = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-agent__mode[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-agent__config[data-v-f0fd1638] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-agent__actions[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\n}\n.ub-agent__current[data-v-f0fd1638] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-agent__current strong[data-v-f0fd1638] {\r\n  color: var(--ub-text);\n}\n.ub-agent-fav[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\n}\n.ub-agent-fav__list[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--ub-s1);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\n}\n.ub-agent-fav__item[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s1) 0;\n}\n.ub-agent-fav__item + .ub-agent-fav__item[data-v-f0fd1638] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-agent-fav__check[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex: 1 1 calc(var(--ub-u) * 120);\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\r\n  min-height: var(--ub-control-h-sm);\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border: 0;\r\n  border-radius: calc(var(--ub-r-control) - 3px);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: left;\r\n  cursor: pointer;\r\n  overflow-wrap: anywhere;\n}\n.ub-agent-fav__check[data-v-f0fd1638]:hover:not(:disabled) {\r\n  background: var(--ub-hover);\n}\n.ub-agent-fav__check[data-v-f0fd1638]:disabled {\r\n  cursor: not-allowed;\r\n  opacity: 0.6;\n}\n.ub-agent-fav__check.is-on[data-v-f0fd1638] {\r\n  color: var(--ub-text);\r\n  font-weight: 600;\n}\n.ub-agent-fav__check.is-on i[data-v-f0fd1638] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-agent-fav__add[data-v-f0fd1638],\r\n.ub-agent-fav__mount[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-agent-fav__add[data-v-f0fd1638] > :first-child {\r\n  flex: 1 1 calc(var(--ub-u) * 140);\r\n  min-width: 0;\n}\n.ub-agent-fav__mount .ub-agent__current[data-v-f0fd1638] {\r\n  flex: 1 1 auto;\n}\r\n", "src/presentation-v3/pages/AgentPage.vue#style-0-f0fd1638");
 var AgentPage_vue_vue_type_style_index_0_scoped_f0fd1638_lang = null;
 
-const _hoisted_1$w = { class: "ub-agent__mode" };
+const _hoisted_1$x = { class: "ub-agent__mode" };
 const _hoisted_2$u = { class: "ub-agent__config" };
 const _hoisted_3$s = { class: "ub-agent__actions" };
 const _hoisted_4$o = { class: "ub-agent__current" };
@@ -193245,7 +193322,7 @@ function _sfc_render$A(_ctx, _cache, $props, $setup, $data, $options) {
 					_: 1
 				}, 8, ["variant"])]),
 				default: withCtx(() => [
-					createBaseVNode("div", _hoisted_1$w, [createBaseVNode(
+					createBaseVNode("div", _hoisted_1$x, [createBaseVNode(
 						"p",
 						_hoisted_2$u,
 						toDisplayString($setup.agentControl.configStatusText.value),
@@ -194050,7 +194127,7 @@ var _sfc_main$A = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-picker[data-v-2ea232e6] {\r\n  display: flex;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-picker__trigger[data-v-2ea232e6] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\r\n  min-width: 0;\r\n  height: var(--ub-control-h);\r\n  padding: 0 var(--ub-s3);\r\n  border: 1px solid var(--ub-line);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-picker__trigger[data-v-2ea232e6]:hover:not(:disabled) {\r\n  border-color: var(--ub-line-strong);\n}\n.ub-picker__trigger[data-v-2ea232e6]:disabled {\r\n  opacity: 0.5;\r\n  cursor: not-allowed;\n}\n.ub-picker__star-mark[data-v-2ea232e6] {\r\n  color: var(--ub-warn);\r\n  font-size: 0.85em;\n}\n.ub-picker__value[data-v-2ea232e6] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-picker__value.is-placeholder[data-v-2ea232e6] {\r\n  color: var(--ub-text-3);\r\n  font-weight: 500;\n}\n.ub-picker__caret[data-v-2ea232e6] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-picker-layer[data-v-2ea232e6] {\r\n  position: fixed;\r\n  inset: 0;\r\n  z-index: 9350;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  padding: max(var(--ub-safe-top), 16px) 16px max(var(--ub-safe-bottom), 16px);\r\n  background: var(--ub-scrim);\r\n  animation: ub-fade-in 0.14s ease-out both;\n}\n.ub-picker-panel[data-v-2ea232e6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  width: min(420px, 100%);\r\n  max-height: min(560px, 100%);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  overflow: hidden;\r\n  animation: ub-pop-in 0.16s cubic-bezier(0.2, 0.8, 0.2, 1) both;\n}\n.ub-picker-panel__head[data-v-2ea232e6] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s3) var(--ub-s2) var(--ub-s4);\n}\n.ub-picker-panel__title[data-v-2ea232e6] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\r\n  font-weight: 700;\n}\n.ub-picker-panel__hint[data-v-2ea232e6] {\r\n  margin: 0;\r\n  padding: 0 var(--ub-s4) var(--ub-s2);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-picker-panel__list[data-v-2ea232e6] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  margin: 0;\r\n  padding: var(--ub-s1) var(--ub-s2) var(--ub-s2);\r\n  list-style: none;\r\n  overflow-y: auto;\n}\n.ub-picker-panel__item[data-v-2ea232e6] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-height: calc(var(--ub-control-h) + 6px);\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border-radius: var(--ub-r-control);\r\n  cursor: pointer;\n}\n.ub-picker-panel__item[data-v-2ea232e6]:hover {\r\n  background: var(--ub-hover);\n}\n.ub-picker-panel__item.is-active[data-v-2ea232e6] {\r\n  background: var(--ub-accent-soft);\n}\n.ub-picker-panel__check[data-v-2ea232e6] {\r\n  display: inline-flex;\r\n  justify-content: center;\r\n  width: 1.2em;\r\n  color: var(--ub-accent-ink);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-picker-panel__main[data-v-2ea232e6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-picker-panel__name[data-v-2ea232e6] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-picker-panel__meta[data-v-2ea232e6] {\r\n  overflow: hidden;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-picker-panel__star[data-v-2ea232e6] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: var(--ub-control-h-sm);\r\n  height: var(--ub-control-h-sm);\r\n  border: 0;\r\n  border-radius: var(--ub-r-control);\r\n  background: transparent;\r\n  color: var(--ub-text-3);\r\n  cursor: pointer;\n}\n.ub-picker-panel__star[data-v-2ea232e6]:hover {\r\n  background: var(--ub-hover-strong);\r\n  color: var(--ub-warn);\n}\n.ub-picker-panel__star.is-default[data-v-2ea232e6] {\r\n  color: var(--ub-warn);\n}\n.ub-picker-panel__empty[data-v-2ea232e6] {\r\n  padding: var(--ub-s4);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: center;\n}\r\n", "src/presentation-v3/ui/UbPresetPicker.vue#style-0-2ea232e6");
 var UbPresetPicker_vue_vue_type_style_index_0_scoped_2ea232e6_lang = null;
 
-const _hoisted_1$v = ["disabled", "aria-expanded"];
+const _hoisted_1$w = ["disabled", "aria-expanded"];
 const _hoisted_2$t = {
 	key: 0,
 	class: "fa-solid fa-star ub-picker__star-mark",
@@ -194122,7 +194199,7 @@ function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 				-1
 				/* CACHED */
 			))
-		], 8, _hoisted_1$v), (openBlock(), createBlock(Teleport, {
+		], 8, _hoisted_1$w), (openBlock(), createBlock(Teleport, {
 			defer: "",
 			to: "#ub-portal"
 		}, [$setup.open ? (openBlock(), createElementBlock("div", {
@@ -194345,7 +194422,7 @@ var _sfc_main$z = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-go-usage[data-v-e95f3951] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s4);\n}\n.ub-go-usage__meter[data-v-e95f3951] {\r\n  min-width: 0;\n}\n.ub-go-usage__meter.is-wide[data-v-e95f3951] {\r\n  grid-column: 1 / -1;\n}\n.ub-go-usage__head[data-v-e95f3951] {\r\n  display: flex;\r\n  align-items: baseline;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2);\n}\n.ub-go-usage__label[data-v-e95f3951] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-go-usage__pct[data-v-e95f3951] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\r\n  font-weight: 700;\r\n  font-variant-numeric: tabular-nums;\n}\n.ub-go-usage__track[data-v-e95f3951] {\r\n  height: 6px;\r\n  margin-top: var(--ub-s1);\r\n  overflow: hidden;\r\n  border-radius: 999px;\r\n  background: var(--ub-sunken);\r\n  box-shadow: inset 0 0 0 1px var(--ub-line-soft);\n}\n.ub-go-usage__fill[data-v-e95f3951] {\r\n  height: 100%;\r\n  border-radius: inherit;\r\n  background: var(--ub-accent);\r\n  transition: width 0.3s ease;\n}\n.ub-go-usage__reset[data-v-e95f3951] {\r\n  margin-top: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-go-usage__meter.is-high .ub-go-usage__fill[data-v-e95f3951] {\r\n  background: var(--ub-warn);\n}\n.ub-go-usage__meter.is-limited .ub-go-usage__fill[data-v-e95f3951] {\r\n  background: var(--ub-danger);\n}\n.ub-go-usage__meter.is-limited .ub-go-usage__pct[data-v-e95f3951],\r\n.ub-go-usage__meter.is-limited .ub-go-usage__reset[data-v-e95f3951] {\r\n  color: var(--ub-danger);\n}\r\n", "src/presentation-v3/parts/OpencodeGoUsage.vue#style-0-e95f3951");
 var OpencodeGoUsage_vue_vue_type_style_index_0_scoped_e95f3951_lang = null;
 
-const _hoisted_1$u = {
+const _hoisted_1$v = {
 	key: 0,
 	class: "ub-go-usage"
 };
@@ -194383,7 +194460,7 @@ function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
 			64
 			/* STABLE_FRAGMENT */
 		))]),
-		default: withCtx(() => [$setup.usage ? (openBlock(), createElementBlock("div", _hoisted_1$u, [(openBlock(), createElementBlock(
+		default: withCtx(() => [$setup.usage ? (openBlock(), createElementBlock("div", _hoisted_1$v, [(openBlock(), createElementBlock(
 			Fragment,
 			null,
 			renderList($setup.meters, (item) => {
@@ -194708,7 +194785,7 @@ var _sfc_main$y = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-api[data-v-b64f6b1b],\r\n.ub-api__form[data-v-b64f6b1b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-api__picker[data-v-b64f6b1b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\n}\n.ub-api__empty[data-v-b64f6b1b] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n.ub-api__model[data-v-b64f6b1b] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-api__model[data-v-b64f6b1b] > :first-child {\r\n  flex: 1 1 auto;\n}\n.ub-api__error[data-v-b64f6b1b] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-api__test-result[data-v-b64f6b1b] {\r\n  display: block;\r\n  margin-top: var(--ub-s2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 500;\r\n  overflow-wrap: anywhere;\n}\n.ub-api__test-result.is-ok[data-v-b64f6b1b] {\r\n  color: var(--ub-ok);\n}\n.ub-api__test-result.is-error[data-v-b64f6b1b] {\r\n  color: var(--ub-danger);\n}\n.ub-api__test-note[data-v-b64f6b1b] {\r\n  display: block;\r\n  color: var(--ub-text-2);\n}\n.ub-api__danger-hint[data-v-b64f6b1b] {\r\n  color: var(--ub-danger);\r\n  font-weight: 600;\n}\n.ub-api__savebar[data-v-b64f6b1b] {\r\n  position: sticky;\r\n  bottom: var(--ub-s3);\r\n  z-index: 4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-toast-bg);\r\n  box-shadow: var(--ub-overlay-shadow);\r\n  backdrop-filter: blur(12px);\r\n  -webkit-backdrop-filter: blur(12px);\n}\n.ub-api__savebar[data-v-b64f6b1b]:not(.is-dirty) {\r\n  box-shadow: none;\n}\n.ub-api__savebar-text[data-v-b64f6b1b] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-api__savebar.is-dirty .ub-api__savebar-text[data-v-b64f6b1b] {\r\n  color: var(--ub-warn);\n}\n.ub-api__savebar-text.is-error[data-v-b64f6b1b] {\r\n  color: var(--ub-danger) !important;\n}\n@media (max-width: 560px) {\n.ub-api__savebar[data-v-b64f6b1b] {\r\n    flex-wrap: wrap;\r\n    border-radius: var(--ub-r-card);\n}\n.ub-api__savebar-text[data-v-b64f6b1b] {\r\n    flex-basis: 100%;\n}\n}\r\n", "src/presentation-v3/parts/ApiPresetEditor.vue#style-0-b64f6b1b");
 var ApiPresetEditor_vue_vue_type_style_index_0_scoped_b64f6b1b_lang = null;
 
-const _hoisted_1$t = { class: "ub-api" };
+const _hoisted_1$u = { class: "ub-api" };
 const _hoisted_2$r = { class: "ub-api__picker" };
 const _hoisted_3$p = {
 	key: 0,
@@ -194728,7 +194805,7 @@ const _hoisted_7$e = {
 	class: "ub-api__test-note"
 };
 function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("div", _hoisted_1$t, [createVNode($setup["UbSection"], {
+	return openBlock(), createElementBlock("div", _hoisted_1$u, [createVNode($setup["UbSection"], {
 		id: `${$props.idPrefix}-preset`,
 		title: "当前 API 预设",
 		description: "数据库各功能默认用这里选中的预设。星标 = 新聊天默认使用的预设。",
@@ -195986,12 +196063,12 @@ var _sfc_main$w = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-rules[data-v-17445fad] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\n}\n.ub-rules__head[data-v-17445fad] {\r\n  display: flex;\r\n  align-items: baseline;\r\n  justify-content: space-between;\r\n  width: 100%;\n}\n.ub-rules__label[data-v-17445fad] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\n}\n.ub-rules__count[data-v-17445fad] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-rules__row[data-v-17445fad] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\n}\n.ub-rules__sep[data-v-17445fad] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\r\n", "src/presentation-v3/ui/UbRulePairs.vue#style-0-17445fad");
 var UbRulePairs_vue_vue_type_style_index_0_scoped_17445fad_lang = null;
 
-const _hoisted_1$s = { class: "ub-rules" };
+const _hoisted_1$t = { class: "ub-rules" };
 const _hoisted_2$q = { class: "ub-rules__head" };
 const _hoisted_3$o = { class: "ub-rules__label" };
 const _hoisted_4$k = { class: "ub-rules__count" };
 function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("div", _hoisted_1$s, [
+	return openBlock(), createElementBlock("div", _hoisted_1$t, [
 		createBaseVNode("div", _hoisted_2$q, [createBaseVNode(
 			"span",
 			_hoisted_3$o,
@@ -196126,7 +196203,7 @@ var _sfc_main$v = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-pte[data-v-5bbd16c6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s5);\n}\n.ub-pte__segs[data-v-5bbd16c6] {\r\n  padding: var(--ub-s3);\n}\n.ub-pte__empty[data-v-5bbd16c6] {\r\n  padding: var(--ub-s5);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-card);\r\n  color: var(--ub-text-3);\r\n  text-align: center;\n}\r\n", "src/presentation-v3/parts/PlotTaskEditor.vue#style-0-5bbd16c6");
 var PlotTaskEditor_vue_vue_type_style_index_0_scoped_5bbd16c6_lang = null;
 
-const _hoisted_1$r = {
+const _hoisted_1$s = {
 	key: 0,
 	class: "ub-pte"
 };
@@ -196136,7 +196213,7 @@ const _hoisted_3$n = {
 	class: "ub-pte__empty"
 };
 function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
-	return $props.task ? (openBlock(), createElementBlock("div", _hoisted_1$r, [
+	return $props.task ? (openBlock(), createElementBlock("div", _hoisted_1$s, [
 		createVNode($setup["UbSection"], {
 			title: "基本字段",
 			description: "同一阶段号的任务并发执行，不同阶段按顺序串行。"
@@ -196447,7 +196524,7 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-pps-form[data-v-3b300f52] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s5);\n}\n.ub-pps-list[data-v-3b300f52] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-pps-list__item[data-v-3b300f52] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-pps-list__item + .ub-pps-list__item[data-v-3b300f52] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-pps-list__info[data-v-3b300f52] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-pps-list__name[data-v-3b300f52] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-pps-list__star[data-v-3b300f52] {\r\n  color: var(--ub-warn);\r\n  font-size: 0.85em;\n}\n.ub-pps-list__meta[data-v-3b300f52] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-pps-list__actions[data-v-3b300f52] {\r\n  display: flex;\r\n  gap: 2px;\n}\n.ub-pps-empty[data-v-3b300f52] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-pps-tasks[data-v-3b300f52] {\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3);\r\n  overflow-x: auto;\n}\n.ub-pps-task[data-v-3b300f52] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-start;\r\n  gap: 2px;\r\n  flex: 0 0 auto;\r\n  min-width: calc(var(--ub-u) * 130);\r\n  max-width: calc(var(--ub-u) * 220);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border: 1.5px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-pps-task.is-active[data-v-3b300f52] {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\n}\n.ub-pps-task.is-off[data-v-3b300f52] {\r\n  opacity: 0.55;\n}\n.ub-pps-task__name[data-v-3b300f52] {\r\n  max-width: 100%;\r\n  overflow: hidden;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 700;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-pps-task__meta[data-v-3b300f52] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\r\n", "src/presentation-v3/parts/PlotPresetSheet.vue#style-0-3b300f52");
 var PlotPresetSheet_vue_vue_type_style_index_0_scoped_3b300f52_lang = null;
 
-const _hoisted_1$q = {
+const _hoisted_1$r = {
 	key: 0,
 	class: "ub-pps-list"
 };
@@ -196497,7 +196574,7 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 					/* CACHED */
 				)])]),
 				_: 1
-			}), $props.presetMeta.length ? (openBlock(), createElementBlock("ul", _hoisted_1$q, [(openBlock(true), createElementBlock(
+			}), $props.presetMeta.length ? (openBlock(), createElementBlock("ul", _hoisted_1$r, [(openBlock(true), createElementBlock(
 				Fragment,
 				null,
 				renderList($props.presetMeta, (meta) => {
@@ -196886,7 +196963,7 @@ var _sfc_main$t = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-plotp[data-v-0c48a73a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-plotp.has-below[data-v-0c48a73a] {\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-plotp__facts[data-v-0c48a73a] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s2);\r\n  margin: 0;\n}\n.ub-plotp__facts > div[data-v-0c48a73a] {\r\n  min-width: 0;\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\n}\n.ub-plotp__facts dt[data-v-0c48a73a] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\n}\n.ub-plotp__facts dd[data-v-0c48a73a] {\r\n  margin: 2px 0 0;\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-plotp__picker[data-v-0c48a73a] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\r\n", "src/presentation-v3/parts/PlotPresetSection.vue#style-0-0c48a73a");
 var PlotPresetSection_vue_vue_type_style_index_0_scoped_0c48a73a_lang = null;
 
-const _hoisted_1$p = { class: "ub-plotp__facts" };
+const _hoisted_1$q = { class: "ub-plotp__facts" };
 const _hoisted_2$n = { class: "ub-plotp__picker" };
 function _sfc_render$s(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSection"], {
@@ -196914,7 +196991,7 @@ function _sfc_render$s(_ctx, _cache, $props, $setup, $data, $options) {
 			createBaseVNode(
 				"div",
 				{ class: normalizeClass(["ub-plotp", { "has-below": $props.showApiPreset }]) },
-				[createBaseVNode("dl", _hoisted_1$p, [createBaseVNode("div", null, [_cache[6] || (_cache[6] = createBaseVNode(
+				[createBaseVNode("dl", _hoisted_1$q, [createBaseVNode("div", null, [_cache[6] || (_cache[6] = createBaseVNode(
 					"dt",
 					null,
 					"当前聊天",
@@ -198094,7 +198171,7 @@ var _sfc_main$s = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-plist[data-v-aed3eab6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-plist__item[data-v-aed3eab6] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-plist__item + .ub-plist__item[data-v-aed3eab6] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-plist__info[data-v-aed3eab6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-plist__name[data-v-aed3eab6] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-plist__star[data-v-aed3eab6] {\r\n  color: var(--ub-warn);\r\n  font-size: 0.85em;\n}\n.ub-plist__meta[data-v-aed3eab6] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-plist__actions[data-v-aed3eab6] {\r\n  display: flex;\r\n  flex: 0 0 auto;\r\n  gap: 2px;\n}\n.ub-plist__empty[data-v-aed3eab6] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\n}\n@media (max-width: 480px) {\n.ub-plist__item[data-v-aed3eab6] {\r\n    flex-wrap: wrap;\n}\n.ub-plist__actions[data-v-aed3eab6] {\r\n    width: 100%;\r\n    justify-content: flex-end;\n}\n}\r\n", "src/presentation-v3/parts/TablePresetSheet.vue#style-0-aed3eab6");
 var TablePresetSheet_vue_vue_type_style_index_0_scoped_aed3eab6_lang = null;
 
-const _hoisted_1$o = {
+const _hoisted_1$p = {
 	key: 1,
 	class: "ub-plist"
 };
@@ -198144,7 +198221,7 @@ function _sfc_render$r(_ctx, _cache, $props, $setup, $data, $options) {
 				)])]),
 				_: 1
 			}, 8, ["disabled"]),
-			$props.presetMeta.length ? (openBlock(), createElementBlock("ul", _hoisted_1$o, [(openBlock(true), createElementBlock(
+			$props.presetMeta.length ? (openBlock(), createElementBlock("ul", _hoisted_1$p, [(openBlock(true), createElementBlock(
 				Fragment,
 				null,
 				renderList($props.presetMeta, (meta) => {
@@ -198272,7 +198349,7 @@ var _sfc_main$r = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-tpl[data-v-4bb4a8a2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-tpl__facts[data-v-4bb4a8a2] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s2);\r\n  margin: 0;\n}\n.ub-tpl__facts > div[data-v-4bb4a8a2] {\r\n  min-width: 0;\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\n}\n.ub-tpl__facts dt[data-v-4bb4a8a2] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\n}\n.ub-tpl__facts dd[data-v-4bb4a8a2] {\r\n  margin: 2px 0 0;\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-tpl__tools[data-v-4bb4a8a2] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s1);\r\n  margin: 0 calc(var(--ub-s2) * -1);\n}\r\n", "src/presentation-v3/parts/TableTemplateSection.vue#style-0-4bb4a8a2");
 var TableTemplateSection_vue_vue_type_style_index_0_scoped_4bb4a8a2_lang = null;
 
-const _hoisted_1$n = { class: "ub-tpl" };
+const _hoisted_1$o = { class: "ub-tpl" };
 const _hoisted_2$l = { class: "ub-tpl__facts" };
 const _hoisted_3$k = { class: "ub-tpl__tools" };
 function _sfc_render$q(_ctx, _cache, $props, $setup, $data, $options) {
@@ -198290,7 +198367,7 @@ function _sfc_render$q(_ctx, _cache, $props, $setup, $data, $options) {
 			)]),
 			_: 1
 		}, 8, ["variant"])]),
-		default: withCtx(() => [createBaseVNode("div", _hoisted_1$n, [
+		default: withCtx(() => [createBaseVNode("div", _hoisted_1$o, [
 			$setup.templates.message.value ? (openBlock(), createBlock($setup["UbCallout"], {
 				key: 0,
 				kind: $setup.templates.message.value.kind
@@ -199160,7 +199237,7 @@ var _sfc_main$q = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-upd__more[data-v-0e2c9095] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border: 0;\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-upd__more[data-v-0e2c9095]:hover {\r\n  color: var(--ub-text);\n}\n.ub-upd__chevron[data-v-0e2c9095] {\r\n  font-size: 0.75em;\r\n  transition: transform 0.16s ease;\n}\n.ub-upd__chevron.is-open[data-v-0e2c9095] {\r\n  transform: rotate(90deg);\n}\n.ub-upd__more + .ub-row[data-v-0e2c9095],\r\n.ub-upd__more ~ .ub-row[data-v-0e2c9095] {\r\n  background: color-mix(in srgb, var(--ub-sunken) 50%, transparent);\n}\r\n", "src/presentation-v3/parts/UpdateSettingsSection.vue#style-0-0e2c9095");
 var UpdateSettingsSection_vue_vue_type_style_index_0_scoped_0e2c9095_lang = null;
 
-const _hoisted_1$m = ["aria-expanded"];
+const _hoisted_1$n = ["aria-expanded"];
 function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbSection"], {
 		id: $props.id,
@@ -199255,7 +199332,7 @@ function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
 						)]),
 						_: 1
 					}, 8, ["variant"])
-				], 8, _hoisted_1$m), $setup.advancedExpanded ? (openBlock(true), createElementBlock(
+				], 8, _hoisted_1$n), $setup.advancedExpanded ? (openBlock(true), createElementBlock(
 					Fragment,
 					{ key: 0 },
 					renderList($setup.advancedFields, (field) => {
@@ -200355,7 +200432,7 @@ var _sfc_main$o = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-cr__preset[data-v-dacc639a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-dacc639a] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-dacc639a] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-dacc639a] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-dacc639a] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-dacc639a] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-dacc639a] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-dacc639a] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-dacc639a] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-dacc639a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-dacc639a] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-dacc639a] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-dacc639a] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-dacc639a] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-dacc639a");
 var ContentReplacePage_vue_vue_type_style_index_0_scoped_dacc639a_lang = null;
 
-const _hoisted_1$l = { class: "ub-cr__picker" };
+const _hoisted_1$m = { class: "ub-cr__picker" };
 const _hoisted_2$k = { class: "ub-cr__preset" };
 const _hoisted_3$j = { class: "ub-cr__meta" };
 const _hoisted_4$h = { class: "ub-cr__picker" };
@@ -200622,7 +200699,7 @@ function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
 						label: "决策模型",
 						hint: $setup.decisionView.modelHint
 					}, {
-						default: withCtx(() => [createBaseVNode("div", _hoisted_1$l, [createVNode($setup["UbSelect"], {
+						default: withCtx(() => [createBaseVNode("div", _hoisted_1$m, [createVNode($setup["UbSelect"], {
 							options: $setup.decisionModelOptions,
 							"model-value": $setup.decisionModel,
 							"aria-label": "决策模型",
@@ -201692,7 +201769,7 @@ var _sfc_main$n = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-feed[data-v-be3d44d3] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  min-height: calc(var(--ub-u) * 220);\r\n  max-height: min(calc(var(--tt-base-viewport-height, 100vh) * 0.62), calc(var(--ub-u) * 640));\r\n  padding: var(--ub-s4);\r\n  overflow-y: auto;\r\n  overscroll-behavior: contain;\n}\n.ub-feed__empty[data-v-be3d44d3] {\r\n  margin: auto;\r\n  max-width: 360px;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.7;\r\n  text-align: center;\n}\n.ub-feed__fold[data-v-be3d44d3] {\r\n  align-self: center;\r\n  padding: var(--ub-s1) var(--ub-s3);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: 999px;\r\n  background: transparent;\r\n  color: var(--ub-text-3);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  cursor: pointer;\n}\n.ub-feed__divider[data-v-be3d44d3] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  margin: var(--ub-s2) 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-feed__divider[data-v-be3d44d3]::before,\r\n.ub-feed__divider[data-v-be3d44d3]::after {\r\n  content: '';\r\n  flex: 1 1 auto;\r\n  height: 1px;\r\n  background: var(--ub-line-soft);\n}\n.ub-feed__divider-badge[data-v-be3d44d3] {\r\n  padding: 1px 8px;\r\n  border-radius: 999px;\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\r\n  font-weight: 700;\n}\n.ub-feed__divider-title[data-v-be3d44d3] {\r\n  max-width: 40%;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-feed__time[data-v-be3d44d3] {\r\n  flex: 0 0 auto;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-variant-numeric: tabular-nums;\n}\n.ub-feed__user[data-v-be3d44d3] {\r\n  display: flex;\r\n  justify-content: flex-end;\n}\n.ub-feed__bubble[data-v-be3d44d3] {\r\n  max-width: 82%;\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-radius: 16px 16px 4px 16px;\r\n  background: var(--ub-accent);\r\n  color: var(--ub-on-accent);\n}\n.ub-feed__bubble p[data-v-be3d44d3] {\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow-wrap: anywhere;\n}\n.ub-feed__bubble .ub-feed__time[data-v-be3d44d3] {\r\n  display: block;\r\n  margin-top: 2px;\r\n  color: inherit;\r\n  opacity: 0.7;\r\n  text-align: right;\n}\n.ub-feed__thought[data-v-be3d44d3] {\r\n  padding: var(--ub-s1) var(--ub-s3);\r\n  border-left: 2px solid var(--ub-line);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-feed__thought-label[data-v-be3d44d3] {\r\n  font-weight: 700;\n}\n.ub-feed__thought p[data-v-be3d44d3] {\r\n  margin-top: 2px;\r\n  white-space: pre-wrap;\r\n  overflow-wrap: anywhere;\n}\n.ub-feed__card[data-v-be3d44d3] {\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-panel);\r\n  overflow: hidden;\n}\n.ub-feed__card.is-failed[data-v-be3d44d3] {\r\n  border-color: color-mix(in srgb, var(--ub-danger) 45%, var(--ub-line-soft));\n}\n.ub-feed__card-head[data-v-be3d44d3] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-feed__status[data-v-be3d44d3] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: 18px;\r\n  height: 18px;\r\n  border-radius: 50%;\r\n  background: var(--ub-ok-soft);\r\n  color: var(--ub-ok);\r\n  font-size: 10px;\n}\n.ub-feed__status.is-running[data-v-be3d44d3] {\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-feed__status.is-failed[data-v-be3d44d3] {\r\n  background: var(--ub-danger-soft);\r\n  color: var(--ub-danger);\n}\n.ub-feed__kind[data-v-be3d44d3] {\r\n  flex: 0 0 auto;\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-weight: 700;\n}\n.ub-feed__title[data-v-be3d44d3] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-feed__chevron[data-v-be3d44d3] {\r\n  color: var(--ub-text-3);\r\n  font-size: 0.8em;\r\n  transition: transform 0.14s ease;\n}\n.ub-feed__chevron.is-open[data-v-be3d44d3] {\r\n  transform: rotate(180deg);\n}\n.ub-feed__preview[data-v-be3d44d3],\r\n.ub-feed__detail[data-v-be3d44d3] {\r\n  padding: 0 var(--ub-s3) var(--ub-s2) calc(var(--ub-s3) + 26px);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow-wrap: anywhere;\n}\n.ub-feed__preview[data-v-be3d44d3] {\r\n  display: -webkit-box;\r\n  overflow: hidden;\r\n  cursor: pointer;\r\n  -webkit-line-clamp: 2;\r\n  -webkit-box-orient: vertical;\n}\n.ub-feed__running[data-v-be3d44d3] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-accent-ink);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-feed__pulse[data-v-be3d44d3] {\r\n  width: 8px;\r\n  height: 8px;\r\n  border-radius: 50%;\r\n  background: var(--ub-accent);\r\n  animation: ub-feed-pulse-be3d44d3 1.2s ease-in-out infinite;\n}\n@keyframes ub-feed-pulse-be3d44d3 {\n0%, 100% { opacity: 1; transform: scale(1);\n}\n50% { opacity: 0.35; transform: scale(0.7);\n}\n}\r\n", "src/presentation-v3/parts/ContinuationSessionFeed.vue#style-0-be3d44d3");
 var ContinuationSessionFeed_vue_vue_type_style_index_0_scoped_be3d44d3_lang = null;
 
-const _hoisted_1$k = {
+const _hoisted_1$l = {
 	ref: "feedElement",
 	class: "ub-feed"
 };
@@ -201750,7 +201827,7 @@ const _hoisted_22$2 = {
 function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"div",
-		_hoisted_1$k,
+		_hoisted_1$l,
 		[
 			!$props.entries.length ? (openBlock(), createElementBlock("p", _hoisted_2$j, " 还没有运行记录。发送一条指令后，主 Agent 的思考、派工、大纲操作与交付过程会实时显示在这里。 ")) : createCommentVNode("v-if", true),
 			$setup.hiddenCount > 0 ? (openBlock(), createElementBlock(
@@ -201996,7 +202073,7 @@ var _sfc_main$m = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-cchat[data-v-acb581a2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\n}\n.ub-cchat__status[data-v-acb581a2] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1) var(--ub-s3);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-variant-numeric: tabular-nums;\n}\n.ub-cchat__state[data-v-acb581a2] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  padding: 2px 10px 2px 8px;\r\n  border-radius: 999px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-weight: 700;\n}\n.ub-cchat__dot[data-v-acb581a2] {\r\n  width: 7px;\r\n  height: 7px;\r\n  border-radius: 50%;\r\n  background: var(--ub-text-3);\n}\n.ub-cchat__state.is-running[data-v-acb581a2] {\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n.ub-cchat__state.is-running .ub-cchat__dot[data-v-acb581a2] {\r\n  background: var(--ub-accent);\r\n  animation: ub-cchat-pulse-acb581a2 1.2s ease-in-out infinite;\n}\n.ub-cchat__state.is-failed[data-v-acb581a2] {\r\n  background: var(--ub-danger-soft);\r\n  color: var(--ub-danger);\n}\n.ub-cchat__state.is-failed .ub-cchat__dot[data-v-acb581a2] {\r\n  background: var(--ub-danger);\n}\n.ub-cchat__notice[data-v-acb581a2] {\r\n  margin: 0 var(--ub-s4);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-warn-soft);\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cchat__composer[data-v-acb581a2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  margin: var(--ub-s3) var(--ub-s4) var(--ub-s4);\r\n  padding: var(--ub-s2);\r\n  border: 1px solid var(--ub-line);\r\n  border-radius: calc(var(--ub-r-control) + 4px);\r\n  background: var(--ub-input-bg);\r\n  transition: border-color 0.14s ease, box-shadow 0.14s ease;\n}\n.ub-cchat__composer[data-v-acb581a2]:focus-within {\r\n  border-color: var(--ub-accent);\r\n  box-shadow: 0 0 0 3px var(--ub-accent-soft);\n}\n.ub-cchat__input[data-v-acb581a2] {\r\n  width: 100%;\r\n  min-height: calc(var(--ub-u) * 64);\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.6;\r\n  resize: vertical;\r\n  outline: none;\n}\n.ub-cchat__input[data-v-acb581a2]::placeholder {\r\n  color: var(--ub-text-3);\n}\n.ub-cchat__actions[data-v-acb581a2] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cchat__hint[data-v-acb581a2] {\r\n  margin-right: auto;\r\n  padding-left: var(--ub-s2);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\n@keyframes ub-cchat-pulse-acb581a2 {\n0%, 100% { opacity: 1;\n}\n50% { opacity: 0.3;\n}\n}\r\n", "src/presentation-v3/parts/ContinuationChat.vue#style-0-acb581a2");
 var ContinuationChat_vue_vue_type_style_index_0_scoped_acb581a2_lang = null;
 
-const _hoisted_1$j = { class: "ub-cchat" };
+const _hoisted_1$k = { class: "ub-cchat" };
 const _hoisted_2$i = { class: "ub-cchat__status" };
 const _hoisted_3$h = { key: 0 };
 const _hoisted_4$f = {
@@ -202008,7 +202085,7 @@ const _hoisted_6$b = ["value", "placeholder"];
 const _hoisted_7$9 = { class: "ub-cchat__actions" };
 const _hoisted_8$8 = { class: "ub-cchat__hint" };
 function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("div", _hoisted_1$j, [
+	return openBlock(), createElementBlock("div", _hoisted_1$k, [
 		createBaseVNode("div", _hoisted_2$i, [
 			createBaseVNode(
 				"span",
@@ -202339,7 +202416,7 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-jde[data-v-c21c1478] {\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-control);\n}\n.ub-jde.is-open[data-v-c21c1478] {\r\n  border-style: solid;\n}\n.ub-jde__toggle[data-v-c21c1478] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-jde__chevron[data-v-c21c1478] {\r\n  margin-left: auto;\r\n  transition: transform 0.14s ease;\n}\n.is-open .ub-jde__chevron[data-v-c21c1478] {\r\n  transform: rotate(180deg);\n}\n.ub-jde__body[data-v-c21c1478] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: 0 var(--ub-s3) var(--ub-s3);\n}\n.ub-jde__hint[data-v-c21c1478] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-jde__error[data-v-c21c1478] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-jde__actions[data-v-c21c1478] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\r\n", "src/presentation-v3/parts/JsonDraftEditor.vue#style-0-c21c1478");
 var JsonDraftEditor_vue_vue_type_style_index_0_scoped_c21c1478_lang = null;
 
-const _hoisted_1$i = ["aria-expanded"];
+const _hoisted_1$j = ["aria-expanded"];
 const _hoisted_2$h = {
 	key: 0,
 	class: "ub-jde__body"
@@ -202400,7 +202477,7 @@ function _sfc_render$k(_ctx, _cache, $props, $setup, $data, $options) {
 				-1
 				/* CACHED */
 			))
-		], 8, _hoisted_1$i), $setup.open ? (openBlock(), createElementBlock("div", _hoisted_2$h, [
+		], 8, _hoisted_1$j), $setup.open ? (openBlock(), createElementBlock("div", _hoisted_2$h, [
 			$props.hint ? (openBlock(), createElementBlock(
 				"p",
 				_hoisted_3$g,
@@ -202722,7 +202799,7 @@ var _sfc_main$k = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-cm[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\n}\n.ub-cm__bar[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-cm__spacer[data-v-77fa46d6] {\r\n  flex: 1 1 auto;\n}\n.ub-cm__confirm[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  margin: var(--ub-s3) var(--ub-s4) 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-danger-soft);\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-cm__pane[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cm__actions[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cm__empty[data-v-77fa46d6] {\r\n  padding: var(--ub-s4);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-control);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: center;\n}\n.ub-cm__meta[data-v-77fa46d6] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  overflow-wrap: anywhere;\n}\n.ub-cm__body[data-v-77fa46d6] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.6;\r\n  overflow-wrap: anywhere;\n}\n.ub-cm__error[data-v-77fa46d6] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cm__tags[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s1);\n}\n.ub-cm__hero[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s4);\r\n  border-radius: var(--ub-r-card);\r\n  background: linear-gradient(140deg, var(--ub-accent-soft), transparent 70%), var(--ub-sunken);\n}\n.ub-cm__hero-title[data-v-77fa46d6] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-lg);\r\n  font-weight: 800;\n}\n.ub-cm__progress[data-v-77fa46d6] {\r\n  height: 6px;\r\n  border-radius: 999px;\r\n  background: var(--ub-line-soft);\r\n  overflow: hidden;\n}\n.ub-cm__progress span[data-v-77fa46d6] {\r\n  display: block;\r\n  height: 100%;\r\n  border-radius: inherit;\r\n  background: var(--ub-accent);\n}\n.ub-cm__node[data-v-77fa46d6] {\r\n  padding: var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\n}\n.ub-cm__node-head[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-cm__turns[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  margin: var(--ub-s2) 0 0;\r\n  padding: 0;\r\n  list-style: none;\n}\n.ub-cm__turns li[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-left: 3px solid var(--ub-line);\r\n  border-radius: 0 6px 6px 0;\r\n  background: var(--ub-input-bg);\n}\n.ub-cm__turns li.is-done[data-v-77fa46d6] {\r\n  border-left-color: var(--ub-ok);\r\n  opacity: 0.6;\n}\n.ub-cm__turns li.is-current[data-v-77fa46d6] {\r\n  border-left-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\n}\n.ub-cm__turn-goal[data-v-77fa46d6] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-cm__history[data-v-77fa46d6] {\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  padding: var(--ub-s2) var(--ub-s3);\n}\n.ub-cm__history > summary[data-v-77fa46d6] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\r\n  cursor: pointer;\n}\n.ub-cm__history--inner[data-v-77fa46d6] {\r\n  margin-top: var(--ub-s2);\n}\n.ub-cm__history-body[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  margin-top: var(--ub-s2);\n}\n.ub-cm__list[data-v-77fa46d6] {\r\n  margin: 0;\r\n  padding-left: 1.4em;\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-cm__status-grid[data-v-77fa46d6] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-cm__status[data-v-77fa46d6] {\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\n}\n.ub-cm__status.is-bad[data-v-77fa46d6] {\r\n  background: var(--ub-danger-soft);\n}\n.ub-cm__box[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\n}\n.ub-cm__box.is-warn[data-v-77fa46d6] {\r\n  border-color: color-mix(in srgb, var(--ub-warn) 45%, var(--ub-line-soft));\r\n  background: var(--ub-warn-soft);\n}\n.ub-cm__box-title[data-v-77fa46d6],\r\n.ub-cm__module-head[data-v-77fa46d6] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\r\n  font-weight: 800;\n}\n.ub-cm__module-head span[data-v-77fa46d6] {\r\n  margin-left: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-cm__checks[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2) var(--ub-s4);\n}\n.ub-cm__fix + .ub-cm__fix[data-v-77fa46d6] {\r\n  padding-top: var(--ub-s2);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cm__module[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding-top: var(--ub-s3);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cm__cards[data-v-77fa46d6] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-cm__card[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  min-width: 0;\r\n  padding: var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-panel);\n}\n.ub-cm__card.is-retired[data-v-77fa46d6] {\r\n  opacity: 0.55;\n}\ndetails.ub-cm__card > summary[data-v-77fa46d6] {\r\n  cursor: pointer;\n}\n.ub-cm__reqs[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\n}\n.ub-cm__req[data-v-77fa46d6] {\r\n  display: flex;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s2);\n}\n.ub-cm__req-index[data-v-77fa46d6] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: 1.8em;\r\n  height: 1.8em;\r\n  margin-top: 6px;\r\n  border-radius: 50%;\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 800;\n}\r\n", "src/presentation-v3/parts/ContinuationMaterials.vue#style-0-77fa46d6");
 var ContinuationMaterials_vue_vue_type_style_index_0_scoped_77fa46d6_lang = null;
 
-const _hoisted_1$h = { class: "ub-cm" };
+const _hoisted_1$i = { class: "ub-cm" };
 const _hoisted_2$g = { class: "ub-cm__bar" };
 const _hoisted_3$f = {
 	key: 0,
@@ -202939,7 +203016,7 @@ const _hoisted_109 = {
 	role: "alert"
 };
 function _sfc_render$j(_ctx, _cache, $props, $setup, $data, $options) {
-	return openBlock(), createElementBlock("div", _hoisted_1$h, [
+	return openBlock(), createElementBlock("div", _hoisted_1$i, [
 		createBaseVNode("div", _hoisted_2$g, [
 			createVNode($setup["UbSegmented"], {
 				modelValue: $setup.activeTab,
@@ -205356,7 +205433,7 @@ var _sfc_main$j = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-cont__actions[data-v-57f4a57a] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cont__error[data-v-57f4a57a] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cont__notice[data-v-57f4a57a] {\r\n  color: var(--ub-warn);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-cont__pad[data-v-57f4a57a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4) 0;\n}\n.ub-cont__groups[data-v-57f4a57a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cont__groups[data-v-57f4a57a] .ub-row {\r\n  padding-left: 0;\r\n  padding-right: 0;\n}\n.ub-cont__meta[data-v-57f4a57a] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-cont__checks[data-v-57f4a57a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) 0;\n}\n.ub-cont__subhead[data-v-57f4a57a] {\r\n  margin: var(--ub-s2) 0 0;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 700;\n}\r\n", "src/presentation-v3/pages/ContinuationPage.vue#style-0-57f4a57a");
 var ContinuationPage_vue_vue_type_style_index_0_scoped_57f4a57a_lang = null;
 
-const _hoisted_1$g = {
+const _hoisted_1$h = {
 	key: 0,
 	class: "ub-cont__error"
 };
@@ -205444,7 +205521,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 					}, null, 8, ["model-value"]),
 					$setup.outlineDraftError ? (openBlock(), createElementBlock(
 						"p",
-						_hoisted_1$g,
+						_hoisted_1$h,
 						toDisplayString($setup.outlineDraftError),
 						1
 						/* TEXT */
@@ -207874,7 +207951,7 @@ var _sfc_main$i = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-dash-health[data-v-1ee4f1f2] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--ub-u) * 340)), 1fr));\r\n  gap: var(--ub-s3);\n}\n.ub-health[data-v-1ee4f1f2] {\r\n  --ub-health-tone: var(--ub-text-3);\r\n  display: flex;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\r\n  padding: var(--ub-s4);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  box-shadow: var(--ub-card-shadow);\n}\n.ub-health.is-ok[data-v-1ee4f1f2] {\r\n  --ub-health-tone: var(--ub-ok);\n}\n.ub-health.is-info[data-v-1ee4f1f2] {\r\n  --ub-health-tone: var(--ub-accent-ink);\n}\n.ub-health.is-warning[data-v-1ee4f1f2] {\r\n  --ub-health-tone: var(--ub-warn);\n}\n.ub-health.is-error[data-v-1ee4f1f2] {\r\n  --ub-health-tone: var(--ub-danger);\r\n  border-color: color-mix(in srgb, var(--ub-danger) 40%, var(--ub-line-soft));\n}\n.ub-health__icon[data-v-1ee4f1f2] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: calc(var(--ub-u) * 36);\r\n  height: calc(var(--ub-u) * 36);\r\n  border-radius: 11px;\r\n  background: color-mix(in srgb, var(--ub-health-tone) 15%, transparent);\r\n  color: var(--ub-health-tone);\n}\n.ub-health__body[data-v-1ee4f1f2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-health__head[data-v-1ee4f1f2] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2);\n}\n.ub-health__title[data-v-1ee4f1f2] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\n}\n.ub-health__summary[data-v-1ee4f1f2] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-health__action[data-v-1ee4f1f2] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  align-self: flex-start;\r\n  margin-top: var(--ub-s1);\r\n  padding: 0;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--ub-accent-ink);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\r\n  cursor: pointer;\n}\n.ub-health__action[data-v-1ee4f1f2]:hover {\r\n  text-decoration: underline;\n}\r\n", "src/presentation-v3/pages/DashboardPage.vue#style-0-1ee4f1f2");
 var DashboardPage_vue_vue_type_style_index_0_scoped_1ee4f1f2_lang = null;
 
-const _hoisted_1$f = {
+const _hoisted_1$g = {
 	class: "ub-dash-health",
 	"aria-label": "运行概览"
 };
@@ -207891,7 +207968,7 @@ const _hoisted_8$5 = ["onClick"];
 function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], { lead: $setup.dashboardCopy.panels.healthDescription }, {
 		default: withCtx(() => [
-			createBaseVNode("section", _hoisted_1$f, [(openBlock(true), createElementBlock(
+			createBaseVNode("section", _hoisted_1$g, [(openBlock(true), createElementBlock(
 				Fragment,
 				null,
 				renderList($setup.healthCards, (item) => {
@@ -209548,7 +209625,7 @@ var _sfc_main$h = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-dormant__notes[data-v-527fd598] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4) 0;\n}\n.ub-dormant__issues[data-v-527fd598] {\r\n  margin: var(--ub-s1) 0 0;\r\n  padding-left: 1.2em;\n}\n.ub-dormant__empty[data-v-527fd598] {\r\n  padding: var(--ub-s5) var(--ub-s4);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: center;\n}\n.ub-dormant__group[data-v-527fd598] {\r\n  padding: var(--ub-s2) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 800;\n}\n.ub-dormant__group[data-v-527fd598]:first-child {\r\n  border-top: 0;\n}\n.ub-dormant__blocked[data-v-527fd598] {\r\n  display: block;\r\n  color: var(--ub-warn);\n}\r\n", "src/presentation-v3/parts/DormantDataSection.vue#style-0-527fd598");
 var DormantDataSection_vue_vue_type_style_index_0_scoped_527fd598_lang = null;
 
-const _hoisted_1$e = {
+const _hoisted_1$f = {
 	key: 0,
 	class: "ub-dormant__notes"
 };
@@ -209585,7 +209662,7 @@ function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 			_: 1
 		}, 8, ["disabled", "onClick"])]),
 		default: withCtx(() => [
-			$setup.dormant.listError.value || $setup.dormant.integrityIssues.value.length ? (openBlock(), createElementBlock("div", _hoisted_1$e, [$setup.dormant.listError.value ? (openBlock(), createBlock($setup["UbCallout"], {
+			$setup.dormant.listError.value || $setup.dormant.integrityIssues.value.length ? (openBlock(), createElementBlock("div", _hoisted_1$f, [$setup.dormant.listError.value ? (openBlock(), createBlock($setup["UbCallout"], {
 				key: 0,
 				kind: "error"
 			}, {
@@ -209985,7 +210062,7 @@ ${floorNote}确认继续？`,
 injectSfcStyle("\n.ub-dm__text[data-v-948ff65b] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-dm__strong[data-v-948ff65b] {\r\n  color: var(--ub-text);\n}\n.ub-dm__block[data-v-948ff65b] {\r\n  display: block;\r\n  margin-top: 2px;\n}\n.ub-dm__buttons[data-v-948ff65b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\n}\n.ub-dm__group[data-v-948ff65b] {\r\n  padding: var(--ub-s2) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\n}\n.ub-dm__sheets[data-v-948ff65b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2) var(--ub-s4);\n}\n.ub-dm__danger[data-v-948ff65b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: color-mix(in srgb, var(--ub-danger-soft) 40%, transparent);\n}\r\n", "src/presentation-v3/pages/DataMgmtPage.vue#style-0-948ff65b");
 var DataMgmtPage_vue_vue_type_style_index_0_scoped_948ff65b_lang = null;
 
-const _hoisted_1$d = { class: "ub-dm__text" };
+const _hoisted_1$e = { class: "ub-dm__text" };
 const _hoisted_2$c = { class: "ub-dm__buttons" };
 const _hoisted_3$b = { class: "ub-dm__text" };
 const _hoisted_4$9 = { class: "ub-dm__buttons" };
@@ -210105,7 +210182,7 @@ function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
 				icon: "fa-solid fa-code-merge",
 				padded: ""
 			}, {
-				default: withCtx(() => [createBaseVNode("p", _hoisted_1$d, [
+				default: withCtx(() => [createBaseVNode("p", _hoisted_1$e, [
 					createTextVNode(
 						" 当前聊天同时检测到 legacy-v1 与 V2 数据。决议：" + toDisplayString($setup.flow.mixedStorageDecision.value.kind) + "。 ",
 						1
@@ -210579,7 +210656,7 @@ var _sfc_main$f = /*@__PURE__*/ defineComponent({
 injectSfcStyle("\n.ub-dr__more[data-v-5ba6a7f4] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border: 0;\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-dr__more[data-v-5ba6a7f4]:hover {\r\n  color: var(--ub-text);\n}\n.ub-dr__chevron[data-v-5ba6a7f4] {\r\n  font-size: 0.75em;\r\n  transition: transform 0.16s ease;\n}\n.ub-dr__chevron.is-open[data-v-5ba6a7f4] {\r\n  transform: rotate(90deg);\n}\n.ub-dr__more ~ .ub-row[data-v-5ba6a7f4] {\r\n  background: color-mix(in srgb, var(--ub-sunken) 50%, transparent);\n}\n.ub-dr__picker[data-v-5ba6a7f4] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__meta[data-v-5ba6a7f4] {\r\n  margin: 0;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-dr__actions[data-v-5ba6a7f4] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-dr__output[data-v-5ba6a7f4] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\r\n", "src/presentation-v3/pages/DecisionRecallPage.vue#style-0-5ba6a7f4");
 var DecisionRecallPage_vue_vue_type_style_index_0_scoped_5ba6a7f4_lang = null;
 
-const _hoisted_1$c = {
+const _hoisted_1$d = {
 	key: 0,
 	class: "ub-dr__picker"
 };
@@ -210716,7 +210793,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 							autocomplete: "off",
 							"aria-label": "决策模型名",
 							onChange: $setup.setModelText
-						}, null, 8, ["model-value", "placeholder"])), $setup.store.settings.provider !== "custom" ? (openBlock(), createElementBlock("div", _hoisted_1$c, [createVNode($setup["UbSelect"], {
+						}, null, 8, ["model-value", "placeholder"])), $setup.store.settings.provider !== "custom" ? (openBlock(), createElementBlock("div", _hoisted_1$d, [createVNode($setup["UbSelect"], {
 							options: $setup.modelOptions,
 							"model-value": $setup.store.endpoint.model,
 							placeholder: "从常用模型里选",
@@ -211011,12 +211088,30 @@ var _sfc_main$e = /*@__PURE__*/ defineComponent({
     setup(__props, { expose: __expose }) {
         __expose();
         const devOptions = useDevOptions();
-        const __returned__ = { devOptions, get copy() { return developerCopy; }, UbPage, UbRow, UbSection, UbSwitch };
+        const GUARD_TARGET_LABELS = {
+            fill: '填表',
+            plot: '剧情推进',
+            continuation: '智能续写',
+            agent: 'Agent',
+            optimize: '正文替换',
+            template: '改表助手',
+            summary: '交火模式（总结索引）',
+            worldbook: '外部脚本调用',
+        };
+        const GUARD_TARGETS = SCOPE_GUARD_TARGET_KEYS_ACU.map(key => ({ key, label: GUARD_TARGET_LABELS[key] }));
+        const __returned__ = { devOptions, GUARD_TARGET_LABELS, GUARD_TARGETS, get copy() { return developerCopy; }, UbCheck, UbPage, UbRow, UbSection, UbSwitch };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
+injectSfcStyle("\n.ub-dev__guard-targets[data-v-ab5636fc] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2) var(--ub-s4);\r\n  padding: var(--ub-s1) 0;\n}\r\n", "src/presentation-v3/pages/DeveloperPage.vue#style-0-ab5636fc");
+var DeveloperPage_vue_vue_type_style_index_0_scoped_ab5636fc_lang = null;
+
+const _hoisted_1$c = {
+	class: "ub-dev__guard-targets",
+	"data-scope-guard-targets": ""
+};
 function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], { lead: "面向开发与排障的选项。默认关闭，不建议无经验用户开启。" }, {
 		default: withCtx(() => [createVNode($setup["UbSection"], {
@@ -211060,7 +211155,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 				}),
 				createVNode($setup["UbRow"], {
 					label: "执行边界提示词",
-					hint: "开启后，数据库发出的每一次 AI 请求（填表、剧情推进、Agent、续写等）都会额外附加一段约束提示词，要求模型只做指令要求的事、不编造、不越范围。适合 MiniMax M3.1 Flash 这类爱「顺便多做」的模型；默认关闭，关闭时请求与原来完全一致。"
+					hint: "开启后，在下方勾选的功能发出 AI 请求时额外附加一段约束提示词，要求模型只做指令要求的事、不编造、不越范围。适合 MiniMax M3.1 Flash 这类爱「顺便多做」的模型；默认关闭，关闭时请求与原来完全一致。"
 				}, {
 					default: withCtx(() => [createVNode($setup["UbSwitch"], {
 						"model-value": $setup.devOptions.scopeGuardPrompt.value,
@@ -211068,14 +211163,40 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 						"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.devOptions.setScopeGuardPrompt($event))
 					}, null, 8, ["model-value"])]),
 					_: 1
-				})
+				}),
+				$setup.devOptions.scopeGuardPrompt.value ? (openBlock(), createBlock($setup["UbRow"], {
+					key: 0,
+					label: "附加到",
+					hint: "默认只勾填表——压测只在填表上验证过效果。智能续写和外部脚本本身要写正文，勾选前建议先试一轮。",
+					stack: ""
+				}, {
+					default: withCtx(() => [createBaseVNode("div", _hoisted_1$c, [(openBlock(true), createElementBlock(
+						Fragment,
+						null,
+						renderList($setup.GUARD_TARGETS, (target) => {
+							return openBlock(), createBlock($setup["UbCheck"], {
+								key: target.key,
+								"model-value": $setup.devOptions.scopeGuardTargets.value[target.key],
+								label: target.label,
+								"onUpdate:modelValue": ($event) => $setup.devOptions.setScopeGuardTarget(target.key, $event)
+							}, null, 8, [
+								"model-value",
+								"label",
+								"onUpdate:modelValue"
+							]);
+						}),
+						128
+						/* KEYED_FRAGMENT */
+					))])]),
+					_: 1
+				})) : createCommentVNode("v-if", true)
 			]),
 			_: 1
 		}, 8, ["title", "description"])]),
 		_: 1
 	});
 }
-var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$e, [["render", _sfc_render$d]]);
+var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$e, [["render", _sfc_render$d], ["__scopeId", "data-v-ab5636fc"]]);
 
 /** 宿主世界书 API 挂起时确认弹窗不能被无限期拖住，超过该时长即降级为提示文案。 */
 const INJECTION_TARGET_RESOLVE_TIMEOUT_MS = 1500;
