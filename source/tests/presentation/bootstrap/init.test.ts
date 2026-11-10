@@ -47,6 +47,9 @@ const m = vi.hoisted(() => ({
   shouldProcessSummary: vi.fn(),
   captureVault: vi.fn(),
   deletedChatVectorCleanup: vi.fn(async () => ({})),
+  noteChatSwitchForDeletion: vi.fn(),
+  takeDeletedOpenChat: vi.fn((_name: string): any => null),
+  redeleteResurrectedChat: vi.fn(async (_chat: any): Promise<string> => 'absent'),
   dormantAudit: vi.fn(),
   clearAutoFillDebounce: vi.fn(),
   cancelPendingAutoTasks: vi.fn(),
@@ -72,6 +75,11 @@ const m = vi.hoisted(() => ({
 vi.mock('../../../src/shared/host-api', () => ({ SillyTavern_API_ACU: m.api }));
 vi.mock('../../../src/shared/env', () => ({ topLevelWindow_ACU: { AutoCardUpdaterAPI: { _notifyTableUpdate: m.notify } } }));
 vi.mock('../../../src/presentation/theme/toast', () => ({ showToastr_ACU: vi.fn() }));
+vi.mock('../../../src/service/chat/deleted-chat-resurrection-guard', () => ({
+  noteChatSwitchForDeletionGuard_ACU: () => m.noteChatSwitchForDeletion(),
+  takeDeletedOpenChatCandidate_ACU: (name: string) => m.takeDeletedOpenChat(name),
+  redeleteResurrectedChat_ACU: (chat: any) => m.redeleteResurrectedChat(chat),
+}));
 vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect', () => ({ attemptToLoadCoreApis_ACU: vi.fn(() => true), handleNewMessageDebounced_ACU: (...args: any[]) => m.handleNewMessage(...args), cancelPendingAutoTasks_ACU: (...args: any[]) => m.cancelPendingAutoTasks(...args) }));
 vi.mock('../../../src/service/runtime/helpers-remaining', () => ({ ensureInitialSeedCheckpoint_ACU: (...args: any[]) => m.ensureSeedCheckpoint(...args), handleChatCompletionReady_ACU: vi.fn(), loadPresetAndCleanCharacterData_ACU: m.loadPreset }));
 vi.mock('../../../src/service/table/runtime-only-pending-flush', () => ({ flushRuntimeOnlyPendingChanges_ACU: (...args: any[]) => m.runtimeOnlyFlush(...args) }));
@@ -376,6 +384,53 @@ describe('mainInitialize_ACU 宿主事件桥接线注册', () => {
     expect(m.generationEndedHandler).toBeTypeOf('function');
     expect(m.afterCommandsHandler).toBeTypeOf('function');
     expect(m.settingsReadyHandler).toBeTypeOf('function');
+  });
+});
+
+describe('删除当前聊天后被存盘写回的补删接线', () => {
+  it('切换聊天时同步记下刚关掉的聊天（宿主随后才发删除事件）', () => {
+    void m.chatChanged!('');
+    expect(m.noteChatSwitchForDeletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('删的是刚关掉的聊天：当场认领，2 秒后核对并补删；不是则什么都不做', async () => {
+    vi.useFakeTimers();
+    try {
+      m.chatDeletedHandler!('别的聊天');
+      expect(m.takeDeletedOpenChat).toHaveBeenCalledWith('别的聊天');
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(m.redeleteResurrectedChat).not.toHaveBeenCalled();
+
+      const chat = { avatar: 'aria.png', name: '旧聊天' };
+      m.takeDeletedOpenChat.mockReturnValueOnce(chat);
+      m.redeleteResurrectedChat.mockResolvedValueOnce('redeleted');
+      m.chatDeletedHandler!('旧聊天');
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(m.redeleteResurrectedChat).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(m.redeleteResurrectedChat).toHaveBeenCalledWith(chat);
+      const toast = vi.mocked((await import('../../../src/presentation/theme/toast')).showToastr_ACU);
+      expect(toast).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('写回的聊天被酒馆重新打开、或补删没删成：提示用户再删一次', async () => {
+    const toast = vi.mocked((await import('../../../src/presentation/theme/toast')).showToastr_ACU);
+    vi.useFakeTimers();
+    try {
+      for (const outcome of ['reopened', 'delete_failed']) {
+        toast.mockClear();
+        m.takeDeletedOpenChat.mockReturnValueOnce({ avatar: 'aria.png', name: '旧聊天' });
+        m.redeleteResurrectedChat.mockResolvedValueOnce(outcome);
+        m.chatDeletedHandler!('旧聊天');
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(toast).toHaveBeenCalledWith('warning', expect.stringContaining('再删一次'), expect.anything());
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

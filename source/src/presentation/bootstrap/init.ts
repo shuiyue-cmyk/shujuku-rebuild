@@ -153,6 +153,11 @@ import {
 } from '../../service/vector/summary-vector-index-chat-deletion-gc';
 import { SUMMARY_VECTOR_INDEX_SAFE_GC_GRACE_PERIOD_MS_ACU } from '../../service/vector/summary-vector-index-storage-service';
 import {
+  noteChatSwitchForDeletionGuard_ACU,
+  redeleteResurrectedChat_ACU,
+  takeDeletedOpenChatCandidate_ACU,
+} from '../../service/chat/deleted-chat-resurrection-guard';
+import {
   topLevelWindow_ACU
 } from '../../shared/env';
 import {
@@ -825,13 +830,36 @@ export   function mainInitialize_ACU() {
         // [L4] 与其余注册一致的 eventTypes 存在性守卫（eventSource/eventTypes 整体缺失已有外层守卫）。
         // [H2/M3] 处理体抽至模块级 handleChatChangedEvent_ACU：整体 try/catch，延迟链走互斥守卫入口。
         if (SillyTavern_API_ACU.eventTypes.CHAT_CHANGED) {
+          // 删除当前聊天的补删要知道「切换前开着的是哪个聊天」：先记下插件加载时已打开的那个。
+          noteChatSwitchForDeletionGuard_ACU();
           SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_CHANGED, (chatFileName: string) => {
             // 同步标记：宿主载入聊天时收起停止按钮派发的无配对 ENDED 只立新聊天基线，不误开自动链
             markChatChangedForEndedGate_ACU();
+            // 宿主删除打开中的聊天时先切走、再发删除事件：此刻同步记下刚关掉的聊天
+            noteChatSwitchForDeletionGuard_ACU();
             chatChangeEpoch_ACU += 1;
             void handleChatChangedEvent_ACU(chatFileName);
           });
         }
+
+        // 删除打开中的聊天时，插件存盘若落在宿主排空存盘队列之后、切走之前，宿主会把被删聊天原样写回。
+        // 删除事件到达时当场认领（下一次切换会覆盖记录），2s 后等写回落盘再核对：没被打开就补删，
+        // 被宿主当作接替聊天重新打开、或补删没删成，就请用户再删一次。
+        const handleChatDeletedForResurrection_ACU = (deletedChatName: unknown): void => {
+          const candidate = takeDeletedOpenChatCandidate_ACU(String(deletedChatName ?? '').trim());
+          if (!candidate) return;
+          setTimeout(() => {
+            void redeleteResurrectedChat_ACU(candidate).then(outcome => {
+              if (outcome === 'reopened' || outcome === 'delete_failed') {
+                showToastr_ACU('warning', `聊天「${candidate.name}」在删除途中被数据库存盘写回了，如仍要删除，请再删一次。`, '数据库');
+              } else if (outcome !== 'absent') {
+                logWarn_ACU(`[删除聊天] 「${candidate.name}」写回核对：${outcome === 'redeleted' ? '删除途中被存盘写回，已补删' : '聊天列表读取不全，未核对'}`);
+              }
+            }).catch((error: any) => {
+              logWarn_ACU('[删除聊天] 核对被删聊天是否被写回失败:', error?.message || error);
+            });
+          }, 2000);
+        };
 
         // P7：聊天被删除时清理其向量外置存档 / IDB 缓存 / flush 任务。
         // 延迟 5s 执行：等宿主完成删除后的状态收敛（characters[].chats、当前聊天切换）再枚举校验。
@@ -849,7 +877,10 @@ export   function mainInitialize_ACU() {
           setTimeout(runCleanup, SUMMARY_VECTOR_INDEX_SAFE_GC_GRACE_PERIOD_MS_ACU + 60_000);
         };
         if (SillyTavern_API_ACU.eventTypes.CHAT_DELETED) {
-          SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_DELETED, handleChatDeletedForVectorCleanup_ACU);
+          SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_DELETED, (deletedChatName: unknown) => {
+            handleChatDeletedForResurrection_ACU(deletedChatName);
+            handleChatDeletedForVectorCleanup_ACU(deletedChatName);
+          });
           logDebug_ACU('[交火向量索引] 已注册 CHAT_DELETED 向量清理监听');
         }
         // GROUP_CHAT_DELETED 在本地 eventTypes 类型声明快照中缺失（运行时存在），用索引访问。

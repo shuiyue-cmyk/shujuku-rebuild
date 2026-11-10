@@ -34,6 +34,8 @@ import {
   setChatMessages_ACU,
   emitMessageUpdated_ACU,
   listAllHostChatNames_ACU,
+  fetchCharacterChatNames_ACU,
+  deleteCharacterChatFile_ACU,
 } from '../../../src/data/gateways/chat-gateway';
 
 beforeEach(() => {
@@ -263,5 +265,38 @@ describe('listAllHostChatNames_ACU', () => {
     });
 
     expect(await listAllHostChatNames_ACU()).toBeNull();
+  });
+});
+
+// ═══ 单个角色的聊天读取 / 删除（删除当前聊天后被存盘写回的补删使用）═══
+describe('fetchCharacterChatNames_ACU / deleteCharacterChatFile_ACU', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('读某个角色的全部聊天名（去掉 .jsonl）；请求失败时返回 null，不当成没有聊天', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => [{ file_name: '旧聊天.jsonl' }, { file_name: '新聊天.jsonl' }] }));
+    vi.stubGlobal('fetch', fetchMock);
+    expect([...((await fetchCharacterChatNames_ACU('aria.png')) as Set<string>)].sort()).toEqual(['新聊天', '旧聊天']);
+    expect(fetchMock).toHaveBeenCalledWith('/api/characters/chats', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ avatar_url: 'aria.png', simple: true }),
+    }));
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}) })));
+    expect(await fetchCharacterChatNames_ACU('aria.png')).toBeNull();
+  });
+
+  it('按宿主删除接口删掉指定角色的指定聊天文件，返回是否删成', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await deleteCharacterChatFile_ACU('aria.png', '旧聊天')).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith('/api/chats/delete', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ chatfile: '旧聊天.jsonl', avatar_url: 'aria.png' }),
+    }));
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404 })));
+    expect(await deleteCharacterChatFile_ACU('aria.png', '旧聊天')).toBe(false);
   });
 });

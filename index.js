@@ -5816,6 +5816,76 @@ async function setChatMessages_ACU(messages, options) {
     return true;
 }
 // ═══ 全量聊天枚举 ═══
+/** 宿主请求头的拷贝（补上 JSON Content-Type），不改宿主请求头对象本身。 */
+function buildHostJsonRequestHeaders_ACU() {
+    const headers = { ...getHostRequestHeaders_ACU() };
+    if (!headers['Content-Type'] && !headers['content-type']) {
+        headers['Content-Type'] = 'application/json';
+    }
+    return headers;
+}
+/**
+ * 读某个角色的全部聊天名（归一化，去掉 .jsonl）。
+ * 与 listAllHostChatNames_ACU 同一 fail-safe 契约：请求失败或响应不能证明列表完整时返回 null。
+ */
+async function fetchCharacterChatNames_ACU(avatar) {
+    const names = new Set();
+    try {
+        const response = await fetch('/api/characters/chats', {
+            method: 'POST',
+            headers: buildHostJsonRequestHeaders_ACU(),
+            body: JSON.stringify({ avatar_url: avatar, simple: true }),
+        });
+        if (!response.ok) {
+            logWarn_ACU(`[ChatGateway] 枚举角色聊天失败（HTTP ${response.status}）：${avatar}`);
+            return null;
+        }
+        const payload = await response.json();
+        // TT character-routes.js 的完整响应契约是数组（无角色/无聊天均为 []）。
+        // 2xx error 对象、旧版对象形态或畸形 entry 都不能证明枚举完整，否则 GC
+        // 会把「无法枚举」误判成「没有存活聊天」并删除向量。
+        if (!Array.isArray(payload)) {
+            logWarn_ACU(`[ChatGateway] 角色聊天响应不是数组，无法证明枚举完整：${avatar}`);
+            return null;
+        }
+        for (const entry of payload) {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry) || typeof entry.file_name !== 'string') {
+                logWarn_ACU(`[ChatGateway] 角色聊天响应包含畸形 entry，无法证明枚举完整：${avatar}`);
+                return null;
+            }
+            const fileName = entry.file_name.trim();
+            if (!fileName) {
+                logWarn_ACU(`[ChatGateway] 角色聊天响应包含空 file_name，无法证明枚举完整：${avatar}`);
+                return null;
+            }
+            const normalized = cleanChatName_ACU(fileName);
+            if (!normalized) {
+                logWarn_ACU(`[ChatGateway] 角色聊天名无法归一化，无法证明枚举完整：${avatar}`);
+                return null;
+            }
+            names.add(normalized);
+        }
+    }
+    catch (error) {
+        logWarn_ACU(`[ChatGateway] 枚举角色聊天异常：${avatar}: ${error?.message || error}`);
+        return null;
+    }
+    return names;
+}
+/**
+ * 按宿主的删除接口删掉某个角色的一个聊天文件（TT deleteCharacterChat 同一请求体）。
+ * 只删文件：不发 CHAT_DELETED、不动当前打开的聊天，调用方须确认它不是打开中的聊天。
+ */
+async function deleteCharacterChatFile_ACU(avatar, chatName) {
+    const response = await fetch('/api/chats/delete', {
+        method: 'POST',
+        headers: buildHostJsonRequestHeaders_ACU(),
+        body: JSON.stringify({ chatfile: `${chatName}.jsonl`, avatar_url: avatar }),
+    });
+    if (!response.ok)
+        logWarn_ACU(`[ChatGateway] 删除聊天文件失败（HTTP ${response.status}）：${avatar} / ${chatName}`);
+    return response.ok;
+}
 /**
  * 枚举宿主上全部存活聊天的归一化名称（角色聊天 + 群组聊天）。
  *
@@ -5833,11 +5903,6 @@ async function listAllHostChatNames_ACU() {
         return null;
     }
     const names = new Set();
-    // 拷贝一份再补 Content-Type，不改宿主请求头对象本身
-    const headers = { ...getHostRequestHeaders_ACU() };
-    if (!headers['Content-Type'] && !headers['content-type']) {
-        headers['Content-Type'] = 'application/json';
-    }
     for (const character of characters) {
         // 缺头像标识就查不到这个角色的聊天，按枚举残缺处理，不能当成它没有聊天（上游 #39 修法）
         const avatar = typeof character?.avatar === 'string' ? character.avatar.trim() : '';
@@ -5845,46 +5910,10 @@ async function listAllHostChatNames_ACU() {
             logWarn_ACU('[ChatGateway] 角色条目缺少头像标识，无法证明枚举完整');
             return null;
         }
-        try {
-            const response = await fetch('/api/characters/chats', {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({ avatar_url: avatar, simple: true }),
-            });
-            if (!response.ok) {
-                logWarn_ACU(`[ChatGateway] 枚举角色聊天失败（HTTP ${response.status}）：${avatar}`);
-                return null;
-            }
-            const payload = await response.json();
-            // TT character-routes.js 的完整响应契约是数组（无角色/无聊天均为 []）。
-            // 2xx error 对象、旧版对象形态或畸形 entry 都不能证明枚举完整，否则 GC
-            // 会把「无法枚举」误判成「没有存活聊天」并删除向量。
-            if (!Array.isArray(payload)) {
-                logWarn_ACU(`[ChatGateway] 角色聊天响应不是数组，无法证明枚举完整：${avatar}`);
-                return null;
-            }
-            for (const entry of payload) {
-                if (!entry || typeof entry !== 'object' || Array.isArray(entry) || typeof entry.file_name !== 'string') {
-                    logWarn_ACU(`[ChatGateway] 角色聊天响应包含畸形 entry，无法证明枚举完整：${avatar}`);
-                    return null;
-                }
-                const fileName = entry.file_name.trim();
-                if (!fileName) {
-                    logWarn_ACU(`[ChatGateway] 角色聊天响应包含空 file_name，无法证明枚举完整：${avatar}`);
-                    return null;
-                }
-                const normalized = cleanChatName_ACU(fileName);
-                if (!normalized) {
-                    logWarn_ACU(`[ChatGateway] 角色聊天名无法归一化，无法证明枚举完整：${avatar}`);
-                    return null;
-                }
-                names.add(normalized);
-            }
-        }
-        catch (error) {
-            logWarn_ACU(`[ChatGateway] 枚举角色聊天异常：${avatar}: ${error?.message || error}`);
+        const characterChatNames = await fetchCharacterChatNames_ACU(avatar);
+        if (!characterChatNames)
             return null;
-        }
+        characterChatNames.forEach(name => names.add(name));
     }
     try {
         const groups = globalThis.SillyTavern?.getContext?.()?.groups
@@ -95807,7 +95836,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261110-1530"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261110-1549"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95826,7 +95855,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1530";
+        const stamp = "20261110-1549";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -122885,10 +122914,11 @@ function buildAutoUpdatePlan_ACU(liveChat, tableData, settings, isolationKey, pe
             logDebug_ACU(`[Trigger Check] EffIndicesLen: ${effectiveAiIndices.length}, StartIndex: ${startIndexInAiArray}`);
             if (startIndexInAiArray < effectiveAiIndices.length) {
                 const unupdatedAiIndices = effectiveAiIndices.slice(startIndexInAiArray);
-                logDebug_ACU(`[Trigger Check] Unupdated: ${unupdatedAiIndices.length}`);
-                // 历史补填范围 = 完整待更新缺口（计划 §5.6：新增表历史前沿为 0 时必须能从第 1 楼补到当前楼）。
-                // contextDepth（上下文层数）因此只剩「0 = 不参与自动填表」这一个作用（见上面 threshold > 0），
-                // 数值大小不影响补哪些楼，也不影响 AI 读到的上下文——每批提示词只带本批楼层（D02-07）。
+                const contextScopeIndices = effectiveAiIndices.slice(-threshold);
+                logDebug_ACU(`[Trigger Check] Unupdated: ${unupdatedAiIndices.length}, ContextScope: ${contextScopeIndices.length}`);
+                // 历史补填范围 = 完整待更新缺口（不再与 contextDepth 求交）。
+                // 计划 §5.6：新增表历史前沿为 0 时必须能从第 1 楼补到当前楼，
+                // 不能把 contextDepth（AI prompt 上下文窗口）当作历史补填范围。
                 const indicesToUpdate = unupdatedAiIndices;
                 const requiresBoundaryStaging = originalFullIndex >= 0
                     && indicesToUpdate.length > 0
@@ -134562,6 +134592,60 @@ async function preloadSummaryVectorIndexCacheForCurrentChat_ACU() {
             error: message,
         };
     }
+}
+
+/**
+ * service/chat/deleted-chat-resurrection-guard.ts — 删除当前聊天后被存盘写回的补删
+ *
+ * TT 2.4.0 删除打开中的角色聊天：排空宿主存盘队列 → 删文件 → 读剩余聊天列表、清空界面 →
+ * 切到另一个聊天（CHAT_CHANGED）→ CHAT_DELETED(文件名)。排空之后、切走之前若插件的存盘进了宿主队列，
+ * 宿主按仍指向被删聊天的文件名写盘，后端发现文件不在就直接新建（不留删除记录），被删聊天带着内容回到列表；
+ * 写回早于宿主读列表时，宿主还会把它当作接替的聊天重新打开。
+ *
+ * CHAT_DELETED 只带文件名、不带角色，删别的聊天也发同一个事件。所以每次切换时记下「刚关掉的是哪个
+ * 角色的哪个聊天」，紧随其后的同名删除才算删的是打开中的那个；稍后核对文件是否又在：在且没被打开就补删，
+ * 被重新打开就交给调用方提示用户（在宿主脚下删打开中的聊天会让宿主状态错乱）。
+ * 群聊不处理：宿主从内存列表挑接替聊天，写回的群聊文件不会出现在群聊列表里。
+ */
+/** 宿主在同一次删除里先发切换、再发删除，中间只隔一次保存角色当前聊天的调用；超出这个间隔的删除与切换无关。 */
+const DELETION_FOLLOWS_SWITCH_WITHIN_MS_ACU = 30000;
+let openChat_ACU = null;
+let closedChat_ACU = null;
+function readOpenCharacterChat_ACU() {
+    const api = SillyTavern_API_ACU;
+    if (api.groupId)
+        return null;
+    const avatar = api.characters?.[Number(api.characterId)]?.avatar;
+    const name = api.chatId;
+    return avatar && name ? { avatar: String(avatar), name: String(name) } : null;
+}
+/** CHAT_CHANGED 时同步调用：此刻宿主已指向新聊天，上一次记下的就是刚关掉的那个。 */
+function noteChatSwitchForDeletionGuard_ACU() {
+    closedChat_ACU = openChat_ACU ? { ...openChat_ACU, at: Date.now() } : null;
+    openChat_ACU = readOpenCharacterChat_ACU();
+}
+/**
+ * CHAT_DELETED 时同步调用：删的正是刚关掉的聊天才返回它。
+ * 一次切换只认领紧随其后的一次删除，之后的删除事件与这次切换无关。
+ */
+function takeDeletedOpenChatCandidate_ACU(deletedChatName) {
+    const closed = closedChat_ACU;
+    closedChat_ACU = null;
+    if (!closed || closed.name !== deletedChatName || Date.now() - closed.at > DELETION_FOLLOWS_SWITCH_WITHIN_MS_ACU)
+        return null;
+    return { avatar: closed.avatar, name: closed.name };
+}
+/** 核对被删聊天的文件是否又出现，出现且没被宿主打开就补删。 */
+async function redeleteResurrectedChat_ACU(chat) {
+    const names = await fetchCharacterChatNames_ACU(chat.avatar);
+    if (!names)
+        return 'unknown';
+    if (!names.has(chat.name))
+        return 'absent';
+    const open = readOpenCharacterChat_ACU();
+    if (open?.avatar === chat.avatar && open.name === chat.name)
+        return 'reopened';
+    return (await deleteCharacterChatFile_ACU(chat.avatar, chat.name)) ? 'redeleted' : 'delete_failed';
 }
 
 const INTERNAL_REQUEST_TTL_MS_ACU = 60000;
@@ -151808,13 +151892,37 @@ function mainInitialize_ACU() {
             // [L4] 与其余注册一致的 eventTypes 存在性守卫（eventSource/eventTypes 整体缺失已有外层守卫）。
             // [H2/M3] 处理体抽至模块级 handleChatChangedEvent_ACU：整体 try/catch，延迟链走互斥守卫入口。
             if (SillyTavern_API_ACU.eventTypes.CHAT_CHANGED) {
+                // 删除当前聊天的补删要知道「切换前开着的是哪个聊天」：先记下插件加载时已打开的那个。
+                noteChatSwitchForDeletionGuard_ACU();
                 SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_CHANGED, (chatFileName) => {
                     // 同步标记：宿主载入聊天时收起停止按钮派发的无配对 ENDED 只立新聊天基线，不误开自动链
                     markChatChangedForEndedGate_ACU();
+                    // 宿主删除打开中的聊天时先切走、再发删除事件：此刻同步记下刚关掉的聊天
+                    noteChatSwitchForDeletionGuard_ACU();
                     chatChangeEpoch_ACU += 1;
                     void handleChatChangedEvent_ACU(chatFileName);
                 });
             }
+            // 删除打开中的聊天时，插件存盘若落在宿主排空存盘队列之后、切走之前，宿主会把被删聊天原样写回。
+            // 删除事件到达时当场认领（下一次切换会覆盖记录），2s 后等写回落盘再核对：没被打开就补删，
+            // 被宿主当作接替聊天重新打开、或补删没删成，就请用户再删一次。
+            const handleChatDeletedForResurrection_ACU = (deletedChatName) => {
+                const candidate = takeDeletedOpenChatCandidate_ACU(String(deletedChatName ?? '').trim());
+                if (!candidate)
+                    return;
+                setTimeout(() => {
+                    void redeleteResurrectedChat_ACU(candidate).then(outcome => {
+                        if (outcome === 'reopened' || outcome === 'delete_failed') {
+                            showToastr_ACU('warning', `聊天「${candidate.name}」在删除途中被数据库存盘写回了，如仍要删除，请再删一次。`, '数据库');
+                        }
+                        else if (outcome !== 'absent') {
+                            logWarn_ACU(`[删除聊天] 「${candidate.name}」写回核对：${outcome === 'redeleted' ? '删除途中被存盘写回，已补删' : '聊天列表读取不全，未核对'}`);
+                        }
+                    }).catch((error) => {
+                        logWarn_ACU('[删除聊天] 核对被删聊天是否被写回失败:', error?.message || error);
+                    });
+                }, 2000);
+            };
             // P7：聊天被删除时清理其向量外置存档 / IDB 缓存 / flush 任务。
             // 延迟 5s 执行：等宿主完成删除后的状态收敛（characters[].chats、当前聊天切换）再枚举校验。
             // 保护期内新写的文件第一次删不掉，保护期过后（留 60s 余量）再清一次；
@@ -151832,7 +151940,10 @@ function mainInitialize_ACU() {
                 setTimeout(runCleanup, SUMMARY_VECTOR_INDEX_SAFE_GC_GRACE_PERIOD_MS_ACU + 60000);
             };
             if (SillyTavern_API_ACU.eventTypes.CHAT_DELETED) {
-                SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_DELETED, handleChatDeletedForVectorCleanup_ACU);
+                SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_DELETED, (deletedChatName) => {
+                    handleChatDeletedForResurrection_ACU(deletedChatName);
+                    handleChatDeletedForVectorCleanup_ACU(deletedChatName);
+                });
                 logDebug_ACU('[交火向量索引] 已注册 CHAT_DELETED 向量清理监听');
             }
             // GROUP_CHAT_DELETED 在本地 eventTypes 类型声明快照中缺失（运行时存在），用索引访问。
@@ -157828,7 +157939,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1530";
+        const stamp = "20261110-1549";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186092,7 +186203,7 @@ var _sfc_main$L = /*@__PURE__*/ defineComponent({
         const config = useVisualizerConfigEditing();
         const ddlValidation = ref(null);
         const updateFields = [
-            { key: 'contextDepth', label: '上下文层数', hint: '-1 跟随全局；0 = 这张表不参与自动填表。其他数值目前不影响补哪些楼层（自动填表会补齐全部未填楼层）。' },
+            { key: 'contextDepth', label: '上下文层数', hint: '-1 跟随全局。' },
             { key: 'updateFrequency', label: '更新频率', hint: '每隔几层更新一次；-1 跟随全局，0 不自动更新这张表。' },
             { key: 'batchSize', label: '批处理大小', hint: '-1 跟随全局。' },
             { key: 'groupId', label: '分组编号', hint: '-1 不分组。' },
@@ -186161,8 +186272,8 @@ var _sfc_main$L = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-vconf[data-v-c4ea9c9b] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s6);\n  min-width: 0;\n}\n.ub-vconf__cols[data-v-c4ea9c9b] {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n.ub-vconf__col[data-v-c4ea9c9b] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  padding: var(--ub-s2) var(--ub-s3) var(--ub-s2) var(--ub-s4);\n}\n.ub-vconf__col + .ub-vconf__col[data-v-c4ea9c9b] {\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vconf__col[data-v-c4ea9c9b] >  .ub-field {\n  flex: 1 1 auto;\n}\n.ub-vconf__col-no[data-v-c4ea9c9b] {\n  flex: 0 0 auto;\n  min-width: 1.6em;\n  color: var(--ub-text-3);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  text-align: right;\n}\n.ub-vconf__empty[data-v-c4ea9c9b],\n.ub-vconf__muted[data-v-c4ea9c9b] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-vconf__empty[data-v-c4ea9c9b] {\n  padding: var(--ub-s4);\n}\n.ub-vconf__num[data-v-c4ea9c9b] {\n  display: block;\n  width: calc(var(--ub-u) * 110);\n}\n.ub-vconf__modes[data-v-c4ea9c9b] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n}\n.ub-vconf__mode[data-v-c4ea9c9b] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ub-s2) var(--ub-s3);\n  padding: var(--ub-s2) var(--ub-s3);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-sunken);\n}\n.ub-vconf__mode[data-v-c4ea9c9b] >  .ub-select {\n  flex: 0 1 calc(var(--ub-u) * 220);\n}\n", "src/presentation-v3/surfaces/visualizer/VizConfigView.vue#style-0-c4ea9c9b");
-var VizConfigView_vue_vue_type_style_index_0_scoped_c4ea9c9b_lang = null;
+injectSfcStyle("\n.ub-vconf[data-v-a4913a1c] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s6);\n  min-width: 0;\n}\n.ub-vconf__cols[data-v-a4913a1c] {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n.ub-vconf__col[data-v-a4913a1c] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  padding: var(--ub-s2) var(--ub-s3) var(--ub-s2) var(--ub-s4);\n}\n.ub-vconf__col + .ub-vconf__col[data-v-a4913a1c] {\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vconf__col[data-v-a4913a1c] >  .ub-field {\n  flex: 1 1 auto;\n}\n.ub-vconf__col-no[data-v-a4913a1c] {\n  flex: 0 0 auto;\n  min-width: 1.6em;\n  color: var(--ub-text-3);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  text-align: right;\n}\n.ub-vconf__empty[data-v-a4913a1c],\n.ub-vconf__muted[data-v-a4913a1c] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-vconf__empty[data-v-a4913a1c] {\n  padding: var(--ub-s4);\n}\n.ub-vconf__num[data-v-a4913a1c] {\n  display: block;\n  width: calc(var(--ub-u) * 110);\n}\n.ub-vconf__modes[data-v-a4913a1c] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n}\n.ub-vconf__mode[data-v-a4913a1c] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ub-s2) var(--ub-s3);\n  padding: var(--ub-s2) var(--ub-s3);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-sunken);\n}\n.ub-vconf__mode[data-v-a4913a1c] >  .ub-select {\n  flex: 0 1 calc(var(--ub-u) * 220);\n}\n", "src/presentation-v3/surfaces/visualizer/VizConfigView.vue#style-0-a4913a1c");
+var VizConfigView_vue_vue_type_style_index_0_scoped_a4913a1c_lang = null;
 
 const _hoisted_1$G = {
 	class: "ub-vconf",
@@ -186643,7 +186754,7 @@ function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var VizConfigView = /* @__PURE__ */ _export_sfc(_sfc_main$L, [["render", _sfc_render$K], ["__scopeId", "data-v-c4ea9c9b"]]);
+var VizConfigView = /* @__PURE__ */ _export_sfc(_sfc_main$L, [["render", _sfc_render$K], ["__scopeId", "data-v-a4913a1c"]]);
 
 /** 数据库编辑器（v3）数据视图的纯布局计算：短字段并排、分页窗口。 */
 const VIZ_PAGE_SIZE = 30;
