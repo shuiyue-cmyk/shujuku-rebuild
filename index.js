@@ -5505,8 +5505,10 @@ function currentChatSaveKey_ACU() {
     const api = SillyTavern_API_ACU;
     try {
         const viaGetter = typeof api?.getCurrentChatId === 'function' ? api.getCurrentChatId() : undefined;
-        const key = viaGetter ?? api?.chatId ?? api?.this_chid;
-        return key === undefined || key === null || String(key) === '' ? null : String(key);
+        // 空串不算有效 id、继续往下取：宿主切聊天的过渡期 getter 可能返回空串，按「同一聊天」处理会把
+        // 上一聊天的待存改动补存进新聊天（此刻数组可能还是空的，等于把新聊天存空）（D05-03）
+        const key = [viaGetter, api?.chatId, api?.this_chid].find(value => value !== undefined && value !== null && String(value) !== '');
+        return key === undefined ? null : String(key);
     }
     catch {
         return null;
@@ -95805,7 +95807,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261110-1043"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261110-1048"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95824,7 +95826,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1043";
+        const stamp = "20261110-1048";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -123302,7 +123304,8 @@ function shouldSkipDuplicateAutoTableFill_ACU(floor) {
  * 自动填表成功提交后登记该 messageId「已自动填表」。
  * @returns 登记的条目；拿不到 messageId 时返回 null（不登记）。
  */
-function recordAutoTableFillProcessedForFloor_ACU(floor) {
+/** chatKey：填表开始时的聊天；收尾时可能已切走，按当前聊天登记会把旧楼号记到新聊天名下（D02-04）。 */
+function recordAutoTableFillProcessedForFloor_ACU(floor, chatKey) {
     const messageId = floor?.messageId;
     if (messageId === null || messageId === undefined)
         return null;
@@ -123310,7 +123313,7 @@ function recordAutoTableFillProcessedForFloor_ACU(floor) {
         return recordAutoTableFillProcessed_ACU({
             messageId,
             messageIndex: Number.isInteger(floor?.messageIndex) ? floor.messageIndex : -1,
-            chatKey: String(currentChatFileIdentifier_ACU ?? ''),
+            chatKey: String(chatKey ?? currentChatFileIdentifier_ACU ?? ''),
             updatedAt: Date.now(),
         });
     }
@@ -123392,6 +123395,7 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
     // 该楼已成功自动填过表 → 记日志直接返回，不构建计划、不调 AI。
     // 只作用于自动入口；手动填表/历史补填走各自入口，不经过本函数。
     const autoFillTargetFloor = resolveLatestAiFloor_ACU(getChatArray_ACU());
+    const autoFillChatKey = String(currentChatFileIdentifier_ACU ?? '');
     if (shouldSkipDuplicateAutoTableFill_ACU(autoFillTargetFloor)) {
         logDebug_ACU(`[自动填表] 第 ${autoFillTargetFloor.messageIndex} 楼（messageId=${autoFillTargetFloor.messageId}）已完成自动填表，跳过重复自动触发`);
         logAutoFillSkip_ACU('duplicate_auto_fill_ended', {
@@ -123485,7 +123489,7 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
         // [回声防重] 只有「确实有活干且全部分组成功提交、且未被用户终止」才登记该楼已自动填表；
         // 空计划（本轮无表到期）不登记，避免把「还没填过」误标成「已填完」。
         if (result.totalGroups > 0 && result.failedGroups === 0 && !wasStoppedByUser_ACU) {
-            const recordedFloor = recordAutoTableFillProcessedForFloor_ACU(autoFillTargetFloor);
+            const recordedFloor = recordAutoTableFillProcessedForFloor_ACU(autoFillTargetFloor, autoFillChatKey);
             if (recordedFloor) {
                 logDebug_ACU(`[自动填表] 已登记第 ${recordedFloor.messageIndex} 楼的自动填表完成记录，用于回声触发判重`);
             }
@@ -157795,7 +157799,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1043";
+        const stamp = "20261110-1048";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

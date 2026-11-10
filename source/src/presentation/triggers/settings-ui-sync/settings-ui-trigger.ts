@@ -155,6 +155,7 @@ function currentAutoUpdateScopeKey_ACU(): string {
     // 该楼已成功自动填过表 → 记日志直接返回，不构建计划、不调 AI。
     // 只作用于自动入口；手动填表/历史补填走各自入口，不经过本函数。
     const autoFillTargetFloor = resolveLatestAiFloor_ACU(getChatArray_ACU());
+    const autoFillChatKey = String(currentChatFileIdentifier_ACU ?? '');
     if (shouldSkipDuplicateAutoTableFill_ACU(autoFillTargetFloor)) {
       logDebug_ACU(
         `[自动填表] 第 ${autoFillTargetFloor!.messageIndex} 楼（messageId=${autoFillTargetFloor!.messageId}）已完成自动填表，跳过重复自动触发`,
@@ -281,7 +282,7 @@ function currentAutoUpdateScopeKey_ACU(): string {
     // [回声防重] 只有「确实有活干且全部分组成功提交、且未被用户终止」才登记该楼已自动填表；
     // 空计划（本轮无表到期）不登记，避免把「还没填过」误标成「已填完」。
     if (result.totalGroups > 0 && result.failedGroups === 0 && !wasStoppedByUser_ACU) {
-      const recordedFloor = recordAutoTableFillProcessedForFloor_ACU(autoFillTargetFloor);
+      const recordedFloor = recordAutoTableFillProcessedForFloor_ACU(autoFillTargetFloor, autoFillChatKey);
       if (recordedFloor) {
         logDebug_ACU(`[自动填表] 已登记第 ${recordedFloor.messageIndex} 楼的自动填表完成记录，用于回声触发判重`);
       }

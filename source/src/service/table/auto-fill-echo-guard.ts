@@ -154,7 +154,8 @@ export function shouldSkipDuplicateAutoTableFill_ACU(floor: AutoFillFloor_ACU | 
  * 自动填表成功提交后登记该 messageId「已自动填表」。
  * @returns 登记的条目；拿不到 messageId 时返回 null（不登记）。
  */
-export function recordAutoTableFillProcessedForFloor_ACU(floor: AutoFillFloor_ACU | null) {
+/** chatKey：填表开始时的聊天；收尾时可能已切走，按当前聊天登记会把旧楼号记到新聊天名下（D02-04）。 */
+export function recordAutoTableFillProcessedForFloor_ACU(floor: AutoFillFloor_ACU | null, chatKey?: string) {
     const messageId = floor?.messageId;
     if (messageId === null || messageId === undefined) return null;
 
@@ -162,7 +163,7 @@ export function recordAutoTableFillProcessedForFloor_ACU(floor: AutoFillFloor_AC
         return recordAutoTableFillProcessed_ACU({
             messageId,
             messageIndex: Number.isInteger(floor?.messageIndex) ? floor!.messageIndex : -1,
-            chatKey: String(currentChatFileIdentifier_ACU ?? ''),
+            chatKey: String(chatKey ?? currentChatFileIdentifier_ACU ?? ''),
             updatedAt: Date.now(),
         });
     } catch (error) {

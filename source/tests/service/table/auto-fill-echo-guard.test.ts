@@ -169,6 +169,14 @@ describe('shouldSkipDuplicateAutoTableFill_ACU / recordAutoTableFillProcessedFor
     expect(shouldSkipDuplicateAutoTableFill_ACU({ messageIndex: 4, messageId: 44 })).toBe(true);
   });
 
+  it('填表收尾时已切到别的聊天：登记记在填表开始时的聊天名下，新聊天的同号楼不被误判已填（D02-04）', () => {
+    mockChatKey.value = 'chat-B';
+    recordAutoTableFillProcessedForFloor_ACU({ messageIndex: 4, messageId: 44 }, 'chat-A');
+    expect(shouldSkipDuplicateAutoTableFill_ACU({ messageIndex: 4, messageId: 44 })).toBe(false);
+    mockChatKey.value = 'chat-A';
+    expect(shouldSkipDuplicateAutoTableFill_ACU({ messageIndex: 4, messageId: 44 })).toBe(true);
+  });
+
   it('④容量按 updatedAt 裁剪，不随聊天推进无界增长', () => {
     for (let i = 0; i < 30; i++) {
       recordAutoTableFillProcessed_ACU({ messageId: i, messageIndex: i, chatKey: 'chat-A', updatedAt: 1000 + i });

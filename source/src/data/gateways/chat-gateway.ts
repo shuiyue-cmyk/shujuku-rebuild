@@ -90,8 +90,10 @@ function currentChatSaveKey_ACU(): string | null {
     const api = SillyTavern_API_ACU as any;
     try {
         const viaGetter = typeof api?.getCurrentChatId === 'function' ? api.getCurrentChatId() : undefined;
-        const key = viaGetter ?? api?.chatId ?? api?.this_chid;
-        return key === undefined || key === null || String(key) === '' ? null : String(key);
+        // 空串不算有效 id、继续往下取：宿主切聊天的过渡期 getter 可能返回空串，按「同一聊天」处理会把
+        // 上一聊天的待存改动补存进新聊天（此刻数组可能还是空的，等于把新聊天存空）（D05-03）
+        const key = [viaGetter, api?.chatId, api?.this_chid].find(value => value !== undefined && value !== null && String(value) !== '');
+        return key === undefined ? null : String(key);
     } catch {
         return null;
     }

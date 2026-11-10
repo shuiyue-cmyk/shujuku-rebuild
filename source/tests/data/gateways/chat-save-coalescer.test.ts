@@ -250,6 +250,21 @@ describe('聊天归属与页面隐藏', () => {
     expect(mockLogWarn).toHaveBeenCalled();
   });
 
+  it('切聊天过渡期宿主 getCurrentChatId 返回空串：改看 chatId，仍能认出已切走，不把新聊天（此刻可能还是空数组）存一遍（D05-03）', async () => {
+    mockHost.currentChatId = 'chat-a';
+    beginChatSaveCoalescing_ACU();
+    await saveChatToHostCoalesced_ACU();
+    mockHost.currentChatId = '';
+    mockSillyTavern.chatId = 'chat-b';
+    try {
+      await endChatSaveCoalescing_ACU();
+    } finally {
+      delete mockSillyTavern.chatId;
+    }
+    expect(saveChat).not.toHaveBeenCalled();
+    expect(hasPendingCoalescedChatSave_ACU()).toBe(false);
+  });
+
   it('页面转入后台时立即补存运行中记下的改动（手机切后台最容易被系统杀掉）', async () => {
     beginChatSaveCoalescing_ACU();
     await saveChatToHostCoalesced_ACU();
