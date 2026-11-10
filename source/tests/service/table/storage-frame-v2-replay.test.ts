@@ -6290,6 +6290,18 @@ describe('deriveSheetLifecycleFromFramesV2_ACU', () => {
     expect(a?.data).not.toEqual(b?.data);
   });
 
+  it('阶段 G2：同一个数组被原地换成另一个聊天的内容（宿主切聊天复用 chat 数组）：不共享上一个聊天的在途回放（D05-07）', async () => {
+    const { chat } = buildLongHistoryFixture_ACU();
+    const { chat: chatB } = buildLongHistoryFixture_ACU();
+    chatB[61].TavernDB_ACU_IsolatedData[''].storageFrame.logEntries[0].operations[10].data.sheet_0.content[1][1] = '另一聊天的值';
+    const pendingA = loadTableStateFromFramesV2Detailed_ACU(chat, '', { updateRuntimeState: false });
+    chat.splice(0, chat.length, ...chatB);
+    const b = await loadTableStateFromFramesV2Detailed_ACU(chat, '', { updateRuntimeState: false });
+    await pendingA;
+    expect(b?.metrics?.replayShareCount).toBe(0);
+    expect(JSON.stringify(b?.data)).toContain('另一聊天的值');
+  });
+
   it('阶段 G2：不同 boundary 的并发调用不共享（各跑各的全量回放）', async () => {
     const { chat } = buildLongHistoryFixture_ACU();
 

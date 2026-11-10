@@ -70,11 +70,11 @@ const inflightV2Replays_ACU = new Map<string, Promise<TableReplayResultV2_ACU | 
 const chatIdentityTokens_ACU = new WeakMap<object, number>();
 let chatIdentitySeq_ACU = 0;
 
-function chatIdentityToken_ACU(chat: any[]): string {
-    const existing = chatIdentityTokens_ACU.get(chat);
+function chatIdentityToken_ACU(target: object): string {
+    const existing = chatIdentityTokens_ACU.get(target);
     if (existing !== undefined) return String(existing);
     chatIdentitySeq_ACU += 1;
-    chatIdentityTokens_ACU.set(chat, chatIdentitySeq_ACU);
+    chatIdentityTokens_ACU.set(target, chatIdentitySeq_ACU);
     return String(chatIdentitySeq_ACU);
 }
 
@@ -99,6 +99,11 @@ function buildInflightReplayKey_ACU(
     // 窗口内令牌相同而内容不同——由调用方保证 fill 提交不在并发 replay 窗口
     // 内发生（commit lock 内串行），否则此处只合并同一时刻的请求，语义安全。
     chatIdentityToken_ACU(chat),
+    // 宿主切聊天会原地复用同一个 chat 数组，数组令牌不变；楼层对象却全换了新的。
+    // 首尾楼层的对象身份 + 长度区分「同一个数组装着另一个聊天」，免得新聊天拿到上一个聊天的回放（D05-07）。
+    'head', chat.length > 0 && chat[0] && typeof chat[0] === 'object' ? chatIdentityToken_ACU(chat[0]) : 'none',
+    'tail', chat.length > 0 && chat[chat.length - 1] && typeof chat[chat.length - 1] === 'object' ? chatIdentityToken_ACU(chat[chat.length - 1]) : 'none',
+    'len', chat.length,
     'iso', isolationKey,
     'max', options.maxMessageIndex ?? 'latest',
     'struct', structureMappingDigest || '',

@@ -6317,6 +6317,137 @@ function allocConsecutiveOrderBlock_ACU(usedSet, blockSize, preferred = 1, min =
 }
 
 /**
+ * service/table/runtime-only-pending-state.ts — 运行时未落盘变更登记。
+ *
+ * 开放 API 的 CRUD/SQL 写入允许 skipChatSave（skipSave / isImportMode）：只改 live runtime，
+ * 不写聊天 V2 帧。V2 是 operation log 语义，后续任何普通写入只追加自己的 operation，
+ * 不会像旧版那样把整份运行时快照带回聊天。于是这些行只存在于 runtime：
+ * 楼层帧里没有对应数据、表格状态显示未初始、填表基底（聊天回放）看不到它们，
+ * AI 把已存在的行重新 INSERT，提交时撞 live SQLite 的 UNIQUE 约束或把行数翻倍。
+ *
+ * 本模块按 (chatKey, isolationKey) 登记「哪些表有未落盘的运行时变更」以及
+ * 已被删除但仍需写回聊天的 tombstone；真正的落盘由 runtime-only-pending-flush
+ * 在下一次普通持久化写入 / 填表开始前完成。
+ * 这里刻意不依赖任何 service 模块，避免与提交模型形成循环导入。
+ */
+const pendingByScope_ACU = new Map();
+// 每次登记加一：锁外比对会让出执行权，比对期间有新登记时不能按旧快照清账
+let pendingMarkSeq_ACU = 0;
+function getRuntimeOnlyPendingMarkSeq_ACU() {
+    return pendingMarkSeq_ACU;
+}
+let registeredFlusher_ACU = null;
+function normalizeScopePart_ACU$2(value, fallback) {
+    const normalized = String(value || fallback).trim();
+    return normalized || fallback;
+}
+function buildRuntimeOnlyPendingScopeKey_ACU(scope) {
+    return [
+        normalizeScopePart_ACU$2(scope.chatKey, 'current-chat'),
+        normalizeScopePart_ACU$2(scope.isolationKey, 'default'),
+    ].join('::');
+}
+/**
+ * 从写集提取受影响的表。任何 kind:'all' 或缺少 sheetKey 的单元都视为「全部表」，
+ * 宁可多登记也不能漏掉 runtime-only 变更。
+ */
+function extractPendingSheetKeysFromWriteSet_ACU(writeSet) {
+    if (!Array.isArray(writeSet) || writeSet.length === 0)
+        return { all: true, sheetKeys: [] };
+    const sheetKeys = new Set();
+    for (const unit of writeSet) {
+        if (!unit || unit.kind === 'all')
+            return { all: true, sheetKeys: [] };
+        const sheetKey = String(unit.sheetKey || '').trim();
+        if (!sheetKey.startsWith('sheet_'))
+            return { all: true, sheetKeys: [] };
+        sheetKeys.add(sheetKey);
+    }
+    return { all: false, sheetKeys: [...sheetKeys].sort() };
+}
+function markRuntimeOnlyPendingSheets_ACU(scope, pending) {
+    pendingMarkSeq_ACU += 1;
+    const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
+    const state = pendingByScope_ACU.get(scopeKey) || {
+        all: false,
+        sheetKeys: new Set(),
+        deletedSheetKeys: new Set(),
+    };
+    if (pending.all)
+        state.all = true;
+    for (const sheetKey of pending.sheetKeys) {
+        if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_'))
+            state.sheetKeys.add(sheetKey);
+    }
+    for (const sheetKey of pending.deletedSheetKeys || []) {
+        if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_')) {
+            state.deletedSheetKeys.add(sheetKey);
+            state.sheetKeys.delete(sheetKey);
+        }
+    }
+    pendingByScope_ACU.set(scopeKey, state);
+}
+function readRuntimeOnlyPendingSheets_ACU(scope) {
+    const state = pendingByScope_ACU.get(buildRuntimeOnlyPendingScopeKey_ACU(scope));
+    if (!state || (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0))
+        return null;
+    const deletedSheetKeys = [...state.deletedSheetKeys].sort();
+    return {
+        all: state.all,
+        sheetKeys: [...state.sheetKeys].sort(),
+        ...(deletedSheetKeys.length > 0 ? { deletedSheetKeys } : {}),
+    };
+}
+function hasRuntimeOnlyPendingSheets_ACU(scope) {
+    return readRuntimeOnlyPendingSheets_ACU(scope) !== null;
+}
+/** 不传 scope 时清空全部登记（测试/聊天切换收尾用）。 */
+function clearRuntimeOnlyPendingSheets_ACU(scope) {
+    if (!scope) {
+        pendingByScope_ACU.clear();
+        return;
+    }
+    pendingByScope_ACU.delete(buildRuntimeOnlyPendingScopeKey_ACU(scope));
+}
+/**
+ * 按表集合条件化清除登记：只移除给定的 sheetKey（以及可选的 all 标记），保留同 scope
+ * 下其他并发登记；清除后若无任何残留登记才删除整个 scope 条目。
+ *
+ * 供 runtime-only-pending-flush 在提交事务内（持锁中）按「本次实际处理集」清账使用，
+ * 替代会吞掉并发写者新登记的全量 clearRuntimeOnlyPendingSheets_ACU（原 API 保持兼容）。
+ */
+function clearRuntimeOnlyPendingSheetKeys_ACU(scope, sheetKeys, options) {
+    const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
+    const state = pendingByScope_ACU.get(scopeKey);
+    if (!state)
+        return;
+    for (const sheetKey of sheetKeys) {
+        if (typeof sheetKey === 'string') {
+            state.sheetKeys.delete(sheetKey);
+            state.deletedSheetKeys.delete(sheetKey);
+        }
+    }
+    if (options?.dropAllFlag)
+        state.all = false;
+    if (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0) {
+        pendingByScope_ACU.delete(scopeKey);
+    }
+}
+/**
+ * 落盘器由 runtime-only-pending-flush 注册；提交模型通过本入口触发，
+ * 避免 table-update-commit ↔ flush 之间的直接循环导入。未注册时静默跳过。
+ */
+function registerRuntimeOnlyPendingFlusher_ACU(flusher) {
+    registeredFlusher_ACU = flusher;
+}
+async function runRegisteredRuntimeOnlyPendingFlush_ACU(scope, reason) {
+    if (!registeredFlusher_ACU || !hasRuntimeOnlyPendingSheets_ACU(scope)) {
+        return { flushed: false, sheetKeys: [] };
+    }
+    return registeredFlusher_ACU(reason);
+}
+
+/**
  * data/gateways/character-gateway.ts — 角色数据读取网关
  *
  * 封装 TavernHelper_API_ACU 的角色数据相关方法。
@@ -44778,8 +44909,8 @@ function getRuntimeRevisionState_ACU(scopeKey) {
 }
 function getRuntimeScopeKey_ACU(parts) {
     return [
-        normalizeScopePart_ACU$2(parts.chatKey, 'current-chat'),
-        normalizeScopePart_ACU$2(parts.isolationKey, 'default'),
+        normalizeScopePart_ACU$1(parts.chatKey, 'current-chat'),
+        normalizeScopePart_ACU$1(parts.isolationKey, 'default'),
         'runtime',
     ].join('::');
 }
@@ -44864,8 +44995,8 @@ function bumpRuntimeRevision_ACU(scopeKey, writeSet) {
     return `runtime:${revision}`;
 }
 function invalidateTableRuntimeRevision_ACU(parts = {}) {
-    const chatKey = normalizeScopePart_ACU$2(parts.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
-    const isolationKey = normalizeScopePart_ACU$2(parts.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
+    const chatKey = normalizeScopePart_ACU$1(parts.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
+    const isolationKey = normalizeScopePart_ACU$1(parts.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
     const scopeKey = getRuntimeScopeKey_ACU({ chatKey, isolationKey });
     return bumpRuntimeRevision_ACU(scopeKey, [{ kind: 'all' }]);
 }
@@ -44883,35 +45014,35 @@ async function acquireRead_ACU(scopeKey) {
 async function acquireWrite_ACU(scopeKey) {
     return getLock_ACU(scopeKey).acquireWrite();
 }
-function normalizeScopePart_ACU$2(value, fallback) {
+function normalizeScopePart_ACU$1(value, fallback) {
     const normalized = String(value || fallback).trim();
     return normalized || fallback;
 }
 function buildTableMaintenanceScopeKey_ACU(parts) {
     return [
-        normalizeScopePart_ACU$2(parts.chatKey, 'current-chat'),
-        normalizeScopePart_ACU$2(parts.isolationKey, 'default'),
+        normalizeScopePart_ACU$1(parts.chatKey, 'current-chat'),
+        normalizeScopePart_ACU$1(parts.isolationKey, 'default'),
         'maintenance',
     ].join('::');
 }
 function buildTableSheetMutationScopeKey_ACU(parts) {
     return [
-        normalizeScopePart_ACU$2(parts.chatKey, 'current-chat'),
-        normalizeScopePart_ACU$2(parts.isolationKey, 'default'),
+        normalizeScopePart_ACU$1(parts.chatKey, 'current-chat'),
+        normalizeScopePart_ACU$1(parts.isolationKey, 'default'),
         'sheet',
         parts.sheetKey || '*',
     ].join('::');
 }
 function buildTableCommitScopeKey_ACU(parts) {
     return [
-        normalizeScopePart_ACU$2(parts.chatKey, 'current-chat'),
-        normalizeScopePart_ACU$2(parts.isolationKey, 'default'),
+        normalizeScopePart_ACU$1(parts.chatKey, 'current-chat'),
+        normalizeScopePart_ACU$1(parts.isolationKey, 'default'),
         'commit',
     ].join('::');
 }
 function captureTableRuntimeRevisionForWriteSet_ACU(writeSet, parts = {}) {
-    const chatKey = normalizeScopePart_ACU$2(parts.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
-    const isolationKey = normalizeScopePart_ACU$2(parts.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
+    const chatKey = normalizeScopePart_ACU$1(parts.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
+    const isolationKey = normalizeScopePart_ACU$1(parts.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
     return captureRuntimeRevisionSnapshotForScope_ACU(getRuntimeScopeKey_ACU({ chatKey, isolationKey }), normalizeTableWriteSet_ACU(writeSet));
 }
 function resolveTableWriteTargetMessageIndex_ACU(chat, requestedTargetMessageIndex) {
@@ -45043,14 +45174,14 @@ async function acquireTransactionLocks_ACU(options) {
     }
 }
 async function runTableWriteTransaction_ACU(options, task) {
-    const chatKey = normalizeScopePart_ACU$2(options.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
-    const isolationKey = normalizeScopePart_ACU$2(options.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
+    const chatKey = normalizeScopePart_ACU$1(options.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
+    const isolationKey = normalizeScopePart_ACU$1(options.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
     const writeSet = normalizeTableWriteSet_ACU(options.writeSet);
     const revisionImpact = options.revisionImpact === 'derived_metadata' ? 'derived_metadata' : 'source_table';
     const maintenanceMode = options.maintenanceMode || 'shared';
     const releases = await acquireTransactionLocks_ACU({ chatKey, isolationKey, writeSet, maintenanceMode });
     if (options.guardChatSwitch) {
-        const currentChatKey = normalizeScopePart_ACU$2(currentChatFileIdentifier_ACU, 'current-chat');
+        const currentChatKey = normalizeScopePart_ACU$1(currentChatFileIdentifier_ACU, 'current-chat');
         if (currentChatKey !== chatKey) {
             for (const release of releases.reverse())
                 release();
@@ -45377,12 +45508,12 @@ const inflightV2Replays_ACU = new Map();
  */
 const chatIdentityTokens_ACU = new WeakMap();
 let chatIdentitySeq_ACU = 0;
-function chatIdentityToken_ACU(chat) {
-    const existing = chatIdentityTokens_ACU.get(chat);
+function chatIdentityToken_ACU(target) {
+    const existing = chatIdentityTokens_ACU.get(target);
     if (existing !== undefined)
         return String(existing);
     chatIdentitySeq_ACU += 1;
-    chatIdentityTokens_ACU.set(chat, chatIdentitySeq_ACU);
+    chatIdentityTokens_ACU.set(target, chatIdentitySeq_ACU);
     return String(chatIdentitySeq_ACU);
 }
 function buildInflightReplayKey_ACU(chat, isolationKey, options, structureMappingDigest = '') {
@@ -45407,6 +45538,11 @@ function buildInflightReplayKey_ACU(chat, isolationKey, options, structureMappin
         // 窗口内令牌相同而内容不同——由调用方保证 fill 提交不在并发 replay 窗口
         // 内发生（commit lock 内串行），否则此处只合并同一时刻的请求，语义安全。
         chatIdentityToken_ACU(chat),
+        // 宿主切聊天会原地复用同一个 chat 数组，数组令牌不变；楼层对象却全换了新的。
+        // 首尾楼层的对象身份 + 长度区分「同一个数组装着另一个聊天」，免得新聊天拿到上一个聊天的回放（D05-07）。
+        'head', chat.length > 0 && chat[0] && typeof chat[0] === 'object' ? chatIdentityToken_ACU(chat[0]) : 'none',
+        'tail', chat.length > 0 && chat[chat.length - 1] && typeof chat[chat.length - 1] === 'object' ? chatIdentityToken_ACU(chat[chat.length - 1]) : 'none',
+        'len', chat.length,
         'iso', isolationKey,
         'max', options.maxMessageIndex ?? 'latest',
         'struct', structureMappingDigest || '',
@@ -48391,7 +48527,7 @@ function buildCanonicalSheetCheckpoint_ACU(options) {
     return validateCandidate_ACU(checkpoint, { ...options.context, reason: options.reason });
 }
 
-function normalizeScopePart_ACU$1(value, fallback) {
+function normalizeScopePart_ACU(value, fallback) {
     const normalized = String(value ?? '').trim();
     return normalized || fallback;
 }
@@ -48400,7 +48536,7 @@ function normalizeScopePart_ACU$1(value, fallback) {
  * Empty runtime isolation is the canonical default vector scope.
  */
 function normalizeSummaryVectorIsolationKey_ACU(value) {
-    return normalizeScopePart_ACU$1(value, 'default');
+    return normalizeScopePart_ACU(value, 'default');
 }
 /**
  * 把向量 scope 的 isolation token 映射回聊天 IsolatedData 槽键。
@@ -48416,9 +48552,9 @@ function toChatIsolationSlotKey_ACU(scopeIsolationKey, runtimeIsolationKey) {
 }
 function normalizeSummaryVectorIndexScope_ACU(parts) {
     return {
-        chatKey: normalizeScopePart_ACU$1(parts.chatKey, 'current-chat'),
+        chatKey: normalizeScopePart_ACU(parts.chatKey, 'current-chat'),
         isolationKey: normalizeSummaryVectorIsolationKey_ACU(parts.isolationKey),
-        sourceTableKey: normalizeScopePart_ACU$1(parts.sourceTableKey, 'summary'),
+        sourceTableKey: normalizeScopePart_ACU(parts.sourceTableKey, 'summary'),
     };
 }
 function serializeSummaryVectorIndexScope_ACU(parts) {
@@ -59545,6 +59681,10 @@ function authorizeManualCatchUpBucketWrite_ACU(bridge, runId, saveTargetIndex, c
  *   7. strict save，失败完整回滚。
  *
  * 关键限制：建立后稳定持久化态仍只有一个 active full；原 full 只存在于 recovery backup。
+ *
+ * 现状（D03-06）：手动追平已改用跨根 staging，生产代码不再调用本函数。旧版本建过的桥接仍可能留在
+ * 用户聊天里，由本模块的恢复 / 授权路径处理；本函数留作这类持久化态的权威构造器，供那些路径的集成测试造数据。
+ * 不要在新代码里调用它。
  */
 async function establishProvisionalBridge_ACU(runId, selectedSheetKeys, rangeStartMessageIndex, originalFullCheckpointIndex, options = {}) {
     const isolationKey = options.isolationKey ?? getCurrentIsolationKey_ACU();
@@ -85299,6 +85439,11 @@ function resolveTableFillToolTurn_ACU(turn) {
         if (value.trim())
             parts.push(value.trim());
     }
+    // 工具调用全是空 sql、正文却写了块：模型把修改写在了正文里，按正文走；
+    // 照常剔除正文块会把这些修改吞成一次「零操作成功」，该楼还被记成已填（D04-03）。
+    if (parts.length === 0 && /<tableEdit>[\s\S]*?<\/tableEdit>/i.test(content)) {
+        return { ok: true, text: content, viaTool: false };
+    }
     const residual = content.replace(/<tableEdit>[\s\S]*?<\/tableEdit>/gi, '').trim();
     const block = `<tableEdit>\n${parts.join('\n')}\n</tableEdit>`;
     return { ok: true, text: residual ? `${residual}\n${block}` : block, viaTool: true };
@@ -86598,7 +86743,7 @@ function extractTableEditInner_ACU(text, options = {}) {
         return null;
     return { inner: chosen.raw, cleaned, mode: 'comment_fallback', hasOpen, hasClose };
 }
-function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = 'standard', isImportMode = false) {
+function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = 'standard') {
     if (!tableData) {
         logError_ACU('Cannot apply edits, tableData is not loaded.');
         return false;
@@ -87122,12 +87267,13 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
         error: success ? '' : `解析或应用失败：${totalCommands} 条指令中成功 0 条，失败 ${failedEdits} 条。`,
     };
 }
-function parseAndApplyTableEdits_ACU(aiResponse, updateMode = 'standard', isImportMode = false) {
+/** 对当前运行时表格直接解析应用的便捷入口；运行时填表链路都走 parseAndApplyTableEditsToData_ACU，这里留给测试使用。 */
+function parseAndApplyTableEdits_ACU(aiResponse, updateMode = 'standard') {
     if (!currentJsonTableData_ACU) {
         logError_ACU('Cannot apply edits, currentJsonTableData_ACU is not loaded.');
         return false;
     }
-    return parseAndApplyTableEditsToData_ACU(aiResponse, currentJsonTableData_ACU, updateMode, isImportMode);
+    return parseAndApplyTableEditsToData_ACU(aiResponse, currentJsonTableData_ACU, updateMode);
 }
 /**
  * 检测 <tableEdit> 内容是否为 SQL 语句
@@ -95659,7 +95805,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261110-1027"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261110-1043"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95678,7 +95824,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1027";
+        const stamp = "20261110-1043";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -101455,6 +101601,8 @@ async function resetScriptStateForNewChat_ACU(chatFileName, { reason = 'startup_
         releaseAgentGreenlightsOfPreviousChat_ACU(true);
     resetPlotAgentWorldbookSessionSnapshot_ACU();
     _set_currentJsonTableData_ACU(null);
+    // 只写进运行时、还没落盘的外部写入登记随运行时一起作废（D05-08）
+    clearRuntimeOnlyPendingSheets_ACU();
     _set_independentTableStates_ACU({});
     _set_allChatMessages_ACU([]);
     _set_lastTotalAiMessages_ACU(0); // 重置 AI 消息计数
@@ -108147,137 +108295,6 @@ function scanTargetKeysResidue_ACU(msg, isolationKey, targetSheetKeys, messageIn
     return report;
 }
 
-/**
- * service/table/runtime-only-pending-state.ts — 运行时未落盘变更登记。
- *
- * 开放 API 的 CRUD/SQL 写入允许 skipChatSave（skipSave / isImportMode）：只改 live runtime，
- * 不写聊天 V2 帧。V2 是 operation log 语义，后续任何普通写入只追加自己的 operation，
- * 不会像旧版那样把整份运行时快照带回聊天。于是这些行只存在于 runtime：
- * 楼层帧里没有对应数据、表格状态显示未初始、填表基底（聊天回放）看不到它们，
- * AI 把已存在的行重新 INSERT，提交时撞 live SQLite 的 UNIQUE 约束或把行数翻倍。
- *
- * 本模块按 (chatKey, isolationKey) 登记「哪些表有未落盘的运行时变更」以及
- * 已被删除但仍需写回聊天的 tombstone；真正的落盘由 runtime-only-pending-flush
- * 在下一次普通持久化写入 / 填表开始前完成。
- * 这里刻意不依赖任何 service 模块，避免与提交模型形成循环导入。
- */
-const pendingByScope_ACU = new Map();
-// 每次登记加一：锁外比对会让出执行权，比对期间有新登记时不能按旧快照清账
-let pendingMarkSeq_ACU = 0;
-function getRuntimeOnlyPendingMarkSeq_ACU() {
-    return pendingMarkSeq_ACU;
-}
-let registeredFlusher_ACU = null;
-function normalizeScopePart_ACU(value, fallback) {
-    const normalized = String(value || fallback).trim();
-    return normalized || fallback;
-}
-function buildRuntimeOnlyPendingScopeKey_ACU(scope) {
-    return [
-        normalizeScopePart_ACU(scope.chatKey, 'current-chat'),
-        normalizeScopePart_ACU(scope.isolationKey, 'default'),
-    ].join('::');
-}
-/**
- * 从写集提取受影响的表。任何 kind:'all' 或缺少 sheetKey 的单元都视为「全部表」，
- * 宁可多登记也不能漏掉 runtime-only 变更。
- */
-function extractPendingSheetKeysFromWriteSet_ACU(writeSet) {
-    if (!Array.isArray(writeSet) || writeSet.length === 0)
-        return { all: true, sheetKeys: [] };
-    const sheetKeys = new Set();
-    for (const unit of writeSet) {
-        if (!unit || unit.kind === 'all')
-            return { all: true, sheetKeys: [] };
-        const sheetKey = String(unit.sheetKey || '').trim();
-        if (!sheetKey.startsWith('sheet_'))
-            return { all: true, sheetKeys: [] };
-        sheetKeys.add(sheetKey);
-    }
-    return { all: false, sheetKeys: [...sheetKeys].sort() };
-}
-function markRuntimeOnlyPendingSheets_ACU(scope, pending) {
-    pendingMarkSeq_ACU += 1;
-    const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
-    const state = pendingByScope_ACU.get(scopeKey) || {
-        all: false,
-        sheetKeys: new Set(),
-        deletedSheetKeys: new Set(),
-    };
-    if (pending.all)
-        state.all = true;
-    for (const sheetKey of pending.sheetKeys) {
-        if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_'))
-            state.sheetKeys.add(sheetKey);
-    }
-    for (const sheetKey of pending.deletedSheetKeys || []) {
-        if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_')) {
-            state.deletedSheetKeys.add(sheetKey);
-            state.sheetKeys.delete(sheetKey);
-        }
-    }
-    pendingByScope_ACU.set(scopeKey, state);
-}
-function readRuntimeOnlyPendingSheets_ACU(scope) {
-    const state = pendingByScope_ACU.get(buildRuntimeOnlyPendingScopeKey_ACU(scope));
-    if (!state || (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0))
-        return null;
-    const deletedSheetKeys = [...state.deletedSheetKeys].sort();
-    return {
-        all: state.all,
-        sheetKeys: [...state.sheetKeys].sort(),
-        ...(deletedSheetKeys.length > 0 ? { deletedSheetKeys } : {}),
-    };
-}
-function hasRuntimeOnlyPendingSheets_ACU(scope) {
-    return readRuntimeOnlyPendingSheets_ACU(scope) !== null;
-}
-/** 不传 scope 时清空全部登记（测试/聊天切换收尾用）。 */
-function clearRuntimeOnlyPendingSheets_ACU(scope) {
-    if (!scope) {
-        pendingByScope_ACU.clear();
-        return;
-    }
-    pendingByScope_ACU.delete(buildRuntimeOnlyPendingScopeKey_ACU(scope));
-}
-/**
- * 按表集合条件化清除登记：只移除给定的 sheetKey（以及可选的 all 标记），保留同 scope
- * 下其他并发登记；清除后若无任何残留登记才删除整个 scope 条目。
- *
- * 供 runtime-only-pending-flush 在提交事务内（持锁中）按「本次实际处理集」清账使用，
- * 替代会吞掉并发写者新登记的全量 clearRuntimeOnlyPendingSheets_ACU（原 API 保持兼容）。
- */
-function clearRuntimeOnlyPendingSheetKeys_ACU(scope, sheetKeys, options) {
-    const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
-    const state = pendingByScope_ACU.get(scopeKey);
-    if (!state)
-        return;
-    for (const sheetKey of sheetKeys) {
-        if (typeof sheetKey === 'string') {
-            state.sheetKeys.delete(sheetKey);
-            state.deletedSheetKeys.delete(sheetKey);
-        }
-    }
-    if (options?.dropAllFlag)
-        state.all = false;
-    if (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0) {
-        pendingByScope_ACU.delete(scopeKey);
-    }
-}
-/**
- * 落盘器由 runtime-only-pending-flush 注册；提交模型通过本入口触发，
- * 避免 table-update-commit ↔ flush 之间的直接循环导入。未注册时静默跳过。
- */
-function registerRuntimeOnlyPendingFlusher_ACU(flusher) {
-    registeredFlusher_ACU = flusher;
-}
-async function runRegisteredRuntimeOnlyPendingFlush_ACU(scope, reason) {
-    if (!registeredFlusher_ACU || !hasRuntimeOnlyPendingSheets_ACU(scope)) {
-        return { flushed: false, sheetKeys: [] };
-    }
-    return registeredFlusher_ACU(reason);
-}
-
 class TableUpdateCommitError_ACU extends Error {
     constructor(message, category) {
         super(message);
@@ -113764,7 +113781,7 @@ function createTableFillStagingSession_ACU(run) {
                 let workingTableData = JSON.parse(JSON.stringify(workingView));
                 if (Array.isArray(input.dslResponses)) {
                     for (const response of input.dslResponses) {
-                        const parseResult = parseAndApplyTableEditsToData_ACU(response.aiResponse, workingTableData, input.updateMode, false);
+                        const parseResult = parseAndApplyTableEditsToData_ACU(response.aiResponse, workingTableData, input.updateMode);
                         const parseSuccess = typeof parseResult === 'object' && parseResult !== null ? parseResult.success : !!parseResult;
                         if (!parseSuccess) {
                             return {
@@ -116716,7 +116733,7 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
             }
         }
         else {
-            parseResult = parseAndApplyTableEditsToData_ACU(response.aiResponse, workingTableData, options.updateMode, options.isImportMode);
+            parseResult = parseAndApplyTableEditsToData_ACU(response.aiResponse, workingTableData, options.updateMode);
         }
         const parseResultObject = typeof parseResult === 'object' && parseResult !== null ? parseResult : null;
         const parseSuccess = parseResultObject ? parseResultObject.success : !!parseResult;
@@ -117996,7 +118013,7 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                     skipChatSave: isImportMode,
                 }, async ({ workingData }) => {
                     let workingTableData = (workingData || {});
-                    const parseResult = parseAndApplyTableEditsToData_ACU(aiResponse, workingTableData, updateMode, isImportMode);
+                    const parseResult = parseAndApplyTableEditsToData_ACU(aiResponse, workingTableData, updateMode);
                     let parseSuccess = false;
                     let parsedKeys = [];
                     if (typeof parseResult === 'object' && parseResult !== null) {
@@ -118991,7 +119008,8 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
     // structural switch points (introduction/rebase/reveal/hide) that a catch-up wave
     // must not silently cross inside a single persisted batch.
     const schemaBoundaries = collectV2SchemaBoundaryIndices_ACU(getChatArray_ACU(), getCurrentIsolationKey_ACU());
-    // 手动追平与填表同族（bucket 串行、每个 bucket 一次全量存盘）：同样开存盘合并窗口，finally 收口补存。
+    // 手动追平同样开存盘合并窗口、finally 收口补存。注意追平的 bucket 会替换旧增量，persist 对替换一律 strict 直存
+    // （要确认宿主真落盘，失败才能原位回滚），所以 bucket 自身不进合并；窗口只合并本轮期间其他走普通存盘的写入（D03-07）。
     beginChatSaveCoalescing_ACU();
     try {
         for (let waveIndex = 0; waveIndex < plan.waves.length; waveIndex += 1) {
@@ -120535,7 +120553,7 @@ async function handleManualUpdate_ACU() {
             '高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n' +
             '如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n' +
             '保留边界 checkpoint 会按 AI 回复楼层计数，在达到保留窗口和 20 个 AI 楼层缓冲后自动滚动建立。\n' +
-            '范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或终止时会回滚到本次操作前的状态。', { confirmLabel: '确认并继续', cancelLabel: '取消', tone: 'danger' });
+            '范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或中途终止时：本次只要提交过任何批次（含只落了进度、未写入数据的批次）就不会回滚——已清理的旧数据不会恢复，运行时会按聊天记录中的已提交结果重新对齐；只有本次一个批次都没提交时，才会自动回滚清理并恢复被删除的旧数据。', { confirmLabel: '确认并继续', cancelLabel: '取消', tone: 'danger' });
         if (!confirmed) {
             logDebug_ACU('[更新流程] 用户取消了手动填表确认框');
             showToastr_ACU('info', '已取消手动填表。');
@@ -122865,11 +122883,10 @@ function buildAutoUpdatePlan_ACU(liveChat, tableData, settings, isolationKey, pe
             logDebug_ACU(`[Trigger Check] EffIndicesLen: ${effectiveAiIndices.length}, StartIndex: ${startIndexInAiArray}`);
             if (startIndexInAiArray < effectiveAiIndices.length) {
                 const unupdatedAiIndices = effectiveAiIndices.slice(startIndexInAiArray);
-                const contextScopeIndices = effectiveAiIndices.slice(-threshold);
-                logDebug_ACU(`[Trigger Check] Unupdated: ${unupdatedAiIndices.length}, ContextScope: ${contextScopeIndices.length}`);
-                // 历史补填范围 = 完整待更新缺口（不再与 contextDepth 求交）。
-                // 计划 §5.6：新增表历史前沿为 0 时必须能从第 1 楼补到当前楼，
-                // 不能把 contextDepth（AI prompt 上下文窗口）当作历史补填范围。
+                logDebug_ACU(`[Trigger Check] Unupdated: ${unupdatedAiIndices.length}`);
+                // 历史补填范围 = 完整待更新缺口（计划 §5.6：新增表历史前沿为 0 时必须能从第 1 楼补到当前楼）。
+                // contextDepth（上下文层数）因此只剩「0 = 不参与自动填表」这一个作用（见上面 threshold > 0），
+                // 数值大小不影响补哪些楼，也不影响 AI 读到的上下文——每批提示词只带本批楼层（D02-07）。
                 const indicesToUpdate = unupdatedAiIndices;
                 const requiresBoundaryStaging = originalFullIndex >= 0
                     && indicesToUpdate.length > 0
@@ -157778,7 +157795,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1027";
+        const stamp = "20261110-1043";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186042,7 +186059,7 @@ var _sfc_main$L = /*@__PURE__*/ defineComponent({
         const config = useVisualizerConfigEditing();
         const ddlValidation = ref(null);
         const updateFields = [
-            { key: 'contextDepth', label: '上下文层数', hint: '-1 跟随全局。' },
+            { key: 'contextDepth', label: '上下文层数', hint: '-1 跟随全局；0 = 这张表不参与自动填表。其他数值目前不影响补哪些楼层（自动填表会补齐全部未填楼层）。' },
             { key: 'updateFrequency', label: '更新频率', hint: '每隔几层更新一次；-1 跟随全局，0 不自动更新这张表。' },
             { key: 'batchSize', label: '批处理大小', hint: '-1 跟随全局。' },
             { key: 'groupId', label: '分组编号', hint: '-1 不分组。' },
@@ -186111,8 +186128,8 @@ var _sfc_main$L = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-vconf[data-v-2658197b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\n.ub-vconf__cols[data-v-2658197b] {\r\n  margin: 0;\r\n  padding: 0;\r\n  list-style: none;\n}\n.ub-vconf__col[data-v-2658197b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s2) var(--ub-s3) var(--ub-s2) var(--ub-s4);\n}\n.ub-vconf__col + .ub-vconf__col[data-v-2658197b] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vconf__col[data-v-2658197b] >  .ub-field {\r\n  flex: 1 1 auto;\n}\n.ub-vconf__col-no[data-v-2658197b] {\r\n  flex: 0 0 auto;\r\n  min-width: 1.6em;\r\n  color: var(--ub-text-3);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  text-align: right;\n}\n.ub-vconf__empty[data-v-2658197b],\r\n.ub-vconf__muted[data-v-2658197b] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-vconf__empty[data-v-2658197b] {\r\n  padding: var(--ub-s4);\n}\n.ub-vconf__num[data-v-2658197b] {\r\n  display: block;\r\n  width: calc(var(--ub-u) * 110);\n}\n.ub-vconf__modes[data-v-2658197b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\n}\n.ub-vconf__mode[data-v-2658197b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2) var(--ub-s3);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\n}\n.ub-vconf__mode[data-v-2658197b] >  .ub-select {\r\n  flex: 0 1 calc(var(--ub-u) * 220);\n}\r\n", "src/presentation-v3/surfaces/visualizer/VizConfigView.vue#style-0-2658197b");
-var VizConfigView_vue_vue_type_style_index_0_scoped_2658197b_lang = null;
+injectSfcStyle("\n.ub-vconf[data-v-c4ea9c9b] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s6);\n  min-width: 0;\n}\n.ub-vconf__cols[data-v-c4ea9c9b] {\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n.ub-vconf__col[data-v-c4ea9c9b] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s3);\n  padding: var(--ub-s2) var(--ub-s3) var(--ub-s2) var(--ub-s4);\n}\n.ub-vconf__col + .ub-vconf__col[data-v-c4ea9c9b] {\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vconf__col[data-v-c4ea9c9b] >  .ub-field {\n  flex: 1 1 auto;\n}\n.ub-vconf__col-no[data-v-c4ea9c9b] {\n  flex: 0 0 auto;\n  min-width: 1.6em;\n  color: var(--ub-text-3);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  text-align: right;\n}\n.ub-vconf__empty[data-v-c4ea9c9b],\n.ub-vconf__muted[data-v-c4ea9c9b] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-vconf__empty[data-v-c4ea9c9b] {\n  padding: var(--ub-s4);\n}\n.ub-vconf__num[data-v-c4ea9c9b] {\n  display: block;\n  width: calc(var(--ub-u) * 110);\n}\n.ub-vconf__modes[data-v-c4ea9c9b] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n}\n.ub-vconf__mode[data-v-c4ea9c9b] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ub-s2) var(--ub-s3);\n  padding: var(--ub-s2) var(--ub-s3);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-sunken);\n}\n.ub-vconf__mode[data-v-c4ea9c9b] >  .ub-select {\n  flex: 0 1 calc(var(--ub-u) * 220);\n}\n", "src/presentation-v3/surfaces/visualizer/VizConfigView.vue#style-0-c4ea9c9b");
+var VizConfigView_vue_vue_type_style_index_0_scoped_c4ea9c9b_lang = null;
 
 const _hoisted_1$G = {
 	class: "ub-vconf",
@@ -186593,7 +186610,7 @@ function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var VizConfigView = /* @__PURE__ */ _export_sfc(_sfc_main$L, [["render", _sfc_render$K], ["__scopeId", "data-v-2658197b"]]);
+var VizConfigView = /* @__PURE__ */ _export_sfc(_sfc_main$L, [["render", _sfc_render$K], ["__scopeId", "data-v-c4ea9c9b"]]);
 
 /** 数据库编辑器（v3）数据视图的纯布局计算：短字段并排、分页窗口。 */
 const VIZ_PAGE_SIZE = 30;
@@ -211669,10 +211686,11 @@ function useManualUpdate() {
             // 表格已提交、只是世界书刷新失败：仍报完成，告警另起一行说明只需重试世界书同步。
             const postCommitWarningText = formatPostCommitWarnings_ACU(result.postCommitWarnings);
             finishToast(result.success ? (result.checkpointWarning || result.rolledBackCleanup || postCommitWarningText ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'), result.success
-                ? `${successText}${result.rolledBackCleanup ? '' : rollbackNote}${result.checkpointWarning
+                ? `${successText}${result.checkpointWarning
                     ? ` 但 AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}`
                     : ''}${postCommitWarningText ? `\n${postCommitWarningText}` : ''}`
-                : (abortRequested ? `手动填表任务已由用户终止。${rollbackNote}` : `${result.error || '手动填表失败。'}${rollbackNote}`));
+                // 失败文案里 service 层已带上回滚说明，这里不再追加（D03-05）；终止时换成固定文案，才需要补上。
+                : (abortRequested ? `手动填表任务已由用户终止。${rollbackNote}` : (result.error || '手动填表失败。')));
         }
         catch (error) {
             finishToast('error', error?.message || '手动填表执行异常。');

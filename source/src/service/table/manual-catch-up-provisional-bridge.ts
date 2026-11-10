@@ -485,6 +485,10 @@ export function authorizeManualCatchUpBucketWrite_ACU(
  *   7. strict save，失败完整回滚。
  *
  * 关键限制：建立后稳定持久化态仍只有一个 active full；原 full 只存在于 recovery backup。
+ *
+ * 现状（D03-06）：手动追平已改用跨根 staging，生产代码不再调用本函数。旧版本建过的桥接仍可能留在
+ * 用户聊天里，由本模块的恢复 / 授权路径处理；本函数留作这类持久化态的权威构造器，供那些路径的集成测试造数据。
+ * 不要在新代码里调用它。
  */
 export async function establishProvisionalBridge_ACU(
   runId: string,

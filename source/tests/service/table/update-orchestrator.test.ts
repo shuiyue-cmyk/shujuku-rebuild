@@ -8795,7 +8795,9 @@ describe('orchestrateManualCatchUp_ACU', () => {
     expect(mockPersistTablesToChatMessage.mock.calls.some(call => call[0]?.manualRefillProgress?.status === 'complete')).toBe(false);
   });
 
-  it('手动追平各 bucket 的普通存盘合并到收尾真存一次（大聊天存盘合并窗口）', async () => {
+  // 只验证追平开 / 收存盘合并窗口：persist 在这里换成直接走普通存盘。真实的追平 bucket 带「替换旧增量」，
+  // persist 会 strict 直存、不进合并（D03-07），不要把本用例读成「生产里每轮只存一次」。
+  it('手动追平期间开存盘合并窗口：窗口内的普通存盘合并到收尾真存一次', async () => {
     mockGetChatArray_ACU.mockReturnValue(createCatchUpChat(1, 2) as any);
     const gateway = await import('../../../src/data/gateways/chat-gateway');
     const { _set_SillyTavern_API_ACU } = await import('../../../src/shared/host-api');

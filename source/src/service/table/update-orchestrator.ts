@@ -2268,7 +2268,7 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
                 if (Array.isArray(parseResult.operations)) operations.push(...parseResult.operations);
             }
         } else {
-            parseResult = parseAndApplyTableEditsToData_ACU(response.aiResponse!, workingTableData, options.updateMode, options.isImportMode);
+            parseResult = parseAndApplyTableEditsToData_ACU(response.aiResponse!, workingTableData, options.updateMode);
         }
         const parseResultObject = typeof parseResult === 'object' && parseResult !== null ? parseResult : null;
         const parseSuccess = parseResultObject ? parseResultObject.success : !!parseResult;
@@ -3717,7 +3717,7 @@ export async function executeCardUpdateCore_ACU(
                     skipChatSave: isImportMode,
                 }, async ({ workingData }) => {
                     let workingTableData = (workingData || {}) as Record<string, any>;
-                    const parseResult: any = parseAndApplyTableEditsToData_ACU(aiResponse, workingTableData, updateMode, isImportMode);
+                    const parseResult: any = parseAndApplyTableEditsToData_ACU(aiResponse, workingTableData, updateMode);
 
                     let parseSuccess = false;
                     let parsedKeys: string[] = [];
@@ -4822,7 +4822,8 @@ export async function orchestrateManualCatchUp_ACU(
     // must not silently cross inside a single persisted batch.
     const schemaBoundaries = collectV2SchemaBoundaryIndices_ACU(getChatArray_ACU(), getCurrentIsolationKey_ACU());
 
-    // 手动追平与填表同族（bucket 串行、每个 bucket 一次全量存盘）：同样开存盘合并窗口，finally 收口补存。
+    // 手动追平同样开存盘合并窗口、finally 收口补存。注意追平的 bucket 会替换旧增量，persist 对替换一律 strict 直存
+    // （要确认宿主真落盘，失败才能原位回滚），所以 bucket 自身不进合并；窗口只合并本轮期间其他走普通存盘的写入（D03-07）。
     beginChatSaveCoalescing_ACU();
     try {
         for (let waveIndex = 0; waveIndex < plan.waves.length; waveIndex += 1) {

@@ -297,6 +297,13 @@ describe('resetScriptStateForNewChat_ACU', () => {
     expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('invalid chat file name'));
   });
 
+  it('切聊天时清掉只写进运行时、还没落盘的外部写入登记：运行时已整个丢弃，留着只会让同名聊天多一次无谓写回（D05-08）', async () => {
+    const pending = await import('../../../src/service/table/runtime-only-pending-state');
+    pending.markRuntimeOnlyPendingSheets_ACU({ chatKey: 'old-chat', isolationKey: '' }, { all: false, sheetKeys: ['sheet_0'] });
+    await resetScriptStateForNewChat_ACU('new-chat', { reason: 'chat_changed' });
+    expect(pending.hasRuntimeOnlyPendingSheets_ACU({ chatKey: 'old-chat', isolationKey: '' })).toBe(false);
+  });
+
   it('切聊天时一并清掉上一聊天留下的「生成结束配对歧义」隔离期，新聊天的首条回复照常触发填表（D01-04）', async () => {
     (mockGenerationGate as any).generationEndMatchQuarantineUntil_ACU = Date.now() + 60_000;
     await resetScriptStateForNewChat_ACU('new-chat', { reason: 'chat_changed' });

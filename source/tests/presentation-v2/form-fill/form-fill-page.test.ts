@@ -663,7 +663,8 @@ describe('FormFillPage · 手动填表面板', () => {
   // 上游 issue #18 第四条：零提交失败时 service 已回滚清理并落盘，toast 必须如实告知。
   it('手动填表零提交失败时提示已回滚清理', async () => {
     const { mount, orchestrate } = await mountFormFillPage();
-    orchestrate.mockResolvedValueOnce({ success: false, error: '模型 404：API 不可用。', rolledBackCleanup: true });
+    // service 层失败文案自带回滚说明（与 failManualRefillSession 同形），页面只展示一次（D03-05）。
+    orchestrate.mockResolvedValueOnce({ success: false, error: '模型 404：API 不可用。（本次未写入任何数据，已回滚清理）', rolledBackCleanup: true });
 
     const button = Array.from(document.querySelectorAll('button'))
       .find(btn => btn.textContent?.includes('执行手动填表')) as HTMLButtonElement;
@@ -674,7 +675,7 @@ describe('FormFillPage · 手动填表面板', () => {
 
     const rolledBackToast = document.querySelector('.ub-toasts')?.textContent || '';
     expect(rolledBackToast).toContain('模型 404：API 不可用。');
-    expect(rolledBackToast).toContain('已回滚清理');
+    expect(rolledBackToast.split('已回滚清理')).toHaveLength(2);
 
     mount.__resetAcuV2MountForTests();
   });

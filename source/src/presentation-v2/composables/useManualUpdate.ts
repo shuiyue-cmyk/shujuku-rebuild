@@ -570,10 +570,11 @@ export function useManualUpdate(): ManualUpdateState {
       finishToast(
         result.success ? (result.checkpointWarning || result.rolledBackCleanup || postCommitWarningText ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'),
         result.success
-          ? `${successText}${result.rolledBackCleanup ? '' : rollbackNote}${result.checkpointWarning
+          ? `${successText}${result.checkpointWarning
                 ? ` 但 AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}`
                 : ''}${postCommitWarningText ? `\n${postCommitWarningText}` : ''}`
-          : (abortRequested ? `手动填表任务已由用户终止。${rollbackNote}` : `${result.error || '手动填表失败。'}${rollbackNote}`),
+          // 失败文案里 service 层已带上回滚说明，这里不再追加（D03-05）；终止时换成固定文案，才需要补上。
+          : (abortRequested ? `手动填表任务已由用户终止。${rollbackNote}` : (result.error || '手动填表失败。')),
       );
     } catch (error: any) {
       finishToast('error', error?.message || '手动填表执行异常。');

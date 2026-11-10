@@ -136,13 +136,12 @@ export function buildAutoUpdatePlan_ACU(
 
             if (startIndexInAiArray < effectiveAiIndices.length) {
                 const unupdatedAiIndices = effectiveAiIndices.slice(startIndexInAiArray);
-                const contextScopeIndices = effectiveAiIndices.slice(-threshold);
 
-                logDebug_ACU(`[Trigger Check] Unupdated: ${unupdatedAiIndices.length}, ContextScope: ${contextScopeIndices.length}`);
+                logDebug_ACU(`[Trigger Check] Unupdated: ${unupdatedAiIndices.length}`);
 
-                // 历史补填范围 = 完整待更新缺口（不再与 contextDepth 求交）。
-                // 计划 §5.6：新增表历史前沿为 0 时必须能从第 1 楼补到当前楼，
-                // 不能把 contextDepth（AI prompt 上下文窗口）当作历史补填范围。
+                // 历史补填范围 = 完整待更新缺口（计划 §5.6：新增表历史前沿为 0 时必须能从第 1 楼补到当前楼）。
+                // contextDepth（上下文层数）因此只剩「0 = 不参与自动填表」这一个作用（见上面 threshold > 0），
+                // 数值大小不影响补哪些楼，也不影响 AI 读到的上下文——每批提示词只带本批楼层（D02-07）。
                 const indicesToUpdate = unupdatedAiIndices;
                 const requiresBoundaryStaging = originalFullIndex >= 0
                     && indicesToUpdate.length > 0

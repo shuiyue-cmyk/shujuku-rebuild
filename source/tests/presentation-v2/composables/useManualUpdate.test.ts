@@ -348,7 +348,8 @@ describe('useManualUpdate destructive refill confirmation', () => {
     const { useManualUpdate, dialog, toast, orchestrateManualUpdate_ACU, __resetToastStoreForTests } = await importManualUpdate();
     const manual = useManualUpdate();
 
-    orchestrateManualUpdate_ACU.mockResolvedValueOnce({ success: false, error: '模型 404：API 不可用。', rolledBackCleanup: true });
+    // service 层失败文案自带回滚说明（与 failManualRefillSession 同形）：UI 只展示一次（D03-05）。
+    orchestrateManualUpdate_ACU.mockResolvedValueOnce({ success: false, error: '模型 404：API 不可用。（本次未写入任何数据，已回滚清理）', rolledBackCleanup: true });
     const rolledBackRun = manual.runManualUpdate();
     await waitForCondition(() => dialog.active?.title === '执行手动填表', '确认弹窗出现');
     dialog.submitActive();
@@ -356,7 +357,7 @@ describe('useManualUpdate destructive refill confirmation', () => {
 
     expect(toast.items.at(-1)?.kind).toBe('error');
     expect(toast.items.at(-1)?.text).toContain('模型 404：API 不可用。');
-    expect(toast.items.at(-1)?.text).toContain('已回滚清理');
+    expect(toast.items.at(-1)?.text.split('已回滚清理')).toHaveLength(2);
 
     // 已提交过批次时 service 不回滚，UI 不得再声称回滚过。
     orchestrateManualUpdate_ACU.mockResolvedValueOnce({ success: false, error: '模型 404：API 不可用。' });

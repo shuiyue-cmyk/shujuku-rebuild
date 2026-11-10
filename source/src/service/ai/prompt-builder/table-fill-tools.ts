@@ -137,6 +137,11 @@ export function resolveTableFillToolTurn_ACU(turn: TableFillTurn_ACU | null | un
     }
     if (value.trim()) parts.push(value.trim());
   }
+  // 工具调用全是空 sql、正文却写了块：模型把修改写在了正文里，按正文走；
+  // 照常剔除正文块会把这些修改吞成一次「零操作成功」，该楼还被记成已填（D04-03）。
+  if (parts.length === 0 && /<tableEdit>[\s\S]*?<\/tableEdit>/i.test(content)) {
+    return { ok: true, text: content, viaTool: false };
+  }
   const residual = content.replace(/<tableEdit>[\s\S]*?<\/tableEdit>/gi, '').trim();
   const block = `<tableEdit>\n${parts.join('\n')}\n</tableEdit>`;
   return { ok: true, text: residual ? `${residual}\n${block}` : block, viaTool: true };

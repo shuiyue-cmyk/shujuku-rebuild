@@ -126,7 +126,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
     return { inner: chosen.raw, cleaned, mode: 'comment_fallback', hasOpen, hasClose };
   }
 
-  export function parseAndApplyTableEditsToData_ACU(aiResponse: string, tableData: any, updateMode = 'standard', isImportMode = false) {
+  export function parseAndApplyTableEditsToData_ACU(aiResponse: string, tableData: any, updateMode = 'standard') {
     if (!tableData) {
         logError_ACU('Cannot apply edits, tableData is not loaded.');
         return false;
@@ -620,12 +620,13 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
     };
   }
 
-  export function parseAndApplyTableEdits_ACU(aiResponse: string, updateMode = 'standard', isImportMode = false) {
+  /** 对当前运行时表格直接解析应用的便捷入口；运行时填表链路都走 parseAndApplyTableEditsToData_ACU，这里留给测试使用。 */
+  export function parseAndApplyTableEdits_ACU(aiResponse: string, updateMode = 'standard') {
     if (!currentJsonTableData_ACU) {
         logError_ACU('Cannot apply edits, currentJsonTableData_ACU is not loaded.');
         return false;
     }
-    return parseAndApplyTableEditsToData_ACU(aiResponse, currentJsonTableData_ACU, updateMode, isImportMode);
+    return parseAndApplyTableEditsToData_ACU(aiResponse, currentJsonTableData_ACU, updateMode);
   }
 
   /**

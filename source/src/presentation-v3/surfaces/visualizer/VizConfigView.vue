@@ -295,7 +295,7 @@ const sqlInjectionPlaceholder = '留空则使用默认表格内容。支持 {[sq
 
 type UpdateKey = 'contextDepth' | 'updateFrequency' | 'batchSize' | 'groupId' | 'skipFloors' | 'sendLatestRows';
 const updateFields: Array<{ key: UpdateKey; label: string; hint: string }> = [
-  { key: 'contextDepth', label: '上下文层数', hint: '-1 跟随全局。' },
+  { key: 'contextDepth', label: '上下文层数', hint: '-1 跟随全局；0 = 这张表不参与自动填表。其他数值目前不影响补哪些楼层（自动填表会补齐全部未填楼层）。' },
   { key: 'updateFrequency', label: '更新频率', hint: '每隔几层更新一次；-1 跟随全局，0 不自动更新这张表。' },
   { key: 'batchSize', label: '批处理大小', hint: '-1 跟随全局。' },
   { key: 'groupId', label: '分组编号', hint: '-1 不分组。' },

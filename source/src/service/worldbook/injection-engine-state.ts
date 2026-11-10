@@ -2,6 +2,7 @@
  * service/worldbook/injection-engine-state.ts — 状态重置、目标获取、隔离前缀、条目清理、聊天历史清理
  * 从 injection-engine.ts 拆出
  */
+import { clearRuntimeOnlyPendingSheets_ACU } from '../table/runtime-only-pending-state';
 import {
   getCurrentWorldbookConfig_ACU
 } from '../settings/settings-readers';
@@ -168,6 +169,8 @@ import {
     resetPlotAgentWorldbookSessionSnapshot_ACU();
 
     _set_currentJsonTableData_ACU(null);
+    // 只写进运行时、还没落盘的外部写入登记随运行时一起作废（D05-08）
+    clearRuntimeOnlyPendingSheets_ACU();
     _set_independentTableStates_ACU({});
     _set_allChatMessages_ACU([]);
     _set_lastTotalAiMessages_ACU(0); // 重置 AI 消息计数

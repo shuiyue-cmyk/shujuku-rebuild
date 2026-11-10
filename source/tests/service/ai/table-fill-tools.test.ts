@@ -65,6 +65,19 @@ describe('填表原生工具（table_sql，可选项）', () => {
     }
   });
 
+  it('工具调用全是空 sql、正文却写了 <tableEdit>：按正文走，不把正文的修改吞成一次零操作（D04-03）', () => {
+    const content = '分析<tableEdit>\nUPDATE t SET a = 1 WHERE row_id = 1;\n</tableEdit>';
+    expect(resolveTableFillToolTurn_ACU({
+      content,
+      toolCalls: [{ name: 'table_sql', arguments: JSON.stringify({ sql: '  ' }) }],
+    })).toEqual({ ok: true, viaTool: false, text: content });
+    // 正文也没有块：空调用仍表示「本轮无改动」，照旧合成空块。
+    expect(resolveTableFillToolTurn_ACU({
+      content: '无需改动',
+      toolCalls: [{ name: 'table_sql', arguments: JSON.stringify({ sql: '' }) }],
+    })).toEqual({ ok: true, viaTool: true, text: '无需改动\n<tableEdit>\n\n</tableEdit>' });
+  });
+
   it('多次调用按顺序合并', () => {
     const result = resolveTableFillToolTurn_ACU({
       content: '',
