@@ -11,11 +11,14 @@
  *   所以停止 Debug 不会关掉这里显式打开的常驻采集，本 store 也不会被 Debug 改写。
  * - apiReconfirm：API 预设变更后，其他使用 API 预设的位置是否标黄提醒二次确认。
  *   默认打开（保持现有行为）；关闭后全库不再标黄。缺省（老版本存量）视为打开。
+ * - scopeGuardPrompt：执行边界提示词。开启后数据库的每次 AI 请求附加一段约束提示词，默认关闭。
+ *   服务层启动时自读持久化值（不打开面板也生效），本 store 只在切换 / refresh 时推送变化。
  *
  * 新 UI 自有持久化，物理隔离于 settings_ACU。
  */
 import { defineStore } from 'pinia';
 import { setWarnLogEnabledByDevOption_ACU as applyWarnLogEnabled } from '../../shared/log-buffer';
+import { setScopeGuardPromptEnabled_ACU as applyScopeGuardPrompt } from '../../service/ai/scope-guard-prompt';
 import { readSection, writeSection } from './persistence';
 
 const SECTION_KEY = 'devOptions';
@@ -29,6 +32,8 @@ export interface DevOptionsState {
   warnLogEnabled: boolean;
   /** API 二次确认：预设变更后他处是否标黄。默认打开；缺省视为打开。 */
   apiReconfirm: boolean;
+  /** 执行边界提示词：开启后每次 AI 请求附加约束提示词。默认关闭。 */
+  scopeGuardPrompt: boolean;
 }
 
 interface PersistedShape {
@@ -36,6 +41,7 @@ interface PersistedShape {
   plotAdvanced?: unknown;
   warnLogEnabled?: unknown;
   apiReconfirm?: unknown;
+  scopeGuardPrompt?: unknown;
 }
 
 function loadFromStorage(): DevOptionsState {
@@ -45,6 +51,7 @@ function loadFromStorage(): DevOptionsState {
     plotAdvanced: raw.plotAdvanced === true,
     warnLogEnabled: raw.warnLogEnabled === true,
     apiReconfirm: raw.apiReconfirm !== false,
+    scopeGuardPrompt: raw.scopeGuardPrompt === true,
   };
 }
 
@@ -54,6 +61,7 @@ function persist(state: DevOptionsState): void {
     plotAdvanced: state.plotAdvanced,
     warnLogEnabled: state.warnLogEnabled,
     apiReconfirm: state.apiReconfirm,
+    scopeGuardPrompt: state.scopeGuardPrompt,
   });
 }
 
@@ -81,13 +89,20 @@ export const useDevOptionsStore = defineStore('acu-v2-dev-options', {
       this.apiReconfirm = !!enabled;
       persist(this.$state);
     },
+    setScopeGuardPrompt(enabled: boolean): void {
+      this.scopeGuardPrompt = !!enabled;
+      applyScopeGuardPrompt(this.scopeGuardPrompt);
+      persist(this.$state);
+    },
     refresh(): void {
       const next = loadFromStorage();
       this.developerOptionsEnabled = next.developerOptionsEnabled;
       this.plotAdvanced = next.plotAdvanced;
       this.warnLogEnabled = next.warnLogEnabled;
       this.apiReconfirm = next.apiReconfirm;
+      this.scopeGuardPrompt = next.scopeGuardPrompt;
       applyWarnLogEnabled(this.warnLogEnabled);
+      applyScopeGuardPrompt(this.scopeGuardPrompt);
     },
   },
 });

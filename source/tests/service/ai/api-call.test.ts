@@ -75,6 +75,7 @@ import {
   __clearPresetResolveCacheForTests_ACU,
 } from '../../../src/service/settings/api-preset-service';
 import { resolveContinuationApiPreset_ACU } from '../../../src/service/continuation/api-preset';
+import { SCOPE_GUARD_PROMPT_ACU, setScopeGuardPromptEnabled_ACU } from '../../../src/service/ai/scope-guard-prompt';
 import { callContinuationInternalAi_ACU } from '../../../src/service/continuation/internal-ai-call';
 import {
   apiPresetDraftFromPreset,
@@ -92,6 +93,7 @@ beforeEach(() => {
   mockSettings.apiPresets = [];
   __clearPresetResolveCacheForTests_ACU();
   __clearComposeIncludeBodyCacheForTests_ACU();
+  setScopeGuardPromptEnabled_ACU(false);
 });
 
 // ═══ resolveApiConfigByPreset_ACU memo ═══
@@ -292,6 +294,22 @@ describe('callAIWithPreset_ACU', () => {
 
 // ═══ buildCustomApiRequestBody_ACU ═══
 describe('buildCustomApiRequestBody_ACU', () => {
+  it('执行边界提示词：关闭时消息逐字不变；开启后所有请求统一在开头 system 段之后附加一条', () => {
+    const messages = [{ role: 'SYSTEM', content: '你是助手' }, { role: 'USER', content: '填表' }, { role: 'assistant', content: '收到' }];
+    const off = buildCustomApiRequestBody_ACU(messages, { url: 'https://api.example.com', model: 'm', apiKey: 'k' });
+    expect(off.messages).toEqual([{ role: 'system', content: '你是助手' }, { role: 'user', content: '填表' }, { role: 'assistant', content: '收到' }]);
+
+    setScopeGuardPromptEnabled_ACU(true);
+    const on = buildCustomApiRequestBody_ACU(messages, { url: 'https://api.example.com', model: 'm', apiKey: 'k' }, { nonPrefillSupport: true });
+    expect(on.messages).toEqual([
+      { role: 'system', content: '你是助手' },
+      { role: 'system', content: SCOPE_GUARD_PROMPT_ACU },
+      { role: 'user', content: '填表' },
+      { role: 'user', content: '助手：\n收到' },
+    ]);
+    expect(messages).toHaveLength(3);
+  });
+
   it('插件请求一律标为后台请求：宿主把上游错误作为 502 返回，而不是包成一条「助手回复」', () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],

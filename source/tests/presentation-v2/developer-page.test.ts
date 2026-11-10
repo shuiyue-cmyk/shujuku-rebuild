@@ -168,4 +168,42 @@ describe('DeveloperPage', () => {
       mount.__resetAcuV2MountForTests();
     });
   });
+
+  describe('执行边界提示词开关', () => {
+    function findGuardToggle(): HTMLElement | undefined {
+      return document.querySelector<HTMLElement>('[data-ub-main] [role="switch"][aria-label="执行边界提示词"]') ?? undefined;
+    }
+
+    it('默认关：请求不附加；打开后立即生效并落盘，再关掉也同步', async () => {
+      const { mount } = await mountDeveloperPage();
+      const guard = await import('../../src/service/ai/scope-guard-prompt');
+
+      const toggle = findGuardToggle();
+      expect(toggle, '开发者页必须有执行边界提示词开关').not.toBeUndefined();
+      expect(toggle!.getAttribute('aria-checked')).toBe('false');
+      expect(guard.isScopeGuardPromptEnabled_ACU()).toBe(false);
+
+      toggle!.click();
+      await new Promise(r => setTimeout(r, 0));
+      expect(guard.isScopeGuardPromptEnabled_ACU(), '打开后请求必须马上附加').toBe(true);
+      expect(JSON.parse(localStorage.getItem('acu_v2_ui_state') || '{}').devOptions.scopeGuardPrompt).toBe(true);
+
+      findGuardToggle()!.click();
+      await new Promise(r => setTimeout(r, 0));
+      expect(guard.isScopeGuardPromptEnabled_ACU()).toBe(false);
+      expect(JSON.parse(localStorage.getItem('acu_v2_ui_state') || '{}').devOptions.scopeGuardPrompt).toBe(false);
+
+      mount.__resetAcuV2MountForTests();
+    });
+
+    it('已保存为开时：开关回显为开，请求附加', async () => {
+      const { mount } = await mountDeveloperPage({ scopeGuardPrompt: true });
+      const guard = await import('../../src/service/ai/scope-guard-prompt');
+
+      expect(findGuardToggle()!.getAttribute('aria-checked')).toBe('true');
+      expect(guard.isScopeGuardPromptEnabled_ACU()).toBe(true);
+
+      mount.__resetAcuV2MountForTests();
+    });
+  });
 });

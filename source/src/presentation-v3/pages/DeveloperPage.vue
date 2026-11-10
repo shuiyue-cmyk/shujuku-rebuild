@@ -13,6 +13,12 @@
       >
         <UbSwitch :model-value="devOptions.warnLogEnabled.value" aria-label="WARN 日志" @update:model-value="devOptions.setWarnLogEnabled($event)" />
       </UbRow>
+      <UbRow
+        label="执行边界提示词"
+        hint="开启后，数据库发出的每一次 AI 请求（填表、剧情推进、Agent、续写等）都会额外附加一段约束提示词，要求模型只做指令要求的事、不编造、不越范围。适合 MiniMax M3.1 Flash 这类爱「顺便多做」的模型；默认关闭，关闭时请求与原来完全一致。"
+      >
+        <UbSwitch :model-value="devOptions.scopeGuardPrompt.value" aria-label="执行边界提示词" @update:model-value="devOptions.setScopeGuardPrompt($event)" />
+      </UbRow>
     </UbSection>
   </UbPage>
 </template>

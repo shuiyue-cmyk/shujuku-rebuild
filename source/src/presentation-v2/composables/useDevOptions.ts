@@ -13,6 +13,7 @@ export function useDevOptions() {
     plotAdvanced,
     warnLogEnabled,
     apiReconfirm,
+    scopeGuardPrompt,
   } = storeToRefs(store);
   return {
     developerOptionsEnabled,
@@ -23,6 +24,8 @@ export function useDevOptions() {
     setWarnLogEnabled: (enabled: boolean) => store.setWarnLogEnabled(enabled),
     apiReconfirm,
     setApiReconfirm: (enabled: boolean) => store.setApiReconfirm(enabled),
+    scopeGuardPrompt,
+    setScopeGuardPrompt: (enabled: boolean) => store.setScopeGuardPrompt(enabled),
     refresh: () => store.refresh(),
   };
 }

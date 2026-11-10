@@ -1868,10 +1868,12 @@ function safeJsonStringify_ACU(obj, fallback = '{}') {
 const ACU_V2_STORAGE_KEY = 'acu_v2_ui_state';
 const ACU_V2_DEV_OPTIONS_SECTION_KEY = 'devOptions';
 const WARN_LOG_ENABLED_KEY = 'warnLogEnabled';
+const SCOPE_GUARD_PROMPT_KEY = 'scopeGuardPrompt';
 /**
- * 在 Vue/Pinia 尚未挂载时读取 WARN 日志开关，保证启动阶段也遵守持久化设置。
+ * 在 Vue/Pinia 尚未挂载时读取一个开发者选项布尔开关（只认显式 true），
+ * 保证启动阶段、没打开过面板时也遵守持久化设置。
  */
-function readWarnLogEnabled() {
+function readDevOptionFlag(key) {
     try {
         if (typeof window === 'undefined' || !window.localStorage)
             return false;
@@ -1884,11 +1886,17 @@ function readWarnLogEnabled() {
         const devOptions = parsed[ACU_V2_DEV_OPTIONS_SECTION_KEY];
         if (!devOptions || typeof devOptions !== 'object')
             return false;
-        return devOptions[WARN_LOG_ENABLED_KEY] === true;
+        return devOptions[key] === true;
     }
     catch {
         return false;
     }
+}
+function readWarnLogEnabled() {
+    return readDevOptionFlag(WARN_LOG_ENABLED_KEY);
+}
+function readScopeGuardPromptEnabled() {
+    return readDevOptionFlag(SCOPE_GUARD_PROMPT_KEY);
 }
 
 /**
@@ -88283,6 +88291,43 @@ async function sendChatCompletionBody_ACU(body, signal) {
     });
 }
 
+/**
+ * 执行边界提示词（开发者选项「执行边界提示词」）
+ *
+ * 背景：MiniMax M3.1 Flash 这类主观能动性过强的模型，越界集中在规则留了解释空间的地方——
+ * 楼层里没发生什么也要改写几条记录、用户只要求改一处仍按默认规则把整轮表都更新一遍。
+ * 开启后，数据库发出的每一次 AI 请求都附加这段固定约束。默认关闭；关闭时请求逐字不变。
+ * 文本与压测数据见 docs/SCOPE-GUARD-PROMPT.md（第二版，第 4 条专压「没新信息也要写」）。
+ *
+ * 位置：插在开头连续的 system 段之后、作为一条独立 system。开头是固定前缀，不破坏提示词缓存，
+ * 也能被 Claude / Gemini 协议收进系统提示字段；压测里效果不差于放末尾，且不用绕开结尾预填充。
+ */
+const SCOPE_GUARD_PROMPT_ACU = `【执行边界】
+你正在执行一项由程序自动调用的后台任务，输出会被程序直接解析。完成任务时，额外遵守以下边界：
+1. 只做指令明确要求的事。指令没有要求的步骤、内容、改动一律不做，不主动"顺便"多做。
+2. 只依据本次提供的资料。资料里没有写明的事实、数值、人物、事件，不补全、不推测、不编造。
+3. 指令限定了范围（只改某张表、某个字段、某几处、某类内容）时，只在范围内操作，范围外的内容保持原样。
+4. 资料没有带来新的事实时，不改动已有内容：不为了"有所作为"去改写、扩写或换个说法重写原有记录。一笔带过、没有后续影响的小动作（擦拭、整理、看一眼、想起某事），以及只被提到或回忆、本身没有新经历的人和物，都不算发生了变化。
+5. 拿不准某项操作是否必要、是否在要求范围内时，不做这项操作。
+6. 严格按指令规定的输出格式输出：格式之外不加说明、建议、总结、追问，也不续写剧情、不替任何角色发言或行动。`;
+// 启动即读持久化值：不打开面板、刷新页面后的自动填表也要遵守开关。之后由开发者选项 store 推送变化。
+let scopeGuardPromptEnabled_ACU = readScopeGuardPromptEnabled();
+function setScopeGuardPromptEnabled_ACU(enabled) {
+    scopeGuardPromptEnabled_ACU = enabled === true;
+}
+function isScopeGuardPromptEnabled_ACU() {
+    return scopeGuardPromptEnabled_ACU;
+}
+/** 开关打开时返回插入了执行边界提示词的新数组；关闭时原样返回同一个数组。 */
+function withScopeGuardPrompt_ACU(messages) {
+    if (!scopeGuardPromptEnabled_ACU)
+        return messages;
+    let insertAt = 0;
+    while (insertAt < messages.length && String(messages[insertAt]?.role ?? '').toLowerCase() === 'system')
+        insertAt += 1;
+    return [...messages.slice(0, insertAt), { role: 'system', content: SCOPE_GUARD_PROMPT_ACU }, ...messages.slice(insertAt)];
+}
+
 // service/ai/api-call.ts — AI 调用编排（剧情推进用）
 // 从 04_shared_helpers.js 迁入
 /**
@@ -88766,7 +88811,8 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
     // 提示词后处理（预设级可配）：缺省 strict 与历史写死行为一致；显式「未选择」（''）
     // 时请求体省略该键，后端原样透传消息，保留提示词组中部 system 段的角色。
     const promptPostProcessing_ACU = normalizePromptPostProcessing_ACU(effectiveApiConfig.promptPostProcessing);
-    const effectiveMessages_ACU = Array.isArray(messages) ? [...messages] : messages;
+    // 执行边界提示词（开发者选项，默认关）：全库 AI 请求的统一出口，开启时在开头 system 段之后附加一条。
+    const effectiveMessages_ACU = Array.isArray(messages) ? withScopeGuardPrompt_ACU([...messages]) : messages;
     const body = {
         // 统一将 messages 的 role 归一为小写（system / user / assistant）。
         //
@@ -95603,7 +95649,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261109-1409"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261110-0957"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95622,7 +95668,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261109-1409";
+        const stamp = "20261110-0957";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -157595,7 +157641,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261109-1409";
+        const stamp = "20261110-0957";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -175746,6 +175792,8 @@ function useChatChangedListener() {
  *   所以停止 Debug 不会关掉这里显式打开的常驻采集，本 store 也不会被 Debug 改写。
  * - apiReconfirm：API 预设变更后，其他使用 API 预设的位置是否标黄提醒二次确认。
  *   默认打开（保持现有行为）；关闭后全库不再标黄。缺省（老版本存量）视为打开。
+ * - scopeGuardPrompt：执行边界提示词。开启后数据库的每次 AI 请求附加一段约束提示词，默认关闭。
+ *   服务层启动时自读持久化值（不打开面板也生效），本 store 只在切换 / refresh 时推送变化。
  *
  * 新 UI 自有持久化，物理隔离于 settings_ACU。
  */
@@ -175757,6 +175805,7 @@ function loadFromStorage$1() {
         plotAdvanced: raw.plotAdvanced === true,
         warnLogEnabled: raw.warnLogEnabled === true,
         apiReconfirm: raw.apiReconfirm !== false,
+        scopeGuardPrompt: raw.scopeGuardPrompt === true,
     };
 }
 function persist$2(state) {
@@ -175765,6 +175814,7 @@ function persist$2(state) {
         plotAdvanced: state.plotAdvanced,
         warnLogEnabled: state.warnLogEnabled,
         apiReconfirm: state.apiReconfirm,
+        scopeGuardPrompt: state.scopeGuardPrompt,
     });
 }
 const useDevOptionsStore = defineStore('acu-v2-dev-options', {
@@ -175791,13 +175841,20 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
             this.apiReconfirm = !!enabled;
             persist$2(this.$state);
         },
+        setScopeGuardPrompt(enabled) {
+            this.scopeGuardPrompt = !!enabled;
+            setScopeGuardPromptEnabled_ACU(this.scopeGuardPrompt);
+            persist$2(this.$state);
+        },
         refresh() {
             const next = loadFromStorage$1();
             this.developerOptionsEnabled = next.developerOptionsEnabled;
             this.plotAdvanced = next.plotAdvanced;
             this.warnLogEnabled = next.warnLogEnabled;
             this.apiReconfirm = next.apiReconfirm;
+            this.scopeGuardPrompt = next.scopeGuardPrompt;
             setWarnLogEnabledByDevOption_ACU(this.warnLogEnabled);
+            setScopeGuardPromptEnabled_ACU(this.scopeGuardPrompt);
         },
     },
 });
@@ -175809,7 +175866,7 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
  */
 function useDevOptions() {
     const store = useDevOptionsStore();
-    const { developerOptionsEnabled, plotAdvanced, warnLogEnabled, apiReconfirm, } = storeToRefs(store);
+    const { developerOptionsEnabled, plotAdvanced, warnLogEnabled, apiReconfirm, scopeGuardPrompt, } = storeToRefs(store);
     return {
         developerOptionsEnabled,
         setDeveloperOptionsEnabled: (enabled) => store.setDeveloperOptionsEnabled(enabled),
@@ -175819,6 +175876,8 @@ function useDevOptions() {
         setWarnLogEnabled: (enabled) => store.setWarnLogEnabled(enabled),
         apiReconfirm,
         setApiReconfirm: (enabled) => store.setApiReconfirm(enabled),
+        scopeGuardPrompt,
+        setScopeGuardPrompt: (enabled) => store.setScopeGuardPrompt(enabled),
         refresh: () => store.refresh(),
     };
 }
@@ -186703,8 +186762,8 @@ var _sfc_main$K = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-vdata[data-v-2b80fc88] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s3);\n  min-width: 0;\n}\n.ub-vdata__bar[data-v-2b80fc88] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ub-s2) var(--ub-s3);\n  min-height: var(--ub-control-h-sm);\n}\n.ub-vdata__range[data-v-2b80fc88] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n  font-variant-numeric: tabular-nums;\n}\n.ub-vdata__pager[data-v-2b80fc88] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s1);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-xs);\n}\n.ub-vdata__pager-input[data-v-2b80fc88] {\n  width: calc(var(--ub-u) * 64);\n}\n.ub-vdata__pager-text[data-v-2b80fc88] {\n  white-space: nowrap;\n}\n.ub-vdata__empty[data-v-2b80fc88] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  padding: var(--ub-s5) var(--ub-s4);\n  border: 1px dashed var(--ub-line);\n  border-radius: var(--ub-r-card);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-sm);\n}\n.ub-vdata__cards[data-v-2b80fc88] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s3);\n  margin: 0;\n  padding: 0;\n  list-style: none;\n}\n.ub-vcard[data-v-2b80fc88] {\n  min-width: 0;\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-card);\n  background: var(--ub-panel);\n  box-shadow: var(--ub-card-shadow);\n  scroll-margin: var(--ub-s4);\n}\n.ub-vcard.is-locked[data-v-2b80fc88] {\n  border-color: color-mix(in srgb, var(--ub-accent) 45%, var(--ub-line-soft));\n}\n.ub-vcard__head[data-v-2b80fc88] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-vcard__no[data-v-2b80fc88] {\n  color: var(--ub-text);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-sm);\n  font-weight: 700;\n}\n.ub-vcard__spacer[data-v-2b80fc88] {\n  flex: 1 1 auto;\n}\n.ub-vcard__fields[data-v-2b80fc88] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s3);\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\n}\n.ub-vcard__line[data-v-2b80fc88] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: var(--ub-s3);\n}\n.ub-vcard__line.is-wide[data-v-2b80fc88] {\n  grid-template-columns: minmax(0, 1fr);\n}\n.ub-vfield[data-v-2b80fc88] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s1);\n  min-width: 0;\n}\n.ub-vfield__label[data-v-2b80fc88] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  min-height: var(--ub-control-h-sm);\n}\n.ub-vfield__name[data-v-2b80fc88] {\n  flex: 1 1 auto;\n  min-width: 0;\n  overflow: hidden;\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n  font-weight: 700;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.ub-vfield.is-locked .ub-vfield__name[data-v-2b80fc88] {\n  color: var(--ub-accent-ink);\n}\n.ub-vfield__locks[data-v-2b80fc88] {\n  display: inline-flex;\n  align-items: center;\n  gap: 2px;\n  flex: 0 0 auto;\n}\n.ub-vfield__value[data-v-2b80fc88],\n.ub-vfield__editor[data-v-2b80fc88] {\n  width: 100%;\n  min-height: var(--ub-control-h);\n  padding: calc(var(--ub-u) * 7) var(--ub-s3);\n  border: 1px solid transparent;\n  border-radius: var(--ub-r-control);\n  background: var(--ub-sunken);\n  color: var(--ub-text);\n  font: inherit;\n  font-size: var(--ub-fs-sm);\n  line-height: 1.6;\n  overflow-wrap: anywhere;\n  white-space: pre-wrap;\n}\n.ub-vfield__value[data-v-2b80fc88] {\n  cursor: text;\n  transition: border-color 0.14s ease, background 0.14s ease;\n}\n.ub-vfield__value[data-v-2b80fc88]:hover {\n  border-color: var(--ub-line);\n}\n.ub-vfield__value[data-v-2b80fc88]:focus-visible {\n  border-color: var(--ub-accent);\n  outline: none;\n}\n.ub-vfield__value.is-empty[data-v-2b80fc88] {\n  color: var(--ub-text-3);\n  font-style: italic;\n}\n.ub-vfield__editor[data-v-2b80fc88] {\n  display: block;\n  resize: none;\n  overflow: hidden;\n  border-color: var(--ub-accent);\n  background: var(--ub-input-bg);\n  box-shadow: 0 0 0 3px var(--ub-accent-soft);\n  outline: none;\n}\n.ub-vdata__add[data-v-2b80fc88] {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  gap: var(--ub-s2);\n  width: 100%;\n  min-height: calc(var(--ub-u) * 48);\n  border: 1.5px dashed var(--ub-line);\n  border-radius: var(--ub-r-card);\n  background: transparent;\n  color: var(--ub-text-2);\n  font: inherit;\n  font-size: var(--ub-fs-sm);\n  font-weight: 650;\n  cursor: pointer;\n  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;\n}\n.ub-vdata__add[data-v-2b80fc88]:hover {\n  border-color: var(--ub-accent);\n  background: var(--ub-accent-soft);\n  color: var(--ub-accent-ink);\n}\n@media (max-width: 560px) {\n.ub-vcard__fields[data-v-2b80fc88] {\n    padding: var(--ub-s3);\n}\n}\n", "src/presentation-v3/surfaces/visualizer/VizDataView.vue#style-0-2b80fc88");
-var VizDataView_vue_vue_type_style_index_0_scoped_2b80fc88_lang = null;
+injectSfcStyle("\n.ub-vdata[data-v-80ab025b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\n}\n.ub-vdata__bar[data-v-80ab025b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2) var(--ub-s3);\r\n  min-height: var(--ub-control-h-sm);\n}\n.ub-vdata__range[data-v-80ab025b] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\r\n  font-variant-numeric: tabular-nums;\n}\n.ub-vdata__pager[data-v-80ab025b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-vdata__pager-input[data-v-80ab025b] {\r\n  width: calc(var(--ub-u) * 64);\n}\n.ub-vdata__pager-text[data-v-80ab025b] {\r\n  white-space: nowrap;\n}\n.ub-vdata__empty[data-v-80ab025b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s5) var(--ub-s4);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-card);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-vdata__cards[data-v-80ab025b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  margin: 0;\r\n  padding: 0;\r\n  list-style: none;\n}\n.ub-vcard[data-v-80ab025b] {\r\n  min-width: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  box-shadow: var(--ub-card-shadow);\r\n  scroll-margin: var(--ub-s4);\n}\n.ub-vcard.is-locked[data-v-80ab025b] {\r\n  border-color: color-mix(in srgb, var(--ub-accent) 45%, var(--ub-line-soft));\n}\n.ub-vcard__head[data-v-80ab025b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-vcard__no[data-v-80ab025b] {\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 700;\n}\n.ub-vcard__spacer[data-v-80ab025b] {\r\n  flex: 1 1 auto;\n}\n.ub-vcard__fields[data-v-80ab025b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\n}\n.ub-vcard__line[data-v-80ab025b] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: var(--ub-s3);\n}\n.ub-vcard__line.is-wide[data-v-80ab025b] {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.ub-vfield[data-v-80ab025b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  min-width: 0;\n}\n.ub-vfield__label[data-v-80ab025b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-height: var(--ub-control-h-sm);\n}\n.ub-vfield__name[data-v-80ab025b] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-vfield.is-locked .ub-vfield__name[data-v-80ab025b] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-vfield__locks[data-v-80ab025b] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  flex: 0 0 auto;\n}\n.ub-vfield__value[data-v-80ab025b],\r\n.ub-vfield__editor[data-v-80ab025b] {\r\n  width: 100%;\r\n  min-height: var(--ub-control-h);\r\n  padding: calc(var(--ub-u) * 7) var(--ub-s3);\r\n  border: 1px solid transparent;\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.6;\r\n  overflow-wrap: anywhere;\r\n  white-space: pre-wrap;\n}\n.ub-vfield__value[data-v-80ab025b] {\r\n  cursor: text;\r\n  transition: border-color 0.14s ease, background 0.14s ease;\n}\n.ub-vfield__value[data-v-80ab025b]:hover {\r\n  border-color: var(--ub-line);\n}\n.ub-vfield__value[data-v-80ab025b]:focus-visible {\r\n  border-color: var(--ub-accent);\r\n  outline: none;\n}\n.ub-vfield__value.is-empty[data-v-80ab025b] {\r\n  color: var(--ub-text-3);\r\n  font-style: italic;\n}\n.ub-vfield__editor[data-v-80ab025b] {\r\n  display: block;\r\n  resize: none;\r\n  overflow: hidden;\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-input-bg);\r\n  box-shadow: 0 0 0 3px var(--ub-accent-soft);\r\n  outline: none;\n}\n.ub-vdata__add[data-v-80ab025b] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: var(--ub-s2);\r\n  width: 100%;\r\n  min-height: calc(var(--ub-u) * 48);\r\n  border: 1.5px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-card);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 650;\r\n  cursor: pointer;\r\n  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;\n}\n.ub-vdata__add[data-v-80ab025b]:hover {\r\n  border-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\n}\n@media (max-width: 560px) {\n.ub-vcard__fields[data-v-80ab025b] {\r\n    padding: var(--ub-s3);\n}\n}\r\n", "src/presentation-v3/surfaces/visualizer/VizDataView.vue#style-0-80ab025b");
+var VizDataView_vue_vue_type_style_index_0_scoped_80ab025b_lang = null;
 
 const _hoisted_1$F = { class: "ub-vdata__bar" };
 const _hoisted_2$C = { class: "ub-vdata__range" };
@@ -187004,7 +187063,7 @@ function _sfc_render$J(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION, NEED_PATCH */
 	);
 }
-var VizDataView = /* @__PURE__ */ _export_sfc(_sfc_main$K, [["render", _sfc_render$J], ["__scopeId", "data-v-2b80fc88"]]);
+var VizDataView = /* @__PURE__ */ _export_sfc(_sfc_main$K, [["render", _sfc_render$J], ["__scopeId", "data-v-80ab025b"]]);
 
 var _sfc_main$J = /*@__PURE__*/ defineComponent({
     __name: 'VizManageView',
@@ -189468,8 +189527,8 @@ var _sfc_main$F = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-at__sql[data-v-1f0a7747],\n.ub-at__logs[data-v-1f0a7747] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s3);\n  padding: var(--ub-s4);\n}\n.ub-at__row[data-v-1f0a7747] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: var(--ub-s2);\n}\n.ub-at__spacer[data-v-1f0a7747] {\n  flex: 1 1 auto;\n}\n.ub-at__hint[data-v-1f0a7747] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__status[data-v-1f0a7747] {\n  margin-left: auto;\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n}\n.ub-at__status.is-success[data-v-1f0a7747] {\n  color: var(--ub-ok);\n}\n.ub-at__status.is-error[data-v-1f0a7747] {\n  color: var(--ub-danger);\n}\n.ub-at__result[data-v-1f0a7747] {\n  min-width: 0;\n}\n.ub-at__empty[data-v-1f0a7747] {\n  padding: var(--ub-s4);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-sm);\n  text-align: center;\n}\n.ub-at__error[data-v-1f0a7747] {\n  margin: 0;\n  padding: var(--ub-s3);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-danger-soft);\n  color: var(--ub-danger);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  white-space: pre-wrap;\n}\n.ub-at__table-wrap[data-v-1f0a7747] {\n  max-height: calc(var(--ub-u) * 420);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n  overflow: auto;\n}\n.ub-at__table[data-v-1f0a7747] {\n  width: 100%;\n  border-collapse: collapse;\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__table th[data-v-1f0a7747],\n.ub-at__table td[data-v-1f0a7747] {\n  max-width: 320px;\n  padding: var(--ub-s1) var(--ub-s2);\n  border-bottom: 1px solid var(--ub-line-soft);\n  text-align: left;\n  vertical-align: top;\n  white-space: pre-wrap;\n  word-break: break-word;\n}\n.ub-at__table th[data-v-1f0a7747] {\n  position: sticky;\n  top: 0;\n  background: var(--ub-sunken);\n  color: var(--ub-text-2);\n  font-weight: 700;\n}\n.ub-at__table td.is-null[data-v-1f0a7747] {\n  color: var(--ub-text-3);\n  font-style: italic;\n}\n.ub-at__meta[data-v-1f0a7747] {\n  margin-top: var(--ub-s1);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__history[data-v-1f0a7747] {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  width: 100%;\n  padding: var(--ub-s2);\n  border: 0;\n  border-left: 3px solid var(--ub-ok);\n  border-radius: 6px;\n  background: var(--ub-sunken);\n  color: var(--ub-text);\n  font: inherit;\n  text-align: left;\n  cursor: pointer;\n}\n.ub-at__history.is-fail[data-v-1f0a7747] {\n  border-left-color: var(--ub-danger);\n}\n.ub-at__history-meta[data-v-1f0a7747] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n}\n.ub-at__history code[data-v-1f0a7747] {\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  white-space: pre-wrap;\n  word-break: break-all;\n}\n.ub-at__filters[data-v-1f0a7747] {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);\n  gap: var(--ub-s2);\n}\n.ub-at__switch[data-v-1f0a7747] {\n  display: inline-flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n}\n.ub-at__loglist[data-v-1f0a7747] {\n  display: flex;\n  flex-direction: column;\n  max-height: calc(var(--ub-u) * 520);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-input-bg);\n  overflow-y: auto;\n}\n.ub-at__log[data-v-1f0a7747] {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  padding: var(--ub-s2) var(--ub-s3);\n  border-bottom: 1px solid var(--ub-line-soft);\n  border-left: 3px solid transparent;\n}\n.ub-at__log.is-error[data-v-1f0a7747] {\n  border-left-color: var(--ub-danger);\n}\n.ub-at__log.is-warn[data-v-1f0a7747] {\n  border-left-color: var(--ub-warn);\n}\n.ub-at__log-meta[data-v-1f0a7747] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  color: var(--ub-text-3);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-2xs);\n}\n.ub-at__log-tag[data-v-1f0a7747] {\n  color: var(--ub-text-2);\n  font-weight: 700;\n}\n.ub-at__log-msg[data-v-1f0a7747] {\n  color: var(--ub-text);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  white-space: pre-wrap;\n  word-break: break-word;\n}\n.ub-at__log-hint[data-v-1f0a7747] {\n  margin-top: var(--ub-s1);\n  padding: var(--ub-s2);\n  border-radius: 6px;\n  background: var(--ub-warn-soft);\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__log-hint summary[data-v-1f0a7747] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n  cursor: pointer;\n  list-style: none;\n}\n.ub-at__log-hint summary i[data-v-1f0a7747] {\n  color: var(--ub-warn);\n}\n.ub-at__log-hint-toggle[data-v-1f0a7747] {\n  margin-left: auto;\n  color: var(--ub-accent-ink);\n  font-weight: 700;\n}\n.ub-at__log-hint ol[data-v-1f0a7747] {\n  margin: var(--ub-s2) 0 0;\n  padding-left: 1.4em;\n}\n.ub-at__steps[data-v-1f0a7747] {\n  margin: 0;\n  padding-left: 1.4em;\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-sm);\n  line-height: 1.8;\n}\n@media (max-width: 640px) {\n.ub-at__filters[data-v-1f0a7747] {\n    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);\n}\n.ub-at__filters[data-v-1f0a7747] > :last-child {\n    grid-column: 1 / -1;\n}\n}\n", "src/presentation-v3/pages/AdvancedToolsPage.vue#style-0-1f0a7747");
-var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_1f0a7747_lang = null;
+injectSfcStyle("\n.ub-at__sql[data-v-7ec5eaaa],\r\n.ub-at__logs[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-at__row[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-at__spacer[data-v-7ec5eaaa] {\r\n  flex: 1 1 auto;\n}\n.ub-at__hint[data-v-7ec5eaaa] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__status[data-v-7ec5eaaa] {\r\n  margin-left: auto;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-at__status.is-success[data-v-7ec5eaaa] {\r\n  color: var(--ub-ok);\n}\n.ub-at__status.is-error[data-v-7ec5eaaa] {\r\n  color: var(--ub-danger);\n}\n.ub-at__result[data-v-7ec5eaaa] {\r\n  min-width: 0;\n}\n.ub-at__empty[data-v-7ec5eaaa] {\r\n  padding: var(--ub-s4);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: center;\n}\n.ub-at__error[data-v-7ec5eaaa] {\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-danger-soft);\r\n  color: var(--ub-danger);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  white-space: pre-wrap;\n}\n.ub-at__table-wrap[data-v-7ec5eaaa] {\r\n  max-height: calc(var(--ub-u) * 420);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  overflow: auto;\n}\n.ub-at__table[data-v-7ec5eaaa] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__table th[data-v-7ec5eaaa],\r\n.ub-at__table td[data-v-7ec5eaaa] {\r\n  max-width: 320px;\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border-bottom: 1px solid var(--ub-line-soft);\r\n  text-align: left;\r\n  vertical-align: top;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n.ub-at__table th[data-v-7ec5eaaa] {\r\n  position: sticky;\r\n  top: 0;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-weight: 700;\n}\n.ub-at__table td.is-null[data-v-7ec5eaaa] {\r\n  color: var(--ub-text-3);\r\n  font-style: italic;\n}\n.ub-at__meta[data-v-7ec5eaaa] {\r\n  margin-top: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__history[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  width: 100%;\r\n  padding: var(--ub-s2);\r\n  border: 0;\r\n  border-left: 3px solid var(--ub-ok);\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font: inherit;\r\n  text-align: left;\r\n  cursor: pointer;\n}\n.ub-at__history.is-fail[data-v-7ec5eaaa] {\r\n  border-left-color: var(--ub-danger);\n}\n.ub-at__history-meta[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-at__history code[data-v-7ec5eaaa] {\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  white-space: pre-wrap;\r\n  word-break: break-all;\n}\n.ub-at__filters[data-v-7ec5eaaa] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);\r\n  gap: var(--ub-s2);\n}\n.ub-at__switch[data-v-7ec5eaaa] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-at__loglist[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  max-height: calc(var(--ub-u) * 520);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\r\n  overflow-y: auto;\n}\n.ub-at__log[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-bottom: 1px solid var(--ub-line-soft);\r\n  border-left: 3px solid transparent;\n}\n.ub-at__log.is-error[data-v-7ec5eaaa] {\r\n  border-left-color: var(--ub-danger);\n}\n.ub-at__log.is-warn[data-v-7ec5eaaa] {\r\n  border-left-color: var(--ub-warn);\n}\n.ub-at__log-meta[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text-3);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-at__log-tag[data-v-7ec5eaaa] {\r\n  color: var(--ub-text-2);\r\n  font-weight: 700;\n}\n.ub-at__log-msg[data-v-7ec5eaaa] {\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n.ub-at__log-hint[data-v-7ec5eaaa] {\r\n  margin-top: var(--ub-s1);\r\n  padding: var(--ub-s2);\r\n  border-radius: 6px;\r\n  background: var(--ub-warn-soft);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-at__log-hint summary[data-v-7ec5eaaa] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  cursor: pointer;\r\n  list-style: none;\n}\n.ub-at__log-hint summary i[data-v-7ec5eaaa] {\r\n  color: var(--ub-warn);\n}\n.ub-at__log-hint-toggle[data-v-7ec5eaaa] {\r\n  margin-left: auto;\r\n  color: var(--ub-accent-ink);\r\n  font-weight: 700;\n}\n.ub-at__log-hint ol[data-v-7ec5eaaa] {\r\n  margin: var(--ub-s2) 0 0;\r\n  padding-left: 1.4em;\n}\n.ub-at__steps[data-v-7ec5eaaa] {\r\n  margin: 0;\r\n  padding-left: 1.4em;\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.8;\n}\n@media (max-width: 640px) {\n.ub-at__filters[data-v-7ec5eaaa] {\r\n    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);\n}\n.ub-at__filters[data-v-7ec5eaaa] > :last-child {\r\n    grid-column: 1 / -1;\n}\n}\r\n", "src/presentation-v3/pages/AdvancedToolsPage.vue#style-0-7ec5eaaa");
+var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_7ec5eaaa_lang = null;
 
 const _hoisted_1$A = { class: "ub-at__sql" };
 const _hoisted_2$x = { class: "ub-at__row" };
@@ -190041,7 +190100,7 @@ function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$F, [["render", _sfc_render$E], ["__scopeId", "data-v-1f0a7747"]]);
+var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$F, [["render", _sfc_render$E], ["__scopeId", "data-v-7ec5eaaa"]]);
 
 function buildWorldbookSnapshotEntryIndexByBook_ACU(snapshot) {
     const result = new Map();
@@ -192482,8 +192541,8 @@ var _sfc_main$D = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-wbe[data-v-63ba3c51] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  min-width: 0;\n}\n.ub-wbe__toolbar[data-v-63ba3c51] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: var(--ub-s2);\n}\n.ub-wbe__search[data-v-63ba3c51] {\n  flex: 1 1 calc(var(--ub-u) * 200);\n}\n.ub-wbe__actions[data-v-63ba3c51] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: var(--ub-s1);\n}\n.ub-wbe__status[data-v-63ba3c51] {\n  padding: var(--ub-s4);\n  border: 1px dashed var(--ub-line);\n  border-radius: var(--ub-r-control);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-sm);\n  text-align: center;\n}\n.ub-wbe__status.is-error[data-v-63ba3c51] {\n  border-color: var(--ub-danger);\n  color: var(--ub-danger);\n}\n.ub-wbe__groups[data-v-63ba3c51] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n}\n.ub-wbe__entry[data-v-63ba3c51] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s1);\n  padding: var(--ub-s1) 0;\n}\n.ub-wbe__entry + .ub-wbe__entry[data-v-63ba3c51] {\n  border-top: 1px dashed var(--ub-line-soft);\n  padding-top: var(--ub-s2);\n}\n.ub-wbe__entry.is-disabled[data-v-63ba3c51] {\n  opacity: 0.6;\n}\n.ub-wbe__entry-main[data-v-63ba3c51] {\n  display: flex;\n  align-items: flex-start;\n  justify-content: space-between;\n  gap: var(--ub-s2);\n}\n.ub-wbe__label[data-v-63ba3c51] {\n  min-width: 0;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  overflow-wrap: anywhere;\n}\n.ub-wbe__tags[data-v-63ba3c51] {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: var(--ub-s1);\n  flex: 0 0 auto;\n}\n.ub-wbe__skill-row[data-v-63ba3c51] {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: var(--ub-s2);\n  padding-left: calc(var(--ub-u) * 26);\n}\n.ub-wbe__skill[data-v-63ba3c51] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  margin-left: calc(var(--ub-u) * 26);\n  padding: var(--ub-s3);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-sunken);\n}\n.ub-wbe__skill-actions[data-v-63ba3c51] {\n  display: flex;\n  justify-content: flex-end;\n  gap: var(--ub-s2);\n}\n", "src/presentation-v3/parts/WorldbookEntries.vue#style-0-63ba3c51");
-var WorldbookEntries_vue_vue_type_style_index_0_scoped_63ba3c51_lang = null;
+injectSfcStyle("\n.ub-wbe[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\n}\n.ub-wbe__toolbar[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-wbe__search[data-v-2ffd55d4] {\r\n  flex: 1 1 calc(var(--ub-u) * 200);\n}\n.ub-wbe__actions[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s1);\n}\n.ub-wbe__status[data-v-2ffd55d4] {\r\n  padding: var(--ub-s4);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-control);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: center;\n}\n.ub-wbe__status.is-error[data-v-2ffd55d4] {\r\n  border-color: var(--ub-danger);\r\n  color: var(--ub-danger);\n}\n.ub-wbe__groups[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\n}\n.ub-wbe__entry[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  padding: var(--ub-s1) 0;\n}\n.ub-wbe__entry + .ub-wbe__entry[data-v-2ffd55d4] {\r\n  border-top: 1px dashed var(--ub-line-soft);\r\n  padding-top: var(--ub-s2);\n}\n.ub-wbe__entry.is-disabled[data-v-2ffd55d4] {\r\n  opacity: 0.6;\n}\n.ub-wbe__entry-main[data-v-2ffd55d4] {\r\n  display: flex;\r\n  align-items: flex-start;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2);\n}\n.ub-wbe__label[data-v-2ffd55d4] {\r\n  min-width: 0;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  overflow-wrap: anywhere;\n}\n.ub-wbe__tags[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s1);\r\n  flex: 0 0 auto;\n}\n.ub-wbe__skill-row[data-v-2ffd55d4] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--ub-s2);\r\n  padding-left: calc(var(--ub-u) * 26);\n}\n.ub-wbe__skill[data-v-2ffd55d4] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  margin-left: calc(var(--ub-u) * 26);\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\n}\n.ub-wbe__skill-actions[data-v-2ffd55d4] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\r\n", "src/presentation-v3/parts/WorldbookEntries.vue#style-0-2ffd55d4");
+var WorldbookEntries_vue_vue_type_style_index_0_scoped_2ffd55d4_lang = null;
 
 const _hoisted_1$y = { class: "ub-wbe" };
 const _hoisted_2$w = { class: "ub-wbe__toolbar" };
@@ -192780,7 +192839,7 @@ function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
 		/* KEYED_FRAGMENT */
 	))]))]);
 }
-var WorldbookEntries = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$C], ["__scopeId", "data-v-63ba3c51"]]);
+var WorldbookEntries = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$C], ["__scopeId", "data-v-2ffd55d4"]]);
 
 var _sfc_main$C = /*@__PURE__*/ defineComponent({
     __name: 'WorldbookSourcePicker',
@@ -200293,8 +200352,8 @@ var _sfc_main$o = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-cr__preset[data-v-5e9dccf5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s3);\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-5e9dccf5] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-5e9dccf5] {\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-5e9dccf5] {\n  display: flex;\n  align-items: center;\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-5e9dccf5] {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-5e9dccf5] {\n  max-height: calc(var(--ub-u) * 360);\n  margin: 0;\n  padding: var(--ub-s3);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-sunken);\n  color: var(--ub-text);\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n  line-height: 1.6;\n  white-space: pre-wrap;\n  overflow: auto;\n}\n.ub-cr__list[data-v-5e9dccf5] {\n  margin: 0;\n  padding: 0;\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-card);\n  background: var(--ub-panel);\n  list-style: none;\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-5e9dccf5] {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-5e9dccf5] {\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-5e9dccf5] {\n  display: flex;\n  flex-direction: column;\n  flex: 1 1 auto;\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-5e9dccf5] {\n  overflow: hidden;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  font-weight: 600;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-5e9dccf5] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-5e9dccf5] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: var(--ub-s1);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-5e9dccf5] {\n  padding: 1px 6px;\n  border-radius: 6px;\n  background: var(--ub-sunken);\n  color: var(--ub-accent-ink);\n  font-family: var(--ub-mono);\n}\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-5e9dccf5");
-var ContentReplacePage_vue_vue_type_style_index_0_scoped_5e9dccf5_lang = null;
+injectSfcStyle("\n.ub-cr__preset[data-v-dacc639a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cr__meta[data-v-dacc639a] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__meta strong[data-v-dacc639a] {\r\n  color: var(--ub-text);\n}\n.ub-cr__picker[data-v-dacc639a] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__test-actions[data-v-dacc639a] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cr__output[data-v-dacc639a] {\r\n  max-height: calc(var(--ub-u) * 360);\r\n  margin: 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text);\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  white-space: pre-wrap;\r\n  overflow: auto;\n}\n.ub-cr__list[data-v-dacc639a] {\r\n  margin: 0;\r\n  padding: 0;\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-card);\r\n  background: var(--ub-panel);\r\n  list-style: none;\r\n  overflow: hidden;\n}\n.ub-cr__list-item[data-v-dacc639a] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 2px;\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s2) var(--ub-s4);\n}\n.ub-cr__list-item + .ub-cr__list-item[data-v-dacc639a] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cr__list-info[data-v-dacc639a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\n}\n.ub-cr__list-name[data-v-dacc639a] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-cr__list-meta[data-v-dacc639a] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders[data-v-dacc639a] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cr__placeholders code[data-v-dacc639a] {\r\n  padding: 1px 6px;\r\n  border-radius: 6px;\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-accent-ink);\r\n  font-family: var(--ub-mono);\n}\r\n", "src/presentation-v3/pages/ContentReplacePage.vue#style-0-dacc639a");
+var ContentReplacePage_vue_vue_type_style_index_0_scoped_dacc639a_lang = null;
 
 const _hoisted_1$l = { class: "ub-cr__picker" };
 const _hoisted_2$k = { class: "ub-cr__preset" };
@@ -200917,7 +200976,7 @@ function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$o, [["render", _sfc_render$n], ["__scopeId", "data-v-5e9dccf5"]]);
+var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$o, [["render", _sfc_render$n], ["__scopeId", "data-v-dacc639a"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;
@@ -202660,8 +202719,8 @@ var _sfc_main$k = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-cm[data-v-72041ca5] {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n}\n.ub-cm__bar[data-v-72041ca5] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4);\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-cm__spacer[data-v-72041ca5] {\n  flex: 1 1 auto;\n}\n.ub-cm__confirm[data-v-72041ca5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  margin: var(--ub-s3) var(--ub-s4) 0;\n  padding: var(--ub-s3);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-danger-soft);\n  color: var(--ub-text);\n  font-size: var(--ub-fs-xs);\n  line-height: 1.6;\n}\n.ub-cm__pane[data-v-72041ca5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s3);\n  padding: var(--ub-s4);\n}\n.ub-cm__actions[data-v-72041ca5] {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: var(--ub-s2);\n}\n.ub-cm__empty[data-v-72041ca5] {\n  padding: var(--ub-s4);\n  border: 1px dashed var(--ub-line);\n  border-radius: var(--ub-r-control);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-sm);\n  text-align: center;\n}\n.ub-cm__meta[data-v-72041ca5] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n  line-height: 1.6;\n  overflow-wrap: anywhere;\n}\n.ub-cm__body[data-v-72041ca5] {\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  line-height: 1.6;\n  overflow-wrap: anywhere;\n}\n.ub-cm__error[data-v-72041ca5] {\n  color: var(--ub-danger);\n  font-size: var(--ub-fs-xs);\n}\n.ub-cm__tags[data-v-72041ca5] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: var(--ub-s1);\n}\n.ub-cm__hero[data-v-72041ca5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding: var(--ub-s4);\n  border-radius: var(--ub-r-card);\n  background: linear-gradient(140deg, var(--ub-accent-soft), transparent 70%), var(--ub-sunken);\n}\n.ub-cm__hero-title[data-v-72041ca5] {\n  color: var(--ub-text);\n  font-size: var(--ub-fs-lg);\n  font-weight: 800;\n}\n.ub-cm__progress[data-v-72041ca5] {\n  height: 6px;\n  border-radius: 999px;\n  background: var(--ub-line-soft);\n  overflow: hidden;\n}\n.ub-cm__progress span[data-v-72041ca5] {\n  display: block;\n  height: 100%;\n  border-radius: inherit;\n  background: var(--ub-accent);\n}\n.ub-cm__node[data-v-72041ca5] {\n  padding: var(--ub-s3);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n}\n.ub-cm__node-head[data-v-72041ca5] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: var(--ub-s2);\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n}\n.ub-cm__turns[data-v-72041ca5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  margin: var(--ub-s2) 0 0;\n  padding: 0;\n  list-style: none;\n}\n.ub-cm__turns li[data-v-72041ca5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s1);\n  padding: var(--ub-s2) var(--ub-s3);\n  border-left: 3px solid var(--ub-line);\n  border-radius: 0 6px 6px 0;\n  background: var(--ub-input-bg);\n}\n.ub-cm__turns li.is-done[data-v-72041ca5] {\n  border-left-color: var(--ub-ok);\n  opacity: 0.6;\n}\n.ub-cm__turns li.is-current[data-v-72041ca5] {\n  border-left-color: var(--ub-accent);\n  background: var(--ub-accent-soft);\n}\n.ub-cm__turn-goal[data-v-72041ca5] {\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n}\n.ub-cm__history[data-v-72041ca5] {\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n  padding: var(--ub-s2) var(--ub-s3);\n}\n.ub-cm__history > summary[data-v-72041ca5] {\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-xs);\n  font-weight: 700;\n  cursor: pointer;\n}\n.ub-cm__history--inner[data-v-72041ca5] {\n  margin-top: var(--ub-s2);\n}\n.ub-cm__history-body[data-v-72041ca5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s1);\n  margin-top: var(--ub-s2);\n}\n.ub-cm__list[data-v-72041ca5] {\n  margin: 0;\n  padding-left: 1.4em;\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-xs);\n  line-height: 1.6;\n}\n.ub-cm__status-grid[data-v-72041ca5] {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));\n  gap: var(--ub-s2);\n}\n.ub-cm__status[data-v-72041ca5] {\n  padding: var(--ub-s2) var(--ub-s3);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-sunken);\n}\n.ub-cm__status.is-bad[data-v-72041ca5] {\n  background: var(--ub-danger-soft);\n}\n.ub-cm__box[data-v-72041ca5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n}\n.ub-cm__box.is-warn[data-v-72041ca5] {\n  border-color: color-mix(in srgb, var(--ub-warn) 45%, var(--ub-line-soft));\n  background: var(--ub-warn-soft);\n}\n.ub-cm__box-title[data-v-72041ca5],\n.ub-cm__module-head[data-v-72041ca5] {\n  color: var(--ub-text);\n  font-size: var(--ub-fs-md);\n  font-weight: 800;\n}\n.ub-cm__module-head span[data-v-72041ca5] {\n  margin-left: var(--ub-s1);\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n  font-weight: 600;\n}\n.ub-cm__checks[data-v-72041ca5] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: var(--ub-s2) var(--ub-s4);\n}\n.ub-cm__fix + .ub-cm__fix[data-v-72041ca5] {\n  padding-top: var(--ub-s2);\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cm__module[data-v-72041ca5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding-top: var(--ub-s3);\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cm__cards[data-v-72041ca5] {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));\n  gap: var(--ub-s2);\n}\n.ub-cm__card[data-v-72041ca5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s1);\n  min-width: 0;\n  padding: var(--ub-s3);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n  background: var(--ub-panel);\n}\n.ub-cm__card.is-retired[data-v-72041ca5] {\n  opacity: 0.55;\n}\ndetails.ub-cm__card > summary[data-v-72041ca5] {\n  cursor: pointer;\n}\n.ub-cm__reqs[data-v-72041ca5] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n}\n.ub-cm__req[data-v-72041ca5] {\n  display: flex;\n  align-items: flex-start;\n  gap: var(--ub-s2);\n}\n.ub-cm__req-index[data-v-72041ca5] {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  flex: 0 0 auto;\n  width: 1.8em;\n  height: 1.8em;\n  margin-top: 6px;\n  border-radius: 50%;\n  background: var(--ub-accent-soft);\n  color: var(--ub-accent-ink);\n  font-size: var(--ub-fs-xs);\n  font-weight: 800;\n}\n", "src/presentation-v3/parts/ContinuationMaterials.vue#style-0-72041ca5");
-var ContinuationMaterials_vue_vue_type_style_index_0_scoped_72041ca5_lang = null;
+injectSfcStyle("\n.ub-cm[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\n}\n.ub-cm__bar[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-cm__spacer[data-v-77fa46d6] {\r\n  flex: 1 1 auto;\n}\n.ub-cm__confirm[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  margin: var(--ub-s3) var(--ub-s4) 0;\r\n  padding: var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-danger-soft);\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-cm__pane[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\n}\n.ub-cm__actions[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\n}\n.ub-cm__empty[data-v-77fa46d6] {\r\n  padding: var(--ub-s4);\r\n  border: 1px dashed var(--ub-line);\r\n  border-radius: var(--ub-r-control);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: center;\n}\n.ub-cm__meta[data-v-77fa46d6] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\r\n  overflow-wrap: anywhere;\n}\n.ub-cm__body[data-v-77fa46d6] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.6;\r\n  overflow-wrap: anywhere;\n}\n.ub-cm__error[data-v-77fa46d6] {\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-cm__tags[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s1);\n}\n.ub-cm__hero[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s4);\r\n  border-radius: var(--ub-r-card);\r\n  background: linear-gradient(140deg, var(--ub-accent-soft), transparent 70%), var(--ub-sunken);\n}\n.ub-cm__hero-title[data-v-77fa46d6] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-lg);\r\n  font-weight: 800;\n}\n.ub-cm__progress[data-v-77fa46d6] {\r\n  height: 6px;\r\n  border-radius: 999px;\r\n  background: var(--ub-line-soft);\r\n  overflow: hidden;\n}\n.ub-cm__progress span[data-v-77fa46d6] {\r\n  display: block;\r\n  height: 100%;\r\n  border-radius: inherit;\r\n  background: var(--ub-accent);\n}\n.ub-cm__node[data-v-77fa46d6] {\r\n  padding: var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\n}\n.ub-cm__node-head[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-cm__turns[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  margin: var(--ub-s2) 0 0;\r\n  padding: 0;\r\n  list-style: none;\n}\n.ub-cm__turns li[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-left: 3px solid var(--ub-line);\r\n  border-radius: 0 6px 6px 0;\r\n  background: var(--ub-input-bg);\n}\n.ub-cm__turns li.is-done[data-v-77fa46d6] {\r\n  border-left-color: var(--ub-ok);\r\n  opacity: 0.6;\n}\n.ub-cm__turns li.is-current[data-v-77fa46d6] {\r\n  border-left-color: var(--ub-accent);\r\n  background: var(--ub-accent-soft);\n}\n.ub-cm__turn-goal[data-v-77fa46d6] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-cm__history[data-v-77fa46d6] {\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  padding: var(--ub-s2) var(--ub-s3);\n}\n.ub-cm__history > summary[data-v-77fa46d6] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\r\n  cursor: pointer;\n}\n.ub-cm__history--inner[data-v-77fa46d6] {\r\n  margin-top: var(--ub-s2);\n}\n.ub-cm__history-body[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  margin-top: var(--ub-s2);\n}\n.ub-cm__list[data-v-77fa46d6] {\r\n  margin: 0;\r\n  padding-left: 1.4em;\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-cm__status-grid[data-v-77fa46d6] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-cm__status[data-v-77fa46d6] {\r\n  padding: var(--ub-s2) var(--ub-s3);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-sunken);\n}\n.ub-cm__status.is-bad[data-v-77fa46d6] {\r\n  background: var(--ub-danger-soft);\n}\n.ub-cm__box[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\n}\n.ub-cm__box.is-warn[data-v-77fa46d6] {\r\n  border-color: color-mix(in srgb, var(--ub-warn) 45%, var(--ub-line-soft));\r\n  background: var(--ub-warn-soft);\n}\n.ub-cm__box-title[data-v-77fa46d6],\r\n.ub-cm__module-head[data-v-77fa46d6] {\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\r\n  font-weight: 800;\n}\n.ub-cm__module-head span[data-v-77fa46d6] {\r\n  margin-left: var(--ub-s1);\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\n}\n.ub-cm__checks[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2) var(--ub-s4);\n}\n.ub-cm__fix + .ub-cm__fix[data-v-77fa46d6] {\r\n  padding-top: var(--ub-s2);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cm__module[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding-top: var(--ub-s3);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-cm__cards[data-v-77fa46d6] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));\r\n  gap: var(--ub-s2);\n}\n.ub-cm__card[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s1);\r\n  min-width: 0;\r\n  padding: var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-panel);\n}\n.ub-cm__card.is-retired[data-v-77fa46d6] {\r\n  opacity: 0.55;\n}\ndetails.ub-cm__card > summary[data-v-77fa46d6] {\r\n  cursor: pointer;\n}\n.ub-cm__reqs[data-v-77fa46d6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\n}\n.ub-cm__req[data-v-77fa46d6] {\r\n  display: flex;\r\n  align-items: flex-start;\r\n  gap: var(--ub-s2);\n}\n.ub-cm__req-index[data-v-77fa46d6] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  flex: 0 0 auto;\r\n  width: 1.8em;\r\n  height: 1.8em;\r\n  margin-top: 6px;\r\n  border-radius: 50%;\r\n  background: var(--ub-accent-soft);\r\n  color: var(--ub-accent-ink);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 800;\n}\r\n", "src/presentation-v3/parts/ContinuationMaterials.vue#style-0-77fa46d6");
+var ContinuationMaterials_vue_vue_type_style_index_0_scoped_77fa46d6_lang = null;
 
 const _hoisted_1$h = { class: "ub-cm" };
 const _hoisted_2$g = { class: "ub-cm__bar" };
@@ -204615,7 +204674,7 @@ function _sfc_render$j(_ctx, _cache, $props, $setup, $data, $options) {
 		)) : createCommentVNode("v-if", true)
 	]);
 }
-var ContinuationMaterials = /* @__PURE__ */ _export_sfc(_sfc_main$k, [["render", _sfc_render$j], ["__scopeId", "data-v-72041ca5"]]);
+var ContinuationMaterials = /* @__PURE__ */ _export_sfc(_sfc_main$k, [["render", _sfc_render$j], ["__scopeId", "data-v-77fa46d6"]]);
 
 const INHERIT_CHANNEL_VALUE = '__inherit__';
 var _sfc_main$j = /*@__PURE__*/ defineComponent({
@@ -209923,8 +209982,8 @@ ${floorNote}确认继续？`,
     }
 });
 
-injectSfcStyle("\n.ub-dm__text[data-v-847ff87c] {\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-xs);\n  line-height: 1.6;\n}\n.ub-dm__strong[data-v-847ff87c] {\n  color: var(--ub-text);\n}\n.ub-dm__block[data-v-847ff87c] {\n  display: block;\n  margin-top: 2px;\n}\n.ub-dm__buttons[data-v-847ff87c] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: var(--ub-s2);\n}\n.ub-dm__group[data-v-847ff87c] {\n  padding: var(--ub-s2) var(--ub-s4);\n  border-top: 1px solid var(--ub-line-soft);\n  background: var(--ub-sunken);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-xs);\n  font-weight: 700;\n}\n.ub-dm__sheets[data-v-847ff87c] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: var(--ub-s2) var(--ub-s4);\n}\n.ub-dm__danger[data-v-847ff87c] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s3);\n  padding: var(--ub-s4);\n  border-top: 1px solid var(--ub-line-soft);\n  background: color-mix(in srgb, var(--ub-danger-soft) 40%, transparent);\n}\n", "src/presentation-v3/pages/DataMgmtPage.vue#style-0-847ff87c");
-var DataMgmtPage_vue_vue_type_style_index_0_scoped_847ff87c_lang = null;
+injectSfcStyle("\n.ub-dm__text[data-v-948ff65b] {\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  line-height: 1.6;\n}\n.ub-dm__strong[data-v-948ff65b] {\r\n  color: var(--ub-text);\n}\n.ub-dm__block[data-v-948ff65b] {\r\n  display: block;\r\n  margin-top: 2px;\n}\n.ub-dm__buttons[data-v-948ff65b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\n}\n.ub-dm__group[data-v-948ff65b] {\r\n  padding: var(--ub-s2) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 700;\n}\n.ub-dm__sheets[data-v-948ff65b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2) var(--ub-s4);\n}\n.ub-dm__danger[data-v-948ff65b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  padding: var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: color-mix(in srgb, var(--ub-danger-soft) 40%, transparent);\n}\r\n", "src/presentation-v3/pages/DataMgmtPage.vue#style-0-948ff65b");
+var DataMgmtPage_vue_vue_type_style_index_0_scoped_948ff65b_lang = null;
 
 const _hoisted_1$d = { class: "ub-dm__text" };
 const _hoisted_2$c = { class: "ub-dm__buttons" };
@@ -210353,7 +210412,7 @@ function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["sections"]);
 }
-var DataMgmtPage = /* @__PURE__ */ _export_sfc(_sfc_main$g, [["render", _sfc_render$f], ["__scopeId", "data-v-847ff87c"]]);
+var DataMgmtPage = /* @__PURE__ */ _export_sfc(_sfc_main$g, [["render", _sfc_render$f], ["__scopeId", "data-v-948ff65b"]]);
 
 var _sfc_main$f = /*@__PURE__*/ defineComponent({
     __name: 'DecisionRecallPage',
@@ -210996,6 +211055,17 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 						"model-value": $setup.devOptions.warnLogEnabled.value,
 						"aria-label": "WARN 日志",
 						"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.devOptions.setWarnLogEnabled($event))
+					}, null, 8, ["model-value"])]),
+					_: 1
+				}),
+				createVNode($setup["UbRow"], {
+					label: "执行边界提示词",
+					hint: "开启后，数据库发出的每一次 AI 请求（填表、剧情推进、Agent、续写等）都会额外附加一段约束提示词，要求模型只做指令要求的事、不编造、不越范围。适合 MiniMax M3.1 Flash 这类爱「顺便多做」的模型；默认关闭，关闭时请求与原来完全一致。"
+				}, {
+					default: withCtx(() => [createVNode($setup["UbSwitch"], {
+						"model-value": $setup.devOptions.scopeGuardPrompt.value,
+						"aria-label": "执行边界提示词",
+						"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.devOptions.setScopeGuardPrompt($event))
 					}, null, 8, ["model-value"])]),
 					_: 1
 				})
@@ -211860,8 +211930,8 @@ var _sfc_main$c = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-ff-facts[data-v-a2298782] {\n  display: grid;\n  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));\n  gap: 1px;\n  border-bottom: 1px solid var(--ub-line-soft);\n  background: var(--ub-line-soft);\n}\n.ub-ff-fact[data-v-a2298782] {\n  display: flex;\n  flex-direction: column;\n  gap: 2px;\n  min-width: 0;\n  padding: var(--ub-s3) var(--ub-s4);\n  background: var(--ub-panel);\n}\n.ub-ff-fact span[data-v-a2298782] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 700;\n}\n.ub-ff-fact strong[data-v-a2298782] {\n  overflow: hidden;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-md);\n  font-variant-numeric: tabular-nums;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.ub-ff-notes[data-v-a2298782] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4) 0;\n}\n.ub-ff-table[data-v-a2298782] {\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s3);\n  font-size: var(--ub-fs-sm);\n}\n.ub-ff-table__row[data-v-a2298782] {\n  display: grid;\n  grid-template-columns: minmax(0, 1.8fr) repeat(4, minmax(0, 1fr));\n  align-items: center;\n  gap: var(--ub-s2);\n  padding: var(--ub-s2);\n  border-radius: var(--ub-r-control);\n  color: var(--ub-text-2);\n  font-variant-numeric: tabular-nums;\n}\n.ub-ff-table__row--head[data-v-a2298782] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 700;\n}\n.ub-ff-table__row[data-v-a2298782]:not(.ub-ff-table__row--head):hover {\n  background: var(--ub-hover);\n}\n.ub-ff-table__row.is-ready[data-v-a2298782] {\n  background: var(--ub-ok-soft);\n}\n.ub-ff-table__row.is-off[data-v-a2298782] {\n  opacity: 0.6;\n}\n.ub-ff-table__name[data-v-a2298782] {\n  overflow: hidden;\n  color: var(--ub-text);\n  font-weight: 600;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n.ub-ff-table__empty[data-v-a2298782] {\n  padding: var(--ub-s4);\n  color: var(--ub-text-3);\n  text-align: center;\n}\n.ub-ff-run[data-v-a2298782] {\n  display: flex;\n  flex-direction: column;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-ff-run__buttons[data-v-a2298782] {\n  display: flex;\n  flex-wrap: wrap;\n  justify-content: flex-end;\n  gap: var(--ub-s2);\n  margin-top: var(--ub-s1);\n}\n@media (max-width: 600px) {\n.ub-ff-facts[data-v-a2298782] {\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n}\n.ub-ff-fact--wide[data-v-a2298782] {\n    grid-column: 1 / -1;\n}\n.ub-ff-table__row--head[data-v-a2298782] {\n    display: none;\n}\n.ub-ff-table__row[data-v-a2298782] {\n    grid-template-columns: repeat(4, minmax(0, 1fr));\n    row-gap: var(--ub-s1);\n    padding: var(--ub-s3) var(--ub-s2);\n}\n.ub-ff-table__row + .ub-ff-table__row[data-v-a2298782] {\n    border-top: 1px solid var(--ub-line-soft);\n    border-radius: 0;\n}\n.ub-ff-table__name[data-v-a2298782] {\n    grid-column: 1 / -1;\n}\n.ub-ff-table__row [data-label][data-v-a2298782]::before {\n    content: attr(data-label);\n    display: block;\n    color: var(--ub-text-3);\n    font-size: var(--ub-fs-2xs);\n    font-weight: 700;\n}\n.ub-ff-run__buttons[data-v-a2298782] > * {\n    flex: 1 1 100%;\n}\n}\n", "src/presentation-v3/pages/FormFillPage.vue#style-0-a2298782");
-var FormFillPage_vue_vue_type_style_index_0_scoped_a2298782_lang = null;
+injectSfcStyle("\n.ub-ff-facts[data-v-d8dd9638] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));\r\n  gap: 1px;\r\n  border-bottom: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-line-soft);\n}\n.ub-ff-fact[data-v-d8dd9638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  min-width: 0;\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  background: var(--ub-panel);\n}\n.ub-ff-fact span[data-v-d8dd9638] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\n}\n.ub-ff-fact strong[data-v-d8dd9638] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-md);\r\n  font-variant-numeric: tabular-nums;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-ff-notes[data-v-d8dd9638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4) 0;\n}\n.ub-ff-table[data-v-d8dd9638] {\r\n  padding: var(--ub-s2) var(--ub-s2) var(--ub-s3);\r\n  font-size: var(--ub-fs-sm);\n}\n.ub-ff-table__row[data-v-d8dd9638] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1.8fr) repeat(4, minmax(0, 1fr));\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s2);\r\n  border-radius: var(--ub-r-control);\r\n  color: var(--ub-text-2);\r\n  font-variant-numeric: tabular-nums;\n}\n.ub-ff-table__row--head[data-v-d8dd9638] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\n}\n.ub-ff-table__row[data-v-d8dd9638]:not(.ub-ff-table__row--head):hover {\r\n  background: var(--ub-hover);\n}\n.ub-ff-table__row.is-ready[data-v-d8dd9638] {\r\n  background: var(--ub-ok-soft);\n}\n.ub-ff-table__row.is-off[data-v-d8dd9638] {\r\n  opacity: 0.6;\n}\n.ub-ff-table__name[data-v-d8dd9638] {\r\n  overflow: hidden;\r\n  color: var(--ub-text);\r\n  font-weight: 600;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.ub-ff-table__empty[data-v-d8dd9638] {\r\n  padding: var(--ub-s4);\r\n  color: var(--ub-text-3);\r\n  text-align: center;\n}\n.ub-ff-run[data-v-d8dd9638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-ff-run__buttons[data-v-d8dd9638] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  justify-content: flex-end;\r\n  gap: var(--ub-s2);\r\n  margin-top: var(--ub-s1);\n}\n@media (max-width: 600px) {\n.ub-ff-facts[data-v-d8dd9638] {\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\n}\n.ub-ff-fact--wide[data-v-d8dd9638] {\r\n    grid-column: 1 / -1;\n}\n.ub-ff-table__row--head[data-v-d8dd9638] {\r\n    display: none;\n}\n.ub-ff-table__row[data-v-d8dd9638] {\r\n    grid-template-columns: repeat(4, minmax(0, 1fr));\r\n    row-gap: var(--ub-s1);\r\n    padding: var(--ub-s3) var(--ub-s2);\n}\n.ub-ff-table__row + .ub-ff-table__row[data-v-d8dd9638] {\r\n    border-top: 1px solid var(--ub-line-soft);\r\n    border-radius: 0;\n}\n.ub-ff-table__name[data-v-d8dd9638] {\r\n    grid-column: 1 / -1;\n}\n.ub-ff-table__row [data-label][data-v-d8dd9638]::before {\r\n    content: attr(data-label);\r\n    display: block;\r\n    color: var(--ub-text-3);\r\n    font-size: var(--ub-fs-2xs);\r\n    font-weight: 700;\n}\n.ub-ff-run__buttons[data-v-d8dd9638] > * {\r\n    flex: 1 1 100%;\n}\n}\r\n", "src/presentation-v3/pages/FormFillPage.vue#style-0-d8dd9638");
+var FormFillPage_vue_vue_type_style_index_0_scoped_d8dd9638_lang = null;
 
 const _hoisted_1$a = {
 	class: "ub-ff-facts",
@@ -212205,7 +212275,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$b], ["__scopeId", "data-v-a2298782"]]);
+var FormFillPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$b], ["__scopeId", "data-v-d8dd9638"]]);
 
 /**
  * usePlotWorldbookConfig — 剧情推进世界书配置（D23.1）
@@ -214317,8 +214387,8 @@ var _sfc_main$8 = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n/*\n * 分隔线由每格自己在右侧、下方各画 1px（外投影不占布局），网格外缘那一圈被 overflow 裁掉。\n * 不用「gap + 线色背景」：那样网格末行的空位会露出一整块线色底。\n * 各格不铺底色，否则后面的格子会盖住前一格画在外侧的分隔线。\n */\n.ub-stats[data-v-05d62386] {\n  display: grid;\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--ub-u) * 180)), 1fr));\n  grid-auto-flow: row dense;\n  margin: 0;\n  overflow: hidden;\n}\n.ub-stats__item[data-v-05d62386] {\n  min-width: 0;\n  padding: var(--ub-s2) var(--ub-s4);\n  box-shadow: 1px 0 0 var(--ub-line-soft), 0 1px 0 var(--ub-line-soft);\n}\n.ub-stats__item--wide[data-v-05d62386] {\n  grid-column: span 2;\n}\n.ub-stats__item dt[data-v-05d62386] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 700;\n}\n.ub-stats__item dd[data-v-05d62386] {\n  margin: 2px 0 0;\n  color: var(--ub-text);\n  font-size: var(--ub-fs-sm);\n  font-variant-numeric: tabular-nums;\n  overflow-wrap: anywhere;\n}\n.ub-stats--mono .ub-stats__item dd[data-v-05d62386] {\n  font-family: var(--ub-mono);\n  font-size: var(--ub-fs-xs);\n}\n", "src/presentation-v3/ui/UbStats.vue#style-0-05d62386");
-var UbStats_vue_vue_type_style_index_0_scoped_05d62386_lang = null;
+injectSfcStyle("\r\n/*\r\n * 分隔线由每格自己在右侧、下方各画 1px（外投影不占布局），网格外缘那一圈被 overflow 裁掉。\r\n * 不用「gap + 线色背景」：那样网格末行的空位会露出一整块线色底。\r\n * 各格不铺底色，否则后面的格子会盖住前一格画在外侧的分隔线。\r\n */\n.ub-stats[data-v-e91ee34a] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(var(--ub-u) * 180)), 1fr));\r\n  grid-auto-flow: row dense;\r\n  margin: 0;\r\n  overflow: hidden;\n}\n.ub-stats__item[data-v-e91ee34a] {\r\n  min-width: 0;\r\n  padding: var(--ub-s2) var(--ub-s4);\r\n  box-shadow: 1px 0 0 var(--ub-line-soft), 0 1px 0 var(--ub-line-soft);\n}\n.ub-stats__item--wide[data-v-e91ee34a] {\r\n  grid-column: span 2;\n}\n.ub-stats__item dt[data-v-e91ee34a] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 700;\n}\n.ub-stats__item dd[data-v-e91ee34a] {\r\n  margin: 2px 0 0;\r\n  color: var(--ub-text);\r\n  font-size: var(--ub-fs-sm);\r\n  font-variant-numeric: tabular-nums;\r\n  overflow-wrap: anywhere;\n}\n.ub-stats--mono .ub-stats__item dd[data-v-e91ee34a] {\r\n  font-family: var(--ub-mono);\r\n  font-size: var(--ub-fs-xs);\n}\r\n", "src/presentation-v3/ui/UbStats.vue#style-0-e91ee34a");
+var UbStats_vue_vue_type_style_index_0_scoped_e91ee34a_lang = null;
 
 function _sfc_render$7(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
@@ -214359,7 +214429,7 @@ function _sfc_render$7(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbStats = /* @__PURE__ */ _export_sfc(_sfc_main$8, [["render", _sfc_render$7], ["__scopeId", "data-v-05d62386"]]);
+var UbStats = /* @__PURE__ */ _export_sfc(_sfc_main$8, [["render", _sfc_render$7], ["__scopeId", "data-v-e91ee34a"]]);
 
 const FLUSH_ERROR_MAX_CHARS = 60;
 var _sfc_main$7 = /*@__PURE__*/ defineComponent({
@@ -214445,8 +214515,8 @@ var _sfc_main$7 = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-vi__flush-error[data-v-5d536c50] {\n  display: block;\n  color: var(--ub-danger);\n  font-size: var(--ub-fs-2xs);\n}\n.ub-vi__actions[data-v-5d536c50] {\n  display: flex;\n  flex-wrap: wrap;\n  gap: var(--ub-s2);\n  padding: var(--ub-s4);\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vi__note[data-v-5d536c50] {\n  flex-basis: 100%;\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.ub-vi__group[data-v-5d536c50] {\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s1);\n  border-top: 1px solid var(--ub-line-soft);\n  background: var(--ub-sunken);\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-2xs);\n  font-weight: 800;\n  letter-spacing: 0.06em;\n}\n.ub-vi__group[data-v-5d536c50]:first-child {\n  border-top: 0;\n}\n.ub-vi__save[data-v-5d536c50] {\n  display: flex;\n  flex-direction: column;\n  align-items: flex-end;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vi__save[data-v-5d536c50] > :first-child:not(:last-child) {\n  align-self: stretch;\n}\n.ub-vi__pad[data-v-5d536c50] {\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\n", "src/presentation-v3/pages/VectorIndexPage.vue#style-0-5d536c50");
-var VectorIndexPage_vue_vue_type_style_index_0_scoped_5d536c50_lang = null;
+injectSfcStyle("\n.ub-vi__flush-error[data-v-501936c1] {\r\n  display: block;\r\n  color: var(--ub-danger);\r\n  font-size: var(--ub-fs-2xs);\n}\n.ub-vi__actions[data-v-501936c1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vi__note[data-v-501936c1] {\r\n  flex-basis: 100%;\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-vi__group[data-v-501936c1] {\r\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s1);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-2xs);\r\n  font-weight: 800;\r\n  letter-spacing: 0.06em;\n}\n.ub-vi__group[data-v-501936c1]:first-child {\r\n  border-top: 0;\n}\n.ub-vi__save[data-v-501936c1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-end;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-vi__save[data-v-501936c1] > :first-child:not(:last-child) {\r\n  align-self: stretch;\n}\n.ub-vi__pad[data-v-501936c1] {\r\n  padding: 0 var(--ub-s4) var(--ub-s3);\n}\r\n", "src/presentation-v3/pages/VectorIndexPage.vue#style-0-501936c1");
+var VectorIndexPage_vue_vue_type_style_index_0_scoped_501936c1_lang = null;
 
 const _hoisted_1$6 = ["title"];
 const _hoisted_2$5 = { class: "ub-vi__actions" };
@@ -215031,7 +215101,7 @@ function _sfc_render$6(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$7, [["render", _sfc_render$6], ["__scopeId", "data-v-5d536c50"]]);
+var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$7, [["render", _sfc_render$6], ["__scopeId", "data-v-501936c1"]]);
 
 /**
  * page-catalog — 新版界面的页面目录
