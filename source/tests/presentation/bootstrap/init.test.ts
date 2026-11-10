@@ -9,7 +9,7 @@ const m = vi.hoisted(() => ({
   chatChanged: undefined as undefined | ((name: string) => Promise<void>),
   chatMutationHandler: undefined as undefined | ((data: any) => Promise<void>),
   messageDeletedHandler: undefined as undefined | ((data: any) => Promise<void>),
-  chatDeletedHandler: undefined as undefined | (() => void),
+  chatDeletedHandler: undefined as undefined | ((name?: any) => void),
   messageSentHandler: undefined as undefined | ((messageId: any) => void),
   generationStartedHandler: undefined as undefined | ((type: any, params: any, dryRun: any) => void),
   generationStoppedHandler: undefined as undefined | (() => void),
@@ -46,6 +46,7 @@ const m = vi.hoisted(() => ({
   orchestrate: vi.fn(),
   shouldProcessSummary: vi.fn(),
   captureVault: vi.fn(),
+  deletedChatVectorCleanup: vi.fn(async () => ({})),
   dormantAudit: vi.fn(),
   clearAutoFillDebounce: vi.fn(),
   cancelPendingAutoTasks: vi.fn(),
@@ -142,6 +143,7 @@ vi.mock('../../../src/presentation/components/decision-recall-ui', () => ({
 vi.mock('../../../src/presentation/components/summary-vector-index-ui', () => ({ processSummaryVectorIndexBeforeGenerationWithUI_ACU: (...args: any[]) => m.processBeforeGen(...args), isSummaryVectorRecallFailure_ACU: (r: any) => !!r && r.success !== true && r.skipped !== true, SUMMARY_RECALL_FAILED_STOP_NOTICE_ACU: '召回失败已停止', shouldRebuildSummaryVectorIndexWithUI_ACU: (...args: any[]) => m.shouldRebuild(...args), rebuildCurrentSummaryVectorIndexWithUI_ACU: (...args: any[]) => m.rebuild(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-cache-service', () => ({ preloadSummaryVectorIndexCacheForCurrentChat_ACU: (...args: any[]) => m.preload(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({ restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU: (...args: any[]) => m.restoreFlush(...args) }));
+vi.mock('../../../src/service/vector/summary-vector-index-chat-deletion-gc', () => ({ cleanupSummaryVectorIndexForDeletedChat_ACU: (...args: any[]) => m.deletedChatVectorCleanup(...args), sweepOrphanSummaryVectorIndexFiles_ACU: vi.fn(async () => ({})) }));
 vi.mock('../../../src/service/vector/summary-vector-index-realign-state', () => ({ markSummaryVectorIndexDirtyForRealign_ACU: vi.fn() }));
 vi.mock('../../../src/service/table/table-fill-target-watch', () => ({ abortTableFillRequestsWithStaleTarget_ACU: (...args: any[]) => m.abortStaleFill(...args) }));
 vi.mock('../../../src/service/chat/checkpoint-delete-guard', () => ({ captureCheckpointVaultForCurrentChat_ACU: (...args: any[]) => m.captureVault(...args), installCheckpointDeleteGuard_ACU: vi.fn() }));
@@ -374,6 +376,27 @@ describe('mainInitialize_ACU 宿主事件桥接线注册', () => {
     expect(m.generationEndedHandler).toBeTypeOf('function');
     expect(m.afterCommandsHandler).toBeTypeOf('function');
     expect(m.settingsReadyHandler).toBeTypeOf('function');
+  });
+});
+
+describe('删除聊天后的向量外置存档清理', () => {
+  // D06-03：删除当刻的那次清理会因 10 分钟保护期跳过刚写的文件，本次运行内不再重试，
+  // 只能等下次启动的孤儿清扫（24h 节流）。保护期过后补一次清理，让这些文件当场收掉。
+  it('删除 5s 后清理一次；保护期过后再补一次', async () => {
+    vi.useFakeTimers();
+    try {
+      m.chatDeletedHandler!('旧聊天');
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(m.deletedChatVectorCleanup).toHaveBeenCalledTimes(1);
+      expect(m.deletedChatVectorCleanup).toHaveBeenLastCalledWith('旧聊天');
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(m.deletedChatVectorCleanup).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(m.deletedChatVectorCleanup).toHaveBeenCalledTimes(2);
+      expect(m.deletedChatVectorCleanup).toHaveBeenLastCalledWith('旧聊天');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

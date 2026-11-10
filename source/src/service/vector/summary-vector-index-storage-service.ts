@@ -104,7 +104,7 @@ const SUMMARY_VECTOR_INDEX_SNAPSHOT_RETENTION_LIMIT_ACU = 0;
 const pendingSummaryVectorIndexPublicationPaths_ACU = new Set<string>();
 // Registry/pending 状态不是跨重启事务日志。GC 必须给予新对象足够的 durable publish 观察窗口；
 // 无可信时间戳时宁可 quarantine，不能把未知对象当作可回收垃圾。
-const SUMMARY_VECTOR_INDEX_SAFE_GC_GRACE_PERIOD_MS_ACU = 10 * 60 * 1000;
+export const SUMMARY_VECTOR_INDEX_SAFE_GC_GRACE_PERIOD_MS_ACU = 10 * 60 * 1000;
 
 export function logSummaryVectorIndexIdentityEvent_ACU(
     level: 'debug' | 'warn',

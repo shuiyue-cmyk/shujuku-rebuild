@@ -151,6 +151,7 @@ import {
   cleanupSummaryVectorIndexForDeletedChat_ACU,
   sweepOrphanSummaryVectorIndexFiles_ACU,
 } from '../../service/vector/summary-vector-index-chat-deletion-gc';
+import { SUMMARY_VECTOR_INDEX_SAFE_GC_GRACE_PERIOD_MS_ACU } from '../../service/vector/summary-vector-index-storage-service';
 import {
   topLevelWindow_ACU
 } from '../../shared/env';
@@ -834,14 +835,18 @@ export   function mainInitialize_ACU() {
 
         // P7：聊天被删除时清理其向量外置存档 / IDB 缓存 / flush 任务。
         // 延迟 5s 执行：等宿主完成删除后的状态收敛（characters[].chats、当前聊天切换）再枚举校验。
+        // 保护期内新写的文件第一次删不掉，保护期过后（留 60s 余量）再清一次；
+        // 清理本身每次重新核对存活聊天，重复执行无副作用。
         const handleChatDeletedForVectorCleanup_ACU = (deletedChatName: unknown): void => {
           const name = String(deletedChatName || '').trim();
           if (!name) return;
-          setTimeout(() => {
+          const runCleanup = (): void => {
             void cleanupSummaryVectorIndexForDeletedChat_ACU(name).catch((error: any) => {
               logWarn_ACU('[交火向量索引] 聊天删除清理失败（将由孤儿清扫兜底）:', error?.message || error);
             });
-          }, 5000);
+          };
+          setTimeout(runCleanup, 5000);
+          setTimeout(runCleanup, SUMMARY_VECTOR_INDEX_SAFE_GC_GRACE_PERIOD_MS_ACU + 60_000);
         };
         if (SillyTavern_API_ACU.eventTypes.CHAT_DELETED) {
           SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_DELETED, handleChatDeletedForVectorCleanup_ACU);

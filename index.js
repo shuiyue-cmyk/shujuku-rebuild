@@ -95807,7 +95807,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261110-1048"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261110-1530"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95826,7 +95826,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1048";
+        const stamp = "20261110-1530";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -123375,6 +123375,28 @@ let pendingAutoUpdateTrigger_ACU = false;
 let pendingAutoUpdatePerformanceContext_ACU;
 /** R9-18：跟发登记时所在的聊天与隔离域；补跑前比对，切了聊天就作废，不在新聊天上无消息烧一轮填表。 */
 let pendingAutoUpdateScopeKey_ACU = '';
+/**
+ * 手动填表 / 重填 / 追平占着「正在填表」时被拦下的自动触发（D07-02）：它们不走上面的跟发登记，
+ * 放开后也没人补跑，这一楼要等下一条回复才填。登记一次，等那一轮放开「正在填表」再补跑；
+ * 届时已换了聊天或用户点过终止就作废。
+ */
+let autoUpdateWaitingForFillRunEnd_ACU = null;
+let fillRunEndSubscribed_ACU = false;
+function waitForFillRunEndThenRetrigger_ACU(context) {
+    autoUpdateWaitingForFillRunEnd_ACU = { scopeKey: currentAutoUpdateScopeKey_ACU(), context };
+    if (fillRunEndSubscribed_ACU)
+        return;
+    fillRunEndSubscribed_ACU = true;
+    onTableFillRunEnded_ACU(() => {
+        const waiting = autoUpdateWaitingForFillRunEnd_ACU;
+        if (!waiting || autoUpdateTriggerInFlight_ACU)
+            return;
+        autoUpdateWaitingForFillRunEnd_ACU = null;
+        if (wasStoppedByUser_ACU || waiting.scopeKey !== currentAutoUpdateScopeKey_ACU())
+            return;
+        queueMicrotask(() => { void triggerAutomaticUpdateIfNeeded_ACU(waiting.context); });
+    });
+}
 function currentAutoUpdateScopeKey_ACU() {
     return `${String(currentChatFileIdentifier_ACU || '')}::${String(getCurrentIsolationKey_ACU() || '')}`;
 }
@@ -123414,6 +123436,8 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
         const preCheck = checkAutoUpdatePreConditions_ACU(settings_ACU, coreApisAreReady_ACU, isAutoUpdatingCard_ACU, currentJsonTableData_ACU, allChatMessages_ACU.length);
         if (!preCheck.canProceed) {
             logDebug_ACU(`ACU Auto-Trigger: ${preCheck.reason} Skipping.`);
+            if (preCheck.code === 'update_in_flight')
+                waitForFillRunEndThenRetrigger_ACU(performanceContext);
             logAutoFillSkip_ACU('preconditions_failed', {
                 aiFloorCount: countAiFloors_ACU(allChatMessages_ACU),
                 inFlight: isAutoUpdatingCard_ACU,
@@ -123456,7 +123480,6 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
         else {
             showToastr_ACU('info', `检测到 ${plan.tablesToUpdate.length} 个表格需要更新，将并发处理 ${totalGroups} 组。`);
         }
-        const autoGroupedAbortController = new AbortController();
         // 调用 service 层执行更新计划，传入纯业务操作委托（不含 UI 操作）
         const result = await executeAutoUpdatePlan_ACU(plan, settings_ACU, _set_isAutoUpdatingCard_ACU, {
             processUpdates: (indices, mode, options) => processUpdates_ACU(indices, mode, options),
@@ -123475,7 +123498,9 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
                         fullCheckpointIndices: plan.boundary?.fullCheckpointIndices || [],
                         requiresBoundaryStaging: plan.boundary?.requiresBoundaryStaging || false,
                     },
-                    abortController: autoGroupedAbortController,
+                    // 每段一个中止信号：调度层在前一段失败后会接着跑下一段，共用一个信号时，前一段因目标失效被中止，
+                    // 后面本可执行的段一进门就判成已中止（协调者存疑 4）。终止 / 切聊天另有全局停止与本轮楼层锚点拦截。
+                    abortController: new AbortController(),
                     onProgress: event => {
                         upstreamProgress?.(event);
                         handleAutoGroupedProgressEvent_ACU(event);
@@ -151792,15 +151817,19 @@ function mainInitialize_ACU() {
             }
             // P7：聊天被删除时清理其向量外置存档 / IDB 缓存 / flush 任务。
             // 延迟 5s 执行：等宿主完成删除后的状态收敛（characters[].chats、当前聊天切换）再枚举校验。
+            // 保护期内新写的文件第一次删不掉，保护期过后（留 60s 余量）再清一次；
+            // 清理本身每次重新核对存活聊天，重复执行无副作用。
             const handleChatDeletedForVectorCleanup_ACU = (deletedChatName) => {
                 const name = String(deletedChatName || '').trim();
                 if (!name)
                     return;
-                setTimeout(() => {
+                const runCleanup = () => {
                     void cleanupSummaryVectorIndexForDeletedChat_ACU(name).catch((error) => {
                         logWarn_ACU('[交火向量索引] 聊天删除清理失败（将由孤儿清扫兜底）:', error?.message || error);
                     });
-                }, 5000);
+                };
+                setTimeout(runCleanup, 5000);
+                setTimeout(runCleanup, SUMMARY_VECTOR_INDEX_SAFE_GC_GRACE_PERIOD_MS_ACU + 60000);
             };
             if (SillyTavern_API_ACU.eventTypes.CHAT_DELETED) {
                 SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_DELETED, handleChatDeletedForVectorCleanup_ACU);
@@ -157799,7 +157828,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1048";
+        const stamp = "20261110-1530";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

@@ -26,7 +26,8 @@ import {
   lastTotalAiMessages_ACU,
   settings_ACU,
   _set_lastTotalAiMessages_ACU,
-  _set_wasStoppedByUser_ACU
+  _set_wasStoppedByUser_ACU,
+  onTableFillRunEnded_ACU
 } from '../../../service/runtime/state-manager';
 import {
   processUpdates_ACU
@@ -132,6 +133,27 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
 /** R9-18：跟发登记时所在的聊天与隔离域；补跑前比对，切了聊天就作废，不在新聊天上无消息烧一轮填表。 */
 let pendingAutoUpdateScopeKey_ACU = '';
 
+/**
+ * 手动填表 / 重填 / 追平占着「正在填表」时被拦下的自动触发（D07-02）：它们不走上面的跟发登记，
+ * 放开后也没人补跑，这一楼要等下一条回复才填。登记一次，等那一轮放开「正在填表」再补跑；
+ * 届时已换了聊天或用户点过终止就作废。
+ */
+let autoUpdateWaitingForFillRunEnd_ACU: { scopeKey: string; context?: { runId?: string; parentSpanId?: string } } | null = null;
+let fillRunEndSubscribed_ACU = false;
+
+function waitForFillRunEndThenRetrigger_ACU(context?: { runId?: string; parentSpanId?: string }): void {
+  autoUpdateWaitingForFillRunEnd_ACU = { scopeKey: currentAutoUpdateScopeKey_ACU(), context };
+  if (fillRunEndSubscribed_ACU) return;
+  fillRunEndSubscribed_ACU = true;
+  onTableFillRunEnded_ACU(() => {
+    const waiting = autoUpdateWaitingForFillRunEnd_ACU;
+    if (!waiting || autoUpdateTriggerInFlight_ACU) return;
+    autoUpdateWaitingForFillRunEnd_ACU = null;
+    if (wasStoppedByUser_ACU || waiting.scopeKey !== currentAutoUpdateScopeKey_ACU()) return;
+    queueMicrotask(() => { void triggerAutomaticUpdateIfNeeded_ACU(waiting.context); });
+  });
+}
+
 function currentAutoUpdateScopeKey_ACU(): string {
   return `${String(currentChatFileIdentifier_ACU || '')}::${String(getCurrentIsolationKey_ACU() || '')}`;
 }
@@ -183,6 +205,7 @@ function currentAutoUpdateScopeKey_ACU(): string {
     );
     if (!preCheck.canProceed) {
       logDebug_ACU(`ACU Auto-Trigger: ${preCheck.reason} Skipping.`);
+      if (preCheck.code === 'update_in_flight') waitForFillRunEndThenRetrigger_ACU(performanceContext);
       logAutoFillSkip_ACU('preconditions_failed', {
         aiFloorCount: countAiFloors_ACU(allChatMessages_ACU),
         inFlight: isAutoUpdatingCard_ACU,
@@ -242,7 +265,6 @@ function currentAutoUpdateScopeKey_ACU(): string {
         showToastr_ACU('info', `检测到 ${plan.tablesToUpdate.length} 个表格需要更新，将并发处理 ${totalGroups} 组。`);
     }
 
-    const autoGroupedAbortController = new AbortController();
     // 调用 service 层执行更新计划，传入纯业务操作委托（不含 UI 操作）
     const result = await executeAutoUpdatePlan_ACU(
         plan,
@@ -265,7 +287,9 @@ function currentAutoUpdateScopeKey_ACU(): string {
                         fullCheckpointIndices: plan.boundary?.fullCheckpointIndices || [],
                         requiresBoundaryStaging: plan.boundary?.requiresBoundaryStaging || false,
                     },
-                    abortController: autoGroupedAbortController,
+                    // 每段一个中止信号：调度层在前一段失败后会接着跑下一段，共用一个信号时，前一段因目标失效被中止，
+                    // 后面本可执行的段一进门就判成已中止（协调者存疑 4）。终止 / 切聊天另有全局停止与本轮楼层锚点拦截。
+                    abortController: new AbortController(),
                     onProgress: event => {
                         upstreamProgress?.(event);
                         handleAutoGroupedProgressEvent_ACU(event);

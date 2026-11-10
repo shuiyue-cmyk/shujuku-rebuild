@@ -10,6 +10,8 @@ const m = vi.hoisted(() => ({
   getChat: vi.fn(() => [{ is_user: true }, { is_user: false }]),
   preCheck: { canProceed: true, reason: '' },
   refreshWb: vi.fn(async () => [] as any[]),
+  runEndListeners: new Set<() => void>(),
+  runStaging: vi.fn(async () => ({ success: true, failedGroups: [] })),
 }));
 
 // 自动填表「已处理集合」的内存替身（真实实现走 window + localStorage，本文件只验接线）
@@ -26,6 +28,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   get currentChatFileIdentifier_ACU() { return m.chatId; },
   _set_coreApisAreReady_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: vi.fn(),
   _set_manualExtraHint_ACU: vi.fn(), _set_wasStoppedByUser_ACU: vi.fn(),
+  onTableFillRunEnded_ACU: (listener: () => void) => { m.runEndListeners.add(listener); return () => { m.runEndListeners.delete(listener); }; },
 }));
 vi.mock('../../../src/service/table/update-scheduler', () => ({
   checkAutoUpdatePreConditions_ACU: vi.fn(() => m.preCheck),
@@ -44,6 +47,7 @@ vi.mock('../../../src/service/worldbook/pipeline', () => ({ loadAllChatMessages_
 vi.mock('../../../src/shared/env', () => ({ topLevelWindow_ACU: {} }));
 vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-config', () => ({ purgeOldLayerData_ACU: vi.fn() }));
 vi.mock('../../../src/service/table/update-orchestrator', () => ({
+  executeAutoFillStagingGroups_ACU: (...args: any[]) => m.runStaging(...args),
   processGroupedRuntimeChunk_ACU: vi.fn(),
   refreshCommittedWorldbook_ACU: (...args: any[]) => m.refreshWb(...args),
 }));
@@ -120,6 +124,44 @@ describe('triggerAutomaticUpdateIfNeeded_ACU 并发补跑', () => {
     await settleMicrotasks();
 
     expect(m.executePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it('手动填表 / 追平占着「正在填表」时被拦下：那一轮结束后补跑一次；结束时已换了聊天就不补（D07-02）', async () => {
+    m.executePlan.mockResolvedValue({ failedGroups: 0, errors: [], autoMergeTriggered: false, autoMergeSuccess: false });
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    const endRun = async () => { [...m.runEndListeners].forEach(listener => listener()); await settleMicrotasks(); await settleMicrotasks(); };
+
+    m.preCheck = { canProceed: false, reason: 'Pre-flight checks failed.', code: 'update_in_flight' } as any;
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    expect(m.executePlan).not.toHaveBeenCalled();
+    m.preCheck = { canProceed: true, reason: '' };
+    await endRun();
+    expect(m.executePlan).toHaveBeenCalledTimes(1);
+    await endRun();
+    expect(m.executePlan).toHaveBeenCalledTimes(1);
+
+    m.preCheck = { canProceed: false, reason: 'Pre-flight checks failed.', code: 'update_in_flight' } as any;
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    m.preCheck = { canProceed: true, reason: '' };
+    m.chatId = 'other-chat';
+    await endRun();
+    expect(m.executePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it('跨根分段每段各用一个中止信号：前一段因目标失效被中止，不连带让后面本可执行的段直接放弃（协调者存疑 4）', async () => {
+    m.executePlan.mockImplementationOnce(async (_plan: any, _settings: any, _setUpdating: any, ops: any) => {
+      await ops.processStagingGroupedUpdates([], 'auto_independent', {});
+      await ops.processStagingGroupedUpdates([], 'auto_independent', {});
+      return { totalGroups: 2, failedGroups: 0, errors: [], autoMergeTriggered: false, autoMergeSuccess: false };
+    });
+    m.runStaging.mockClear();
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    await triggerAutomaticUpdateIfNeeded_ACU();
+
+    const [first, second] = m.runStaging.mock.calls.map((call: any[]) => call[2].abortController);
+    expect(first).toBeInstanceOf(AbortController);
+    expect(second).not.toBe(first);
   });
 
   it('用户停止后清除 pending 触发而不补跑', async () => {
