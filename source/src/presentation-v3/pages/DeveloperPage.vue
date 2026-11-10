@@ -13,6 +13,28 @@
       >
         <UbSwitch :model-value="devOptions.warnLogEnabled.value" aria-label="WARN 日志" @update:model-value="devOptions.setWarnLogEnabled($event)" />
       </UbRow>
+      <UbRow
+        label="执行边界提示词"
+        hint="开启后，在下方勾选的功能发出 AI 请求时额外附加一段约束提示词，要求模型只做指令要求的事、不编造、不越范围。适合 MiniMax M3.1 Flash 这类爱「顺便多做」的模型；默认关闭，关闭时请求与原来完全一致。"
+      >
+        <UbSwitch :model-value="devOptions.scopeGuardPrompt.value" aria-label="执行边界提示词" @update:model-value="devOptions.setScopeGuardPrompt($event)" />
+      </UbRow>
+      <UbRow
+        v-if="devOptions.scopeGuardPrompt.value"
+        label="附加到"
+        hint="默认只勾填表——压测只在填表上验证过效果。智能续写和外部脚本本身要写正文，勾选前建议先试一轮。"
+        stack
+      >
+        <div class="ub-dev__guard-targets" data-scope-guard-targets>
+          <UbCheck
+            v-for="target in GUARD_TARGETS"
+            :key="target.key"
+            :model-value="devOptions.scopeGuardTargets.value[target.key]"
+            :label="target.label"
+            @update:model-value="devOptions.setScopeGuardTarget(target.key, $event)"
+          />
+        </div>
+      </UbRow>
     </UbSection>
   </UbPage>
 </template>
@@ -20,10 +42,33 @@
 <script setup lang="ts">
 import { useDevOptions } from '../../presentation-v2/composables/useDevOptions';
 import { developerCopy as copy } from '../../presentation-v2/copy/developer-copy';
+import { SCOPE_GUARD_TARGET_KEYS_ACU, type ScopeGuardTarget_ACU } from '../../service/ai/scope-guard-prompt';
+import UbCheck from '../ui/UbCheck.vue';
 import UbPage from '../ui/UbPage.vue';
 import UbRow from '../ui/UbRow.vue';
 import UbSection from '../ui/UbSection.vue';
 import UbSwitch from '../ui/UbSwitch.vue';
 
 const devOptions = useDevOptions();
+
+const GUARD_TARGET_LABELS: Record<ScopeGuardTarget_ACU, string> = {
+  fill: '填表',
+  plot: '剧情推进',
+  continuation: '智能续写',
+  agent: 'Agent',
+  optimize: '正文替换',
+  template: '改表助手',
+  summary: '交火模式（总结索引）',
+  worldbook: '外部脚本调用',
+};
+const GUARD_TARGETS = SCOPE_GUARD_TARGET_KEYS_ACU.map(key => ({ key, label: GUARD_TARGET_LABELS[key] }));
 </script>
+
+<style scoped>
+.ub-dev__guard-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ub-s2) var(--ub-s4);
+  padding: var(--ub-s1) 0;
+}
+</style>
