@@ -44,6 +44,15 @@ describe('table-write-transaction', () => {
     expect(ran).toBe(false);
   });
 
+  it('guardChatSwitch：调用方带着发起时的聊天身份，进入前就已切走同样拒绝（D03-01）', async () => {
+    _set_currentChatFileIdentifier_ACU('chat-b');
+    let ran = false;
+    await expect(runTableWriteTransaction_ACU({
+      source: 'system_cleanup', reason: 'rollback', chatKey: 'chat-a', writeSet: [{ kind: 'all' }], maintenanceMode: 'exclusive', guardChatSwitch: true,
+    }, () => { ran = true; })).rejects.toThrow(/聊天已切换/);
+    expect(ran).toBe(false);
+  });
+
   it('guardChatSwitch：聊天未变时照常执行', async () => {
     await expect(runTableWriteTransaction_ACU({
       source: 'system_cleanup', reason: 'maintenance', writeSet: [{ kind: 'all' }], maintenanceMode: 'exclusive', guardChatSwitch: true,

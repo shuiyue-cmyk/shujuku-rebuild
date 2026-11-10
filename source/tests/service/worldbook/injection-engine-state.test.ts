@@ -297,6 +297,12 @@ describe('resetScriptStateForNewChat_ACU', () => {
     expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('invalid chat file name'));
   });
 
+  it('切聊天时一并清掉上一聊天留下的「生成结束配对歧义」隔离期，新聊天的首条回复照常触发填表（D01-04）', async () => {
+    (mockGenerationGate as any).generationEndMatchQuarantineUntil_ACU = Date.now() + 60_000;
+    await resetScriptStateForNewChat_ACU('new-chat', { reason: 'chat_changed' });
+    expect((mockGenerationGate as any).generationEndMatchQuarantineUntil_ACU).toBe(0);
+  });
+
   it('"null" 字符串且无活动聊天时清空运行时状态', async () => {
     await resetScriptStateForNewChat_ACU('null');
     expect(mockSetCurrentChatFileIdentifier).toHaveBeenCalledWith('');

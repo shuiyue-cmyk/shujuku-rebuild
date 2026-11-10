@@ -40,7 +40,7 @@ export function getLastMessageIndex_ACU(): number {
 const postChatSaveListeners_ACU: Array<() => void> = [];
 
 /**
- * 注册插件聊天保存成功后的回调。
+ * 注册插件聊天保存成功后的回调；填表运行窗口内暂缓存盘、只记下改动时同样回调。
  * 回调同步执行，异常被吞掉并记录，不影响保存契约本身。
  */
 export function registerPostChatSaveListener_ACU(listener: () => void): void {
@@ -217,6 +217,9 @@ export async function saveChatToHostCoalesced_ACU(): Promise<void> {
     markChatSaveDirty_ACU();
     if (chatSaveCoalesceDepth_ACU > 0 && Date.now() - chatSaveLastRealSaveAt_ACU < CHAT_SAVE_COALESCE_DEFER_MAX_MS_ACU) {
         armChatSaveDeferTimer_ACU();
+        // 暂缓存盘也要同步删楼守卫的保管库：宿主删楼时连同内存里这些改动一起存盘，
+        // 不按此刻的 checkpoint 备份，删掉承载新 checkpoint 的楼层就恢复不了（D05-04）
+        notifyPostChatSaveListeners_ACU();
         return;
     }
     await startCoalescedRealChatSave_ACU();

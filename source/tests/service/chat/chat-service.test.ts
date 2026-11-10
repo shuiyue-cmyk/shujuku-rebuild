@@ -521,6 +521,98 @@ describe('purgeOldLayerData_ACU', () => {
     expect(chat[24].TavernDB_ACU_IsolatedData).toBeDefined();
   });
 
+  describe('等待期间聊天被改动（D01-01）：宿主复用同一个 chat 数组，按旧楼号写会写错楼层或写进别的聊天', () => {
+    function buildV2Chat(length: number, tag: string): any[] {
+      return Array.from({ length }, (_, index) => ({
+        is_user: false,
+        mes: `${tag}-${index}`,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            storageFrame: {
+              version: 2,
+              ...(index === 0
+                ? { checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: { sheet_0: { name: '物品表', content: [['row_id', '物品名'], ['1', tag]] } } } }
+                : {}),
+              logEntries: [],
+            },
+            _acu_storage_version: 2,
+          },
+        },
+      }));
+    }
+
+    function switchTo(chat: any[], next: any[]): void {
+      chat.splice(0, chat.length, ...next);
+    }
+
+    it('边界 checkpoint 存盘期间切到别的聊天：不清理新聊天的楼层，也不再存盘', async () => {
+      mockSettings.retainRecentLayers = 2;
+      const chat = buildV2Chat(25, 'A');
+      const chatB = buildV2Chat(26, 'B');
+      const chatBBefore = structuredClone(chatB);
+      mockGetChatArray.mockReturnValue(chat);
+      mockSaveChatToHostStrict.mockImplementationOnce(async () => { switchTo(chat, chatB); });
+
+      await purgeOldLayerData_ACU();
+
+      expect(chat).toEqual(chatBBefore);
+      expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
+    });
+
+    it('边界 checkpoint 存盘期间删掉了一楼：不按旧楼号清理（否则会删掉刚写好的边界 checkpoint）', async () => {
+      mockSettings.retainRecentLayers = 2;
+      const chat = buildV2Chat(25, 'A');
+      const anchor = chat[23];
+      mockGetChatArray.mockReturnValue(chat);
+      mockSaveChatToHostStrict.mockImplementationOnce(async () => { chat.splice(5, 1); });
+
+      await purgeOldLayerData_ACU();
+
+      expect(anchor.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toEqual(expect.objectContaining({ kind: 'full', reason: 'compaction' }));
+      expect(chat[0].TavernDB_ACU_IsolatedData).toBeDefined();
+      expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
+    });
+
+    it('写边界 checkpoint 前的回放期间切到别的聊天：新聊天的楼层不被写入，不存盘', async () => {
+      mockSettings.retainRecentLayers = 2;
+      const chat = buildV2Chat(25, 'A');
+      const chatA = chat.slice();
+      const chatB = buildV2Chat(26, 'B');
+      const chatBBefore = structuredClone(chatB);
+      mockGetChatArray.mockReturnValue(chat);
+      mockLoadTableStateFromFramesV2Detailed.mockImplementationOnce(async () => {
+        switchTo(chat, chatB);
+        return { baseKind: 'full_checkpoint', data: { sheet_0: { name: '物品表', content: [['row_id', '物品名'], ['1', 'A']] } } };
+      });
+
+      await purgeOldLayerData_ACU();
+
+      expect(chat).toEqual(chatBBefore);
+      expect(mockSaveChatToHostStrict).not.toHaveBeenCalled();
+      // 旧聊天的消息对象也回到原样（失败回滚按消息对象恢复，不按楼号）
+      expect(chatA[23].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toBeUndefined();
+    });
+
+    it('写完边界 checkpoint 后折叠向量镜像期间切到别的聊天：不降级新聊天的 checkpoint，不存盘', async () => {
+      mockSettings.retainRecentLayers = 2;
+      const chat = buildV2Chat(25, 'A');
+      const chatB = buildV2Chat(26, 'B');
+      // 新聊天边界之后也有一个 full：若按旧楼号降级，它会被改掉
+      chatB[24].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint = { kind: 'full', createdAt: 2, reason: 'compaction', data: { sheet_0: { name: '物品表', content: [['row_id', '物品名'], ['1', 'B']] } } };
+      const chatBBefore = structuredClone(chatB);
+      mockGetChatArray.mockReturnValue(chat);
+      mockFoldVectorMirror.mockImplementationOnce(async () => {
+        switchTo(chat, chatB);
+        return { folded: false, files: [] };
+      });
+
+      await purgeOldLayerData_ACU();
+
+      expect(chat).toEqual(chatBBefore);
+      expect(mockSaveChatToHostStrict).not.toHaveBeenCalled();
+    });
+  });
+
   it('boundary checkpoint 写入失败时保留旧 checkpoint 且不清理旧楼层', async () => {
     mockSettings.retainRecentLayers = 2;
     mockLoadTableStateFromFramesV2Detailed.mockResolvedValueOnce(null);
@@ -3012,6 +3104,42 @@ describe('commitManualRefillSheetSnapshotInRangeAtomic_ACU', () => {
     expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
   });
 
+  it('回放校验等待期间删了前面一楼：放弃提交，不把重填结果按旧楼层号写到挪上来的另一楼（D03-04）', async () => {
+    const chat: any[] = [
+      makeFrameMessage({
+        version: 2,
+        checkpoint: {
+          kind: 'full', reason: 'compaction', createdAt: 20,
+          data: { mate: { type: 'acu' }, sheet_0: { name: '纪要表', content: [['row_id', '事件'], ['20', '旧事件']] } },
+        },
+        logEntries: [],
+      }),
+      { is_user: true, mes: '用户1' },
+      makeFrameMessage({ version: 2, logEntries: [] }),
+      { is_user: true, mes: '用户2' },
+      { is_user: false, mes: '后面的AI楼' },
+    ];
+    const laterUserFloor = chat[3];
+    mockGetChatArray.mockReturnValue(chat);
+    const replay = mockLoadTableStateFromFramesV2Detailed.getMockImplementation();
+    mockLoadTableStateFromFramesV2Detailed.mockImplementationOnce(async (...args: any[]) => {
+      const replayed = replay ? await (replay as any)(...args) : undefined;
+      chat.splice(1, 1);
+      return replayed;
+    });
+
+    const result = await commitManualRefillSheetSnapshotInRangeAtomic_ACU({
+      isolationKey: '',
+      targetMessageIndices: [0, 1, 2],
+      targetSheetKeys: ['sheet_0'],
+      snapshotData: { sheet_0: { name: '纪要表', content: [['row_id', '事件'], ['1', '重填事件']] } },
+    });
+
+    expect(result.success).toBe(false);
+    expect(laterUserFloor.TavernDB_ACU_IsolatedData).toBeUndefined();
+    expect(mockSaveChatToHostStrict).not.toHaveBeenCalled();
+  });
+
   it('G05-01：末端楼是字符串形态容器时先解析再写——旧标签槽保留，rebase 照常落到默认槽', async () => {
     const chat = [
       makeFrameMessage({
@@ -3439,6 +3567,29 @@ describe('establishManualRefillTemplateRoot_ACU', () => {
     expect(chat[1].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toBeUndefined();
   });
 
+  it('建根存盘失败时按消息本身复原：存盘期间删了前面一楼，不把旧字段写到挪上来的另一楼（D07-03）', async () => {
+    const root = makeEmptyFrameMessage('AI楼层0');
+    const next = makeEmptyFrameMessage('AI楼层1');
+    const chat = [{ is_user: true, mes: '开场' }, root, next];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSaveChatToHostStrict.mockImplementationOnce(async () => {
+      chat.splice(0, 1);
+      throw new Error('模拟宿主保存失败');
+    });
+
+    const result = await establishManualRefillTemplateRoot_ACU({
+      isolationKey: '',
+      targetSheetKeys: ['sheet_0'],
+      targetMessageIndices: [1, 2],
+      templateData,
+    });
+
+    expect(result.success).toBe(false);
+    expect(root.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toBeUndefined();
+    expect(next.mes).toBe('AI楼层1');
+    expect(next.TavernDB_ACU_IsolatedData[''].storageFrame).toEqual({ version: 2, logEntries: [] });
+  });
+
   it('清理后仍有 full checkpoint 时 no-op（部分选表/范围未覆盖场景）', async () => {
     const chat = [
       {
@@ -3747,6 +3898,44 @@ describe('clearManualRefillSheetDataInRange_ACU 的可回滚句柄与外置向�
     expect(restoredTagData.storageFrame.logEntries[0].operations).toEqual([{ kind: 'row_upsert', sheetKey: 'sheet_1', rowId: 'r1', cells: ['x'] }]);
     expect(restoredTagData.summaryVectorIndexManifest).toEqual(manifest);
     expect(restoredTagData.modifiedKeys).toEqual(['sheet_0', 'sheet_1']);
+  });
+
+  it('句柄记住清理时的聊天：回滚事务带着它进场，切到别的聊天后由事务拒绝而不是写进新聊天（D03-01）', async () => {
+    const chat = [makeRollbackTargetMessage({ indexId: 'idx-refill-scope', files: [] }, 'm0')];
+    mockGetChatArray.mockReturnValue(chat);
+    const handles: any[] = [];
+    await clearManualRefillSheetDataInRange_ACU([0], ['sheet_1'], {
+      chatKey: 'chat-a',
+      onRollbackSnapshot: (handle: any) => handles.push(handle),
+    });
+    expect(mockRunTableWriteTransaction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ chatKey: 'chat-a', guardChatSwitch: true }), expect.any(Function));
+    expect(handles[0].chatKey).toBe('chat-a');
+
+    await rollbackManualRefillRangeSnapshotAtomic_ACU(handles[0]);
+
+    expect(mockRunTableWriteTransaction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ reason: 'rollbackManualRefillSheetDataInRange', chatKey: 'chat-a', guardChatSwitch: true }), expect.any(Function));
+  });
+
+  it('清理存盘失败时按消息本身复原：存盘期间删了前面一楼，也不把快照写到挪上来的另一楼（D07-03）', async () => {
+    const manifest = { indexId: 'idx-refill-save-fail', files: [] };
+    const target = makeRollbackTargetMessage(manifest, 'm1');
+    const neighbour = makeRollbackTargetMessage(manifest, 'm2');
+    neighbour.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data.sheet_1 = { name: '纪要表', content: [['row_id'], ['m2-own']] };
+    const chat = [{ is_user: true, mes: '用户' }, target, neighbour];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSaveChatToHostStrict.mockImplementationOnce(async () => {
+      chat.splice(0, 1);
+      throw new Error('模拟宿主保存失败');
+    });
+
+    await expect(clearManualRefillSheetDataInRange_ACU([1], ['sheet_1'])).rejects.toThrow('模拟宿主保存失败');
+
+    expect(target.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data.sheet_1)
+      .toEqual({ name: '纪要表', content: [['row_id'], ['old']] });
+    expect(neighbour.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data.sheet_1)
+      .toEqual({ name: '纪要表', content: [['row_id'], ['m2-own']] });
   });
 
   it('聊天在重填期间被改动时按身份跳过错位楼层，不把快照写到别的楼层上', async () => {

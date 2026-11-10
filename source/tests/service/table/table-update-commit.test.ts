@@ -137,6 +137,26 @@ describe('runTableUpdateCommit_ACU migration gate', () => {
     expect(mocks.setCurrentData).not.toHaveBeenCalled();
   });
 
+  it('调用方没传聊天身份（外部 SQL / CRUD 等）：按提交开始时的聊天核对，提交途中切聊天同样拒绝（D05-05）', async () => {
+    const apply = vi.fn();
+    mocks.currentChatKey = 'chat-a';
+    mocks.currentIsolationKey = 'scope-a';
+    mocks.migration.mockImplementation(async () => {
+      mocks.currentChatKey = 'chat-b';
+      return { success: true, migrated: false };
+    });
+
+    const result = await runTableUpdateCommit_ACU(options('test_scope_pinned_at_start'), apply);
+
+    expect(result).toMatchObject({
+      success: false,
+      errorCategory: 'precondition',
+      error: expect.stringContaining('聊天或隔离标识已切换'),
+    });
+    expect(apply).not.toHaveBeenCalled();
+    expect(mocks.persist).not.toHaveBeenCalled();
+  });
+
   it('AI 等待期间目标楼层换成了另一条回复（滑动 / 重新生成）：拒绝写回，不重试', async () => {
     const chat: any[] = [
       { is_user: true, mes: '你好' },

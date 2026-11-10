@@ -698,6 +698,33 @@ describe('AbortController 管理', () => {
     }
   });
 
+  it('一轮填表开始时记下楼层：之后删楼 / 切聊天让某楼号对应的消息变了就报告对不上；追加新楼不算；本轮结束后不再约束', async () => {
+    const { fillRunTargetsStillInPlace_ACU } = await import('../../../src/service/runtime/state-manager');
+    const chat: any[] = [{ mes: '0' }, { mes: '1' }, { mes: '2' }, { mes: '3' }];
+    mockGetChatArray.mockReturnValue(chat);
+    try {
+      expect(fillRunTargetsStillInPlace_ACU(3)).toBe(true);
+      _set_isAutoUpdatingCard_ACU(true);
+      chat.push({ mes: '4' });
+      expect(fillRunTargetsStillInPlace_ACU(3)).toBe(true);
+
+      chat.splice(2, 1);
+      expect(fillRunTargetsStillInPlace_ACU(1)).toBe(true);
+      expect(fillRunTargetsStillInPlace_ACU(2)).toBe(false);
+
+      chat.splice(0, chat.length, { mes: 'B0' }, { mes: 'B1' }, { mes: 'B2' }, { mes: 'B3' });
+      expect(fillRunTargetsStillInPlace_ACU(0)).toBe(false);
+      // 本轮开始时还不存在的楼号无从核对
+      expect(fillRunTargetsStillInPlace_ACU(9)).toBe(false);
+
+      _set_isAutoUpdatingCard_ACU(false);
+      expect(fillRunTargetsStillInPlace_ACU(3)).toBe(true);
+    } finally {
+      _set_isAutoUpdatingCard_ACU(false);
+      mockGetChatArray.mockReturnValue([]);
+    }
+  });
+
   it('一轮填表结束（「正在填表」被放开）时通知订阅者一次；本来就没在填表的复位不通知；退订后不再通知', async () => {
     const { onTableFillRunEnded_ACU } = await import('../../../src/service/runtime/state-manager');
     const listener = vi.fn();

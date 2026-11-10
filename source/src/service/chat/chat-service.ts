@@ -19,6 +19,7 @@ export {
 } from '../../data/gateways/chat-gateway';
 export { purgeCurrentChatDatabaseState_ACU, type ChatDatabasePurgeResult_ACU } from './chat-database-purge';
 
+import { captureChatPositions_ACU } from '../../shared/chat-positions';
 import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostStrict_ACU, setChatMessages_ACU, emitMessageUpdated_ACU } from '../../data/gateways/chat-gateway';
 import { logDebug_ACU, logError_ACU, logWarn_ACU, isSummaryOrOutlineTable_ACU } from '../../shared/utils';
 import { collectMvuUpdateBlockRanges_ACU, stripMvuUpdateBlocks_ACU } from '../../shared/text-optimization';
@@ -105,6 +106,8 @@ export interface ManualRefillSheetBaselineReplaceOptions_ACU {
 
 export interface ManualRefillSheetSnapshotCommitOptions_ACU {
     isolationKey: string;
+    /** 发起重填时的聊天身份：事务按它核对，最后一段等待期间切了聊天就拒绝，不把结果写进新聊天（D03-04）。 */
+    chatKey?: string;
     targetMessageIndices: number[];
     targetSheetKeys: string[];
     snapshotData: Record<string, any>;
@@ -152,6 +155,8 @@ export interface ManualRefillRangeRollbackHandle_ACU {
     entries: Array<{ index: number; snapshot: ManualRefillMessageFieldSnapshot_ACU; fingerprint: string }>;
     /** 清理实际生效的表键（含同显示名别名代与 SQL 物理表名），回滚写事务按它声明写集。 */
     sheetKeys: string[];
+    /** 清理所在的聊天：回滚事务按它核对，期间切走就拒绝，绝不把这份快照写进别的聊天（D03-01）。 */
+    chatKey: string;
 }
 
 /**
@@ -172,6 +177,8 @@ function buildMessageIdentityFingerprint_ACU(msg: any): string {
 
 /** 手动重填范围清理的可选出口；不提供时保持「清理即终态」的旧语义。 */
 export interface ClearManualRefillSheetDataInRangeOptions_ACU {
+    /** 发起重填时的聊天身份；不给则取进入清理时的当前聊天。 */
+    chatKey?: string;
     /** 清理成功时回调，交回可回滚句柄，供「零提交失败」整段回滚。 */
     onRollbackSnapshot?: (handle: ManualRefillRangeRollbackHandle_ACU) => void;
     /**
@@ -682,6 +689,13 @@ function collectV2FullCheckpointRefsForIsolation_ACU(chat: any[], isolationKey: 
     return refs;
 }
 
+class ChatChangedDuringMaintenanceError_ACU extends Error {
+    constructor() {
+        super('等待期间聊天被改动（删楼或切换聊天），已放弃本轮，下一轮按新楼号重算。');
+        this.name = 'ChatChangedDuringMaintenanceError_ACU';
+    }
+}
+
 async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(
     chat: any[],
     boundary: RetainedCheckpointBoundary_ACU,
@@ -694,7 +708,13 @@ async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(
 
     const anchorIndex = boundary.anchorIndex;
     if (anchorIndex !== undefined && anchorIndex >= 0 && chat[anchorIndex]) {
-        const snapshots = new Map<number, ReturnType<typeof messageFieldSnapshot_ACU>>();
+        const chatUnchanged = captureChatPositions_ACU(chat);
+        const assertChatUnchanged = () => {
+            if (!chatUnchanged()) throw new ChatChangedDuringMaintenanceError_ACU();
+        };
+        // 失败回滚按消息对象恢复，不按楼号：等待期间切了聊天，按楼号会把旧快照写进新聊天
+        const originalMessages = chat.slice();
+        const snapshots = new Map<any, ReturnType<typeof messageFieldSnapshot_ACU>>();
         chat.forEach((message, messageIndex) => {
             const isolatedData = message?.TavernDB_ACU_IsolatedData;
             const hasV2Frame = isolatedData
@@ -710,7 +730,7 @@ async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(
                         || (tagData as any).compatTransitionCheckpoint?.kind === 'compat_replay_transition')
                 ));
             if (messageIndex === anchorIndex || hasV2Frame || hasTransitionCheckpoint) {
-                snapshots.set(messageIndex, messageFieldSnapshot_ACU(message));
+                snapshots.set(message, messageFieldSnapshot_ACU(message));
             }
         });
         let changed = false;
@@ -719,9 +739,10 @@ async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(
         let foldFiles: SummaryVectorIndexExternalFileRef_ACU[] = [];
         const materialSnapshots = snapshotMaterialCheckpointFields_ACU(chat);
         try {
-            const boundaryWrite = await writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex, checkpointReason);
+            const boundaryWrite = await writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex, checkpointReason, assertChatUnchanged);
             changed = boundaryWrite.changed;
             foldFiles = boundaryWrite.foldFiles;
+            assertChatUnchanged();
             downgradedCount = downgradeCoveredV2FullCheckpointsAfterAnchor_ACU(chat, anchorIndex);
             obsoleteInitDowngradedCount = downgradeObsoleteInitialV2FullCheckpointsBeforeCompaction_ACU(chat, anchorIndex);
             // 单根不变量：降级后同一隔离键必须至多一个 full checkpoint，
@@ -736,15 +757,15 @@ async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(
                 await saveChatToHostStrict_ACU();
             }
         } catch (error: any) {
-            for (const [messageIndex, snapshot] of snapshots) {
+            for (const [message, snapshot] of snapshots) {
                 // 单项还原异常不得中断其余楼层回滚：冻结子对象等个别楼层还原失败时，其余楼层必须回到保存前状态。
                 try {
-                    restoreMessageFieldSnapshot_ACU(chat[messageIndex], snapshot);
+                    restoreMessageFieldSnapshot_ACU(message, snapshot);
                 } catch (restoreError: any) {
-                    logWarn_ACU(`[ACU-V2] 边界回滚楼层 #${messageIndex} 异常（继续回滚其余楼层）:`, restoreError?.message || restoreError);
+                    logWarn_ACU(`[ACU-V2] 边界回滚楼层 #${originalMessages.indexOf(message)} 异常（继续回滚其余楼层）:`, restoreError?.message || restoreError);
                 }
             }
-            restoreMaterialCheckpointFields_ACU(chat, materialSnapshots);
+            restoreMaterialCheckpointFields_ACU(originalMessages, materialSnapshots);
             return {
                 success: false,
                 changed: false,
@@ -877,7 +898,9 @@ async function foldVectorMirrorAfterBoundaryWrite_ACU(
 async function writeV2BoundaryCheckpointBeforePurge_ACU(
     chat: any[],
     boundaryAnchorIndex: number,
-    checkpointReason: 'compaction' | 'periodic' = 'compaction',
+    checkpointReason: 'compaction' | 'periodic',
+    /** 回放、折叠镜像之后、按楼号写楼层之前调用：等待期间删了楼或切了聊天就抛错放弃。 */
+    assertChatUnchanged: () => void,
 ): Promise<{ changed: boolean; foldFiles: SummaryVectorIndexExternalFileRef_ACU[] }> {
     if (boundaryAnchorIndex < 0 || !chat[boundaryAnchorIndex] || chat[boundaryAnchorIndex].is_user) {
         throw new Error(`边界 checkpoint 写入失败：boundaryAnchorIndex=${boundaryAnchorIndex} 不是有效 AI 楼层。`);
@@ -966,6 +989,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
                 error.failedIsolationKey = isolationKey;
                 throw error;
             }
+            assertChatUnchanged();
             const transitionMessage = chat[transitionRef.messageIndex];
             const transitionTagData = transitionMessage?.TavernDB_ACU_IsolatedData?.[isolationKey];
             if (transitionTagData && typeof transitionTagData === 'object') {
@@ -994,6 +1018,8 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
         }
         const data = replay.data;
 
+        // 下面规范化楼层容器也算写楼层
+        assertChatUnchanged();
         const anchorMsg = chat[boundaryAnchorIndex];
         // G05-01：遗留字符串形态容器不得未经解析就置空——那会把该楼全部隔离标签槽的数据
         // 静默删掉并随 strict save 落盘。统一走 repo 层规范化：先解析保留其他标签槽，按对象形态写回。
@@ -1113,6 +1139,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
         }
 
         // anchorContainer 即规范化后的 anchorMsg.TavernDB_ACU_IsolatedData（同一引用），就地写槽位。
+        assertChatUnchanged();
         anchorContainer[isolationKey] = {
             ...(existingTagData || {}),
             storageFrame: frame,
@@ -1304,9 +1331,15 @@ async function purgeOldLayerDataCore_ACU() {
     logDebug_ACU(`[数据清理] 将清理 ${indicesToPurge.length} 层旧消息的本地数据（保留最近 ${retainCount} 个 AI 楼层，缓冲 ${RETAIN_RECENT_CHECKPOINT_BUFFER_LAYERS_ACU} 个 AI 楼层后滚动 checkpoint）...`);
 
     // ── [V2 边界 checkpoint] 删除旧 frame 前，确保最新保留 AI 窗口首个 AI 楼层有 full checkpoint ──
+    const chatUnchanged = captureChatPositions_ACU(chat);
     const checkpointResult = await ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(chat, boundary, { reason: 'purge', save: true });
     if (!checkpointResult.success) {
         logError_ACU('[V2 Compaction] 写入边界 checkpoint 失败，已中止本次清理以避免恢复链断裂:', checkpointResult.error);
+        return;
+    }
+    // 下面按上面算好的楼号删字段：边界存盘期间删了楼或切了聊天，楼号已不对应原来的楼层
+    if (!chatUnchanged()) {
+        logWarn_ACU(`[数据清理] ${new ChatChangedDuringMaintenanceError_ACU().message}`);
         return;
     }
 
@@ -1389,15 +1422,16 @@ async function purgeOldLayerDataCore_ACU() {
         'qrf_plot_tasks'
     ];
 
-    const purgeSnapshots = new Map<number, ReturnType<typeof messageFieldSnapshot_ACU>>();
-    const purgedFieldDescriptors = new Map<number, Map<string, PropertyDescriptor | undefined>>();
+    // 存盘失败的回滚按消息对象恢复：存盘期间切了聊天，按楼号会把旧聊天的字段写进新聊天
+    const purgeSnapshots = new Map<any, ReturnType<typeof messageFieldSnapshot_ACU>>();
+    const purgedFieldDescriptors = new Map<any, Map<string, PropertyDescriptor | undefined>>();
     const vectorGcScopes = new Map<string, SummaryVectorIndexSafeGcScopeHint_ACU>();
     let purgedVectorManifestCount = 0;
     for (const idx of indicesToPurge) {
         const msg = chat[idx];
         if (!msg) continue;
-        purgeSnapshots.set(idx, messageFieldSnapshot_ACU(msg));
-        purgedFieldDescriptors.set(idx, new Map(keysToDelete.map((key) => [
+        purgeSnapshots.set(msg, messageFieldSnapshot_ACU(msg));
+        purgedFieldDescriptors.set(msg, new Map(keysToDelete.map((key) => [
             key,
             Object.getOwnPropertyDescriptor(msg, key),
         ])));
@@ -1428,13 +1462,13 @@ async function purgeOldLayerDataCore_ACU() {
             await saveChatToHostStrict_ACU();
             logDebug_ACU(`[数据清理] 已严格保存 ${purgedCount} 层消息的本地数据清理，已移除 ${purgedVectorManifestCount} 组交火向量索引引用。`);
         } catch (e) {
-            purgeSnapshots.forEach((snapshot, messageIndex) => {
-                restoreMessageFieldSnapshot_ACU(chat[messageIndex], snapshot);
-                purgedFieldDescriptors.get(messageIndex)?.forEach((descriptor, key) => {
+            purgeSnapshots.forEach((snapshot, message) => {
+                restoreMessageFieldSnapshot_ACU(message, snapshot);
+                purgedFieldDescriptors.get(message)?.forEach((descriptor, key) => {
                     if (descriptor) {
-                        Object.defineProperty(chat[messageIndex], key, descriptor);
+                        Object.defineProperty(message, key, descriptor);
                     } else {
-                        delete chat[messageIndex][key];
+                        delete message[key];
                     }
                 });
             });
@@ -2519,6 +2553,7 @@ export async function commitManualRefillSheetSnapshotInRangeAtomic_ACU(
     return runTableWriteTransaction_ACU({
         source: 'system_cleanup',
         reason: 'commitManualRefillSheetSnapshotInRange',
+        chatKey: options.chatKey,
         isolationKey: options.isolationKey,
         writeSet,
         maintenanceMode: 'exclusive',
@@ -2589,8 +2624,10 @@ export async function commitManualRefillSheetSnapshotInRangeAtomic_ACU(
         }
 
         const snapshotIndices = [...new Set([rootMessageIndex, completedMessageIndex])];
-        const snapshots = new Map<number, ReturnType<typeof messageFieldSnapshot_ACU>>();
-        snapshotIndices.forEach(idx => snapshots.set(idx, messageFieldSnapshot_ACU(chat[idx])));
+        // 回放校验要等一下：期间删楼或切聊天（宿主复用同一个 chat 数组）会让下标错位，
+        // 写回前按消息对象核对，复原也跟着消息对象走（D03-04 / D07-03）。
+        const chatUnchanged = captureChatPositions_ACU(chat);
+        const snapshots = new Map(snapshotIndices.map(idx => [chat[idx], messageFieldSnapshot_ACU(chat[idx])] as const));
 
         try {
             const candidateChat = cloneCandidateChat_ACU(chat);
@@ -2673,12 +2710,15 @@ export async function commitManualRefillSheetSnapshotInRangeAtomic_ACU(
                     throw new Error(`手动重填最终快照提交失败：候选回放后的目标表 ${sheetKey} 与最终快照不一致。`);
                 }
             }
+            if (!chatUnchanged()) {
+                throw new Error('手动重填最终快照提交失败：提交期间聊天被改动（删楼或切换聊天），已放弃写入。');
+            }
             snapshotIndices.forEach(index => applyCandidateMessageFields_ACU(chat[index], candidateChat[index]));
             await saveChatToHostStrict_ACU();
             logDebug_ACU(`[手动重填最终快照] 已在 AI 楼层 #${completedMessageIndex} 为 ${options.targetSheetKeys.join(', ')} 写入末端 rebase${fallbackRequired ? '，并建立模板临时根' : ''}。`);
             return { success: true, changed: true, clearedCount: 0, checkpointCount: options.targetSheetKeys.length, targetMessageIndex: rootMessageIndex };
         } catch (error: any) {
-            snapshots.forEach((snapshot, idx) => restoreMessageFieldSnapshot_ACU(chat[idx], snapshot));
+            snapshots.forEach((snapshot, message) => restoreMessageFieldSnapshot_ACU(message, snapshot));
             return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, targetMessageIndex: rootMessageIndex, error: error?.message || String(error || '手动重填最终快照提交失败。') };
         }
     });
@@ -2781,8 +2821,8 @@ export async function establishManualRefillTemplateRoot_ACU(options: {
     }
 
     // 候选克隆上写入临时根，strict save 成功后才 apply 到 live chat（与清理同款原子性）。
-    const snapshots = new Map<number, ReturnType<typeof messageFieldSnapshot_ACU>>();
-    snapshots.set(rootMessageIndex, messageFieldSnapshot_ACU(chat[rootMessageIndex]));
+    const rootMessageBefore = chat[rootMessageIndex];
+    const rootSnapshot = messageFieldSnapshot_ACU(rootMessageBefore);
     try {
         const candidateChat = cloneCandidateChat_ACU(chat);
         const rootMessage = candidateChat[rootMessageIndex];
@@ -2798,17 +2838,18 @@ export async function establishManualRefillTemplateRoot_ACU(options: {
         rootFrame.checkpoint = checkpointBuild.checkpoint;
         writeMessageIdentity_ACU(rootMessage, { enabled: settings_ACU.dataIsolationEnabled, code: settings_ACU.dataIsolationCode });
 
-        const rootFingerprint = buildMessageIdentityFingerprint_ACU(chat[rootMessageIndex]);
+        const rootFingerprint = buildMessageIdentityFingerprint_ACU(rootMessageBefore);
         applyCandidateMessageFields_ACU(chat[rootMessageIndex], candidateChat[rootMessageIndex]);
         await saveChatToHostStrict_ACU();
         if (rollbackHandle && Array.isArray(rollbackHandle.entries)
             && !rollbackHandle.entries.some(entry => entry.index === rootMessageIndex)) {
-            rollbackHandle.entries.push({ index: rootMessageIndex, snapshot: snapshots.get(rootMessageIndex)!, fingerprint: rootFingerprint });
+            rollbackHandle.entries.push({ index: rootMessageIndex, snapshot: rootSnapshot, fingerprint: rootFingerprint });
         }
         logDebug_ACU(`[手动重填临时根] 已在 AI 楼层 #${rootMessageIndex} 为 ${targetSheetKeys.join(', ')} 建立模板临时根（runId=${fallbackRunId}）。`);
         return { success: true, changed: true, targetMessageIndex: rootMessageIndex };
     } catch (error: any) {
-        snapshots.forEach((snapshot, idx) => restoreMessageFieldSnapshot_ACU(chat[idx], snapshot));
+        // 按消息对象复原：strict save 期间删楼时下标已错位（D07-03）。
+        restoreMessageFieldSnapshot_ACU(rootMessageBefore, rootSnapshot);
         const failureError = error?.message || String(error || '手动重填临时根建立异常。');
         logError_ACU('[手动重填临时根] 建立 strict save 失败，已原位恢复聊天内存状态:', error);
         return { success: false, changed: false, targetMessageIndex: -1, error: `手动重填临时根建立失败：${failureError}` };
@@ -2818,7 +2859,8 @@ export async function establishManualRefillTemplateRoot_ACU(options: {
 
 async function clearManualRefillSheetDataInRangeCore_ACU(
     targetMessageIndices: number[],
-    targetSheetKeys: string[] | null = null,
+    targetSheetKeys: string[] | null,
+    chatKey: string,
     options: ClearManualRefillSheetDataInRangeOptions_ACU = {},
 ): Promise<number> {
     if (!targetMessageIndices || targetMessageIndices.length === 0) return 0;
@@ -2835,6 +2877,8 @@ async function clearManualRefillSheetDataInRangeCore_ACU(
     let clearedCount = 0;
 
     const normalizedIndices = targetMessageIndices.filter((idx): idx is number => Number.isInteger(idx) && idx >= 0 && idx < chat.length);
+    // 快照跟着消息对象走：strict save 期间删楼会让下标错位，按下标复原会把快照写到挪上来的另一楼（D07-03）。
+    const originalMessages = new Map(normalizedIndices.map(idx => [idx, chat[idx]] as const));
     const snapshots = new Map<number, ManualRefillMessageFieldSnapshot_ACU>();
     const fingerprints = new Map<number, string>();
     normalizedIndices.forEach(idx => {
@@ -2885,6 +2929,7 @@ async function clearManualRefillSheetDataInRangeCore_ACU(
             options.onRollbackSnapshot?.({
                 entries: normalizedIndices.map(index => ({ index, snapshot: snapshots.get(index)!, fingerprint: fingerprints.get(index) || '' })),
                 sheetKeys: [...targetAliases.sheetKeys],
+                chatKey,
             });
             logDebug_ACU(`[手动重填预清理] 共清理 ${clearedCount} 条消息的选中表范围内旧数据，聊天已严格保存。`);
         }
@@ -2892,7 +2937,7 @@ async function clearManualRefillSheetDataInRangeCore_ACU(
     } catch (error: any) {
         // strict save 失败：live chat 原位恢复（候选未 apply 或已 apply 均恢复），
         // 外置向量文件保持未删除。清理失败由调用方按失败语义处理（不恢复已删业务数据）。
-        snapshots.forEach((snapshot, idx) => restoreMessageFieldSnapshot_ACU(chat[idx], snapshot));
+        snapshots.forEach((snapshot, idx) => restoreMessageFieldSnapshot_ACU(originalMessages.get(idx), snapshot));
         logError_ACU('[手动重填预清理] 清理 strict save 失败，已原位恢复聊天内存状态:', error);
         throw error;
     }
@@ -2907,14 +2952,16 @@ export async function clearManualRefillSheetDataInRange_ACU(
         throw new Error('手动重填范围清理必须指定目标表。');
     }
     const writeSet = targetSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey }));
+    const chatKey = options.chatKey ?? String(currentChatFileIdentifier_ACU || 'current-chat');
     return runTableWriteTransaction_ACU({
         source: 'system_cleanup',
         reason: 'clearManualRefillSheetDataInRange',
+        chatKey,
         isolationKey: getCurrentIsolationKey_ACU(),
         writeSet,
         maintenanceMode: 'exclusive',
         guardChatSwitch: true,
-    }, () => clearManualRefillSheetDataInRangeCore_ACU(targetMessageIndices, targetSheetKeys, options));
+    }, () => clearManualRefillSheetDataInRangeCore_ACU(targetMessageIndices, targetSheetKeys, chatKey, options));
 }
 
 /**
@@ -2943,6 +2990,7 @@ export async function rollbackManualRefillRangeSnapshotAtomic_ACU(
     return runTableWriteTransaction_ACU({
         source: 'system_cleanup',
         reason: 'rollbackManualRefillSheetDataInRange',
+        chatKey: handle.chatKey,
         isolationKey: getCurrentIsolationKey_ACU(),
         writeSet,
         maintenanceMode: 'exclusive',

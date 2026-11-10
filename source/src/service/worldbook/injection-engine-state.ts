@@ -180,6 +180,8 @@ import {
     generationGate_ACU.lastGeneration = null;
     generationGate_ACU.generationSeq = 0;
     generationGate_ACU.activeGenerations = [];
+    // 配对歧义隔离只对上一聊天的那批上下文有意义；带过来会把新聊天 60 秒内的生成结束全拦下（D01-04）。
+    generationGate_ACU.generationEndMatchQuarantineUntil_ACU = 0;
 
     logDebug_ACU(
       `ACU: currentChatFileIdentifier FINAL set to: "${currentChatFileIdentifier_ACU}" (Source: CHAT_CHANGED event)`,

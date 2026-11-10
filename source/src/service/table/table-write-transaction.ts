@@ -302,7 +302,8 @@ export interface RunTableWriteTransactionOptions_ACU {
   /**
    * 维护类事务：拿到锁后复核当前聊天仍是发起时的聊天，否则拒绝执行（R3-09）。
    * 锁按发起时刻的聊天取键；等锁期间切换聊天，任务恢复后读到的却是新聊天，
-   * 会把用户在旧聊天里确认过的删除/恢复执行到新聊天上。仅在未显式指定 chatKey 时生效。
+   * 会把用户在旧聊天里确认过的删除/恢复执行到新聊天上。显式给了 chatKey 时按它核对——调用方
+   * 在操作开始时记下聊天身份传进来，进入事务前就已切走（如重填等 AI 期间切聊天）同样拒绝（D03-01）。
    */
   guardChatSwitch?: boolean;
 }
@@ -441,7 +442,7 @@ export async function runTableWriteTransaction_ACU<T>(
   const revisionImpact: TableWriteRevisionImpact_ACU = options.revisionImpact === 'derived_metadata' ? 'derived_metadata' : 'source_table';
   const maintenanceMode = options.maintenanceMode || 'shared';
   const releases = await acquireTransactionLocks_ACU({ chatKey, isolationKey, writeSet, maintenanceMode });
-  if (options.guardChatSwitch && options.chatKey === undefined) {
+  if (options.guardChatSwitch) {
     const currentChatKey = normalizeScopePart_ACU(currentChatFileIdentifier_ACU, 'current-chat');
     if (currentChatKey !== chatKey) {
       for (const release of releases.reverse()) release();

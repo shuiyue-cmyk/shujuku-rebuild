@@ -537,7 +537,12 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName: string): Promise<v
  * - 延迟段：经 scheduleInitChainRun_ACU 互斥守卫入口排程（代次号 + running 标志，参照 chat-mutation-scheduler）。
  * 整体 try/catch 兜底，确保不再产生未处理 rejection。
  */
+// 每次 CHAT_CHANGED 处理开始时递增：处理过程中有 await，期间又切了聊天时，旧处理器回来后
+// 不得再排程——排程会推高代次，把新聊天已排好的重建判成过期（D01-02）。
+let chatChangedHandlerSeq_ACU = 0;
+
 async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
+  const handlerSeq = ++chatChangedHandlerSeq_ACU;
   try {
     logDebug_ACU(`ACU CHAT_CHANGED event: ${chatFileName}`);
 
@@ -576,6 +581,10 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
 
     // [剧情推进] 切换聊天时加载预设
     await loadPresetAndCleanCharacterData_ACU();
+    if (handlerSeq !== chatChangedHandlerSeq_ACU) {
+      logDebug_ACU(`ACU CHAT_CHANGED: ${chatFileName} 的处理期间已切到别的聊天，交给新聊天的处理排程重建。`);
+      return;
+    }
     // Agent 世界书功能开关：只读开关、不扫描候选；失败只关本会话 Agent，剧情推进开跑前会再补读。
     void loadAgentWorldbookRuntimeControl_ACU(agentRuntimeRevision_ACU);
 

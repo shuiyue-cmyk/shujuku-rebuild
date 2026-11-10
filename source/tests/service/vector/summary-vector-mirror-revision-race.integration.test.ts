@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  chat: [] as any[], table: null as any, isolationKey: 'race',
+  chat: [] as any[], table: null as any, isolationKey: 'race', chatKey: 'mirror-race-chat',
   embeddingStarted: null as any, releaseEmbedding: null as any,
   saveStrict: vi.fn(), finalize: vi.fn(), persistPack: vi.fn(), persistManifest: vi.fn(),
   discard: vi.fn(async () => {}),
@@ -16,7 +16,7 @@ const deferred = () => {
 };
 
 vi.mock('../../../src/service/runtime/state-manager', () => ({
-  currentChatFileIdentifier_ACU: 'mirror-race-chat',
+  get currentChatFileIdentifier_ACU() { return h.chatKey; },
   getCurrentIsolationKey_ACU: () => h.isolationKey,
   get currentJsonTableData_ACU() { return { sheet_summary: h.table }; },
 }));
@@ -104,6 +104,7 @@ function resetFixture() {
   h.loadPack.mockReset(); h.loadPack.mockResolvedValue(null);
   h.timelineCheckpointRowIds = [];
   h.timelineEntryRowIds = ['r1'];
+  h.chatKey = 'mirror-race-chat';
 }
 
 async function changeSourceTableDuringEmbedding() {
@@ -258,6 +259,24 @@ describe('summary vector mirror revision race', () => {
     expect(h.saveStrict).not.toHaveBeenCalled();
     expect(h.chat[0].TavernDB_ACU_IsolatedData).toEqual(before);
   });
+  it('行删发布：拍完快照后切到了别的聊天（同内容的分支聊天也一样）→ 不往新聊天发布（D06-01）', async () => {
+    const { snapshotSummaryVectorMirrorExcludingRows_ACU } = await import(
+      '../../../src/service/vector/summary-vector-mirror-rebuild'
+    );
+    h.chatKey = 'chat-A';
+    const snapshot = await snapshotSummaryVectorMirrorExcludingRows_ACU({ excludedRowIds: ['row-2'], sourceTableKey: 'sheet_summary' });
+    expect(snapshot.kind).toBe('ready');
+    h.chatKey = 'chat-B';
+    const before = JSON.parse(JSON.stringify(h.chat[0].TavernDB_ACU_IsolatedData));
+
+    const result = await publishSummaryVectorMirrorRowRemovalSnapshot_ACU(snapshot);
+
+    expect(result.success).toBe(false);
+    expect(h.saveStrict).not.toHaveBeenCalled();
+    expect(h.chat[0].TavernDB_ACU_IsolatedData).toEqual(before);
+    expect(h.persistManifest.mock.calls.some(([arg]: any[]) => arg.chatKey === 'chat-B')).toBe(false);
+  });
+
   it('行删发布：快照后源表 base 指纹漂移（并发行写）→ 拒绝发布不落旧行', async () => {
     const { snapshotSummaryVectorMirrorExcludingRows_ACU } = await import(
       '../../../src/service/vector/summary-vector-mirror-rebuild'

@@ -1003,6 +1003,25 @@ describe('mainInitialize_ACU init 链 running 占用补跑', () => {
     vi.useRealTimers();
   });
 
+  it('上一聊天的切换处理卡在加载预设、新聊天先排好了重建：旧处理器回来后不再排程，新聊天的重建照常跑（D01-02）', async () => {
+    vi.useFakeTimers();
+    m.api.chat = [{ mes: 'active' }];
+    m.resetScript.mockImplementation(async (chatKey: string) => { m.currentChatKey = chatKey; });
+    let releaseA!: () => void;
+    const gateA = new Promise<void>((resolve) => { releaseA = resolve; });
+    m.loadPreset.mockImplementationOnce(async () => { await gateA; });
+
+    const handlerA = m.chatChanged!('chat-a');  // 卡在加载预设
+    await vi.advanceTimersByTimeAsync(0);
+    await m.chatChanged!('chat-b');             // 新聊天排好重建
+    releaseA();
+    await handlerA;                             // 旧处理器回来
+
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(m.loadMessages).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it('待跑代次被更晚排程取代时不补跑旧代次，由新链按其自身代次正常执行', async () => {
     vi.useFakeTimers();
     m.api.chat = [{ mes: 'active' }];
