@@ -9,6 +9,8 @@ const STORAGE_KEY = "acu_v2_ui_state";
 
 const m = vi.hoisted(() => ({
   parseTableTemplateJson_ACU: vi.fn(),
+  fillRunEndedListeners: new Set<() => void>(),
+  historyResolveCount: 0,
 }));
 
 function createSettings() {
@@ -173,6 +175,10 @@ async function mountDashboardPage(
     currentJsonTableData_ACU: tableData,
     coreApisAreReady_ACU: true,
     getCurrentIsolationKey_ACU: () => "",
+    onTableFillRunEnded_ACU: (listener: () => void) => {
+      m.fillRunEndedListeners.add(listener);
+      return () => m.fillRunEndedListeners.delete(listener);
+    },
   }));
   vi.doMock("../../../src/service/settings/settings-service", () => ({
     saveSettings_ACU: saveSettings,
@@ -206,6 +212,7 @@ async function mountDashboardPage(
   }));
   vi.doMock("../../../src/service/table/table-history", () => ({
     resolveTableHistoryStatesFromChat_ACU: (_chat: any[], optsList: any[]) => {
+      m.historyResolveCount += 1;
       if (options.failHistory) throw new Error("history boom");
       const map = new Map<string, any>();
       for (const opts of optsList || []) {
@@ -302,6 +309,49 @@ describe("DashboardPage", () => {
     expect(rows[0].hasTrackedUpdate).toBe(false);
     expect(rows[0].hasAnyData).toBe(false);
     expect(rows[0].lastUpdatedLabel).toBe("未初始");
+    // 3 条 AI 回复跳过 2 条只剩 1 条，没到频率 7：不标就绪，下次触发仍显示「待初始」。
+    expect(rows[0].unrecordedLabel).toBe("3");
+    expect(rows[0].ready).toBe(false);
+    expect(rows[0].nextTriggerLabel).toBe("待初始");
+  });
+
+  it("还没填过的表到了频率也标「就绪」（下一轮自动填表会把它补上），健康卡只算一次", async () => {
+    const tableData = {
+      ...createTableData(),
+      sheet_c: {
+        name: "新开聊天的表",
+        content: [["id"]],
+        updateConfig: { updateFrequency: -1, skipFloors: -1 },
+      },
+    };
+    const { mount, dashboard } = await mountDashboardPage(createSettings(), tableData);
+
+    const row = dashboard.tableRows.value.find((item) => item.key === "sheet_c")!;
+    expect(row.hasTrackedUpdate).toBe(false);
+    expect(row.lastUpdatedLabel).toBe("未初始");
+    expect(row.unrecordedLabel).toBe("3");
+    expect(row.ready).toBe(true);
+
+    const tableHealth = Array.from(document.querySelectorAll<HTMLElement>(".ub-health"))
+      .find((item) => (item.textContent || "").includes("表格更新"));
+    expect(tableHealth?.textContent || "").toContain("2 张表已经满足自动更新条件");
+    expect(tableHealth?.textContent || "").toContain("1 张表满足首次更新条件");
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it("页面开着时一轮填表结束会重算表格状态，不用切走再切回来", async () => {
+    m.fillRunEndedListeners.clear();
+    // 订阅的是挂载出来的仪表盘页面（组件内 onMounted 注册），它在下一次渲染时重算。
+    const { mount } = await mountDashboardPage();
+    const before = m.historyResolveCount;
+    expect(m.fillRunEndedListeners.size).toBeGreaterThan(0);
+
+    for (const listener of [...m.fillRunEndedListeners]) listener();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(m.historyResolveCount).toBeGreaterThan(before);
+
+    mount.__resetAcuV2MountForTests();
   });
 
   it("默认渲染运行概览和基础开关；header 不再有 subtitle / 刷新按钮 / API 三件套", async () => {

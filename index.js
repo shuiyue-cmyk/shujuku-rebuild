@@ -95938,7 +95938,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261110-1554"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261110-1713"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95957,7 +95957,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1554";
+        const stamp = "20261110-1713";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -158041,7 +158041,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1554";
+        const stamp = "20261110-1713";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -207418,8 +207418,9 @@ function buildTableHealthItem(rows, hasTables, totalAi, hasActiveChat) {
         });
     }
     const activeRows = rows.filter((row) => !row.disabled);
-    const dueRows = activeRows.filter((row) => row.ready);
-    const initialDueRows = activeRows.filter((row) => !row.hasTrackedUpdate && row.effectiveUnrecorded >= row.frequency);
+    // 「就绪」也覆盖还没填过的表（下一轮自动填表会把它们一起补上），健康卡仍分开计数，各算一次。
+    const dueRows = activeRows.filter((row) => row.ready && row.hasTrackedUpdate);
+    const initialDueRows = activeRows.filter((row) => row.ready && !row.hasTrackedUpdate);
     if (dueRows.length || initialDueRows.length) {
         const maxOverdue = dueRows.reduce((max, row) => Math.max(max, row.effectiveUnrecorded - row.frequency), 0);
         const issueCount = dueRows.length + initialDueRows.length;
@@ -207678,6 +207679,7 @@ function useDashboardPage() {
     const logRefreshTick = ref(0);
     let unsubscribeLogs = null;
     let unsubscribeLogsClear = null;
+    let unsubscribeFillRunEnded = null;
     let logRefreshQueued = false;
     const sheetKeys = computed(() => {
         void dataRefreshTick.value;
@@ -207769,21 +207771,22 @@ function useDashboardPage() {
                 name: String(table.name || key),
                 frequency,
                 skip,
-                unrecorded: found ? Math.max(0, totalAi - lastFloor) : 0,
+                unrecorded: found ? Math.max(0, totalAi - lastFloor) : totalAi,
                 effectiveUnrecorded: effectiveInitialUnrecorded,
                 lastUpdatedAiFloor: lastFloor,
                 nextTriggerAiFloor,
                 hasTrackedUpdate: found,
                 hasAnyData: history.hasAnyData,
                 frequencyLabel: String(frequency),
-                unrecordedLabel: found ? String(Math.max(0, totalAi - lastFloor)) : "—",
+                unrecordedLabel: String(found ? Math.max(0, totalAi - lastFloor) : totalAi),
                 lastUpdatedLabel: found
                     ? String(lastFloor)
                     : dashboardCopy.tableStatus.notInitialized,
                 nextTriggerLabel: found
                     ? String(lastFloor + frequency + skip)
                     : dashboardCopy.tableStatus.pendingInitial,
-                ready: found && effectiveUnrecorded >= frequency,
+                // 与自动填表的触发判断同口径：还没填过的表，未记录楼数达到频率时这一轮同样会填，一样标「就绪」。
+                ready: effectiveInitialUnrecorded >= frequency,
                 disabled: false,
             };
         });
@@ -207911,12 +207914,18 @@ function useDashboardPage() {
         unsubscribeLogsClear = subscribeToClear(() => {
             logRefreshTick.value++;
         });
+        // 页面开着时一轮填表结束：表格状态当场从「就绪」变成新的上次更新楼层，不用切走再切回来。
+        unsubscribeFillRunEnded = onTableFillRunEnded_ACU(() => {
+            dataRefreshTick.value++;
+        });
     });
     onBeforeUnmount(() => {
         unsubscribeLogs?.();
         unsubscribeLogs = null;
         unsubscribeLogsClear?.();
         unsubscribeLogsClear = null;
+        unsubscribeFillRunEnded?.();
+        unsubscribeFillRunEnded = null;
     });
     async function refresh() {
         refreshDevOptions();
