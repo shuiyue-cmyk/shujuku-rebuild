@@ -251,6 +251,24 @@ describe('buildAutoUpdatePlan_ACU', () => {
     ]);
   });
 
+  it('调度配置相同但表级 API 预设不同的表分开成组，各用各的预设（D02-05）', () => {
+    const liveChat = [
+      { is_user: true },
+      { is_user: false },
+    ];
+    const sharedUpdateConfig = { contextDepth: 3, updateFrequency: 1, skipFloors: 0, batchSize: 2, groupId: 8 };
+    const tableData = {
+      sheet_a: { name: '表A', updateConfig: sharedUpdateConfig },
+      sheet_b: { name: '表B', updateConfig: { ...sharedUpdateConfig } },
+      sheet_c: { name: '表C', updateConfig: { ...sharedUpdateConfig } },
+    };
+    const settings = { ...baseSettings, tableApiPresetOverridesByName: { 表B: '便宜模型' } };
+
+    const plan = buildAutoUpdatePlan_ACU(liveChat, tableData, settings, '');
+
+    expect(Object.values(plan.updateGroups).map(group => group.sheetKeys)).toEqual([['sheet_a', 'sheet_c'], ['sheet_b']]);
+  });
+
   it('同组但不同频率的表不会被强制合组', () => {
     const liveChat = [
       { is_user: true },

@@ -71068,6 +71068,8 @@ function assertNoHiddenPhysicalColumnMutations_ACU(statements, tableData) {
         if (!new Set(['INSERT', 'REPLACE', 'UPDATE', 'DELETE']).has(actionKeyword)) {
             throw new Error(`SQLite 填表仅允许 INSERT、REPLACE、UPDATE、DELETE 数据变更语句，收到：${action?.value || 'empty'}。禁止输出 CREATE、ALTER、DROP、事务或查询语句。`);
         }
+        if (actionKeyword === 'UPDATE')
+            assertUpdateDoesNotAssignRowId_ACU(tokens, actionIndex);
         const target = getSqlMutationTargetToken_ACU(statement, tokens);
         const resolved = sheetsByAlias.get(canonicalizeTableAliasForHiddenProtection_ACU(target.value));
         if (resolved === undefined)
@@ -71096,6 +71098,29 @@ function assertNoHiddenPhysicalColumnMutations_ACU(statements, tableData) {
             if (columnTokens.length === 0) {
                 throw new Error(`存在隐藏物理列时，INSERT/REPLACE 必须显式列出可见目标列：${target.value}。`);
             }
+        }
+    }
+}
+/**
+ * row_id 由系统分配：AI 用 UPDATE 改行号时，行锁按旧行号把整行补回、新行号那份也留着，
+ * 表里就多出一条重复行（D04-01）。只拦 SET 里的赋值目标；拿 row_id 做条件或取值照常放行。
+ */
+function assertUpdateDoesNotAssignRowId_ACU(tokens, actionIndex) {
+    const setIndex = tokens.findIndex((token, index) => index > actionIndex
+        && token.depth === 0
+        && token.quote === null
+        && token.value.toUpperCase() === 'SET');
+    if (setIndex === -1)
+        return;
+    for (let index = setIndex + 1; index < tokens.length; index++) {
+        const token = tokens[index];
+        if (token.depth !== 0)
+            continue;
+        if (token.quote === null && ['WHERE', 'FROM', 'RETURNING'].includes(token.value.toUpperCase()))
+            return;
+        const isAssignmentTarget = index === setIndex + 1 || token.commaBefore;
+        if (isAssignmentTarget && token.value.toLowerCase() === 'row_id') {
+            throw new Error('SQL 填表不允许用 UPDATE 改写 row_id（行号由系统分配）：要改内容请改业务列，要删行请用 DELETE。');
         }
     }
 }
@@ -95634,7 +95659,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261110-1013"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261110-1027"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95653,7 +95678,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1013";
+        const stamp = "20261110-1027";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -108418,13 +108443,15 @@ function assertNoActiveFillForExternalMutation_ACU(options) {
         return;
     throw new TableUpdateCommitError_ACU(`[TableUpdateCommit] ${options.reason}: AI 填表正在进行中，已拒绝外部表格写入（source=${options.source}），请等待填表完成后重试。`, 'precondition');
 }
+function commitScopeIsCurrent_ACU(options) {
+    return String(currentChatFileIdentifier_ACU || 'current-chat') === String(options.chatKey || 'current-chat')
+        && String(getCurrentIsolationKey_ACU() || '') === String(options.isolationKey || '');
+}
 function assertExpectedCommitScope_ACU(options, phase, targetMessageIndex = options.targetMessageIndex) {
     if (options.targetGuard && !options.targetGuard.isCurrent(targetMessageIndex)) {
         throw new TableUpdateCommitError_ACU(`[TableUpdateCommit] ${options.reason}: ${phase} 检测到目标楼层已换成另一条回复（滑动或重新生成），已放弃本次填表结果。`, 'precondition');
     }
-    const chatSwitched = String(currentChatFileIdentifier_ACU || 'current-chat') !== String(options.chatKey || 'current-chat');
-    const isolationSwitched = String(getCurrentIsolationKey_ACU() || '') !== String(options.isolationKey || '');
-    if (chatSwitched || isolationSwitched) {
+    if (!commitScopeIsCurrent_ACU(options)) {
         throw new TableUpdateCommitError_ACU(`[TableUpdateCommit] ${options.reason}: ${phase} 检测到聊天或隔离标识已切换，已拒绝提交。请在当前聊天重新执行填表。`, 'precondition');
     }
 }
@@ -108574,6 +108601,13 @@ async function runTableUpdateCommit_ACU(options, apply) {
                         if (!saveResult.saved) {
                             logWarn_ACU(`[TableUpdateCommit] persist failed after runtime update${reloadOnFailure ? '; reload after releasing transaction locks' : ''}: ${saveResult.error || 'unknown error'}`);
                             throw new TableUpdateCommitError_ACU(saveResult.error || `${options.reason}: persist failed`, classifyPersistRejection_ACU(saveResult.error));
+                        }
+                        if (!commitScopeIsCurrent_ACU(options)) {
+                            // 结果已落进原聊天；存盘等待期间切了聊天，运行时已归新聊天：不写回、不报成功，
+                            // 免得上层拿这份旧表刷新新聊天的运行时和世界书（D05-06 / D06-02）。回到原聊天会按文件重建。
+                            const message = `[TableUpdateCommit] ${options.reason}: 已写进原聊天，但存盘期间切换了聊天，没有带进当前聊天的表格。`;
+                            logWarn_ACU(message);
+                            return { success: false, error: message, errorCategory: 'precondition' };
                         }
                     }
                     else {
@@ -113771,6 +113805,18 @@ function createTableFillStagingSession_ACU(run) {
 }
 
 /**
+ * 表级 API 预设覆盖（settings.tableApiPresetOverridesByName，按表名存）。
+ * 返回空串表示该表没有覆盖、使用全局 tableApiPreset。
+ */
+function resolveTableApiPresetOverride_ACU$1(overrides, tableName) {
+    const normalizedName = String(tableName ?? '').trim();
+    if (!normalizedName || !overrides || typeof overrides !== 'object')
+        return '';
+    const preset = overrides[normalizedName];
+    return typeof preset === 'string' ? preset.trim() : '';
+}
+
+/**
  * service/table/runtime-only-pending-flush.ts — 把 runtime-only 变更物化进聊天 V2 帧。
  *
  * 触发时机（见 runtime-only-pending-state 的问题描述）：
@@ -114864,26 +114910,9 @@ function abortTableFillRequestsWithStaleTarget_ACU() {
  * 从 presentation/triggers/update-process.ts 提取。
  * service 层不驱动 UI，只返回结果/状态，presentation 层根据返回值自行决定 UI 操作。
  */
-/**
- * 表名标准化：trim 后空串视为无效键
- */
-function normalizeTableNameForPresetLookup_ACU(name) {
-    const trimmed = String(name ?? '').trim();
-    return trimmed;
-}
-/**
- * 根据起始表的名称，查找表级 API 预设覆盖
- * @returns 预设名称，空字符串表示使用全局 tableApiPreset
- */
+/** 按表名查表级 API 预设覆盖；空字符串表示使用全局 tableApiPreset。 */
 function resolveTableApiPresetOverride_ACU(tableName) {
-    const normalizedName = normalizeTableNameForPresetLookup_ACU(tableName);
-    if (!normalizedName)
-        return '';
-    const overrides = settings_ACU.tableApiPresetOverridesByName;
-    if (!overrides || typeof overrides !== 'object')
-        return '';
-    const preset = overrides[normalizedName];
-    return (typeof preset === 'string' && preset.trim()) ? preset.trim() : '';
+    return resolveTableApiPresetOverride_ACU$1(settings_ACU.tableApiPresetOverridesByName, tableName);
 }
 function collectManualRefillSummaryVectorCleanup_ACU(targetMessageIndices, targetSheetKeys) {
     const tableData = currentJsonTableData_ACU || {};
@@ -118631,6 +118660,9 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
     // runId 必须在 preflight 之前创建：staging run 与 bucket 提交共用同一个 runId，
     // 保证 run-scoped 隔离（staging 只认本 run 授权的目标表）。
     const runId = createManualCatchUpRunId_ACU();
+    // 追平所在的聊天：收尾的终态进度带着它提交，途中切了聊天由提交层拒绝，不把这一轮的进度写进新聊天（D03-02）。
+    const catchUpChatKey = String(currentChatFileIdentifier_ACU || 'current-chat');
+    const catchUpIsolationKey = getCurrentIsolationKey_ACU();
     // 跨 full checkpoint staging run 状态：冻结 scope 后在 bucket 循环内累积目标表
     // overlay，到达原 full 边界原子汇合。不能依赖全局状态——必须在 run 内显式跟踪。
     let boundaryPlan = null;
@@ -118887,7 +118919,6 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
             // terminal progress 是纯 metadata，必须写在当前 live chat 中能看到 full
             // checkpoint 的楼层。优先计划终点；聊天在运行期间变化时才退回最后一个已严格
             // 提交的 bucket，绝不能向无锚点楼层发起一次注定失败的写入。
-            const isolationKey = getCurrentIsolationKey_ACU();
             const safeTargetMessageIndex = resolveSafeTerminalTargetMessageIndex();
             if (safeTargetMessageIndex === undefined) {
                 return `手动追平终态 ${status} 未找到可见 full checkpoint。`;
@@ -118896,7 +118927,8 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
             const commitResult = await runTableUpdateCommit_ACU({
                 source: 'manual_fill',
                 reason: `orchestrateManualCatchUp:terminal:${status}`,
-                isolationKey,
+                chatKey: catchUpChatKey,
+                isolationKey: catchUpIsolationKey,
                 writeSet: buildWriteSetForSheetKeys_ACU(selectedSheetKeys, currentJsonTableData_ACU),
                 revisionWriteSet: [],
                 workingDataMode: 'none',
@@ -122852,17 +122884,19 @@ function buildAutoUpdatePlan_ACU(liveChat, tableData, settings, isolationKey, pe
                         groupId,
                         batchSize: (rawBatch === -1) ? (settings.updateBatchSize || 3) : ((rawBatch > 0) ? rawBatch : (settings.updateBatchSize || 3)),
                         scheduleSignature: [groupId, threshold, frequency, skipFloors, rawBatch].join('|'),
+                        apiPreset: resolveTableApiPresetOverride_ACU$1(settings.tableApiPresetOverridesByName, table.name),
                     });
                 }
             }
         }
     }
-    // 分组：将待更新的表按 (groupId + indices + batchSize + staging 归属) 进行分组。
+    // 分组：将待更新的表按 (groupId + indices + batchSize + staging 归属 + 表级 API 预设) 进行分组。
     // 同组混合正常表与跨根表必须拆开（计划 §5.6）：staging 表走隔离提交，
     // 普通表走常规提交，两者不能混在一次统一提交中。
+    // 组内按第一张表解析 API 预设，预设不同的表必须拆组，否则后面的表会被静默改用第一张表的预设（D02-05）。
     const updateGroups = {};
     tablesToUpdate.forEach(item => {
-        const key = item.scheduleSignature + '|' + item.indices.join(',') + '|' + item.batchSize + '|' + (item.requiresBoundaryStaging ? 'staging' : 'normal');
+        const key = item.scheduleSignature + '|' + item.indices.join(',') + '|' + item.batchSize + '|' + (item.requiresBoundaryStaging ? 'staging' : 'normal') + '|preset:' + item.apiPreset;
         if (!updateGroups[key]) {
             updateGroups[key] = {
                 indices: item.indices,
@@ -151479,6 +151513,9 @@ async function handleChatChangedEvent_ACU(chatFileName) {
         // [中止] 切聊天时中止所有在飞的依赖楼层的 API 调用
         //（表格填表/生理追踪等），避免用旧上下文的结果写入当前状态。
         abortOnChatMutation_ACU();
+        // 还在组装提示词的填表请求没登记进上面的全局中止表；它们的目标楼层已换成新聊天的楼层，按目标守卫当场中止，
+        // 免得拿新聊天的世界书 / 角色数据拼进旧聊天的请求白花一次调用（D04-02）。
+        abortTableFillRequestsWithStaleTarget_ACU();
         // [跨聊填表守卫] 清掉上一聊天遗留的自动填表防抖定时器（500ms 窗口）。
         // 它原本只被下一次同类事件覆盖清除，CHAT_CHANGED 链不碰它：切聊天后到期的旧定时器
         // 会在新聊天上跑填表（旧事件缺整数 message_id 时没有 intent 可复检，落到末楼-1 兜底）。
@@ -157741,7 +157778,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1013";
+        const stamp = "20261110-1027";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

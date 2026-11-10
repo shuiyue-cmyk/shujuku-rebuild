@@ -299,6 +299,11 @@ function assertNoActiveFillForExternalMutation_ACU(options: RunTableUpdateCommit
   );
 }
 
+function commitScopeIsCurrent_ACU(options: RunTableUpdateCommitOptions_ACU): boolean {
+  return String(currentChatFileIdentifier_ACU || 'current-chat') === String(options.chatKey || 'current-chat')
+    && String(getCurrentIsolationKey_ACU() || '') === String(options.isolationKey || '');
+}
+
 function assertExpectedCommitScope_ACU(
   options: RunTableUpdateCommitOptions_ACU,
   phase: string,
@@ -310,9 +315,7 @@ function assertExpectedCommitScope_ACU(
       'precondition',
     );
   }
-  const chatSwitched = String(currentChatFileIdentifier_ACU || 'current-chat') !== String(options.chatKey || 'current-chat');
-  const isolationSwitched = String(getCurrentIsolationKey_ACU() || '') !== String(options.isolationKey || '');
-  if (chatSwitched || isolationSwitched) {
+  if (!commitScopeIsCurrent_ACU(options)) {
     throw new TableUpdateCommitError_ACU(
       `[TableUpdateCommit] ${options.reason}: ${phase} 检测到聊天或隔离标识已切换，已拒绝提交。请在当前聊天重新执行填表。`,
       'precondition',
@@ -472,6 +475,13 @@ export async function runTableUpdateCommit_ACU<T>(
                 saveResult.error || `${options.reason}: persist failed`,
                 classifyPersistRejection_ACU(saveResult.error),
               );
+            }
+            if (!commitScopeIsCurrent_ACU(options)) {
+              // 结果已落进原聊天；存盘等待期间切了聊天，运行时已归新聊天：不写回、不报成功，
+              // 免得上层拿这份旧表刷新新聊天的运行时和世界书（D05-06 / D06-02）。回到原聊天会按文件重建。
+              const message = `[TableUpdateCommit] ${options.reason}: 已写进原聊天，但存盘期间切换了聊天，没有带进当前聊天的表格。`;
+              logWarn_ACU(message);
+              return { success: false, error: message, errorCategory: 'precondition' as const };
             }
           } else {
             markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, applied.tableData, preApplyData);

@@ -11,6 +11,7 @@ import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performanc
 import { getSortedSheetKeys_ACU } from '../template/chat-scope';
 import { getLatestV2FullCheckpointMessageIndex_ACU, resolveTableHistoryStatesFromChat_ACU } from './table-history';
 import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
+import { resolveTableApiPresetOverride_ACU } from '../../shared/table-api-preset-override';
 import type { TableUpdatePostCommitWarning_ACU } from '../../shared/post-commit-warnings';
 
 export interface TableUpdateItem {
@@ -24,6 +25,8 @@ export interface TableUpdateItem {
     groupId: number;
     batchSize: number;
     scheduleSignature: string;
+    /** 表级 API 预设覆盖，空串表示用全局预设；不同预设不能进同一组。 */
+    apiPreset: string;
 }
 
 export interface UpdateGroup {
@@ -155,19 +158,21 @@ export function buildAutoUpdatePlan_ACU(
                         groupId,
                         batchSize: (rawBatch === -1) ? (settings.updateBatchSize || 3) : ((rawBatch > 0) ? rawBatch : (settings.updateBatchSize || 3)),
                         scheduleSignature: [groupId, threshold, frequency, skipFloors, rawBatch].join('|'),
+                        apiPreset: resolveTableApiPresetOverride_ACU(settings.tableApiPresetOverridesByName, table.name),
                     });
                 }
             }
         }
     }
 
-    // 分组：将待更新的表按 (groupId + indices + batchSize + staging 归属) 进行分组。
+    // 分组：将待更新的表按 (groupId + indices + batchSize + staging 归属 + 表级 API 预设) 进行分组。
     // 同组混合正常表与跨根表必须拆开（计划 §5.6）：staging 表走隔离提交，
     // 普通表走常规提交，两者不能混在一次统一提交中。
+    // 组内按第一张表解析 API 预设，预设不同的表必须拆组，否则后面的表会被静默改用第一张表的预设（D02-05）。
     const updateGroups: Record<string, UpdateGroup> = {};
 
     tablesToUpdate.forEach(item => {
-        const key = item.scheduleSignature + '|' + item.indices.join(',') + '|' + item.batchSize + '|' + (item.requiresBoundaryStaging ? 'staging' : 'normal');
+        const key = item.scheduleSignature + '|' + item.indices.join(',') + '|' + item.batchSize + '|' + (item.requiresBoundaryStaging ? 'staging' : 'normal') + '|preset:' + item.apiPreset;
         if (!updateGroups[key]) {
             updateGroups[key] = {
                 indices: item.indices,

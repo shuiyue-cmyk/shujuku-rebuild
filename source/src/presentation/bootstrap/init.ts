@@ -549,6 +549,9 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
     // [中止] 切聊天时中止所有在飞的依赖楼层的 API 调用
     //（表格填表/生理追踪等），避免用旧上下文的结果写入当前状态。
     abortOnChatMutation_ACU();
+    // 还在组装提示词的填表请求没登记进上面的全局中止表；它们的目标楼层已换成新聊天的楼层，按目标守卫当场中止，
+    // 免得拿新聊天的世界书 / 角色数据拼进旧聊天的请求白花一次调用（D04-02）。
+    abortTableFillRequestsWithStaleTarget_ACU();
 
     // [跨聊填表守卫] 清掉上一聊天遗留的自动填表防抖定时器（500ms 窗口）。
     // 它原本只被下一次同类事件覆盖清除，CHAT_CHANGED 链不碰它：切聊天后到期的旧定时器

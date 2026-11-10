@@ -739,6 +739,15 @@ describe('mainInitialize_ACU 重新生成 / 删楼 / 切换版本作废排队中
     vi.useRealTimers();
   });
 
+  it('切聊天时同样中止目标楼层已失效的在途填表请求：还在组装提示词、没登记到全局中止表的也不再发出（D04-02）', async () => {
+    m.abortStaleFill.mockClear();
+    m.api.chat = [{ mes: 'active' }];
+    vi.useFakeTimers();
+    await m.chatChanged!('chat-b');
+    expect(m.abortStaleFill).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it('删楼、切换回复版本时当场中止目标楼层已失效的在途填表请求', async () => {
     m.abortStaleFill.mockClear();
     vi.useFakeTimers();

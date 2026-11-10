@@ -8778,6 +8778,23 @@ describe('orchestrateManualCatchUp_ACU', () => {
     expect(refreshData).toHaveBeenCalledTimes(1);
   });
 
+  it('追平收尾前切了聊天：终态进度不写进新聊天（D03-02）', async () => {
+    mockGetChatArray_ACU.mockReturnValue(createCatchUpChat(1, 2) as any);
+    const refreshData = vi.fn(async () => {
+      mockChatIdentity.value = 'chat-b';
+      return { degraded: false };
+    });
+
+    try {
+      await orchestrateManualCatchUp_ACU(['sheet_a', 'sheet_b'], refreshData);
+    } finally {
+      mockChatIdentity.value = 'test-chat';
+    }
+
+    expect(refreshData).toHaveBeenCalledTimes(1);
+    expect(mockPersistTablesToChatMessage.mock.calls.some(call => call[0]?.manualRefillProgress?.status === 'complete')).toBe(false);
+  });
+
   it('手动追平各 bucket 的普通存盘合并到收尾真存一次（大聊天存盘合并窗口）', async () => {
     mockGetChatArray_ACU.mockReturnValue(createCatchUpChat(1, 2) as any);
     const gateway = await import('../../../src/data/gateways/chat-gateway');

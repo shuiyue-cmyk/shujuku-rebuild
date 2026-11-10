@@ -1195,6 +1195,28 @@ describe('assertNoHiddenPhysicalColumnMutations_ACU', () => {
     ], tableData)).toThrow('不允许引用隐藏物理列');
   });
 
+  it('拒绝 UPDATE 改写 row_id：改行号会绕开行锁，被锁行补回后多出一条重复行（D04-01）', () => {
+    const plainTable: any = {
+      sheet_0: {
+        uid: 'inventory',
+        name: '背包物品表',
+        sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, quantity INTEGER);' },
+        content: [['row_id', '名称', '数量'], ['1', '铁剑', '3']],
+      },
+    };
+    for (const data of [tableData, plainTable]) {
+      expect(() => assertNoHiddenPhysicalColumnMutations_ACU([
+        'UPDATE inventory SET row_id = 2, quantity = 99 WHERE row_id = 1',
+      ], data)).toThrow('row_id');
+      expect(() => assertNoHiddenPhysicalColumnMutations_ACU([
+        'UPDATE inventory SET quantity = 99, "ROW_ID" = 2 WHERE row_id = 1',
+      ], data)).toThrow('row_id');
+      expect(() => assertNoHiddenPhysicalColumnMutations_ACU([
+        'UPDATE inventory SET quantity = row_id + 1, item_name = coalesce(item_name, row_id) WHERE row_id = 1',
+      ], data)).not.toThrow();
+    }
+  });
+
   it('存在隐藏列时拒绝省略 INSERT 列清单，避免按完整物理顺序写穿', () => {
     expect(() => assertNoHiddenPhysicalColumnMutations_ACU([
       "INSERT INTO inventory VALUES (2, '药水', '秘密', 1)",

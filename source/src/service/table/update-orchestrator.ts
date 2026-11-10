@@ -63,25 +63,10 @@ import { showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
 import { createLorebookReadContext_ACU, type LorebookReadContext_ACU } from '../worldbook/read-context';
 
 import { applyTableDelta_ACU, isDeltaTagData_ACU } from './table-delta';
-/**
- * 表名标准化：trim 后空串视为无效键
- */
-function normalizeTableNameForPresetLookup_ACU(name: any): string {
-    const trimmed = String(name ?? '').trim();
-    return trimmed;
-}
-
-/**
- * 根据起始表的名称，查找表级 API 预设覆盖
- * @returns 预设名称，空字符串表示使用全局 tableApiPreset
- */
+import { resolveTableApiPresetOverride_ACU as resolveTableApiPresetOverrideFrom_ACU } from '../../shared/table-api-preset-override';
+/** 按表名查表级 API 预设覆盖；空字符串表示使用全局 tableApiPreset。 */
 function resolveTableApiPresetOverride_ACU(tableName: any): string {
-    const normalizedName = normalizeTableNameForPresetLookup_ACU(tableName);
-    if (!normalizedName) return '';
-    const overrides = settings_ACU.tableApiPresetOverridesByName;
-    if (!overrides || typeof overrides !== 'object') return '';
-    const preset = overrides[normalizedName];
-    return (typeof preset === 'string' && preset.trim()) ? preset.trim() : '';
+    return resolveTableApiPresetOverrideFrom_ACU(settings_ACU.tableApiPresetOverridesByName, tableName);
 }
 import { checkIfFirstTimeInit_ACU, ensureLegacyStorageMigratedBeforeWrite_ACU } from './table-service';
 import { assertSingleActiveFullCheckpointV2_ACU, assertWriteTargetNotBeforeReplayRoot_ACU, hasAnyV2Checkpoint_ACU } from './storage-frame-v2-persist';
@@ -4493,6 +4478,9 @@ export async function orchestrateManualCatchUp_ACU(
     // runId 必须在 preflight 之前创建：staging run 与 bucket 提交共用同一个 runId，
     // 保证 run-scoped 隔离（staging 只认本 run 授权的目标表）。
     const runId = createManualCatchUpRunId_ACU();
+    // 追平所在的聊天：收尾的终态进度带着它提交，途中切了聊天由提交层拒绝，不把这一轮的进度写进新聊天（D03-02）。
+    const catchUpChatKey = String(currentChatFileIdentifier_ACU || 'current-chat');
+    const catchUpIsolationKey = getCurrentIsolationKey_ACU();
     // 跨 full checkpoint staging run 状态：冻结 scope 后在 bucket 循环内累积目标表
     // overlay，到达原 full 边界原子汇合。不能依赖全局状态——必须在 run 内显式跟踪。
     let boundaryPlan: TableFillBoundaryStagingPlan_ACU | null = null;
@@ -4765,7 +4753,6 @@ export async function orchestrateManualCatchUp_ACU(
             // terminal progress 是纯 metadata，必须写在当前 live chat 中能看到 full
             // checkpoint 的楼层。优先计划终点；聊天在运行期间变化时才退回最后一个已严格
             // 提交的 bucket，绝不能向无锚点楼层发起一次注定失败的写入。
-            const isolationKey = getCurrentIsolationKey_ACU();
             const safeTargetMessageIndex = resolveSafeTerminalTargetMessageIndex();
             if (safeTargetMessageIndex === undefined) {
                 return `手动追平终态 ${status} 未找到可见 full checkpoint。`;
@@ -4774,7 +4761,8 @@ export async function orchestrateManualCatchUp_ACU(
             const commitResult = await runTableUpdateCommit_ACU({
                 source: 'manual_fill',
                 reason: `orchestrateManualCatchUp:terminal:${status}`,
-                isolationKey,
+                chatKey: catchUpChatKey,
+                isolationKey: catchUpIsolationKey,
                 writeSet: buildWriteSetForSheetKeys_ACU(selectedSheetKeys, currentJsonTableData_ACU),
                 revisionWriteSet: [],
                 workingDataMode: 'none',

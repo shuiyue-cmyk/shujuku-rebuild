@@ -1201,6 +1201,7 @@ export function assertNoHiddenPhysicalColumnMutations_ACU(
     if (!new Set(['INSERT', 'REPLACE', 'UPDATE', 'DELETE']).has(actionKeyword)) {
       throw new Error(`SQLite 填表仅允许 INSERT、REPLACE、UPDATE、DELETE 数据变更语句，收到：${action?.value || 'empty'}。禁止输出 CREATE、ALTER、DROP、事务或查询语句。`);
     }
+    if (actionKeyword === 'UPDATE') assertUpdateDoesNotAssignRowId_ACU(tokens, actionIndex);
     const target = getSqlMutationTargetToken_ACU(statement, tokens);
     const resolved = sheetsByAlias.get(canonicalizeTableAliasForHiddenProtection_ACU(target.value));
     if (resolved === undefined) continue;
@@ -1229,6 +1230,27 @@ export function assertNoHiddenPhysicalColumnMutations_ACU(
       if (columnTokens.length === 0) {
         throw new Error(`存在隐藏物理列时，INSERT/REPLACE 必须显式列出可见目标列：${target.value}。`);
       }
+    }
+  }
+}
+
+/**
+ * row_id 由系统分配：AI 用 UPDATE 改行号时，行锁按旧行号把整行补回、新行号那份也留着，
+ * 表里就多出一条重复行（D04-01）。只拦 SET 里的赋值目标；拿 row_id 做条件或取值照常放行。
+ */
+function assertUpdateDoesNotAssignRowId_ACU(tokens: SqlMutationIdentifierToken_ACU[], actionIndex: number): void {
+  const setIndex = tokens.findIndex((token, index) => index > actionIndex
+    && token.depth === 0
+    && token.quote === null
+    && token.value.toUpperCase() === 'SET');
+  if (setIndex === -1) return;
+  for (let index = setIndex + 1; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token.depth !== 0) continue;
+    if (token.quote === null && ['WHERE', 'FROM', 'RETURNING'].includes(token.value.toUpperCase())) return;
+    const isAssignmentTarget = index === setIndex + 1 || token.commaBefore;
+    if (isAssignmentTarget && token.value.toLowerCase() === 'row_id') {
+      throw new Error('SQL 填表不允许用 UPDATE 改写 row_id（行号由系统分配）：要改内容请改业务列，要删行请用 DELETE。');
     }
   }
 }
