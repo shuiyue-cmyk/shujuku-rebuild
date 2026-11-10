@@ -394,3 +394,13 @@ npm run drift                                  # 等价 node scripts/upstream-dr
 无需跟 / 不跟：
 
 - `597ef6ea` 回退 PR #65（格林推演整轮执行链）：上游独有功能；我方此前移植的剧情推进 `$8` 输入外壳闸不受影响（上游保留）。
+
+## 2026-11-11 静默提示框与填表通知（对照上游 `1128b549` 通知汇流 notice-hub）
+
+- 上游 `1128b549` 起，自动填表编排固定 `isSilentMode = false`：静默只决定通知气泡显不显示（notice-hub 判定），不再关闭进度回调与任务登记；
+  旧 `toastMuteEnabled` 由 `silentModeEnabled` 取代。
+- 我方未移植 notice-hub，仍用 `toastMuteEnabled`（「静默提示框」），由提示层 `_acuShouldShowToast_ACU` 按分类过滤（填表 / 规划等核心提示照常保留）。
+  此前编排层把 `toastMuteEnabled` 又折算成 `isSilentMode=true`，开着它时自动填表整轮静默：不弹填表进度、不给卡片前端发「开始填表」、
+  每组完成也不通知，只剩整轮结束时一次表格更新通知——与开关说明不符。
+- 跟法：`processUpdatesBatch_ACU` 同样固定 `isSilentMode = false`；浮窗仍由提示层按静默规则过滤（填表进度提示属 `MANUAL_TABLE` 分类，静默时照常显示）。
+  `isSilentMode` 参数链路保留（与上游一致，减少差异）。

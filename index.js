@@ -95938,7 +95938,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261110-1713"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261110-1720"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95957,7 +95957,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1713";
+        const stamp = "20261110-1720";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -118393,7 +118393,9 @@ async function processUpdatesBatch_ACU(indicesToUpdate, mode, options, executeUp
         logDebug_ACU(`[${mode}] Processing ${indicesToUpdate.length} updates in ${batches.length} batches of size ${batchSize} (${isSummaryMode ? '总结表模式' : '标准表模式'}). Target Sheets: ${targetSheetKeys ? targetSheetKeys.length : 'All'}`);
         const chatHistory = getChatArray_ACU();
         const isAutoUpdateMode = mode && mode.startsWith('auto');
-        const isSilentMode = !!(isAutoUpdateMode && settings_ACU.toastMuteEnabled);
+        // 「静默提示框」只决定浮窗显不显示（由提示层按分类过滤，填表核心提示照常保留），
+        // 不再关掉填表进度、卡片前端的「开始填表」与每组完成通知（对齐上游 1128b549）。
+        const isSilentMode = false;
         // 此处刻意不接 replayEvidence：本循环每批 maxMessageIndex = 本批 saveTarget
         // 严格递增，evidence 复用要求 boundary 完全相同（v2-replay-session.ts），命中率恒为 0，
         // 而 replay 仍会为写回 evidence 多付一次全表深克隆 —— 纯亏。跨批复用属阶段 G2
@@ -158041,7 +158043,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1713";
+        const stamp = "20261110-1720";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

@@ -1169,6 +1169,21 @@ describe('processUpdatesBatch_ACU', () => {
     expect(_set_wasStoppedByUser_ACU).not.toHaveBeenCalled();
   });
 
+  it('开着「静默提示框」时自动填表照样不静默：开始填表 / 每组完成的通知照发，浮窗交给提示层按静默规则过滤（对齐上游 1128b549）', async () => {
+    mockSettings = { ...mockSettings, toastMuteEnabled: true };
+    const mockExecute = vi.fn().mockResolvedValue({ success: true, modifiedKeys: ['sheet_0'] } as CardUpdateResult);
+    mockCurrentJsonTableData = { sheet_0: { name: '测试' } };
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: true }, { is_user: false, mes: '这是AI回复' }]);
+
+    const result = await processUpdatesBatch_ACU([1], 'auto_standard', {}, mockExecute);
+
+    expect(result.success).toBe(true);
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    // 第 4 个参数是「静默」
+    expect(mockExecute.mock.calls[0][3]).toBe(false);
+  });
+
   it('本批自己持有标志时：开始置 true，结束复位', async () => {
     const mockExecute = vi.fn().mockImplementation(async () => {
       expect(mockIsAutoUpdating).toBe(true);
