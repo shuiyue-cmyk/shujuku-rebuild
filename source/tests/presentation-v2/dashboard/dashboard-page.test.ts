@@ -340,6 +340,27 @@ describe("DashboardPage", () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it("没打开聊天时不标「就绪」，未记录仍显示「—」（宿主欢迎页消息不算待填楼层）", async () => {
+    const tableData = {
+      ...createTableData(),
+      sheet_c: {
+        name: "新开聊天的表",
+        content: [["id"]],
+        updateConfig: { updateFrequency: -1, skipFloors: -1 },
+      },
+    };
+    const { mount, dashboard } = await mountDashboardPage(createSettings(), tableData, {
+      chatFileIdentifier: "unknown_chat_init",
+    });
+
+    const row = dashboard.tableRows.value.find((item) => item.key === "sheet_c")!;
+    expect(row.ready).toBe(false);
+    expect(row.unrecordedLabel).toBe("—");
+    expect(dashboard.tableRows.value.some((item) => item.ready)).toBe(false);
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it("页面开着时一轮填表结束会重算表格状态，不用切走再切回来", async () => {
     m.fillRunEndedListeners.clear();
     // 订阅的是挂载出来的仪表盘页面（组件内 onMounted 注册），它在下一次渲染时重算。

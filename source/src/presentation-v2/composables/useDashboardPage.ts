@@ -789,6 +789,8 @@ export function useDashboardPage(): DashboardPageState {
       );
 
       const totalAi = aiMessageCount.value;
+      // 没打开聊天时宿主消息数组里可能只剩欢迎页消息：不能算成待填楼层，不标「就绪」。
+      const hasActiveChat = hasActiveChatContext(chatFileIdentifier.value);
       const globalFrequency = normalizePositiveInteger_ACU(
         settings_ACU.autoUpdateFrequency,
         1,
@@ -861,14 +863,16 @@ export function useDashboardPage(): DashboardPageState {
           name: String(table.name || key),
           frequency,
           skip,
-          unrecorded: found ? Math.max(0, totalAi - lastFloor) : totalAi,
+          unrecorded: found ? Math.max(0, totalAi - lastFloor) : (hasActiveChat ? totalAi : 0),
           effectiveUnrecorded: effectiveInitialUnrecorded,
           lastUpdatedAiFloor: lastFloor,
           nextTriggerAiFloor,
           hasTrackedUpdate: found,
           hasAnyData: history.hasAnyData,
           frequencyLabel: String(frequency),
-          unrecordedLabel: String(found ? Math.max(0, totalAi - lastFloor) : totalAi),
+          unrecordedLabel: found
+            ? String(Math.max(0, totalAi - lastFloor))
+            : (hasActiveChat ? String(totalAi) : "—"),
           lastUpdatedLabel: found
             ? String(lastFloor)
             : dashboardCopy.tableStatus.notInitialized,
@@ -876,7 +880,7 @@ export function useDashboardPage(): DashboardPageState {
             ? String(lastFloor + frequency + skip)
             : dashboardCopy.tableStatus.pendingInitial,
           // 与自动填表的触发判断同口径：还没填过的表，未记录楼数达到频率时这一轮同样会填，一样标「就绪」。
-          ready: effectiveInitialUnrecorded >= frequency,
+          ready: hasActiveChat && effectiveInitialUnrecorded >= frequency,
           disabled: false,
         };
       });

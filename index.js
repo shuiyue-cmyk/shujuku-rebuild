@@ -95938,7 +95938,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261110-1720"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261111-0348"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -95957,7 +95957,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1720";
+        const stamp = "20261111-0348";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -158043,7 +158043,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261110-1720";
+        const stamp = "20261111-0348";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -207710,6 +207710,8 @@ function useDashboardPage() {
             };
         }));
         const totalAi = aiMessageCount.value;
+        // 没打开聊天时宿主消息数组里可能只剩欢迎页消息：不能算成待填楼层，不标「就绪」。
+        const hasActiveChat = hasActiveChatContext(chatFileIdentifier.value);
         const globalFrequency = normalizePositiveInteger_ACU$2(settings_ACU.autoUpdateFrequency, 1);
         const globalSkip = normalizeNonNegativeInteger_ACU$2(settings_ACU.skipUpdateFloors, 0);
         return sheetKeys.value.map((key) => {
@@ -207773,14 +207775,16 @@ function useDashboardPage() {
                 name: String(table.name || key),
                 frequency,
                 skip,
-                unrecorded: found ? Math.max(0, totalAi - lastFloor) : totalAi,
+                unrecorded: found ? Math.max(0, totalAi - lastFloor) : (hasActiveChat ? totalAi : 0),
                 effectiveUnrecorded: effectiveInitialUnrecorded,
                 lastUpdatedAiFloor: lastFloor,
                 nextTriggerAiFloor,
                 hasTrackedUpdate: found,
                 hasAnyData: history.hasAnyData,
                 frequencyLabel: String(frequency),
-                unrecordedLabel: String(found ? Math.max(0, totalAi - lastFloor) : totalAi),
+                unrecordedLabel: found
+                    ? String(Math.max(0, totalAi - lastFloor))
+                    : (hasActiveChat ? String(totalAi) : "—"),
                 lastUpdatedLabel: found
                     ? String(lastFloor)
                     : dashboardCopy.tableStatus.notInitialized,
@@ -207788,7 +207792,7 @@ function useDashboardPage() {
                     ? String(lastFloor + frequency + skip)
                     : dashboardCopy.tableStatus.pendingInitial,
                 // 与自动填表的触发判断同口径：还没填过的表，未记录楼数达到频率时这一轮同样会填，一样标「就绪」。
-                ready: effectiveInitialUnrecorded >= frequency,
+                ready: hasActiveChat && effectiveInitialUnrecorded >= frequency,
                 disabled: false,
             };
         });
