@@ -84,6 +84,12 @@ export function formatDecisionRecallTestOutput_ACU(result: DecisionRecallRunResu
   const source = result.candidateSource === 'crossfire_index' ? '交火筛过的纪要索引' : '全部纪要';
   const runs = result.judgeRuns > 1 ? `，每组判定 ${result.judgeRuns} 次取平均（失败 ${result.failedRunCount} 次）` : '';
   lines.push(`候选 ${result.candidateCount} 条（来自${source}），分 ${result.batchCount} 组打分${runs}，失败 ${result.failedBatchCount} 组。`);
+  // 打过分才读世界书：纪要不多、全部带上时不提
+  if (result.batchCount > 0) {
+    lines.push(result.worldbookChars > 0
+      ? `打分时附带世界书 ${result.worldbookChars} 字。`
+      : '打分时没有附带世界书条目（所选来源没有书，或没有条目命中）。');
+  }
   const warning = describeDecisionRecallWarning_ACU(result);
   if (warning) lines.push(warning);
   const reasons = describeDecisionRecallErrors_ACU(result);

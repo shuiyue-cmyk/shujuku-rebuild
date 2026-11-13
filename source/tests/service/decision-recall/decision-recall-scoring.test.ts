@@ -56,6 +56,14 @@ describe('buildDecisionRecallState_ACU', () => {
     expect(state.indexOf('最近的回复')).toBeLessThan(state.indexOf('我推开门'));
   });
 
+  it('带了世界书时排在最前面，然后是前文与用户最新输入；空白的世界书不留段', () => {
+    const state = buildDecisionRecallState_ACU({ aiFloors: ['最近的回复'], userInput: '我推开门', worldbook: '  旧宅是沈家祖产\n' });
+    expect(state.startsWith('【世界书')).toBe(true);
+    expect(state.indexOf('旧宅是沈家祖产')).toBeLessThan(state.indexOf('最近的回复'));
+    expect(state.indexOf('最近的回复')).toBeLessThan(state.indexOf('我推开门'));
+    expect(buildDecisionRecallState_ACU({ aiFloors: [], userInput: '开始冒险', worldbook: '  \n' })).not.toContain('世界书');
+  });
+
   it('没有前文时只带用户输入，不留空的前文段', () => {
     const state = buildDecisionRecallState_ACU({ aiFloors: [], userInput: '开始冒险' });
     expect(state).toContain('开始冒险');

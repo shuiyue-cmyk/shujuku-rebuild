@@ -7,6 +7,7 @@
  *   - source='manual'：手动指定多本世界书（manualSelection）
  *
  * 与 useFormFillInjectionTarget（写入侧）相互独立。
+ * 决策召回页的「附加世界书条目」复用这一套，只是换成它自己那份配置（getConfig）。
  */
 import { computed, ref } from 'vue';
 import { getCurrentWorldbookConfig_ACU } from '../../service/settings/settings-readers';
@@ -25,27 +26,30 @@ function normalizeSelection(names: unknown): string[] {
   return result;
 }
 
-export function useFormFillWorldbookConfig() {
+/** 来源与手动选择所在的配置对象（原地读写后保存设置）。 */
+export type WorldbookSourceConfigReader = () => Record<string, any>;
+
+export function useFormFillWorldbookConfig(getConfig: WorldbookSourceConfigReader = getCurrentWorldbookConfig_ACU) {
   const source = ref<FormFillWorldbookSource>('character');
   const manualSelection = ref<string[]>([]);
   const manualBook = computed<string>(() => manualSelection.value[0] || '');
 
   function refreshFromSettings(): void {
-    const cfg = getCurrentWorldbookConfig_ACU();
+    const cfg = getConfig();
     source.value = cfg.source === 'manual' ? 'manual' : (cfg.source === 'active' ? 'active' : 'character');
     cfg.manualSelection = normalizeSelection(cfg.manualSelection);
     manualSelection.value = [...cfg.manualSelection];
   }
 
   function setSource(next: FormFillWorldbookSource): void {
-    const cfg = getCurrentWorldbookConfig_ACU();
+    const cfg = getConfig();
     cfg.source = next;
     source.value = next;
     saveSettings_ACU();
   }
 
   function setManualSelection(names: string[]): void {
-    const cfg = getCurrentWorldbookConfig_ACU();
+    const cfg = getConfig();
     const next = normalizeSelection(names);
     cfg.source = 'manual';
     cfg.manualSelection = next;
@@ -65,7 +69,7 @@ export function useFormFillWorldbookConfig() {
   }
 
   async function resolveBookNames(): Promise<string[]> {
-    const cfg = getCurrentWorldbookConfig_ACU();
+    const cfg = getConfig();
     if (cfg.source === 'manual') {
       return normalizeSelection(cfg.manualSelection);
     }

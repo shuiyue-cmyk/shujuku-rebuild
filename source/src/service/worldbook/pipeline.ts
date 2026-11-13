@@ -1604,7 +1604,8 @@ export   async function buildCombinedWorldbookContentByStrategy_ACU(options: any
 
 export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', options: any = {}) {
     logDebug_ACU('Starting to get combined worldbook content with advanced logic...');
-    const worldbookConfig = getCurrentWorldbookConfig_ACU();
+    // 默认读当前角色的填表配置；决策召回传自己那份（来源与勾选的结构相同）
+    const worldbookConfig = options?.worldbookConfig ?? getCurrentWorldbookConfig_ACU();
     const excludeImportTaggedEntries = options?.excludeImportTaggedEntries === true;
     const includeGeneratedEntries = options?.includeGeneratedEntries === true;
     const currentIsolationPrefix = settings_ACU.dataIsolationEnabled ? getIsolationPrefix_ACU() : '';

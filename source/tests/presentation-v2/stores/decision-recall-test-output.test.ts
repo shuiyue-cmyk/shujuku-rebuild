@@ -22,6 +22,18 @@ describe('formatDecisionRecallTestOutput_ACU', () => {
     expect(text).not.toContain('abcdefghijklmnopqrstuvwxyz123456');
   });
 
+  it('打过分时写明附带了多少字世界书；没带到时也说明', () => {
+    const fixed = [row(1)];
+    const base = {
+      status: 'ok', selected: [row(1), row(2)], fixed, scored: [{ row: row(2), score: 4 }], candidateCount: 2, candidateSource: 'all_rows',
+      batchCount: 1, failedBatchCount: 0, judgeRuns: 1, failedRunCount: 0, unscoredCount: 0, missingKey: false, providerLabel: '自定义', errors: [],
+    };
+    expect(formatDecisionRecallTestOutput_ACU({ ...base, worldbookChars: 1234 } as any)).toContain('附带世界书 1234 字');
+    expect(formatDecisionRecallTestOutput_ACU({ ...base, worldbookChars: 0 } as any)).toContain('没有附带世界书条目');
+    // 没打分（纪要不多，全部带上）时没读世界书，不提
+    expect(formatDecisionRecallTestOutput_ACU({ ...base, batchCount: 0, worldbookChars: 0 } as any)).not.toContain('世界书');
+  });
+
   it('档位标签与 decisionRecallLevelLabel_ACU 单一出处一致（G01-03：选中与落选两处口径相同）', () => {
     const fixed = [row(1)];
     const selected = [row(1), row(2)];

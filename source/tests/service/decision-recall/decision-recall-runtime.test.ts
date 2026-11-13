@@ -13,6 +13,7 @@ vi.mock('../../../src/service/decision-recall/decision-recall-sources', async ()
       loadRows: async () => ({ rows: [], error: '' }),
       loadChat: () => [],
       loadCrossfireIndexContent: async () => null,
+      loadWorldbookContent: async () => '',
     },
   };
 });
@@ -38,11 +39,17 @@ function makeRows(count: number): DecisionRecallRow_ACU[] {
   });
 }
 
-function makeSources(rows: DecisionRecallRow_ACU[], indexContent: string | null = null, chat: any[] = []): DecisionRecallSources_ACU {
+function makeSources(
+  rows: DecisionRecallRow_ACU[],
+  indexContent: string | null = null,
+  chat: any[] = [],
+  loadWorldbookContent: (scanText: string) => Promise<string> = async () => '',
+): DecisionRecallSources_ACU {
   return {
     loadRows: async () => ({ rows, error: '' }),
     loadChat: () => chat,
     loadCrossfireIndexContent: async () => indexContent,
+    loadWorldbookContent,
   };
 }
 
@@ -77,7 +84,42 @@ describe('runDecisionRecall_ACU', () => {
     expect(result.batchCount).toBe(1);
   });
 
-  it('前文只在 state 里放一次：两楼 AI 回复加用户最新输入，不带世界书', async () => {
+  it('打分时附带所选世界书条目：排在前文之前，关键词按前文与本轮输入触发', async () => {
+    const fetch = scoringFetch(() => 3);
+    const chat = [{ is_user: false, mes: '回复甲' }, { is_user: true, mes: '问' }, { is_user: false, mes: '回复乙' }];
+    const loadWorldbook = vi.fn(async (_scanText: string) => '旧宅是沈家祖产');
+    const result = await runDecisionRecall_ACU(
+      { userInput: '最新输入', settings: settings() },
+      { sources: makeSources(makeRows(10), null, chat, loadWorldbook), fetch, sleep: noSleep },
+    );
+    expect(loadWorldbook).toHaveBeenCalledTimes(1);
+    expect(loadWorldbook.mock.calls[0][0]).toBe('回复甲\n回复乙\n最新输入');
+    const state = JSON.parse(fetch.mock.calls[0][1].body).state as string;
+    expect(state).toContain('旧宅是沈家祖产');
+    expect(state.indexOf('旧宅是沈家祖产')).toBeLessThan(state.indexOf('回复甲'));
+    expect(result.status === 'ok' && result.worldbookChars).toBe('旧宅是沈家祖产'.length);
+  });
+
+  it('没有世界书条目可带时前文里不留空的世界书段', async () => {
+    const fetch = scoringFetch(() => 3);
+    const result = await runDecisionRecall_ACU({ userInput: '最新输入', settings: settings() }, { sources: makeSources(makeRows(10)), fetch, sleep: noSleep });
+    expect(JSON.parse(fetch.mock.calls[0][1].body).state).not.toContain('世界书');
+    expect(result.status === 'ok' && result.worldbookChars).toBe(0);
+  });
+
+  it('不需要打分（候选不超过召回条数）或接口没填好时不读世界书', async () => {
+    const loadWorldbook = vi.fn(async (_scanText: string) => '设定');
+    const fetch = scoringFetch(() => 3);
+    await runDecisionRecall_ACU({ userInput: 'x', settings: settings() }, { sources: makeSources(makeRows(6), null, [], loadWorldbook), fetch, sleep: noSleep });
+    await runDecisionRecall_ACU(
+      { userInput: 'x', settings: settings({ siliconflowApiKey: '' }) },
+      { sources: makeSources(makeRows(12), null, [], loadWorldbook), fetch, sleep: noSleep },
+    );
+    expect(loadWorldbook).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('前文只在 state 里放一次：两楼 AI 回复加用户最新输入', async () => {
     const fetch = scoringFetch(() => 3);
     const chat = [{ is_user: false, mes: '回复甲' }, { is_user: true, mes: '问' }, { is_user: false, mes: '回复乙' }];
     await runDecisionRecall_ACU({ userInput: '最新输入', settings: settings() }, { sources: makeSources(makeRows(10), null, chat), fetch, sleep: noSleep });

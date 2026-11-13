@@ -62,7 +62,7 @@ describe('runDecisionRecallForPlotTask_ACU', () => {
     const fetch = vi.fn();
     const outcome = await runDecisionRecallForPlotTask_ACU(task(), { userInput: '你好' }, {
       fetch: fetch as any,
-      sources: { loadRows: async () => ({ rows: [], error: '' }), loadChat: () => [], loadCrossfireIndexContent: async () => null },
+      sources: { loadRows: async () => ({ rows: [], error: '' }), loadChat: () => [], loadCrossfireIndexContent: async () => null, loadWorldbookContent: async () => '' },
     });
     expect(fetch).not.toHaveBeenCalled();
     expect(outcome).toMatchObject({ kind: 'done', rawResponse: '<recall>\n\n</recall>', result: { status: 'skipped', reason: 'no_rows' } });

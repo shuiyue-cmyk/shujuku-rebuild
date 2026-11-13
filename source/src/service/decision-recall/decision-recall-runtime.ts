@@ -2,7 +2,7 @@
  * service/decision-recall/decision-recall-runtime.ts — 决策召回一次完整的选取（单独召回与替换剧情推进任务共用）。
  *
  * 流程：读纪要表 → 最新 5 条固定 → 其余（交火开着时只看它筛过的纪要索引）超过召回条数才打分 →
- * 每组 20 条、最多同时 3 组发给决策模型 → 一组失败按重试上限重试，仍失败就跳过这一组 →
+ * 读附加的世界书条目，与前文、本轮输入一起作为打分的参考 → 每组 20 条、最多同时 3 组发给决策模型 → 一组失败按重试上限重试，仍失败就跳过这一组 →
  * 分数从高到低凑满条数 → 与固定条数合并、按表号排列。
  * 没填 Key 时不发请求，只带固定条数。任何一组失败都不会让这次发送停下。
  */
@@ -82,6 +82,8 @@ export type DecisionRecallRunResult_ACU =
     failedRunCount: number;
     /** 没打上分的纪要条数（失败组 + 漏答）。 */
     unscoredCount: number;
+    /** 打分时附带的世界书正文字数；没打分（不读世界书）或没有条目可带时是 0。 */
+    worldbookChars: number;
     /** 接口没填好（缺地址、模型名或 Key），没有打分。 */
     missingKey: boolean;
     /** 缺的是哪一项，配合 missingKey 给提示。 */
@@ -145,6 +147,7 @@ export async function runDecisionRecall_ACU(
     providerLabel: endpoint.label,
     judgeRuns: settings.judgeRuns,
     failedRunCount: 0,
+    worldbookChars: 0,
   };
 
   if (!plan.needsScoring) {
@@ -160,7 +163,11 @@ export async function runDecisionRecall_ACU(
     };
   }
 
-  const state = buildDecisionRecallState_ACU({ aiFloors: collectDecisionRecallAiFloors_ACU(sources.loadChat(), settings.contextAiFloors), userInput: options.userInput });
+  // 确定要打分才读世界书；绿灯条目的关键词按发给决策模型的前文与本轮输入触发
+  const aiFloors = collectDecisionRecallAiFloors_ACU(sources.loadChat(), settings.contextAiFloors);
+  const worldbook = String(await sources.loadWorldbookContent([...aiFloors, options.userInput].join('\n')) || '').trim();
+  if (isAborted()) return { status: 'aborted' };
+  const state = buildDecisionRecallState_ACU({ aiFloors, userInput: options.userInput, worldbook });
   const groups = chunkDecisionRecallRows_ACU(plan.pool, settings.batchSize);
   const fetchImpl = deps.fetch ?? globalThis.fetch;
 
@@ -294,6 +301,7 @@ export async function runDecisionRecall_ACU(
   return {
     status: 'ok', ...base, selected: pickDecisionRecallRows_ACU(plan.fixed, scored, settings.recallCount),
     scored, batchCount: groups.length, failedBatchCount, failedRunCount, unscoredCount, missingKey: false, errors,
+    worldbookChars: worldbook.length,
   };
 }
 
@@ -330,7 +338,7 @@ export function describeDecisionRecallResult_ACU(result: DecisionRecallRunResult
     .map(row => (scoreByKey.has(row.rowKey) ? `${row.indexCode}(${scoreByKey.get(row.rowKey)!.toFixed(2)})` : row.indexCode))
     .join(', ');
   const source = result.candidateSource === 'crossfire_index' ? '交火纪要索引' : '全部纪要';
-  return `[决策召回] 候选 ${result.candidateCount} 条（${source}），分 ${result.batchCount} 组，失败 ${result.failedBatchCount} 组，`
+  return `[决策召回] 候选 ${result.candidateCount} 条（${source}），附带世界书 ${result.worldbookChars} 字，分 ${result.batchCount} 组，失败 ${result.failedBatchCount} 组，`
     + `未打上分 ${result.unscoredCount} 条${result.missingKey ? `（未填 ${result.missingField || 'Key'}）` : ''}；带上 ${result.selected.length} 条：${picked}`;
 }
 

@@ -357,3 +357,35 @@ describe('剧情推进页随决策召回用法', () => {
     expect(replaceSwitch()).toBeNull();
   });
 });
+
+describe('DecisionRecallPage 附加世界书条目', () => {
+  afterEach(async () => {
+    const mount = await import('../../src/presentation-v2/bootstrap/mount');
+    mount.__resetAcuV2MountForTests();
+  });
+
+  const sourceRadio = (label: string) => byText<HTMLButtonElement>('#dr-worldbook [role="radiogroup"][aria-label="世界书来源"] [role="radio"]', label);
+  const recallWorldbookConfigs = (settings: any) => Object.values<any>(settings.characterSettings || {})
+    .map(item => item?.decisionRecallWorldbookConfig)
+    .filter(Boolean);
+
+  it('默认正文接收；改来源只动决策召回自己的那份（按角色卡保存），不动填表的世界书来源', async () => {
+    const { settings, saveSettings, errors } = await openPage('decision-recall', { enabled: true });
+    expect(document.querySelector('#dr-worldbook')).not.toBeNull();
+    expect(sourceRadio('正文接收')!.getAttribute('aria-checked')).toBe('true');
+    expect(document.body.textContent).not.toContain('不带世界书');
+    expect(recallWorldbookConfigs(settings)).toEqual([{ source: 'active', manualSelection: [], enabledEntries: {} }]);
+    const fillSources = () => Object.values<any>(settings.characterSettings).map(item => item?.worldbookConfig?.source);
+    const fillBefore = fillSources();
+
+    saveSettings.mockClear();
+    sourceRadio('手动选择')!.click();
+    await flush();
+
+    expect(recallWorldbookConfigs(settings).map(cfg => cfg.source)).toEqual(['manual']);
+    expect(fillSources()).toEqual(fillBefore);
+    expect(saveSettings).toHaveBeenCalled();
+    expect(sourceRadio('手动选择')!.getAttribute('aria-checked')).toBe('true');
+    expect(errors).toEqual([]);
+  });
+});

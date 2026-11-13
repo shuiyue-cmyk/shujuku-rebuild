@@ -7,6 +7,7 @@
  *   - 本文件：worldbookConfig.enabledEntries（填表 / 提示词附带）
  *
  * 同样过滤掉数据库生成条目和包含屏蔽关键词的条目，避免误开关。
+ * 决策召回页的「附加世界书条目」复用这一套，只是换成它自己那份配置（getConfig）。
  */
 import { ref, shallowRef } from 'vue';
 import { getLorebookEntriesByNames_ACU } from '../../service/worldbook/pipeline';
@@ -38,15 +39,18 @@ export type FormFillWorldbookEntryGroup = WorldbookEntryDisplayGroup_ACU;
 
 export type FormFillEntryLoadStatus = 'idle' | 'loading' | 'success' | 'error';
 
-function ensureEnabledEntries(): Record<string, number[]> {
-  const cfg = getCurrentWorldbookConfig_ACU() as any;
+/** 来源与条目勾选所在的配置对象（原地读写后保存设置）。 */
+export type WorldbookEntriesConfigReader = () => Record<string, any>;
+
+function ensureEnabledEntries(getConfig: WorldbookEntriesConfigReader): Record<string, number[]> {
+  const cfg = getConfig() as any;
   if (!cfg.enabledEntries || typeof cfg.enabledEntries !== 'object') {
     cfg.enabledEntries = {};
   }
   return cfg.enabledEntries;
 }
 
-export function useFormFillWorldbookEntries() {
+export function useFormFillWorldbookEntries(getConfig: WorldbookEntriesConfigReader = getCurrentWorldbookConfig_ACU) {
   const groups = shallowRef<FormFillWorldbookEntryGroup[]>([]);
   const status = ref<FormFillEntryLoadStatus>('idle');
   const error = ref('');
@@ -67,7 +71,7 @@ export function useFormFillWorldbookEntries() {
     error.value = '';
 
     try {
-      const enabledEntries = ensureEnabledEntries();
+      const enabledEntries = ensureEnabledEntries(getConfig);
       const snapshot = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
       const failedBooks = new Set<string>();
       const entriesMap = await getLorebookEntriesByNames_ACU(unique, { failedBooks }) as Record<string, any[]>;
@@ -102,7 +106,7 @@ export function useFormFillWorldbookEntries() {
         const enabledList: number[] = Array.isArray(enabledEntries[bookName])
           ? enabledEntries[bookName]
           : [];
-        const cfgSource = (getCurrentWorldbookConfig_ACU() as any)?.source;
+        const cfgSource = (getConfig() as any)?.source;
 
         const visible: FormFillWorldbookEntryItem[] = visibleBookEntries.map((entry: any) => {
           const comment = String(entry?.comment || entry?.name || '');
@@ -160,7 +164,7 @@ export function useFormFillWorldbookEntries() {
     const targetGroup = groups.value.find(g => g.bookName === bookName);
     const targetEntry: any = targetGroup?.entries.find((e: any) => e.uid === uid);
     if ((targetEntry as any)?._isDefaultActive) return;
-    const enabledEntries = ensureEnabledEntries();
+    const enabledEntries = ensureEnabledEntries(getConfig);
     if (!Array.isArray(enabledEntries[bookName])) {
       enabledEntries[bookName] = [];
     }
@@ -193,7 +197,7 @@ export function useFormFillWorldbookEntries() {
         return { ...e, checked: nextChecked(e) };
       }),
     }));
-    const enabledEntries = ensureEnabledEntries();
+    const enabledEntries = ensureEnabledEntries(getConfig);
     for (const group of groups.value) {
       if (!touchedBooks.has(group.bookName)) continue;
       enabledEntries[group.bookName] = group.entries

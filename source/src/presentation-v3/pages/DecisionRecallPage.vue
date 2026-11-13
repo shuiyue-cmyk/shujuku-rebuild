@@ -164,6 +164,16 @@
       </template>
     </UbSection>
 
+    <UbSection
+      id="dr-worldbook"
+      title="附加世界书条目"
+      description="打分时附加给决策模型参考的世界书条目，选法同填表的「附加世界书条目」，与填表各存各的、按角色卡保存。默认「正文接收」：正文能收到的世界书里，蓝灯条目都带上，绿灯条目按前文与本轮输入的关键词触发，另外勾选的条目一定带上。这些条目会随每个打分请求一起发送，条目多时输入会明显变长（测试召回的结果里会写出附带了多少字）；不想带世界书时选「手动选择」且一本都不选。"
+      icon="fa-solid fa-book"
+      padded
+    >
+      <WorldbookEntriesPanel id-prefix="dr" :get-config="getCurrentDecisionRecallWorldbookConfig_ACU" />
+    </UbSection>
+
     <UbSection id="dr-directive" title="注入指令" description="只用于单独召回：选中的编码写进本轮输入时用这段文字包裹。替换剧情推进任务时用预设自己的最终注入指令。" icon="fa-solid fa-quote-left" padded>
       <template #actions>
         <UbBadge v-if="directiveDirty" variant="accent">未保存</UbBadge>
@@ -184,7 +194,7 @@
       </div>
     </UbSection>
 
-    <UbSection id="dr-test" title="测试召回" :description="`用下面这句输入${store.settings.contextAiFloors > 0 ? `和当前聊天最近 ${store.settings.contextAiFloors} 楼 AI 回复` : ''}跑一次完整打分，只显示结果，不写进聊天。会按所选服务商实际计费。`" icon="fa-solid fa-flask-vial" padded>
+    <UbSection id="dr-test" title="测试召回" :description="`用下面这句输入${store.settings.contextAiFloors > 0 ? `、当前聊天最近 ${store.settings.contextAiFloors} 楼 AI 回复` : ''}和所选的世界书条目跑一次完整打分，只显示结果，不写进聊天。会按所选服务商实际计费。`" icon="fa-solid fa-flask-vial" padded>
       <UbTextarea
         :model-value="store.testInput"
         :rows="3"
@@ -207,6 +217,7 @@ import { useRouterStore } from '../../presentation-v2/stores/router-store';
 import { useToastStore } from '../../presentation-v2/stores/toast-store';
 import { DECISION_RECALL_PROVIDER_LABELS_ACU } from '../../service/decision-recall/decision-recall-settings';
 import { resolveDecisionRecallTotalTimeoutMs_ACU } from '../../service/decision-recall/decision-recall-runtime';
+import { getCurrentDecisionRecallWorldbookConfig_ACU } from '../../service/decision-recall/decision-recall-worldbook';
 import {
   DECISION_RECALL_CODES_PLACEHOLDER_ACU,
   DECISION_RECALL_BATCH_SIZE_ACU,
@@ -228,6 +239,7 @@ import {
 } from '../../shared/decision-recall-defaults';
 import { DEFAULT_DECISION_MODEL_ACU, DEFAULT_SILICONFLOW_DECISION_MODEL_ACU } from '../../shared/decision-gate-defaults';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
+import WorldbookEntriesPanel from '../parts/WorldbookEntriesPanel.vue';
 import UbBadge from '../ui/UbBadge.vue';
 import UbButton from '../ui/UbButton.vue';
 import UbCallout from '../ui/UbCallout.vue';
@@ -248,6 +260,7 @@ const sections = [
   { id: 'dr-mode', label: '用法' },
   { id: 'dr-model', label: '决策模型' },
   { id: 'dr-rule', label: '召回规则' },
+  { id: 'dr-worldbook', label: '世界书' },
   { id: 'dr-directive', label: '注入指令' },
   { id: 'dr-test', label: '测试' },
 ];
@@ -277,7 +290,7 @@ const contextLabel = computed(() => (store.settings.contextAiFloors > 0
   ? `最近 ${store.settings.contextAiFloors} 楼 AI 回复和用户最新输入`
   : '用户最新输入（不带 AI 回复）'));
 const ruleDescription = computed(() => `每组 ${store.settings.batchSize} 条纪要发一次请求、每组判定 ${store.settings.judgeRuns} 次取平均、最多同时 ${store.settings.concurrency} 个请求；`
-  + `参考${contextLabel.value}，不带世界书；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。`);
+  + `参考${contextLabel.value}，另附下面选的世界书条目；按与接下来剧情发展的相关性分五档打分。交火开着时只从交火筛过的纪要里选。`);
 
 const modeOptions = [
   { value: 'standalone', label: '单独召回' },

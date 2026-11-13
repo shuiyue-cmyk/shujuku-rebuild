@@ -7,29 +7,7 @@
       icon="fa-solid fa-book"
       padded
     >
-      <WorldbookSourcePicker
-        :source="entriesSource.source.value"
-        :selected-names="entriesSource.manualSelection.value"
-        :names="entriesWb.names.value"
-        :status="entriesWb.status.value"
-        :error="entriesWb.error.value"
-        allow-active
-        @update:source="onEntriesSourceChange"
-        @toggle-book="onEntriesManualBookToggle"
-      />
-      <p class="ub-tbl__current">目前已选：<strong>{{ entriesSourceLabel }}</strong></p>
-      <WorldbookEntries
-        id-prefix="tbl"
-        :groups="entries.groups.value"
-        :filter="entryFilter"
-        :loading="entries.status.value === 'loading'"
-        :empty-text="entryEmptyText"
-        @update:filter="entryFilter = $event"
-        @select-all="entries.selectAll($event)"
-        @deselect-all="entries.deselectAll($event)"
-        @toggle="(bookName, uid, checked) => entries.toggleEntry(bookName, uid, checked)"
-        @toggle-group="entries.toggleGroupExpanded($event)"
-      />
+      <WorldbookEntriesPanel id-prefix="tbl" />
     </UbSection>
 
     <UbSection
@@ -142,16 +120,13 @@ import { computed, onMounted, ref } from 'vue';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
 import { useFormFillInjectionTarget } from '../../presentation-v2/composables/useFormFillInjectionTarget';
 import { useFormFillSettings } from '../../presentation-v2/composables/useFormFillSettings';
-import { useFormFillWorldbookConfig } from '../../presentation-v2/composables/useFormFillWorldbookConfig';
-import { useFormFillWorldbookEntries } from '../../presentation-v2/composables/useFormFillWorldbookEntries';
 import { useUiCloseGuard } from '../../presentation-v2/composables/useUiCloseGuard';
 import { useWorldbookSelector } from '../../presentation-v2/composables/useWorldbookSelector';
 import { formFillCopy } from '../../presentation-v2/copy/form-fill-copy';
 import { tableCopy } from '../../presentation-v2/copy/table-copy';
 import { useDialogStore } from '../../presentation-v2/stores/dialog-store';
 import PromptSegmentsSheet from '../parts/PromptSegmentsSheet.vue';
-import WorldbookEntries from '../parts/WorldbookEntries.vue';
-import WorldbookSourcePicker from '../parts/WorldbookSourcePicker.vue';
+import WorldbookEntriesPanel from '../parts/WorldbookEntriesPanel.vue';
 import WorldbookTargetSelect from '../parts/WorldbookTargetSelect.vue';
 import UbBadge from '../ui/UbBadge.vue';
 import UbButton from '../ui/UbButton.vue';
@@ -162,20 +137,12 @@ import UbRulePairs from '../ui/UbRulePairs.vue';
 import UbSection from '../ui/UbSection.vue';
 import UbSwitch from '../ui/UbSwitch.vue';
 
-type WorldbookSource = 'character' | 'manual' | 'active';
-
 const dialogStore = useDialogStore();
 const settings = useFormFillSettings();
 const injectionTarget = useFormFillInjectionTarget();
-const entriesSource = useFormFillWorldbookConfig();
-const entries = useFormFillWorldbookEntries();
 const injectionWb = useWorldbookSelector();
-const entriesWb = useWorldbookSelector();
 
-const entryFilter = ref('');
 const injectionTargetLabel = ref('');
-const entriesSourceLabel = ref('');
-const entryEmptyText = ref(tableCopy.worldbook.emptyDefault);
 const promptSheetOpen = ref(false);
 
 const sections = [
@@ -201,46 +168,6 @@ async function refreshInjectionLabel(): Promise<void> {
   injectionTargetLabel.value = await injectionTarget.describeTarget();
 }
 
-function resolveEntryEmptyText(names: string[]): string {
-  const source = entriesSource.source.value;
-  if (source === 'character' && names.length === 0) return tableCopy.worldbook.emptyCharacter;
-  if (source === 'active' && names.length === 0) {
-    return '未找到正文能接收到的世界书（无激活全局书且角色卡未绑定）。可切回「跟随角色卡」或「手动选择」。';
-  }
-  if (source === 'manual' && entriesSource.manualSelection.value.length === 0) return tableCopy.worldbook.emptyManual;
-  return tableCopy.worldbook.emptyDefault;
-}
-
-let entriesRefreshSeq = 0;
-async function refreshEntriesGroups(): Promise<void> {
-  const seq = ++entriesRefreshSeq;
-  const names = await entriesSource.resolveBookNames();
-  if (seq !== entriesRefreshSeq) return;
-  entryEmptyText.value = resolveEntryEmptyText(names);
-  await entries.loadEntries(names);
-  if (seq !== entriesRefreshSeq) return;
-  const source = entriesSource.source.value;
-  if (source === 'character') {
-    const charPrimary = entriesWb.charPrimary.value;
-    entriesSourceLabel.value = charPrimary ? `角色卡所有世界书 · 主册 ${charPrimary}` : '角色卡所有世界书';
-  } else if (source === 'active') {
-    entriesSourceLabel.value = names.length ? names.join('、') : '（未找到正文接收的世界书）';
-  } else {
-    const manual = entriesSource.manualSelection.value;
-    entriesSourceLabel.value = manual.length ? manual.join('、') : '（未选择）';
-  }
-}
-
-function onEntriesSourceChange(value: WorldbookSource): void {
-  entriesSource.setSource(value);
-  void refreshEntriesGroups();
-}
-
-function onEntriesManualBookToggle(name: string, checked: boolean): void {
-  entriesSource.toggleManualBook(name, checked);
-  void refreshEntriesGroups();
-}
-
 async function onInjectionTargetChange(value: string): Promise<void> {
   await injectionTarget.onSelectorChange(value);
   await refreshInjectionLabel();
@@ -249,9 +176,8 @@ async function onInjectionTargetChange(value: string): Promise<void> {
 async function refreshAll(): Promise<void> {
   settings.refresh();
   injectionTarget.refreshFromSettings();
-  entriesSource.refreshFromSettings();
-  await Promise.all([injectionWb.refresh(), entriesWb.refresh()]);
-  await Promise.all([refreshInjectionLabel(), refreshEntriesGroups()]);
+  await injectionWb.refresh();
+  await refreshInjectionLabel();
 }
 
 onMounted(() => void refreshAll());

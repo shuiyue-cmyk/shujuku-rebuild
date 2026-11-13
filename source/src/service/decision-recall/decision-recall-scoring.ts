@@ -1,7 +1,7 @@
 /**
  * service/decision-recall/decision-recall-scoring.ts — 决策召回的打分请求与结果解读（纯函数）。
  *
- * 一次请求 = 前文与用户输入（state，只放一次）+ 一组纪要（每条一个五档单选题）。
+ * 一次请求 = 附加的世界书条目、前文与用户输入（state，只放一次）+ 一组纪要（每条一个五档单选题）。
  * 决策接口的问题键只用于对应答案、不会发给模型，所以纪要的编码与内容都写在题干里。
  * 得分 = 各档分值按模型给出的概率加权；没给概率时取所选档位的分值。
  */
@@ -46,8 +46,10 @@ const CRITERIA_ACU: Record<string, string> = Object.fromEntries(
   DECISION_RECALL_LEVELS_ACU.map(level => [level.label, level.description]),
 );
 
-export function buildDecisionRecallState_ACU(context: { aiFloors: string[]; userInput: string }): string {
+export function buildDecisionRecallState_ACU(context: { aiFloors: string[]; userInput: string; worldbook?: string }): string {
   const parts: string[] = [];
+  const worldbook = String(context.worldbook || '').trim();
+  if (worldbook) parts.push(`【世界书（设定与背景，供判断相关性参考）】\n${worldbook}`);
   const floors = (context.aiFloors || []).map(text => String(text || '').trim()).filter(Boolean);
   if (floors.length > 0) {
     parts.push(`【前文（最近的 AI 回复，按时间先后）】\n${floors.join('\n\n')}`);

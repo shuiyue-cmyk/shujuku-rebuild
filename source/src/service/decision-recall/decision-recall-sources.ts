@@ -1,5 +1,5 @@
 /**
- * service/decision-recall/decision-recall-sources.ts — 决策召回读取的外部数据（纪要表、聊天、交火筛过的纪要索引）。
+ * service/decision-recall/decision-recall-sources.ts — 决策召回读取的外部数据（纪要表、聊天、交火筛过的纪要索引、附加的世界书条目）。
  *
  * 与打分、选取逻辑分开，便于测试替换。
  */
@@ -12,6 +12,7 @@ import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from '../world
 import { getLorebookEntries_ACU, isWorldbookApiAvailable_ACU } from '../worldbook/worldbook-service';
 import { logWarn_ACU } from '../../shared/utils';
 import type { DecisionRecallRow_ACU } from './decision-recall-scoring';
+import { loadDecisionRecallWorldbookContent_ACU } from './decision-recall-worldbook';
 
 export interface DecisionRecallRowsResult_ACU {
   rows: DecisionRecallRow_ACU[];
@@ -24,6 +25,8 @@ export interface DecisionRecallSources_ACU {
   loadChat: () => any[];
   /** 交火开着时返回它写好的纪要索引正文；交火没开或读不到时返回 null（从全部纪要里选）。 */
   loadCrossfireIndexContent: () => Promise<string | null>;
+  /** 打分时附加的世界书正文（按决策召回页选的来源与条目）；绿灯条目的关键词按 scanText 触发。没有可带的条目时返回空串。 */
+  loadWorldbookContent: (scanText: string) => Promise<string>;
 }
 
 async function loadSummaryRows_ACU(): Promise<DecisionRecallRowsResult_ACU> {
@@ -73,6 +76,7 @@ export const DEFAULT_DECISION_RECALL_SOURCES_ACU: DecisionRecallSources_ACU = {
   loadRows: loadSummaryRows_ACU,
   loadChat: () => getChatArray_ACU() || [],
   loadCrossfireIndexContent: loadCrossfireIndexContent_ACU,
+  loadWorldbookContent: loadDecisionRecallWorldbookContent_ACU,
 };
 
 /** 纪要索引正文里出现的编码；一个都对不上时返回 null（退回从全部纪要里选）。 */

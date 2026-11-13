@@ -1722,6 +1722,18 @@ describe('getCombinedWorldbookContent_ACU', () => {
     expect(JSON.stringify(mockLogError.mock.calls)).not.toContain(sensitiveText);
   });
 
+  it('调用方传了 worldbookConfig 时按它取书与条目，不读当前角色的填表配置（决策召回用自己的那份）', async () => {
+    mockGetCurrentWorldbookConfig.mockClear();
+    mockGwGetLorebookEntries.mockResolvedValue([
+      { uid: 2, comment: '用户条目', content: '用户内容', enabled: true, type: 'constant', key: [], keys: [] },
+    ]);
+    const result = await getCombinedWorldbookContent_ACU('', {
+      worldbookConfig: { source: 'manual', manualSelection: ['书A'], enabledEntries: {} },
+    });
+    expect(result).toContain('用户内容');
+    expect(mockGetCurrentWorldbookConfig).not.toHaveBeenCalled();
+  });
+
   it('过滤 TavernDB-ACU- 前缀的条目', async () => {
     mockGetCurrentWorldbookConfig.mockReturnValue({
       source: 'manual',
