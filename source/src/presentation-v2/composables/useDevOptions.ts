@@ -5,7 +5,7 @@
  */
 import { storeToRefs } from 'pinia';
 import { useDevOptionsStore } from '../stores/dev-options-store';
-import type { ScopeGuardTarget_ACU } from '../../service/ai/scope-guard-prompt';
+import type { ExtraPromptKind_ACU, ScopeGuardTarget_ACU } from '../../service/ai/scope-guard-prompt';
 
 export function useDevOptions() {
   const store = useDevOptionsStore();
@@ -15,6 +15,7 @@ export function useDevOptions() {
     warnLogEnabled,
     apiReconfirm,
     scopeGuardPrompt,
+    extraPrompts,
     scopeGuardTargets,
   } = storeToRefs(store);
   return {
@@ -28,6 +29,8 @@ export function useDevOptions() {
     setApiReconfirm: (enabled: boolean) => store.setApiReconfirm(enabled),
     scopeGuardPrompt,
     setScopeGuardPrompt: (enabled: boolean) => store.setScopeGuardPrompt(enabled),
+    extraPrompts,
+    setExtraPromptKind: (kind: ExtraPromptKind_ACU, enabled: boolean) => store.setExtraPromptKind(kind, enabled),
     scopeGuardTargets,
     setScopeGuardTarget: (target: ScopeGuardTarget_ACU, enabled: boolean) => store.setScopeGuardTarget(target, enabled),
     refresh: () => store.refresh(),

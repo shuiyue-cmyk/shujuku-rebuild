@@ -11,8 +11,9 @@
  *   所以停止 Debug 不会关掉这里显式打开的常驻采集，本 store 也不会被 Debug 改写。
  * - apiReconfirm：API 预设变更后，其他使用 API 预设的位置是否标黄提醒二次确认。
  *   默认打开（保持现有行为）；关闭后全库不再标黄。缺省（老版本存量）视为打开。
- * - scopeGuardPrompt：执行边界提示词。开启后数据库的 AI 请求附加一段约束提示词，默认关闭。
- * - scopeGuardTargets：执行边界提示词附加到哪些功能，缺省只勾填表。
+ * - scopeGuardPrompt：「提示词额外要求」总开关（旧名「执行边界提示词」，存储键沿用）。开启后按勾选附加固定提示词，默认关闭。
+ * - extraPrompts：附加哪些提示词（执行边界 / 安全审查，二选一或都选），缺省只勾执行边界。
+ * - scopeGuardTargets：提示词附加到哪些功能，缺省只勾填表。
  *   服务层启动时自读持久化值（不打开面板也生效），本 store 只在切换 / refresh 时推送变化。
  *
  * 新 UI 自有持久化，物理隔离于 settings_ACU。
@@ -20,10 +21,14 @@
 import { defineStore } from 'pinia';
 import { setWarnLogEnabledByDevOption_ACU as applyWarnLogEnabled } from '../../shared/log-buffer';
 import {
+  EXTRA_PROMPT_DEFAULT_SELECTION_ACU,
+  EXTRA_PROMPT_KIND_KEYS_ACU,
   SCOPE_GUARD_DEFAULT_TARGETS_ACU,
   SCOPE_GUARD_TARGET_KEYS_ACU,
+  setExtraPromptSelection_ACU as applyExtraPromptSelection,
   setScopeGuardPromptEnabled_ACU as applyScopeGuardPrompt,
   setScopeGuardTargets_ACU as applyScopeGuardTargets,
+  type ExtraPromptKind_ACU,
   type ScopeGuardTarget_ACU,
 } from '../../service/ai/scope-guard-prompt';
 import { readSection, writeSection } from './persistence';
@@ -39,9 +44,11 @@ export interface DevOptionsState {
   warnLogEnabled: boolean;
   /** API 二次确认：预设变更后他处是否标黄。默认打开；缺省视为打开。 */
   apiReconfirm: boolean;
-  /** 执行边界提示词：开启后每次 AI 请求附加约束提示词。默认关闭。 */
+  /** 「提示词额外要求」总开关（旧名「执行边界提示词」）：开启后按勾选附加固定提示词。默认关闭。 */
   scopeGuardPrompt: boolean;
-  /** 执行边界提示词附加到哪些功能；每项都有值，缺省按服务层默认（只勾填表）。 */
+  /** 附加哪些提示词（执行边界 / 安全审查）；每项都有值，缺省按服务层默认（只勾执行边界）。 */
+  extraPrompts: Record<ExtraPromptKind_ACU, boolean>;
+  /** 提示词附加到哪些功能；每项都有值，缺省按服务层默认（只勾填表）。 */
   scopeGuardTargets: Record<ScopeGuardTarget_ACU, boolean>;
 }
 
@@ -51,6 +58,7 @@ interface PersistedShape {
   warnLogEnabled?: unknown;
   apiReconfirm?: unknown;
   scopeGuardPrompt?: unknown;
+  extraPrompts?: unknown;
   scopeGuardTargets?: unknown;
 }
 
@@ -62,6 +70,14 @@ function normalizeScopeGuardTargets(raw: unknown): Record<ScopeGuardTarget_ACU, 
   ])) as Record<ScopeGuardTarget_ACU, boolean>;
 }
 
+function normalizeExtraPrompts(raw: unknown): Record<ExtraPromptKind_ACU, boolean> {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  return Object.fromEntries(EXTRA_PROMPT_KIND_KEYS_ACU.map(key => [
+    key,
+    typeof source[key] === 'boolean' ? source[key] : EXTRA_PROMPT_DEFAULT_SELECTION_ACU[key],
+  ])) as Record<ExtraPromptKind_ACU, boolean>;
+}
+
 function loadFromStorage(): DevOptionsState {
   const raw = readSection<PersistedShape>(SECTION_KEY) ?? {};
   return {
@@ -70,6 +86,7 @@ function loadFromStorage(): DevOptionsState {
     warnLogEnabled: raw.warnLogEnabled === true,
     apiReconfirm: raw.apiReconfirm !== false,
     scopeGuardPrompt: raw.scopeGuardPrompt === true,
+    extraPrompts: normalizeExtraPrompts(raw.extraPrompts),
     scopeGuardTargets: normalizeScopeGuardTargets(raw.scopeGuardTargets),
   };
 }
@@ -81,6 +98,7 @@ function persist(state: DevOptionsState): void {
     warnLogEnabled: state.warnLogEnabled,
     apiReconfirm: state.apiReconfirm,
     scopeGuardPrompt: state.scopeGuardPrompt,
+    extraPrompts: { ...state.extraPrompts },
     scopeGuardTargets: { ...state.scopeGuardTargets },
   });
 }
@@ -114,6 +132,12 @@ export const useDevOptionsStore = defineStore('acu-v2-dev-options', {
       applyScopeGuardPrompt(this.scopeGuardPrompt);
       persist(this.$state);
     },
+    setExtraPromptKind(kind: ExtraPromptKind_ACU, enabled: boolean): void {
+      if (!EXTRA_PROMPT_KIND_KEYS_ACU.includes(kind)) return;
+      this.extraPrompts = { ...this.extraPrompts, [kind]: !!enabled };
+      applyExtraPromptSelection(this.extraPrompts);
+      persist(this.$state);
+    },
     setScopeGuardTarget(target: ScopeGuardTarget_ACU, enabled: boolean): void {
       if (!SCOPE_GUARD_TARGET_KEYS_ACU.includes(target)) return;
       this.scopeGuardTargets = { ...this.scopeGuardTargets, [target]: !!enabled };
@@ -127,9 +151,11 @@ export const useDevOptionsStore = defineStore('acu-v2-dev-options', {
       this.warnLogEnabled = next.warnLogEnabled;
       this.apiReconfirm = next.apiReconfirm;
       this.scopeGuardPrompt = next.scopeGuardPrompt;
+      this.extraPrompts = next.extraPrompts;
       this.scopeGuardTargets = next.scopeGuardTargets;
       applyWarnLogEnabled(this.warnLogEnabled);
       applyScopeGuardPrompt(this.scopeGuardPrompt);
+      applyExtraPromptSelection(this.extraPrompts);
       applyScopeGuardTargets(this.scopeGuardTargets);
     },
   },

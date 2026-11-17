@@ -6,6 +6,7 @@ export const ACU_V2_DEV_OPTIONS_SECTION_KEY = 'devOptions';
 export const WARN_LOG_ENABLED_KEY = 'warnLogEnabled';
 export const SCOPE_GUARD_PROMPT_KEY = 'scopeGuardPrompt';
 export const SCOPE_GUARD_TARGETS_KEY = 'scopeGuardTargets';
+export const EXTRA_PROMPTS_KEY = 'extraPrompts';
 
 /**
  * 在 Vue/Pinia 尚未挂载时读取一个开发者选项的原始值，
@@ -31,9 +32,15 @@ function readDevOptionFlag(key: string): boolean {
   return readDevOptionValue(key) === true;
 }
 
-/** 执行边界提示词的「附加到」勾选原始记录；非布尔值由服务层按默认处理。 */
+/** 「提示词额外要求」的「附加到」勾选原始记录；非布尔值由服务层按默认处理。 */
 export function readScopeGuardTargets(): Record<string, unknown> {
   const raw = readDevOptionValue(SCOPE_GUARD_TARGETS_KEY);
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {};
+}
+
+/** 「提示词额外要求」的「附加的提示词」勾选原始记录；非布尔值由服务层按默认处理。 */
+export function readExtraPromptSelection(): Record<string, unknown> {
+  const raw = readDevOptionValue(EXTRA_PROMPTS_KEY);
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {};
 }
 

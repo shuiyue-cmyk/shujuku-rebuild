@@ -169,17 +169,20 @@ describe('DeveloperPage', () => {
     });
   });
 
-  describe('执行边界提示词开关', () => {
+  describe('提示词额外要求开关', () => {
     function findGuardToggle(): HTMLElement | undefined {
-      return document.querySelector<HTMLElement>('[data-ub-main] [role="switch"][aria-label="执行边界提示词"]') ?? undefined;
+      return document.querySelector<HTMLElement>('[data-ub-main] [role="switch"][aria-label="提示词额外要求"]') ?? undefined;
     }
+    const kindChecks = () => [...document.querySelectorAll<HTMLInputElement>('[data-ub-main] [data-extra-prompt-kinds] input[type="checkbox"]')];
+    const kindLabels = () => [...document.querySelectorAll('[data-ub-main] [data-extra-prompt-kinds] label')].map(l => l.textContent?.trim());
+    const targetChecks = () => [...document.querySelectorAll<HTMLInputElement>('[data-ub-main] [data-scope-guard-targets] input[type="checkbox"]')];
 
-    it('默认关：请求不附加；打开后立即生效并落盘，再关掉也同步', async () => {
+    it('默认关：请求不附加；打开后立即生效并落盘（沿用旧存储键），再关掉也同步', async () => {
       const { mount } = await mountDeveloperPage();
       const guard = await import('../../src/service/ai/scope-guard-prompt');
 
       const toggle = findGuardToggle();
-      expect(toggle, '开发者页必须有执行边界提示词开关').not.toBeUndefined();
+      expect(toggle, '开发者页必须有提示词额外要求开关').not.toBeUndefined();
       expect(toggle!.getAttribute('aria-checked')).toBe('false');
       expect(guard.isScopeGuardPromptEnabled_ACU()).toBe(false);
 
@@ -196,20 +199,41 @@ describe('DeveloperPage', () => {
       mount.__resetAcuV2MountForTests();
     });
 
-    it('打开后才出现「附加到」勾选项：默认只勾填表，勾选立即生效并落盘', async () => {
+    it('打开后才出现「附加的提示词」与「附加到」：默认只勾执行边界、只勾填表，勾选立即生效并落盘', async () => {
       const { mount } = await mountDeveloperPage();
       const guard = await import('../../src/service/ai/scope-guard-prompt');
-      const targetChecks = () => [...document.querySelectorAll<HTMLInputElement>('[data-ub-main] [data-scope-guard-targets] input[type="checkbox"]')];
 
-      expect(targetChecks(), '开关关闭时不显示勾选项').toHaveLength(0);
+      expect(kindChecks(), '开关关闭时不显示提示词勾选').toHaveLength(0);
+      expect(targetChecks(), '开关关闭时不显示附加到勾选').toHaveLength(0);
       findGuardToggle()!.click();
       await new Promise(r => setTimeout(r, 0));
 
+      // 附加的提示词：执行边界在前、安全审查在后，默认只勾执行边界
+      const kinds = kindChecks();
+      const labels = kindLabels();
+      expect(kinds).toHaveLength(2);
+      expect(labels).toEqual(['执行边界提示词', '安全审查提示词']);
+      expect(kinds.map(c => c.checked), '默认只勾执行边界').toEqual([true, false]);
+
+      const reviewIndex = labels.indexOf('安全审查提示词');
+      kinds[reviewIndex].click();
+      await new Promise(r => setTimeout(r, 0));
+      expect(guard.isExtraPromptSelected_ACU('safetyReview')).toBe(true);
+      expect(guard.isExtraPromptSelected_ACU('scopeGuard')).toBe(true);
+      expect(JSON.parse(localStorage.getItem('acu_v2_ui_state') || '{}').devOptions.extraPrompts).toEqual({ scopeGuard: true, safetyReview: true });
+      expect(kindChecks()[reviewIndex].checked).toBe(true);
+
+      const guardIndex = labels.indexOf('执行边界提示词');
+      kindChecks()[guardIndex].click();
+      await new Promise(r => setTimeout(r, 0));
+      expect(guard.isExtraPromptSelected_ACU('scopeGuard'), '取消勾选执行边界后不再附加执行边界').toBe(false);
+
+      // 附加到：默认只勾填表
       const checks = targetChecks();
       expect(checks).toHaveLength(guard.SCOPE_GUARD_TARGET_KEYS_ACU.length);
       expect(checks.map(c => c.checked), '默认只勾填表').toEqual(guard.SCOPE_GUARD_TARGET_KEYS_ACU.map(key => key === 'fill'));
-      const labels = [...document.querySelectorAll('[data-ub-main] [data-scope-guard-targets] label')].map(l => l.textContent?.trim());
-      expect(labels).toContain('剧情推进');
+      const targetLabels = [...document.querySelectorAll('[data-ub-main] [data-scope-guard-targets] label')].map(l => l.textContent?.trim());
+      expect(targetLabels).toContain('剧情推进');
 
       const plotIndex = guard.SCOPE_GUARD_TARGET_KEYS_ACU.indexOf('plot');
       checks[plotIndex].click();
@@ -227,12 +251,16 @@ describe('DeveloperPage', () => {
       mount.__resetAcuV2MountForTests();
     });
 
-    it('已保存为开时：开关回显为开，请求附加', async () => {
-      const { mount } = await mountDeveloperPage({ scopeGuardPrompt: true });
+    it('已保存为开时：开关回显为开，勾选与附加到按存量回显', async () => {
+      const { mount } = await mountDeveloperPage({ scopeGuardPrompt: true, extraPrompts: { safetyReview: true }, scopeGuardTargets: { plot: true } });
       const guard = await import('../../src/service/ai/scope-guard-prompt');
 
       expect(findGuardToggle()!.getAttribute('aria-checked')).toBe('true');
       expect(guard.isScopeGuardPromptEnabled_ACU()).toBe(true);
+      expect(guard.isExtraPromptSelected_ACU('safetyReview')).toBe(true);
+      expect(guard.isExtraPromptSelected_ACU('scopeGuard'), '没存的按默认勾执行边界').toBe(true);
+      expect(kindChecks().map(c => c.checked)).toEqual([true, true]);
+      expect(guard.isScopeGuardTargetEnabled_ACU('plot')).toBe(true);
 
       mount.__resetAcuV2MountForTests();
     });

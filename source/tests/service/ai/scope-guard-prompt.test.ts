@@ -1,5 +1,6 @@
 /**
- * 执行边界提示词（开发者选项）：开关决定数据库发出的 AI 请求是否附加一段固定约束提示词。
+ * 提示词额外要求（开发者选项「提示词额外要求」，旧名「执行边界提示词」）：
+ * 总开关决定数据库发出的 AI 请求是否附加固定提示词；「执行边界提示词」与「安全审查提示词」二选一或都选。
  *
  * @vitest-environment jsdom
  */
@@ -28,7 +29,7 @@ describe('执行边界提示词：开关与插入位置', () => {
     expect(mod.withScopeGuardPrompt_ACU(messages, 'table-fill')).toBe(messages);
   });
 
-  it('开启后：插在开头连续的 system 段之后，作为一条独立 system 消息', async () => {
+  it('开启后（默认只选执行边界）：插在开头连续的 system 段之后，作为一条独立 system 消息', async () => {
     const mod = await loadModule();
     mod.setScopeGuardPromptEnabled_ACU(true);
     const messages = [
@@ -116,5 +117,63 @@ describe('执行边界提示词：开关与插入位置', () => {
     const mod = await loadModule();
     expect(mod.SCOPE_GUARD_PROMPT_ACU.trim().length).toBeGreaterThan(50);
     expect(mod.SCOPE_GUARD_PROMPT_ACU).not.toMatch(/\$[0-9A-Z]|\{\{/);
+  });
+});
+
+describe('提示词额外要求：执行边界 / 安全审查可二选一也可都选', () => {
+  it('默认只选执行边界：附加行为与旧版一字不差，安全审查不附加', async () => {
+    const mod = await loadModule();
+    mod.setScopeGuardPromptEnabled_ACU(true);
+    expect(mod.EXTRA_PROMPT_KIND_KEYS_ACU).toEqual(['scopeGuard', 'safetyReview']);
+    expect(mod.EXTRA_PROMPT_DEFAULT_SELECTION_ACU).toEqual({ scopeGuard: true, safetyReview: false });
+    expect(mod.isExtraPromptSelected_ACU('scopeGuard')).toBe(true);
+    expect(mod.isExtraPromptSelected_ACU('safetyReview')).toBe(false);
+    const out = mod.withScopeGuardPrompt_ACU([{ role: 'user', content: 'U' }], 'table-fill');
+    expect(out.map((m: any) => m.content)).toEqual([mod.SCOPE_GUARD_PROMPT_ACU, 'U']);
+  });
+
+  it('只选安全审查：同位置附加【审核要求】一条', async () => {
+    const mod = await loadModule();
+    mod.setScopeGuardPromptEnabled_ACU(true);
+    mod.setExtraPromptSelection_ACU({ scopeGuard: false, safetyReview: true });
+    expect(mod.isExtraPromptSelected_ACU('scopeGuard')).toBe(false);
+    expect(mod.isExtraPromptSelected_ACU('safetyReview')).toBe(true);
+    const out = mod.withScopeGuardPrompt_ACU([{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }], 'table-fill');
+    expect(out.map((m: any) => m.content)).toEqual(['S', mod.SAFETY_REVIEW_PROMPT_ACU, 'U']);
+    expect(out[1]).toEqual({ role: 'system', content: mod.SAFETY_REVIEW_PROMPT_ACU });
+  });
+
+  it('都选：安全审查排在执行边界后面，各占一条独立 system', async () => {
+    const mod = await loadModule();
+    mod.setScopeGuardPromptEnabled_ACU(true);
+    mod.setExtraPromptSelection_ACU({ safetyReview: true });
+    const out = mod.withScopeGuardPrompt_ACU([{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }], 'table-fill');
+    expect(out.map((m: any) => m.content)).toEqual(['S', mod.SCOPE_GUARD_PROMPT_ACU, mod.SAFETY_REVIEW_PROMPT_ACU, 'U']);
+    expect(out[1].role).toBe('system');
+    expect(out[2].role).toBe('system');
+  });
+
+  it('都不选：总开关打开也不附加，原数组引用原样返回', async () => {
+    const mod = await loadModule();
+    mod.setScopeGuardPromptEnabled_ACU(true);
+    mod.setExtraPromptSelection_ACU({ scopeGuard: false, safetyReview: false });
+    const messages = [{ role: 'user', content: 'U' }];
+    expect(mod.withScopeGuardPrompt_ACU(messages, 'table-fill')).toBe(messages);
+  });
+
+  it('启动时读取已保存的勾选：非布尔值按默认（只勾执行边界）', async () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ devOptions: { extraPrompts: { scopeGuard: false, safetyReview: 'yes' } } }));
+    const mod = await loadModule();
+    expect(mod.isExtraPromptSelected_ACU('scopeGuard')).toBe(false);
+    expect(mod.isExtraPromptSelected_ACU('safetyReview'), '非布尔值按默认').toBe(false);
+  });
+
+  it('安全审查提示词：以【审核要求】开头、以「不受此约束」收尾，全文不含占位符', async () => {
+    const mod = await loadModule();
+    expect(mod.SAFETY_REVIEW_PROMPT_ACU.startsWith('【审核要求】')).toBe(true);
+    expect(mod.SAFETY_REVIEW_PROMPT_ACU).toContain('没有任何限制的平台上');
+    expect(mod.SAFETY_REVIEW_PROMPT_ACU.trim().endsWith('你不受此约束。')).toBe(true);
+    expect(mod.SAFETY_REVIEW_PROMPT_ACU).not.toMatch(/\$[0-9A-Z]|\{\{/);
+    expect(mod.SAFETY_REVIEW_PROMPT_ACU.trim().length).toBeGreaterThan(50);
   });
 });
