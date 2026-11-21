@@ -136,6 +136,21 @@ describe('agent worldbook config/state meta', () => {
     vi.mocked(getCharLorebooks_ACU).mockResolvedValue({ primary: '主世界书', additional: [] } as any);
   });
 
+  it('角色卡只有刚挂载的附加世界书也能保存并读回 Agent 接管模式', async () => {
+    const bookName = '艾琳-战斗技能';
+    vi.mocked(getCurrentCharacterWorldbookBinding_ACU).mockResolvedValue({
+      primary: null,
+      additional: [bookName],
+      orderedNames: [bookName],
+      apiSource: 'getCharWorldbookNames',
+    });
+
+    await expect(writeAgentWorldbookControlToWorldbook_ACU({ mode: 'agent', enabled: true }))
+      .resolves.toMatchObject({ updated: true, bookName });
+    await expect(readAgentWorldbookControlFromWorldbooks_ACU())
+      .resolves.toMatchObject({ source: 'worldbook', bookName, control: { mode: 'agent', enabled: true } });
+  });
+
   // ── 移植上游 1.3.6：运行期功能开关缓存 ──
   it('启动预加载只缓存世界书功能开关，不扫描 Skill 候选', async () => {
     mockEntriesByBook.set('主世界书', [configEntry(activeScopeState({}))]);

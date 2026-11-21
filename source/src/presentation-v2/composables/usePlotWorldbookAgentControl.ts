@@ -278,8 +278,16 @@ export function usePlotWorldbookAgentControl() {
   }
 
   /** 返回值表示模式配置是否写入成功；接管/恢复的部分失败不影响返回 true（模式已变，调用方仍需刷新），由 toast 告警。 */
-  async function setMode(next: AgentWorldbookControlMode_ACU): Promise<boolean> {
-    const saved = await writeControlPatch({ mode: next, enabled: next !== 'disabled' });
+  async function setMode(next: AgentWorldbookControlMode_ACU, mountedBookNames: string[] = []): Promise<boolean> {
+    const patch: Partial<AgentWorldbookControl_ACU> = { mode: next, enabled: next !== 'disabled' };
+    const scope = worldbookScope.value;
+    if (next === 'agent' && scope.source === 'manual' && mountedBookNames.length > 0) {
+      patch.worldbookScope = {
+        source: 'manual',
+        manualSelection: [...new Set([...scope.manualSelection, ...mountedBookNames])],
+      };
+    }
+    const saved = await writeControlPatch(patch);
     if (!saved) return false;
     if (next === 'agent') {
       try {

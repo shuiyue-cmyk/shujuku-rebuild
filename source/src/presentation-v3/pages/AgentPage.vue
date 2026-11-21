@@ -12,6 +12,7 @@
           :model-value="agentControl.mode.value"
           :options="modeOptions"
           aria-label="Agent 世界书模式"
+          :disabled="favoriteMountAction !== null"
           block
           @update:model-value="onModeChange"
         />
@@ -135,15 +136,25 @@
         <div class="ub-agent-fav__mount">
           <p class="ub-agent__current">
             当前角色卡：<strong>{{ favorites.characterName.value || '（未打开单人角色卡）' }}</strong>
+            <span v-if="favorites.selected.value.length > 0"> · 已选 {{ favorites.selected.value.length }} 本</span>
           </p>
-          <UbButton
-            size="sm"
-            variant="primary"
-            icon="fa-solid fa-link"
-            :busy="favorites.mounting.value"
-            :disabled="!favorites.canMount.value || favorites.selected.value.length === 0"
-            @click="onMountFavorites"
-          >挂载所选到当前角色卡（{{ favorites.selected.value.length }}）</UbButton>
+          <div class="ub-agent-fav__mount-actions">
+            <UbButton
+              class="ub-agent-fav__takeover"
+              variant="primary"
+              icon="fa-solid fa-robot"
+              :busy="favoriteMountAction === 'takeover'"
+              :disabled="favoriteMountDisabled || !agentControl.isReady.value"
+              @click="onMountFavorites('takeover')"
+            >挂载并启用 Agent 接管</UbButton>
+            <UbButton
+              size="sm"
+              icon="fa-solid fa-link"
+              :busy="favoriteMountAction === 'mount'"
+              :disabled="favoriteMountDisabled"
+              @click="onMountFavorites('mount')"
+            >仅挂载</UbButton>
+          </div>
         </div>
       </div>
     </UbSection>
@@ -200,6 +211,7 @@ import UbSelect from '../ui/UbSelect.vue';
 
 type WorldbookSource = 'character' | 'manual';
 type SkillDraft = { description: string; triggerWhen: string };
+type FavoriteMountAction = 'mount' | 'takeover';
 
 const copy = plotCopy.agentControl;
 const worldbook = useWorldbookSelector();
@@ -218,6 +230,11 @@ const { isStale: agentStale, markConfirmed: markAgentConfirmed } = useApiPresetS
 const favorites = useFavoriteWorldbooks({ skillifyBooks: agentControl.skillifyBooks });
 const favoriteToAdd = ref('');
 const skillifyingFavorite = ref('');
+const favoriteMountAction = ref<FavoriteMountAction | null>(null);
+const favoriteMountDisabled = computed(() =>
+  favoriteMountAction.value !== null || agentControl.busy.value !== null
+  || !favorites.canMount.value || favorites.selected.value.length === 0,
+);
 const favoriteAddOptions = computed(() => favorites.addableNames.value.map(name => ({ value: name, label: name })));
 
 const advancedOpen = ref(false);
@@ -381,8 +398,17 @@ async function onSkillifyFavorite(name: string): Promise<void> {
   await refreshEntries();
 }
 
-async function onMountFavorites(): Promise<void> {
-  if (await favorites.mountSelected()) await refreshAll();
+async function onMountFavorites(action: FavoriteMountAction): Promise<void> {
+  if (favoriteMountDisabled.value || (action === 'takeover' && !agentControl.isReady.value)) return;
+  favoriteMountAction.value = action;
+  try {
+    const mounted = await favorites.mountSelected(action === 'takeover'
+      ? bookNames => agentControl.setMode('agent', bookNames)
+      : undefined);
+    if (mounted) await refreshAll();
+  } finally {
+    favoriteMountAction.value = null;
+  }
 }
 
 async function onScopeSourceChange(source: WorldbookSource): Promise<void> {
@@ -520,7 +546,8 @@ watchChatChanged_ACU(() => void refreshAll());
 }
 
 .ub-agent-fav__add,
-.ub-agent-fav__mount {
+.ub-agent-fav__mount,
+.ub-agent-fav__mount-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -534,5 +561,18 @@ watchChatChanged_ACU(() => void refreshAll());
 
 .ub-agent-fav__mount .ub-agent__current {
   flex: 1 1 auto;
+}
+
+.ub-agent-fav__mount-actions {
+  max-width: 100%;
+}
+
+.ub-agent-fav__takeover {
+  max-width: 100%;
+  min-height: var(--ub-control-h);
+  height: auto;
+  padding-block: var(--ub-s2);
+  line-height: 1.25;
+  white-space: normal;
 }
 </style>

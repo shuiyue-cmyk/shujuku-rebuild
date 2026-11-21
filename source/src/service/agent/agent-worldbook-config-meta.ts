@@ -546,13 +546,14 @@ async function resolveAgentWorldbookBootstrapBookNames_ACU(): Promise<string[]> 
 
 async function resolveAgentWorldbookHostBookForScope_ACU(scope: AgentWorldbookScope_ACU): Promise<string> {
   // [TT 降级] API 不可用按无绑定走手动/空 hostBook 分支。
-  let primary: string | null = null;
   try {
-    primary = (await getCurrentCharacterWorldbookBinding_ACU()).primary;
+    const binding = await getCurrentCharacterWorldbookBinding_ACU();
+    if (binding.primary) return binding.primary;
+    // 刚挂载常用世界书的角色卡可能只有附加书，卡级配置也需要有保存位置。
+    if (scope.source === 'character') return binding.orderedNames[0] || '';
   } catch (e) {
     logWarn_ACU('[AgentWorldbook] 角色世界书绑定 API 不可用，hostBook 按无绑定降级。', e);
   }
-  if (primary) return primary;
   if (scope.source === 'manual') return scope.manualSelection[0] || '';
   return '';
 }

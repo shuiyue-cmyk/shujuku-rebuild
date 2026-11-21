@@ -3,10 +3,11 @@
  */
 import { createPinia } from 'pinia';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp } from 'vue';
+import { createApp, nextTick } from 'vue';
 
 const harness = vi.hoisted(() => ({
   setScope: vi.fn(async () => true),
+  setMode: vi.fn(async () => true),
   toggleScopeBook: vi.fn(async () => true),
   refreshControl: vi.fn(async () => undefined),
   loadEntries: vi.fn(async () => ['AgentBook']),
@@ -43,6 +44,7 @@ vi.mock('../../src/presentation-v2/composables/usePlotWorldbookAgentControl', as
     agentDecisionPromptSegments: ref([]),
     agentSkillifyPromptSegments: ref([]),
     refresh: harness.refreshControl,
+    setMode: harness.setMode,
     setWorldbookScope: harness.setScope,
     toggleWorldbookScopeBook: harness.toggleScopeBook,
   };
@@ -100,7 +102,10 @@ vi.mock('../../src/presentation-v2/composables/useFavoriteWorldbooks', async () 
     toggleSelected: vi.fn((name: string, checked: boolean) => {
       selected.value = checked ? [...selected.value, name] : selected.value.filter(item => item !== name);
     }),
-    mountSelected: vi.fn(async () => true),
+    mountSelected: vi.fn(async (enableTakeover?: (bookNames: string[]) => Promise<boolean>) => {
+      await enableTakeover?.(['艾琳-战斗技能']);
+      return true;
+    }),
     skillify: vi.fn(async () => undefined),
   };
   return { useFavoriteWorldbooks: () => harness.favorites };
@@ -169,7 +174,7 @@ describe('AgentPage', () => {
     app.unmount();
   });
 
-  it('常用世界书：显示 Skill 进度，未完成的给 Skill 化按钮，找不到的不能勾选；勾选后挂载到当前角色卡', async () => {
+  it('常用世界书：显示 Skill 进度、提供仅挂载和突出显示的挂载并接管按钮', async () => {
     const Page = (await import('../../src/presentation-v3/pages/AgentPage.vue')).default;
     const portal = document.createElement('div');
     portal.id = 'ub-portal';
@@ -198,15 +203,33 @@ describe('AgentPage', () => {
     await Promise.resolve();
     expect(harness.favorites.skillify).toHaveBeenCalledWith('地理百科');
 
-    const mountButton = Array.from(section.querySelectorAll<HTMLButtonElement>('button')).find(button => button.textContent?.includes('挂载所选'))!;
+    const buttons = Array.from(section.querySelectorAll<HTMLButtonElement>('button'));
+    const mountButton = buttons.find(button => button.textContent?.trim() === '仅挂载')!;
+    const takeoverButton = buttons.find(button => button.textContent?.trim() === '挂载并启用 Agent 接管')!;
+    expect(takeoverButton.classList.contains('ub-btn--primary')).toBe(true);
+    expect(mountButton.classList.contains('ub-btn--primary')).toBe(false);
     expect(mountButton.disabled).toBe(true);
+    expect(takeoverButton.disabled).toBe(true);
     items[0].querySelector<HTMLButtonElement>('.ub-agent-fav__check')!.click();
     await Promise.resolve();
     expect(mountButton.disabled).toBe(false);
+    expect(takeoverButton.disabled).toBe(false);
     expect(section.textContent).toContain('艾琳');
     mountButton.click();
-    await Promise.resolve();
+    await nextTick();
+    expect(takeoverButton.disabled).toBe(true);
+    expect(mountButton.getAttribute('aria-busy')).toBe('true');
+    await vi.waitFor(() => expect(takeoverButton.disabled).toBe(false));
     expect(harness.favorites.mountSelected).toHaveBeenCalledTimes(1);
+    expect(harness.setMode).not.toHaveBeenCalled();
+
+    takeoverButton.click();
+    await nextTick();
+    expect(mountButton.disabled).toBe(true);
+    expect(takeoverButton.getAttribute('aria-busy')).toBe('true');
+    await vi.waitFor(() => expect(mountButton.disabled).toBe(false));
+    expect(harness.favorites.mountSelected).toHaveBeenCalledTimes(2);
+    expect(harness.setMode).toHaveBeenCalledExactlyOnceWith('agent', ['艾琳-战斗技能']);
 
     app.unmount();
   });

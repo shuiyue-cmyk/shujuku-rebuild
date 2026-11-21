@@ -96039,7 +96039,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261117-1958"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261121-1501"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -96058,7 +96058,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261117-1958";
+        const stamp = "20261121-1501";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -99625,15 +99625,17 @@ async function resolveAgentWorldbookBootstrapBookNames_ACU() {
 }
 async function resolveAgentWorldbookHostBookForScope_ACU(scope) {
     // [TT 降级] API 不可用按无绑定走手动/空 hostBook 分支。
-    let primary = null;
     try {
-        primary = (await getCurrentCharacterWorldbookBinding_ACU()).primary;
+        const binding = await getCurrentCharacterWorldbookBinding_ACU();
+        if (binding.primary)
+            return binding.primary;
+        // 刚挂载常用世界书的角色卡可能只有附加书，卡级配置也需要有保存位置。
+        if (scope.source === 'character')
+            return binding.orderedNames[0] || '';
     }
     catch (e) {
         logWarn_ACU('[AgentWorldbook] 角色世界书绑定 API 不可用，hostBook 按无绑定降级。', e);
     }
-    if (primary)
-        return primary;
     if (scope.source === 'manual')
         return scope.manualSelection[0] || '';
     return '';
@@ -158145,7 +158147,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261117-1958";
+        const stamp = "20261121-1501";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -185631,8 +185633,8 @@ const _hoisted_11$d = {
 	key: 2,
 	class: "ub-vai__diffs"
 };
-const _hoisted_12$b = { class: "ub-vai__diff-title" };
-const _hoisted_13$a = { class: "ub-vai__list" };
+const _hoisted_12$c = { class: "ub-vai__diff-title" };
+const _hoisted_13$b = { class: "ub-vai__list" };
 const _hoisted_14$8 = { class: "ub-vai__raw" };
 const _hoisted_15$8 = {
 	key: 4,
@@ -185863,11 +185865,11 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 											},
 											[createBaseVNode(
 												"h4",
-												_hoisted_12$b,
+												_hoisted_12$c,
 												toDisplayString(group.title),
 												1
 												/* TEXT */
-											), createBaseVNode("ul", _hoisted_13$a, [(openBlock(true), createElementBlock(
+											), createBaseVNode("ul", _hoisted_13$b, [(openBlock(true), createElementBlock(
 												Fragment,
 												null,
 												renderList(group.items, (item) => {
@@ -187332,12 +187334,12 @@ const _hoisted_8$j = { class: "ub-vcard__head" };
 const _hoisted_9$e = { class: "ub-vcard__no" };
 const _hoisted_10$d = { class: "ub-vcard__fields" };
 const _hoisted_11$c = ["data-ub-viz-line"];
-const _hoisted_12$a = [
+const _hoisted_12$b = [
 	"data-ub-viz-field-layout",
 	"onPointerdown",
 	"onFocusin"
 ];
-const _hoisted_13$9 = { class: "ub-vfield__label" };
+const _hoisted_13$a = { class: "ub-vfield__label" };
 const _hoisted_14$7 = { class: "ub-vfield__name" };
 const _hoisted_15$7 = { class: "ub-vfield__locks" };
 const _hoisted_16$5 = [
@@ -187498,7 +187500,7 @@ function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 											"data-ub-viz-field-layout": fieldRow.wide ? "wide" : "half",
 											onPointerdown: ($event) => $setup.setActiveField(row.index, field.columnIndex),
 											onFocusin: ($event) => $setup.setActiveField(row.index, field.columnIndex)
-										}, [createBaseVNode("div", _hoisted_13$9, [createBaseVNode(
+										}, [createBaseVNode("div", _hoisted_13$a, [createBaseVNode(
 											"span",
 											_hoisted_14$7,
 											toDisplayString(field.header),
@@ -187570,7 +187572,7 @@ function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 											onPointerdown: withModifiers(($event) => $setup.startEditing(row.index, field.columnIndex), ["stop"]),
 											onClick: ($event) => $setup.startEditing(row.index, field.columnIndex),
 											onKeydown: [withKeys(withModifiers(($event) => $setup.startEditing(row.index, field.columnIndex), ["prevent"]), ["enter"]), withKeys(withModifiers(($event) => $setup.startEditing(row.index, field.columnIndex), ["prevent"]), ["space"])]
-										}, toDisplayString(field.value || "未填写"), 43, _hoisted_17$5))], 42, _hoisted_12$a);
+										}, toDisplayString(field.value || "未填写"), 43, _hoisted_17$5))], 42, _hoisted_12$b);
 									}),
 									128
 									/* KEYED_FRAGMENT */
@@ -188119,8 +188121,8 @@ const _hoisted_8$g = {
 const _hoisted_9$d = ["aria-expanded"];
 const _hoisted_10$c = { class: "ub-viz__switcher-name" };
 const _hoisted_11$b = { class: "ub-viz__titles" };
-const _hoisted_12$9 = { class: "ub-viz__title" };
-const _hoisted_13$8 = { class: "ub-viz__sub" };
+const _hoisted_12$a = { class: "ub-viz__title" };
+const _hoisted_13$9 = { class: "ub-viz__sub" };
 const _hoisted_14$6 = {
 	key: 0,
 	class: "ub-viz__conflict"
@@ -188222,11 +188224,11 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 				], 8, _hoisted_9$d),
 				createBaseVNode("div", _hoisted_11$b, [createBaseVNode(
 					"h1",
-					_hoisted_12$9,
+					_hoisted_12$a,
 					toDisplayString($setup.headTitle),
 					1
 					/* TEXT */
-				), createBaseVNode("p", _hoisted_13$8, [createTextVNode(
+				), createBaseVNode("p", _hoisted_13$9, [createTextVNode(
 					"模板：" + toDisplayString($setup.templateLabel),
 					1
 					/* TEXT */
@@ -190096,11 +190098,11 @@ const _hoisted_8$f = { class: "ub-at__table" };
 const _hoisted_9$c = { key: 0 };
 const _hoisted_10$b = ["colspan"];
 const _hoisted_11$a = { class: "ub-at__meta" };
-const _hoisted_12$8 = {
+const _hoisted_12$9 = {
 	key: 0,
 	class: "ub-at__empty"
 };
-const _hoisted_13$7 = ["onClick"];
+const _hoisted_13$8 = ["onClick"];
 const _hoisted_14$5 = { class: "ub-at__history-meta" };
 const _hoisted_15$5 = { class: "ub-at__logs" };
 const _hoisted_16$3 = { class: "ub-at__filters" };
@@ -190312,7 +190314,7 @@ function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 						"max-height": "260px",
 						onToggle: _cache[1] || (_cache[1] = ($event) => $setup.historyOpen = !$setup.historyOpen)
 					}, {
-						default: withCtx(() => [!$setup.sqlFlow.history.value.length ? (openBlock(), createElementBlock("p", _hoisted_12$8, "暂无执行历史")) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
+						default: withCtx(() => [!$setup.sqlFlow.history.value.length ? (openBlock(), createElementBlock("p", _hoisted_12$9, "暂无执行历史")) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
 							Fragment,
 							null,
 							renderList($setup.sqlFlow.history.value, (item, index) => {
@@ -190341,7 +190343,7 @@ function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 									toDisplayString(item.sql),
 									1
 									/* TEXT */
-								)], 10, _hoisted_13$7);
+								)], 10, _hoisted_13$8);
 							}),
 							128
 							/* KEYED_FRAGMENT */
@@ -191527,8 +191529,11 @@ function useFavoriteWorldbooks(options) {
             return `「${item.targetName}」已建好，挂到角色卡时出错：${item.reason || '未知错误'}，请手动挂载。`;
         return '';
     }
-    async function mountSelected() {
+    async function mountSelected(enableTakeover) {
         if (!canMount.value || selected.value.length === 0)
+            return false;
+        const character = getCurrentSingleCharacter_ACU();
+        if (!character)
             return false;
         mounting.value = true;
         try {
@@ -191548,6 +191553,21 @@ function useFavoriteWorldbooks(options) {
             if (mounted.length === 0 && problems.length === 0)
                 toast.info('没有挂载任何世界书（都已跳过）。', { muteable: false });
             selected.value = [];
+            if (enableTakeover && mounted.length > 0) {
+                const current = getCurrentSingleCharacter_ACU();
+                if (current?.avatar !== character.avatar || current.name !== character.name) {
+                    toast.warning('世界书已挂载。当前角色卡已切换，请切回原角色卡启用 Agent 接管。', { muteable: false });
+                }
+                else {
+                    try {
+                        await enableTakeover(mounted.map(item => item.targetName));
+                    }
+                    catch (error) {
+                        const reason = error instanceof Error ? error.message : String(error);
+                        toast.warning(`世界书已挂载，启用 Agent 接管时出错：${reason}`, { muteable: false });
+                    }
+                }
+            }
             try {
                 allNames.value = await listWorldbookNamesLive_ACU();
             }
@@ -191979,8 +191999,16 @@ function usePlotWorldbookAgentControl() {
         return result;
     }
     /** 返回值表示模式配置是否写入成功；接管/恢复的部分失败不影响返回 true（模式已变，调用方仍需刷新），由 toast 告警。 */
-    async function setMode(next) {
-        const saved = await writeControlPatch({ mode: next, enabled: next !== 'disabled' });
+    async function setMode(next, mountedBookNames = []) {
+        const patch = { mode: next, enabled: next !== 'disabled' };
+        const scope = worldbookScope.value;
+        if (next === 'agent' && scope.source === 'manual' && mountedBookNames.length > 0) {
+            patch.worldbookScope = {
+                source: 'manual',
+                manualSelection: [...new Set([...scope.manualSelection, ...mountedBookNames])],
+            };
+        }
+        const saved = await writeControlPatch(patch);
         if (!saved)
             return false;
         if (next === 'agent') {
@@ -193117,11 +193145,11 @@ const _hoisted_11$9 = {
 	key: 0,
 	class: "ub-wbe__skill-row"
 };
-const _hoisted_12$7 = {
+const _hoisted_12$8 = {
 	key: 1,
 	class: "ub-wbe__skill"
 };
-const _hoisted_13$6 = { class: "ub-wbe__skill-actions" };
+const _hoisted_13$7 = { class: "ub-wbe__skill-actions" };
 function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$A, [createBaseVNode("div", _hoisted_2$x, [createVNode($setup["UbInput"], {
 		class: "ub-wbe__search",
@@ -193309,7 +193337,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 									)]),
 									_: 2
 								}, 1032, ["onClick"])) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true),
-								$props.showSkillEditor && $setup.isSkillEditorOpen(entry) ? (openBlock(), createElementBlock("div", _hoisted_12$7, [
+								$props.showSkillEditor && $setup.isSkillEditorOpen(entry) ? (openBlock(), createElementBlock("div", _hoisted_12$8, [
 									createVNode($setup["UbTextarea"], {
 										"model-value": $setup.getSkillDraft(entry).description,
 										label: "Skill 描述",
@@ -193328,7 +193356,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 										"auto-resize": "",
 										"onUpdate:modelValue": ($event) => $setup.patchSkillDraft(entry, { triggerWhen: $event })
 									}, null, 8, ["model-value", "onUpdate:modelValue"]),
-									createBaseVNode("div", _hoisted_13$6, [createVNode($setup["UbButton"], {
+									createBaseVNode("div", _hoisted_13$7, [createVNode($setup["UbButton"], {
 										size: "sm",
 										variant: "danger",
 										onClick: ($event) => $setup.emit("delete-skill", entry.bookName, entry.uid)
@@ -193536,6 +193564,9 @@ var _sfc_main$C = /*@__PURE__*/ defineComponent({
         const favorites = useFavoriteWorldbooks({ skillifyBooks: agentControl.skillifyBooks });
         const favoriteToAdd = ref('');
         const skillifyingFavorite = ref('');
+        const favoriteMountAction = ref(null);
+        const favoriteMountDisabled = computed(() => favoriteMountAction.value !== null || agentControl.busy.value !== null
+            || !favorites.canMount.value || favorites.selected.value.length === 0);
         const favoriteAddOptions = computed(() => favorites.addableNames.value.map(name => ({ value: name, label: name })));
         const advancedOpen = ref(false);
         const entryFilter = ref('');
@@ -193701,9 +193732,20 @@ var _sfc_main$C = /*@__PURE__*/ defineComponent({
             }
             await refreshEntries();
         }
-        async function onMountFavorites() {
-            if (await favorites.mountSelected())
-                await refreshAll();
+        async function onMountFavorites(action) {
+            if (favoriteMountDisabled.value || (action === 'takeover' && !agentControl.isReady.value))
+                return;
+            favoriteMountAction.value = action;
+            try {
+                const mounted = await favorites.mountSelected(action === 'takeover'
+                    ? bookNames => agentControl.setMode('agent', bookNames)
+                    : undefined);
+                if (mounted)
+                    await refreshAll();
+            }
+            finally {
+                favoriteMountAction.value = null;
+            }
         }
         async function onScopeSourceChange(source) {
             if (await agentControl.setWorldbookScope(source))
@@ -193739,14 +193781,14 @@ var _sfc_main$C = /*@__PURE__*/ defineComponent({
         }
         onMounted(() => void refreshAll());
         watchChatChanged_ACU(() => void refreshAll());
-        const __returned__ = { copy, worldbook, agentControl, toast, entries, apiStore, followActiveApiLabel, apiPresetOptions, agentStale, markAgentConfirmed, favorites, favoriteToAdd, skillifyingFavorite, favoriteAddOptions, advancedOpen, entryFilter, entryEmptyText, sections, modeOptions, editingEnabled, entryStats, disabledSkillCount, blueSkillCount, combinedCount, currentScopeLabel, setDecisionApi, setSkillApi, onModeChange, runRestore, runSkillify, runClearSkillMeta, reportBatchFailedBooks, onEnableDisabledSkills, onConvertBlueToGreen, onCombined, refreshEntries, refreshAll, favoriteStatus, favoriteNeedsSkillify, favoriteBadge, onAddFavorite, onSkillifyFavorite, onMountFavorites, onScopeSourceChange, onScopeBookToggle, onSkillifySelected, onSaveSkill, onDeleteSkill, AgentAdvancedSheet, WorldbookEntries, WorldbookSourcePicker, UbBadge, UbButton, UbPage, UbRow, UbSection, UbSegmented, UbSelect };
+        const __returned__ = { copy, worldbook, agentControl, toast, entries, apiStore, followActiveApiLabel, apiPresetOptions, agentStale, markAgentConfirmed, favorites, favoriteToAdd, skillifyingFavorite, favoriteMountAction, favoriteMountDisabled, favoriteAddOptions, advancedOpen, entryFilter, entryEmptyText, sections, modeOptions, editingEnabled, entryStats, disabledSkillCount, blueSkillCount, combinedCount, currentScopeLabel, setDecisionApi, setSkillApi, onModeChange, runRestore, runSkillify, runClearSkillMeta, reportBatchFailedBooks, onEnableDisabledSkills, onConvertBlueToGreen, onCombined, refreshEntries, refreshAll, favoriteStatus, favoriteNeedsSkillify, favoriteBadge, onAddFavorite, onSkillifyFavorite, onMountFavorites, onScopeSourceChange, onScopeBookToggle, onSkillifySelected, onSaveSkill, onDeleteSkill, AgentAdvancedSheet, WorldbookEntries, WorldbookSourcePicker, UbBadge, UbButton, UbPage, UbRow, UbSection, UbSegmented, UbSelect };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.ub-agent__mode[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-agent__config[data-v-f0fd1638] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-agent__actions[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\n}\n.ub-agent__current[data-v-f0fd1638] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-agent__current strong[data-v-f0fd1638] {\r\n  color: var(--ub-text);\n}\n.ub-agent-fav[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\n}\n.ub-agent-fav__list[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--ub-s1);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\n}\n.ub-agent-fav__item[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s1) 0;\n}\n.ub-agent-fav__item + .ub-agent-fav__item[data-v-f0fd1638] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-agent-fav__check[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex: 1 1 calc(var(--ub-u) * 120);\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\r\n  min-height: var(--ub-control-h-sm);\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border: 0;\r\n  border-radius: calc(var(--ub-r-control) - 3px);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: left;\r\n  cursor: pointer;\r\n  overflow-wrap: anywhere;\n}\n.ub-agent-fav__check[data-v-f0fd1638]:hover:not(:disabled) {\r\n  background: var(--ub-hover);\n}\n.ub-agent-fav__check[data-v-f0fd1638]:disabled {\r\n  cursor: not-allowed;\r\n  opacity: 0.6;\n}\n.ub-agent-fav__check.is-on[data-v-f0fd1638] {\r\n  color: var(--ub-text);\r\n  font-weight: 600;\n}\n.ub-agent-fav__check.is-on i[data-v-f0fd1638] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-agent-fav__add[data-v-f0fd1638],\r\n.ub-agent-fav__mount[data-v-f0fd1638] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-agent-fav__add[data-v-f0fd1638] > :first-child {\r\n  flex: 1 1 calc(var(--ub-u) * 140);\r\n  min-width: 0;\n}\n.ub-agent-fav__mount .ub-agent__current[data-v-f0fd1638] {\r\n  flex: 1 1 auto;\n}\r\n", "src/presentation-v3/pages/AgentPage.vue#style-0-f0fd1638");
-var AgentPage_vue_vue_type_style_index_0_scoped_f0fd1638_lang = null;
+injectSfcStyle("\n.ub-agent__mode[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-agent__config[data-v-e58b6402] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-agent__actions[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\n}\n.ub-agent__current[data-v-e58b6402] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-agent__current strong[data-v-e58b6402] {\r\n  color: var(--ub-text);\n}\n.ub-agent-fav[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\n}\n.ub-agent-fav__list[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--ub-s1);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\n}\n.ub-agent-fav__item[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s1) 0;\n}\n.ub-agent-fav__item + .ub-agent-fav__item[data-v-e58b6402] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-agent-fav__check[data-v-e58b6402] {\r\n  display: flex;\r\n  flex: 1 1 calc(var(--ub-u) * 120);\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\r\n  min-height: var(--ub-control-h-sm);\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border: 0;\r\n  border-radius: calc(var(--ub-r-control) - 3px);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: left;\r\n  cursor: pointer;\r\n  overflow-wrap: anywhere;\n}\n.ub-agent-fav__check[data-v-e58b6402]:hover:not(:disabled) {\r\n  background: var(--ub-hover);\n}\n.ub-agent-fav__check[data-v-e58b6402]:disabled {\r\n  cursor: not-allowed;\r\n  opacity: 0.6;\n}\n.ub-agent-fav__check.is-on[data-v-e58b6402] {\r\n  color: var(--ub-text);\r\n  font-weight: 600;\n}\n.ub-agent-fav__check.is-on i[data-v-e58b6402] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-agent-fav__add[data-v-e58b6402],\r\n.ub-agent-fav__mount[data-v-e58b6402],\r\n.ub-agent-fav__mount-actions[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-agent-fav__add[data-v-e58b6402] > :first-child {\r\n  flex: 1 1 calc(var(--ub-u) * 140);\r\n  min-width: 0;\n}\n.ub-agent-fav__mount .ub-agent__current[data-v-e58b6402] {\r\n  flex: 1 1 auto;\n}\n.ub-agent-fav__mount-actions[data-v-e58b6402] {\r\n  max-width: 100%;\n}\n.ub-agent-fav__takeover[data-v-e58b6402] {\r\n  max-width: 100%;\r\n  min-height: var(--ub-control-h);\r\n  height: auto;\r\n  padding-block: var(--ub-s2);\r\n  line-height: 1.25;\r\n  white-space: normal;\n}\r\n", "src/presentation-v3/pages/AgentPage.vue#style-0-e58b6402");
+var AgentPage_vue_vue_type_style_index_0_scoped_e58b6402_lang = null;
 
 const _hoisted_1$y = { class: "ub-agent__mode" };
 const _hoisted_2$v = { class: "ub-agent__config" };
@@ -193770,6 +193812,8 @@ const _hoisted_8$d = [
 const _hoisted_9$a = { class: "ub-agent-fav__add" };
 const _hoisted_10$9 = { class: "ub-agent-fav__mount" };
 const _hoisted_11$8 = { class: "ub-agent__current" };
+const _hoisted_12$7 = { key: 0 };
+const _hoisted_13$6 = { class: "ub-agent-fav__mount-actions" };
 function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		lead: "独立管理 Agent 的世界书范围、Skill 元数据和接管状态。",
@@ -193801,9 +193845,10 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 						"model-value": $setup.agentControl.mode.value,
 						options: $setup.modeOptions,
 						"aria-label": "Agent 世界书模式",
+						disabled: $setup.favoriteMountAction !== null,
 						block: "",
 						"onUpdate:modelValue": $setup.onModeChange
-					}, null, 8, ["model-value"])]),
+					}, null, 8, ["model-value", "disabled"])]),
 					createVNode($setup["UbRow"], {
 						label: $setup.copy.apiPresets.decisionLabel,
 						hint: $setup.copy.apiPresets.decisionHint,
@@ -193932,7 +193977,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 					"names",
 					"status",
 					"error"
-				]), createBaseVNode("p", _hoisted_4$n, [_cache[9] || (_cache[9] = createTextVNode(
+				]), createBaseVNode("p", _hoisted_4$n, [_cache[11] || (_cache[11] = createTextVNode(
 					"当前范围：",
 					-1
 					/* CACHED */
@@ -194039,7 +194084,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 									disabled: $setup.agentControl.busy.value !== null,
 									onClick: ($event) => $setup.onSkillifyFavorite(name)
 								}, {
-									default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
+									default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
 										"Skill 化",
 										-1
 										/* CACHED */
@@ -194057,7 +194102,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 									"aria-label": `移出 ${name}`,
 									onClick: ($event) => $setup.favorites.remove(name)
 								}, {
-									default: withCtx(() => [..._cache[11] || (_cache[11] = [createTextVNode(
+									default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
 										"移出",
 										-1
 										/* CACHED */
@@ -194081,38 +194126,61 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.favoriteToAdd,
 						onClick: $setup.onAddFavorite
 					}, {
-						default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
+						default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
 							"加入常用",
 							-1
 							/* CACHED */
 						)])]),
 						_: 1
 					}, 8, ["disabled"])]),
-					createBaseVNode("div", _hoisted_10$9, [createBaseVNode("p", _hoisted_11$8, [_cache[13] || (_cache[13] = createTextVNode(
-						" 当前角色卡：",
-						-1
-						/* CACHED */
-					)), createBaseVNode(
-						"strong",
-						null,
-						toDisplayString($setup.favorites.characterName.value || "（未打开单人角色卡）"),
-						1
-						/* TEXT */
-					)]), createVNode($setup["UbButton"], {
-						size: "sm",
-						variant: "primary",
-						icon: "fa-solid fa-link",
-						busy: $setup.favorites.mounting.value,
-						disabled: !$setup.favorites.canMount.value || $setup.favorites.selected.value.length === 0,
-						onClick: $setup.onMountFavorites
-					}, {
-						default: withCtx(() => [createTextVNode(
-							"挂载所选到当前角色卡（" + toDisplayString($setup.favorites.selected.value.length) + "）",
+					createBaseVNode("div", _hoisted_10$9, [createBaseVNode("p", _hoisted_11$8, [
+						_cache[15] || (_cache[15] = createTextVNode(
+							" 当前角色卡：",
+							-1
+							/* CACHED */
+						)),
+						createBaseVNode(
+							"strong",
+							null,
+							toDisplayString($setup.favorites.characterName.value || "（未打开单人角色卡）"),
 							1
 							/* TEXT */
-						)]),
+						),
+						$setup.favorites.selected.value.length > 0 ? (openBlock(), createElementBlock(
+							"span",
+							_hoisted_12$7,
+							" · 已选 " + toDisplayString($setup.favorites.selected.value.length) + " 本",
+							1
+							/* TEXT */
+						)) : createCommentVNode("v-if", true)
+					]), createBaseVNode("div", _hoisted_13$6, [createVNode($setup["UbButton"], {
+						class: "ub-agent-fav__takeover",
+						variant: "primary",
+						icon: "fa-solid fa-robot",
+						busy: $setup.favoriteMountAction === "takeover",
+						disabled: $setup.favoriteMountDisabled || !$setup.agentControl.isReady.value,
+						onClick: _cache[8] || (_cache[8] = ($event) => $setup.onMountFavorites("takeover"))
+					}, {
+						default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+							"挂载并启用 Agent 接管",
+							-1
+							/* CACHED */
+						)])]),
 						_: 1
-					}, 8, ["busy", "disabled"])])
+					}, 8, ["busy", "disabled"]), createVNode($setup["UbButton"], {
+						size: "sm",
+						icon: "fa-solid fa-link",
+						busy: $setup.favoriteMountAction === "mount",
+						disabled: $setup.favoriteMountDisabled,
+						onClick: _cache[9] || (_cache[9] = ($event) => $setup.onMountFavorites("mount"))
+					}, {
+						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+							"仅挂载",
+							-1
+							/* CACHED */
+						)])]),
+						_: 1
+					}, 8, ["busy", "disabled"])])])
 				])]),
 				_: 1
 			}),
@@ -194133,7 +194201,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: !$setup.editingEnabled || $setup.disabledSkillCount === 0,
 							onClick: $setup.onEnableDisabledSkills
 						}, {
-							default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
+							default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 								"执行",
 								-1
 								/* CACHED */
@@ -194152,7 +194220,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: !$setup.editingEnabled || $setup.blueSkillCount === 0,
 							onClick: $setup.onConvertBlueToGreen
 						}, {
-							default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+							default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 								"执行",
 								-1
 								/* CACHED */
@@ -194172,7 +194240,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: !$setup.editingEnabled || $setup.combinedCount === 0,
 							onClick: $setup.onCombined
 						}, {
-							default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+							default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
 								"执行",
 								-1
 								/* CACHED */
@@ -194187,14 +194255,14 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 			createVNode($setup["AgentAdvancedSheet"], {
 				open: $setup.advancedOpen,
 				"agent-control": $setup.agentControl,
-				onClose: _cache[8] || (_cache[8] = ($event) => $setup.advancedOpen = false),
+				onClose: _cache[10] || (_cache[10] = ($event) => $setup.advancedOpen = false),
 				onCurrentWorldbookChanged: $setup.refreshAll
 			}, null, 8, ["open", "agent-control"])
 		]),
 		_: 1
 	});
 }
-var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$C, [["render", _sfc_render$B], ["__scopeId", "data-v-f0fd1638"]]);
+var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$C, [["render", _sfc_render$B], ["__scopeId", "data-v-e58b6402"]]);
 
 const apiCopy = {
     panels: {

@@ -117,12 +117,53 @@ describe('useFavoriteWorldbooks', () => {
     fav.toggleSelected('战斗技能', true);
     fav.toggleSelected('地理百科', true);
 
-    await fav.mountSelected();
+    const enableTakeover = vi.fn(async () => true);
+    await fav.mountSelected(enableTakeover);
 
+    expect(enableTakeover).not.toHaveBeenCalled();
     const text = h.toast.warning.mock.calls.map(call => call[0]).join('\n');
     expect(text).toContain('手动');
     expect(text).toContain('艾琳-战斗技能');
     expect(text).toContain('找不到常用世界书「地理百科」');
+  });
+
+  it('仅将成功挂载或已挂载的副本交给 Agent，接管期间保持挂载操作锁定', async () => {
+    h.favorites = ['战斗技能', '地理百科', '艾琳自带'];
+    h.mount.mockResolvedValue({ ok: true, characterName: '艾琳', results: [
+      { sourceName: '战斗技能', targetName: '艾琳-战斗技能', copy: 'created', binding: 'bound' },
+      { sourceName: '地理百科', targetName: '艾琳-地理百科', copy: 'kept', binding: 'already' },
+      { sourceName: '艾琳自带', targetName: '艾琳-艾琳自带', copy: 'skipped', binding: 'not_attempted' },
+    ] });
+    const fav = useFavoriteWorldbooks({ skillifyBooks: vi.fn() });
+    await fav.refresh();
+    for (const name of h.favorites) fav.toggleSelected(name, true);
+    const enableTakeover = vi.fn(async () => {
+      expect(fav.mounting.value).toBe(true);
+      return true;
+    });
+
+    await expect(fav.mountSelected(enableTakeover)).resolves.toBe(true);
+
+    expect(enableTakeover).toHaveBeenCalledExactlyOnceWith(['艾琳-战斗技能', '艾琳-地理百科']);
+    expect(fav.mounting.value).toBe(false);
+  });
+
+  it('挂载期间切换到同名的另一张角色卡时，不在另一张卡启用接管', async () => {
+    h.mount.mockImplementation(async () => {
+      h.character = { name: '艾琳', avatar: 'Other-Erin.png' };
+      return { ok: true, characterName: '艾琳', results: [
+        { sourceName: '战斗技能', targetName: '艾琳-战斗技能', copy: 'created', binding: 'bound' },
+      ] };
+    });
+    const fav = useFavoriteWorldbooks({ skillifyBooks: vi.fn() });
+    await fav.refresh();
+    fav.toggleSelected('战斗技能', true);
+    const enableTakeover = vi.fn(async () => true);
+
+    await expect(fav.mountSelected(enableTakeover)).resolves.toBe(true);
+
+    expect(enableTakeover).not.toHaveBeenCalled();
+    expect(h.toast.warning).toHaveBeenCalledWith(expect.stringContaining('当前角色卡已切换'), expect.anything());
   });
 
   it('没勾选或不是单人角色卡时不挂载', async () => {

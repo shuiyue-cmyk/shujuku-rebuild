@@ -419,6 +419,23 @@ describe('usePlotWorldbookAgentControl', () => {
     expect(toast.info).not.toHaveBeenCalledWith('Agent 世界书已切换为接管模式。', { muteable: false });
   });
 
+  it('挂载并接管时保留原有手动范围、追加副本，并保持跟随角色卡范围不变', async () => {
+    const c = await getComposable();
+
+    await c.setMode('agent', ['角色A-战斗技能']);
+    expect(mockWriteControl).toHaveBeenLastCalledWith({ mode: 'agent', enabled: true });
+
+    await c.setWorldbookScope('manual', ['原有世界书', '角色A-战斗技能']);
+    await c.setMode('agent', ['角色A-战斗技能', '角色A-地理百科']);
+
+    expect(mockWriteControl).toHaveBeenLastCalledWith({
+      mode: 'agent',
+      enabled: true,
+      worldbookScope: { source: 'manual', manualSelection: ['原有世界书', '角色A-战斗技能', '角色A-地理百科'] },
+    });
+    expect(mockTakeover).toHaveBeenCalledTimes(2);
+  });
+
   it('setMode disabled 保存成功后执行 restore_only 恢复但保留 legacy snapshot', async () => {
     const c = await getComposable();
     const settings = (c as any).__settings;

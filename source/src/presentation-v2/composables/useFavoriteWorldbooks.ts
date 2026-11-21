@@ -108,8 +108,10 @@ export function useFavoriteWorldbooks(options: { skillifyBooks: (bookNames: stri
     return '';
   }
 
-  async function mountSelected(): Promise<boolean> {
+  async function mountSelected(enableTakeover?: (bookNames: string[]) => Promise<boolean>): Promise<boolean> {
     if (!canMount.value || selected.value.length === 0) return false;
+    const character = getCurrentSingleCharacter_ACU();
+    if (!character) return false;
     mounting.value = true;
     try {
       const ordered = favorites.value.filter(name => selected.value.includes(name));
@@ -126,6 +128,19 @@ export function useFavoriteWorldbooks(options: { skillifyBooks: (bookNames: stri
       if (problems.length > 0) toast.warning(problems.join('\n'), { muteable: false });
       if (mounted.length === 0 && problems.length === 0) toast.info('没有挂载任何世界书（都已跳过）。', { muteable: false });
       selected.value = [];
+      if (enableTakeover && mounted.length > 0) {
+        const current = getCurrentSingleCharacter_ACU();
+        if (current?.avatar !== character.avatar || current.name !== character.name) {
+          toast.warning('世界书已挂载。当前角色卡已切换，请切回原角色卡启用 Agent 接管。', { muteable: false });
+        } else {
+          try {
+            await enableTakeover(mounted.map(item => item.targetName));
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            toast.warning(`世界书已挂载，启用 Agent 接管时出错：${reason}`, { muteable: false });
+          }
+        }
+      }
       try {
         allNames.value = await listWorldbookNamesLive_ACU();
       } catch { /* 列表刷新失败不影响结果 */ }
