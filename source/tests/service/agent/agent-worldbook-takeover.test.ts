@@ -2006,16 +2006,30 @@ describe('Agent 世界书失败隔离（1.3.6）', () => {
       .map(entry => entry.uid);
   }
 
-  it('空选择按完整集合关闭上一轮全部受控条目，不改无关条目', async () => {
+  it('2,774 条 Skill 世界书收到空选择时只收回已放行条目，下一轮仍可正常放行', async () => {
+    const entries = mockEntriesByBook.get('角色A世界书')!;
+    entries[0].type = 'selective';
+    entries.push(...Array.from({ length: 2773 }, (_, index) => ({
+      uid: index + 2, enabled: true, type: 'selective', comment: skillComment_ACU, keys: [`关键词${index + 2}`],
+    })));
+    entries.push({ uid: 3000, enabled: true, type: 'constant', comment: '无关条目' });
     await takeoverWorldbookGreenlights_ACU();
     await writeFinalGenerationGreenlights_ACU([{ bookName: '角色A世界书', uid: 1 }]);
     expect(litGreenlights()).toEqual([1]);
-    mockEntriesByBook.get('角色A世界书')!.push({ uid: 99, enabled: true, type: 'constant', comment: '无关条目' });
+    const persisted = structuredClone(mockStateSnapshot.current);
+    mockSetLorebookEntries.mockClear();
 
     await expect(writeFinalGenerationGreenlights_ACU([])).resolves.toBe(true);
-    expect(mockEntriesByBook.get('角色A世界书')!.find(entry => entry.uid === 1)?.enabled).toBe(false);
-    expect(mockEntriesByBook.get('角色A世界书')!.find(entry => entry.uid === 99)?.enabled).toBe(true);
+    expect(mockSetLorebookEntries).toHaveBeenCalledExactlyOnceWith('角色A世界书', [
+      { uid: 1, enabled: false, type: 'selective' },
+    ]);
+    const live = mockEntriesByBook.get('角色A世界书')!;
+    expect(live.filter(entry => entry.enabled !== false).map(entry => entry.uid)).toEqual([3000]);
+    expect(mockStateSnapshot.current).toEqual(persisted);
     expect(litGreenlights()).toEqual([]);
+
+    await expect(writeFinalGenerationGreenlights_ACU([{ bookName: '角色A世界书', uid: 2774 }])).resolves.toBe(true);
+    expect(litGreenlights()).toEqual([2774]);
   });
 
   it('Agent 失败仅按持久快照恢复原条目，忽略矛盾的内存快照并保留恢复依据', async () => {

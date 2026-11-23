@@ -569,6 +569,38 @@ describe('runAgentDecisionForPlot_ACU', () => {
     expect(mockCallAIWithPreset).toHaveBeenCalledTimes(2);
   });
 
+  it.each([null, '   '])('Agent 模型连续空回 %j 时单独标记，供剧情继续且收回本轮放行', async (response) => {
+    mockCallAIWithPreset.mockResolvedValue(response);
+
+    await expect(runAgentDecisionForPlot_ACU({
+      plotSettings: { agentWorldbookControl: { enabled: true, mode: 'agent', contextSettings: { agentAiMaxRetries: 2 } } },
+      userMessage: '继续', sharedContext: {}, enabledTasks: [],
+      requireTaskPlan: false, requireCompleteDecision: true,
+    })).resolves.toMatchObject({ active: false, fallbackReason: 'empty_agent_response', finalGenerationGreenlights: [] });
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(2);
+  });
+
+  it('要求完整决策时，一个分片空回就不使用其他分片的放行', async () => {
+    mockRefreshPlotAgentWorldbookSnapshot.mockResolvedValueOnce({
+      active: true, selectionSignature: 'scope', createdAt: 1,
+      books: { 剧情书: [{ uid: 1 }, { uid: 2 }] },
+    });
+    mockGetLorebookEntries.mockResolvedValueOnce([1, 2].map(uid => ({
+      uid, enabled: true, comment: `条目${uid}`, keys: [`关键词${uid}`], content: `内容${uid}`,
+    })));
+    mockCallAIWithPreset.mockResolvedValueOnce('{"finalGenerationGreenlights":[{"entries":[1]}]}').mockResolvedValueOnce(null);
+
+    await expect(runAgentDecisionForPlot_ACU({
+      plotSettings: { agentWorldbookControl: {
+        enabled: true, mode: 'agent', agentDecisionConcurrency: 2,
+        contextSettings: { agentAiMaxRetries: 1, decisionWorldbookCandidateLimit: 2 },
+      } },
+      userMessage: '继续', sharedContext: {}, enabledTasks: [],
+      requireTaskPlan: false, requireCompleteDecision: true,
+    })).resolves.toMatchObject({ active: false, fallbackReason: 'empty_agent_response', finalGenerationGreenlights: [] });
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(2);
+  });
+
   it('uses configured concurrency above the former limit while avoiding empty decision shards', async () => {
     mockRefreshPlotAgentWorldbookSnapshot.mockResolvedValueOnce({
       active: true,

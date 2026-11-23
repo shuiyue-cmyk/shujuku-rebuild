@@ -144,11 +144,10 @@ export {
     let result = String(text || '');
     let removedCount = 0;
     for (const entry of Array.isArray(entries) ? entries : []) {
-      const comment = String(entry?.comment || entry?.rawComment || entry?.name || '').trim();
       const candidates = buildNativeWorldbookGreenlightRemovalCandidates_ACU(entry);
       for (const candidate of candidates) {
         if (!allowRawContentOnly && !candidate.requiresComment) continue;
-        if (candidate.requiresComment && comment && !result.includes(comment)) continue;
+        if (!result.includes(candidate.text)) continue;
         const pattern = new RegExp(`(?:\\n{0,2})${escapeAgentWorldbookRegExp_ACU(candidate.text)}(?:\\n{0,2})`, 'g');
         const before = result;
         result = result.replace(pattern, '\n\n');

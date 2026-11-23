@@ -237,11 +237,11 @@ function buildGreenlightReleasePatch_ACU(
   entry: Record<string, any>,
 ): Record<string, any> | null {
   const patch: Record<string, any> = {};
+  if (String(entry?.type || '').trim().toLowerCase() !== 'constant') return null;
   if (isFinalGenerationBlueLightEntry_ACU(entry)) patch.enabled = false;
   const previousType = getSnapshotEntryForBookAndUid_ACU(snapshot, bookName, entry?.uid)?.previousType;
   if (typeof previousType === 'string' && previousType.trim() !== ''
-    && previousType.trim().toLowerCase() !== 'constant'
-    && String(entry?.type || '').trim().toLowerCase() === 'constant') {
+    && previousType.trim().toLowerCase() !== 'constant') {
     patch.type = previousType;
   }
   return Object.keys(patch).length > 0 ? { uid: entry.uid, ...patch } : null;

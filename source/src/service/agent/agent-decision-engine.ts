@@ -721,6 +721,8 @@ function normalizePlotGreenlights_ACU(
   return result;
 }
 
+class EmptyAgentDecisionResponseError_ACU extends Error {}
+
 async function runAgentDecisionShard_ACU(params: {
   shard: AgentDecisionShard_ACU;
   shardCount: number;
@@ -745,8 +747,9 @@ async function runAgentDecisionShard_ACU(params: {
     shardIndex: params.shard.index,
     shardCount: params.shardCount,
   });
-  let rawResponse = '';
+  let rawResponse: string | null = null;
   let failureReason = 'empty_agent_response';
+  let lastResponseWasEmpty = false;
   for (let attempt = 1; attempt <= params.maxAiAttempts; attempt++) {
     try {
       // 中止信号透传：剧情推进「停止」可中断 agent 决策请求（与 plot-task-engine 一致）
@@ -756,6 +759,7 @@ async function runAgentDecisionShard_ACU(params: {
       if (params.signal?.aborted || error?.name === 'AbortError') {
         throw new Error(`agent_decision_shard_${params.shard.index + 1}_aborted`);
       }
+      lastResponseWasEmpty = false;
       failureReason = 'agent_request_error';
       const retryable = isRetryableAiRequestError_ACU(error);
       logWarn_ACU(`[Agent决策] 分片 ${params.shard.index + 1}/${params.shardCount} 第 ${attempt}/${params.maxAiAttempts} 次请求失败；${retryable ? '允许重试' : '不可重试'}；候选 ${params.shard.summaries.length} 条：${String(error?.message || 'unknown')}`);
@@ -763,7 +767,8 @@ async function runAgentDecisionShard_ACU(params: {
       if (!retryable) break;
       continue;
     }
-    if (!rawResponse) {
+    lastResponseWasEmpty = !rawResponse?.trim();
+    if (!rawResponse || lastResponseWasEmpty) {
       failureReason = 'empty_agent_response';
       continue;
     }
@@ -771,7 +776,8 @@ async function runAgentDecisionShard_ACU(params: {
     if (parsed && parsed.fallbackMode !== true) return { shard: params.shard, rawResponse, parsed };
     failureReason = parsed?.reason || 'invalid_agent_response';
   }
-  throw new Error(`agent_decision_shard_${params.shard.index + 1}_failed:${failureReason}`);
+  const message = `agent_decision_shard_${params.shard.index + 1}_failed:${failureReason}`;
+  throw lastResponseWasEmpty ? new EmptyAgentDecisionResponseError_ACU(message) : new Error(message);
 }
 
 export async function runAgentDecisionForPlot_ACU(params: {
@@ -782,8 +788,7 @@ export async function runAgentDecisionForPlot_ACU(params: {
   enabledTasks: any[];
   requireTaskPlan?: boolean;
   /**
-   * 剧情推进专用（上游 1.3.6）：任一分片失败、任务计划不合法或决策异常都抛错，不返回部分选择。
-   * 部分选择会让失败分片那批书的受控条目继续关着、正文里静默缺内容；由调用方改走原生世界书恢复。
+   * 剧情推进专用：不应用部分选择。空回复单独标记供调用方收回放行，其余失败抛错。
    */
   requireCompleteDecision?: boolean;
   signal?: AbortSignal | null;
@@ -836,8 +841,10 @@ export async function runAgentDecisionForPlot_ACU(params: {
       signal: params.signal,
     })));
     if (params.requireCompleteDecision) {
-      const rejected = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-      if (rejected) throw rejected.reason;
+      const rejected = settled.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      const otherFailure = rejected.find(result => !(result.reason instanceof EmptyAgentDecisionResponseError_ACU));
+      if (otherFailure) throw otherFailure.reason;
+      if (rejected.length > 0) return emptyDecision_ACU(originalTasks, 'empty_agent_response');
     }
     const successfulShards = settled
       .filter((result): result is PromiseFulfilledResult<AgentDecisionShardResult_ACU> => result.status === 'fulfilled')

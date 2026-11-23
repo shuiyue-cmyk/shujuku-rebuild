@@ -1056,6 +1056,43 @@ describe('runPlotTasksRuntime_ACU', () => {
     expect(mockSetPendingFinalGenerationGreenlights).not.toHaveBeenCalledWith(expect.arrayContaining([expect.anything()]));
   });
 
+  it.each(['sequential', 'concurrent'] as const)('Agent 空回时保留 %s 剧情推进，正文清空放行，不恢复整批条目', async (mode) => {
+    mockResolveAgentWorldbookFilterAvailability.mockResolvedValueOnce(agentAvailable_ACU(mode));
+    mockRunAgentDecisionForPlot.mockImplementationOnce(async ({ enabledTasks }: any) => ({
+      active: false, fallbackReason: 'empty_agent_response', taskPlan: [], plotGreenlights: {},
+      finalGenerationGreenlights: [], effectiveTasks: enabledTasks,
+    }));
+    agentRuntime.nativeFallback = true;
+    const reportWarning = vi.fn();
+
+    const result = await runPlotTasksRuntime_ACU(isolationTask_ACU('agent-empty'), '当前输入', { reportWarning });
+
+    expect(result.successfulResults).toHaveLength(1);
+    expect(result.finalMessage).toBe('最终注入消息');
+    expect(mockWriteFinalGenerationGreenlights).toHaveBeenCalledExactlyOnceWith([], expect.objectContaining({ expectedRevision: 7 }));
+    expect(mockRecoverAgentWorldbookAfterFailure).not.toHaveBeenCalled();
+    expect(mockSetPendingFinalGenerationGreenlights).toHaveBeenLastCalledWith([]);
+    expect(agentRuntime.nativeFallback).toBe(false);
+    expect(reportWarning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('未返回内容'));
+  });
+
+  it('Agent 空回且宿主未应用清理时仍继续剧情，并提示可能残留此前放行', async () => {
+    mockResolveAgentWorldbookFilterAvailability.mockResolvedValueOnce(agentAvailable_ACU());
+    mockRunAgentDecisionForPlot.mockImplementationOnce(async ({ enabledTasks }: any) => ({
+      active: false, fallbackReason: 'empty_agent_response', taskPlan: [], plotGreenlights: {},
+      finalGenerationGreenlights: [], effectiveTasks: enabledTasks,
+    }));
+    mockWriteFinalGenerationGreenlights.mockResolvedValueOnce(false);
+    const reportWarning = vi.fn();
+
+    const result = await runPlotTasksRuntime_ACU(isolationTask_ACU('agent-empty-clear-failure'), '当前输入', { reportWarning });
+
+    expect(result.finalMessage).toBe('最终注入消息');
+    expect(mockWriteFinalGenerationGreenlights).toHaveBeenCalledExactlyOnceWith([], expect.anything());
+    expect(mockRecoverAgentWorldbookAfterFailure).not.toHaveBeenCalled();
+    expect(reportWarning).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('未能确认收回'));
+  });
+
   it('正文绿灯写入未生效时按 Agent 失败恢复原生，不留待放行列表', async () => {
     const finalGreenlights = [{ bookName: '剧情书', uid: 12, reason: '正文需要' }];
     mockResolveAgentWorldbookFilterAvailability.mockResolvedValueOnce(agentAvailable_ACU());

@@ -83315,12 +83315,13 @@ function isFinalGenerationBlueLightEntry_ACU(entry) {
  */
 function buildGreenlightReleasePatch_ACU(snapshot, bookName, entry) {
     const patch = {};
+    if (String(entry?.type || '').trim().toLowerCase() !== 'constant')
+        return null;
     if (isFinalGenerationBlueLightEntry_ACU(entry))
         patch.enabled = false;
     const previousType = getSnapshotEntryForBookAndUid_ACU(snapshot, bookName, entry?.uid)?.previousType;
     if (typeof previousType === 'string' && previousType.trim() !== ''
-        && previousType.trim().toLowerCase() !== 'constant'
-        && String(entry?.type || '').trim().toLowerCase() === 'constant') {
+        && previousType.trim().toLowerCase() !== 'constant') {
         patch.type = previousType;
     }
     return Object.keys(patch).length > 0 ? { uid: entry.uid, ...patch } : null;
@@ -94312,6 +94313,8 @@ function normalizePlotGreenlights_ACU(raw, allowedKeys, enabledTaskIds, summarie
     }
     return result;
 }
+class EmptyAgentDecisionResponseError_ACU extends Error {
+}
 async function runAgentDecisionShard_ACU(params) {
     const messages = buildAgentDecisionPrompt_ACU({
         plotSettings: params.plotSettings,
@@ -94325,8 +94328,9 @@ async function runAgentDecisionShard_ACU(params) {
         shardIndex: params.shard.index,
         shardCount: params.shardCount,
     });
-    let rawResponse = '';
+    let rawResponse = null;
     let failureReason = 'empty_agent_response';
+    let lastResponseWasEmpty = false;
     for (let attempt = 1; attempt <= params.maxAiAttempts; attempt++) {
         try {
             // 中止信号透传：剧情推进「停止」可中断 agent 决策请求（与 plot-task-engine 一致）
@@ -94337,6 +94341,7 @@ async function runAgentDecisionShard_ACU(params) {
             if (params.signal?.aborted || error?.name === 'AbortError') {
                 throw new Error(`agent_decision_shard_${params.shard.index + 1}_aborted`);
             }
+            lastResponseWasEmpty = false;
             failureReason = 'agent_request_error';
             const retryable = isRetryableAiRequestError_ACU(error);
             logWarn_ACU(`[Agent决策] 分片 ${params.shard.index + 1}/${params.shardCount} 第 ${attempt}/${params.maxAiAttempts} 次请求失败；${retryable ? '允许重试' : '不可重试'}；候选 ${params.shard.summaries.length} 条：${String(error?.message || 'unknown')}`);
@@ -94345,7 +94350,8 @@ async function runAgentDecisionShard_ACU(params) {
                 break;
             continue;
         }
-        if (!rawResponse) {
+        lastResponseWasEmpty = !rawResponse?.trim();
+        if (!rawResponse || lastResponseWasEmpty) {
             failureReason = 'empty_agent_response';
             continue;
         }
@@ -94354,7 +94360,8 @@ async function runAgentDecisionShard_ACU(params) {
             return { shard: params.shard, rawResponse, parsed };
         failureReason = parsed?.reason || 'invalid_agent_response';
     }
-    throw new Error(`agent_decision_shard_${params.shard.index + 1}_failed:${failureReason}`);
+    const message = `agent_decision_shard_${params.shard.index + 1}_failed:${failureReason}`;
+    throw lastResponseWasEmpty ? new EmptyAgentDecisionResponseError_ACU(message) : new Error(message);
 }
 async function runAgentDecisionForPlot_ACU(params) {
     const originalTasks = Array.isArray(params.enabledTasks) ? params.enabledTasks : [];
@@ -94397,9 +94404,12 @@ async function runAgentDecisionForPlot_ACU(params) {
             signal: params.signal,
         })));
         if (params.requireCompleteDecision) {
-            const rejected = settled.find((result) => result.status === 'rejected');
-            if (rejected)
-                throw rejected.reason;
+            const rejected = settled.filter((result) => result.status === 'rejected');
+            const otherFailure = rejected.find(result => !(result.reason instanceof EmptyAgentDecisionResponseError_ACU));
+            if (otherFailure)
+                throw otherFailure.reason;
+            if (rejected.length > 0)
+                return emptyDecision_ACU(originalTasks, 'empty_agent_response');
         }
         const successfulShards = settled
             .filter((result) => result.status === 'fulfilled')
@@ -95321,8 +95331,7 @@ async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions
         });
         sharedContext.worldbookReadContext = worldbookReadContext;
         checkPlotAbortRequested_ACU();
-        // ── [Agent 隔离]（上游 1.3.6）Agent 世界书任何一步失败都只归属 Agent：按持久快照恢复原生世界书，
-        // 本轮剧情与正文改用原始世界书继续，不再让 Agent 的读写错误拖垮整轮剧情推进。未开启 Agent 时整段不读不写。
+        // Agent 空回只收回正文放行。其他 Agent 世界书错误沿用按持久快照恢复的逻辑。
         const reportWarning = (text) => {
             try {
                 runtimeOptions.reportWarning?.(text);
@@ -95385,7 +95394,8 @@ async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions
         let agentActive = false;
         async function applyAgentFinalGreenlights_ACU(agentDecision) {
             assertAgentScopeCurrent();
-            if (agentDecision.active !== true || !Array.isArray(agentDecision.finalGenerationGreenlights)) {
+            const emptyResponse = agentDecision.active === false && agentDecision.fallbackReason === 'empty_agent_response';
+            if (!emptyResponse && (agentDecision.active !== true || !Array.isArray(agentDecision.finalGenerationGreenlights))) {
                 agentActive = false;
                 // 本轮没有可用决策（如范围里没有候选条目）不是出错：照样回到原生世界书，但不刷提示。
                 if (!agentFailureRecovered) {
@@ -95395,22 +95405,40 @@ async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions
             }
             if (agentFailureRecovered)
                 return;
+            const greenlights = emptyResponse ? [] : agentDecision.finalGenerationGreenlights;
             try {
-                const applied = await writeFinalGenerationGreenlights_ACU(agentDecision.finalGenerationGreenlights, {
+                const applied = await writeFinalGenerationGreenlights_ACU(greenlights, {
                     assertCurrent: assertAgentScopeCurrent,
                     expectedRevision: agentRuntimeRevision,
                 });
                 assertAgentScopeCurrent();
                 if (!applied)
                     throw Object.assign(new Error('AgentSelectionNotApplied'), { category: 'selection_not_applied' });
-                agentActive = true;
+                agentActive = !emptyResponse;
                 setAgentWorldbookNativeFallback_ACU(false);
                 worldbookReadContext.bookEntriesPromises.clear();
-                _set_pendingFinalGenerationGreenlights_ACU(agentDecision.finalGenerationGreenlights);
+                _set_pendingFinalGenerationGreenlights_ACU(greenlights);
             }
             catch (error) {
                 agentActive = false;
-                await recoverAgentFailure_ACU('apply_selection', error);
+                if (!emptyResponse) {
+                    await recoverAgentFailure_ACU('apply_selection', error);
+                    return;
+                }
+                assertAgentScopeCurrent();
+                if (error instanceof PlotAgentScopeChangedSignal_ACU
+                    || ['aborted', 'scope_changed'].includes(classifyLorebookReadError_ACU(error)))
+                    throw error;
+                if (agentRuntimeRevision !== getAgentWorldbookRuntimeRevision_ACU())
+                    return;
+                worldbookReadContext.bookEntriesPromises.clear();
+                logWarn_ACU('[Agent世界书] 模型空回后未能确认收回正文放行。', summarizePlotRuntimeError_ACU(error));
+                reportWarning('Agent 决策模型未返回内容，未能确认收回上一轮世界书放行，剧情继续。');
+                return;
+            }
+            if (emptyResponse) {
+                logWarn_ACU('[Agent世界书] 模型空回，已收回正文放行，保留 Agent 接管。');
+                reportWarning('Agent 决策模型未返回内容，本轮跳过接管条目的正文放行，剧情继续。');
             }
         }
         async function resolveAgentDecision_ACU(requireTaskPlan) {
@@ -96039,7 +96067,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261121-1501"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261123-1011"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -96058,7 +96086,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261121-1501";
+        const stamp = "20261123-1011";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -96314,12 +96342,11 @@ function removeNativeWorldbookGreenlightText_ACU(text, entries, allowRawContentO
     let result = String(text || '');
     let removedCount = 0;
     for (const entry of Array.isArray(entries) ? entries : []) {
-        const comment = String(entry?.comment || entry?.rawComment || entry?.name || '').trim();
         const candidates = buildNativeWorldbookGreenlightRemovalCandidates_ACU(entry);
         for (const candidate of candidates) {
             if (!allowRawContentOnly && !candidate.requiresComment)
                 continue;
-            if (candidate.requiresComment && comment && !result.includes(comment))
+            if (!result.includes(candidate.text))
                 continue;
             const pattern = new RegExp(`(?:\\n{0,2})${escapeAgentWorldbookRegExp_ACU(candidate.text)}(?:\\n{0,2})`, 'g');
             const before = result;
@@ -158147,7 +158174,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261121-1501";
+        const stamp = "20261123-1011";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

@@ -1052,8 +1052,7 @@ import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-s
       sharedContext.worldbookReadContext = worldbookReadContext;
     checkPlotAbortRequested_ACU();
 
-    // ── [Agent 隔离]（上游 1.3.6）Agent 世界书任何一步失败都只归属 Agent：按持久快照恢复原生世界书，
-    // 本轮剧情与正文改用原始世界书继续，不再让 Agent 的读写错误拖垮整轮剧情推进。未开启 Agent 时整段不读不写。
+    // Agent 空回只收回正文放行。其他 Agent 世界书错误沿用按持久快照恢复的逻辑。
     const reportWarning = (text: string): void => {
       try { runtimeOptions.reportWarning?.(text); } catch { /* 通知失败不影响剧情。 */ }
     };
@@ -1110,7 +1109,8 @@ import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-s
 
     async function applyAgentFinalGreenlights_ACU(agentDecision: AgentDecisionResult_ACU): Promise<void> {
       assertAgentScopeCurrent();
-      if (agentDecision.active !== true || !Array.isArray(agentDecision.finalGenerationGreenlights)) {
+      const emptyResponse = agentDecision.active === false && agentDecision.fallbackReason === 'empty_agent_response';
+      if (!emptyResponse && (agentDecision.active !== true || !Array.isArray(agentDecision.finalGenerationGreenlights))) {
         agentActive = false;
         // 本轮没有可用决策（如范围里没有候选条目）不是出错：照样回到原生世界书，但不刷提示。
         if (!agentFailureRecovered) {
@@ -1119,20 +1119,36 @@ import { isEntryExplicitlySelected_ACU } from '../../../shared/worldbook-entry-s
         return;
       }
       if (agentFailureRecovered) return;
+      const greenlights = emptyResponse ? [] : agentDecision.finalGenerationGreenlights;
       try {
-        const applied = await writeFinalGenerationGreenlights_ACU(agentDecision.finalGenerationGreenlights, {
+        const applied = await writeFinalGenerationGreenlights_ACU(greenlights, {
           assertCurrent: assertAgentScopeCurrent,
           expectedRevision: agentRuntimeRevision,
         });
         assertAgentScopeCurrent();
         if (!applied) throw Object.assign(new Error('AgentSelectionNotApplied'), { category: 'selection_not_applied' });
-        agentActive = true;
+        agentActive = !emptyResponse;
         setAgentWorldbookNativeFallback_ACU(false);
         worldbookReadContext.bookEntriesPromises.clear();
-        _set_pendingFinalGenerationGreenlights_ACU(agentDecision.finalGenerationGreenlights);
+        _set_pendingFinalGenerationGreenlights_ACU(greenlights);
       } catch (error) {
         agentActive = false;
-        await recoverAgentFailure_ACU('apply_selection', error);
+        if (!emptyResponse) {
+          await recoverAgentFailure_ACU('apply_selection', error);
+          return;
+        }
+        assertAgentScopeCurrent();
+        if (error instanceof PlotAgentScopeChangedSignal_ACU
+          || ['aborted', 'scope_changed'].includes(classifyLorebookReadError_ACU(error))) throw error;
+        if (agentRuntimeRevision !== getAgentWorldbookRuntimeRevision_ACU()) return;
+        worldbookReadContext.bookEntriesPromises.clear();
+        logWarn_ACU('[Agent世界书] 模型空回后未能确认收回正文放行。', summarizePlotRuntimeError_ACU(error));
+        reportWarning('Agent 决策模型未返回内容，未能确认收回上一轮世界书放行，剧情继续。');
+        return;
+      }
+      if (emptyResponse) {
+        logWarn_ACU('[Agent世界书] 模型空回，已收回正文放行，保留 Agent 接管。');
+        reportWarning('Agent 决策模型未返回内容，本轮跳过接管条目的正文放行，剧情继续。');
       }
     }
 
