@@ -96067,7 +96067,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261123-1011"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261123-1717"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -96086,7 +96086,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261123-1011";
+        const stamp = "20261123-1717";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -158174,7 +158174,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261123-1011";
+        const stamp = "20261123-1717";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -191300,7 +191300,7 @@ async function addAuxWorldbookToCurrentCharacter_ACU(character, bookName) {
 /**
  * service/agent/agent-favorite-worldbooks.ts — 常用世界书（用户需求）
  *
- * 用户把几本 skill 化的世界书设为「常用」，换新角色卡时一键复制成「角色卡名-原书名」并挂成该卡的
+ * 用户把几本 skill 化的世界书设为「常用」，换新角色卡时一键复制成「原书名-角色卡名」并挂成该卡的
  * 附加世界书，免去手动复制、改名、挂载。副本与常用书互相独立：每张卡的 Agent 接管、手改互不影响。
  * 名单存插件设置（所有角色卡共用）。
  */
@@ -191342,9 +191342,9 @@ function sanitizeWorldbookNamePart_ACU(text) {
         .trim()
         .replace(/[.\s]+$/, '');
 }
-/** 副本名：角色卡名-原书名（用户决定）。 */
+/** 副本名：原书名-角色卡名。 */
 function buildMountedWorldbookName_ACU(characterName, bookName) {
-    return `${sanitizeWorldbookNamePart_ACU(characterName)}-${sanitizeWorldbookNamePart_ACU(bookName)}`;
+    return `${sanitizeWorldbookNamePart_ACU(bookName)}-${sanitizeWorldbookNamePart_ACU(characterName)}`;
 }
 function isAgentRuntimeEntry_ACU(entry) {
     const comment = String(entry?.comment ?? '').trim();
@@ -193814,8 +193814,8 @@ var _sfc_main$C = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-agent__mode[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-agent__config[data-v-e58b6402] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-agent__actions[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\n}\n.ub-agent__current[data-v-e58b6402] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-agent__current strong[data-v-e58b6402] {\r\n  color: var(--ub-text);\n}\n.ub-agent-fav[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\n}\n.ub-agent-fav__list[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--ub-s1);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\n}\n.ub-agent-fav__item[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s1) 0;\n}\n.ub-agent-fav__item + .ub-agent-fav__item[data-v-e58b6402] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-agent-fav__check[data-v-e58b6402] {\r\n  display: flex;\r\n  flex: 1 1 calc(var(--ub-u) * 120);\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\r\n  min-height: var(--ub-control-h-sm);\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border: 0;\r\n  border-radius: calc(var(--ub-r-control) - 3px);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: left;\r\n  cursor: pointer;\r\n  overflow-wrap: anywhere;\n}\n.ub-agent-fav__check[data-v-e58b6402]:hover:not(:disabled) {\r\n  background: var(--ub-hover);\n}\n.ub-agent-fav__check[data-v-e58b6402]:disabled {\r\n  cursor: not-allowed;\r\n  opacity: 0.6;\n}\n.ub-agent-fav__check.is-on[data-v-e58b6402] {\r\n  color: var(--ub-text);\r\n  font-weight: 600;\n}\n.ub-agent-fav__check.is-on i[data-v-e58b6402] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-agent-fav__add[data-v-e58b6402],\r\n.ub-agent-fav__mount[data-v-e58b6402],\r\n.ub-agent-fav__mount-actions[data-v-e58b6402] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-agent-fav__add[data-v-e58b6402] > :first-child {\r\n  flex: 1 1 calc(var(--ub-u) * 140);\r\n  min-width: 0;\n}\n.ub-agent-fav__mount .ub-agent__current[data-v-e58b6402] {\r\n  flex: 1 1 auto;\n}\n.ub-agent-fav__mount-actions[data-v-e58b6402] {\r\n  max-width: 100%;\n}\n.ub-agent-fav__takeover[data-v-e58b6402] {\r\n  max-width: 100%;\r\n  min-height: var(--ub-control-h);\r\n  height: auto;\r\n  padding-block: var(--ub-s2);\r\n  line-height: 1.25;\r\n  white-space: normal;\n}\r\n", "src/presentation-v3/pages/AgentPage.vue#style-0-e58b6402");
-var AgentPage_vue_vue_type_style_index_0_scoped_e58b6402_lang = null;
+injectSfcStyle("\n.ub-agent__mode[data-v-53850e9e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-bottom: 1px solid var(--ub-line-soft);\n}\n.ub-agent__config[data-v-53850e9e] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\n}\n.ub-agent__actions[data-v-53850e9e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s3) var(--ub-s4);\r\n  border-top: 1px solid var(--ub-line-soft);\r\n  background: var(--ub-sunken);\n}\n.ub-agent__current[data-v-53850e9e] {\r\n  color: var(--ub-text-3);\r\n  font-size: var(--ub-fs-xs);\r\n  overflow-wrap: anywhere;\n}\n.ub-agent__current strong[data-v-53850e9e] {\r\n  color: var(--ub-text);\n}\n.ub-agent-fav[data-v-53850e9e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s3);\r\n  min-width: 0;\n}\n.ub-agent-fav__list[data-v-53850e9e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--ub-s1);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: var(--ub-r-control);\r\n  background: var(--ub-input-bg);\n}\n.ub-agent-fav__item[data-v-53850e9e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  padding: var(--ub-s1) 0;\n}\n.ub-agent-fav__item + .ub-agent-fav__item[data-v-53850e9e] {\r\n  border-top: 1px solid var(--ub-line-soft);\n}\n.ub-agent-fav__check[data-v-53850e9e] {\r\n  display: flex;\r\n  flex: 1 1 calc(var(--ub-u) * 120);\r\n  align-items: center;\r\n  gap: var(--ub-s2);\r\n  min-width: 0;\r\n  min-height: var(--ub-control-h-sm);\r\n  padding: var(--ub-s1) var(--ub-s2);\r\n  border: 0;\r\n  border-radius: calc(var(--ub-r-control) - 3px);\r\n  background: transparent;\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-sm);\r\n  text-align: left;\r\n  cursor: pointer;\r\n  overflow-wrap: anywhere;\n}\n.ub-agent-fav__check[data-v-53850e9e]:hover:not(:disabled) {\r\n  background: var(--ub-hover);\n}\n.ub-agent-fav__check[data-v-53850e9e]:disabled {\r\n  cursor: not-allowed;\r\n  opacity: 0.6;\n}\n.ub-agent-fav__check.is-on[data-v-53850e9e] {\r\n  color: var(--ub-text);\r\n  font-weight: 600;\n}\n.ub-agent-fav__check.is-on i[data-v-53850e9e] {\r\n  color: var(--ub-accent-ink);\n}\n.ub-agent-fav__add[data-v-53850e9e],\r\n.ub-agent-fav__mount[data-v-53850e9e],\r\n.ub-agent-fav__mount-actions[data-v-53850e9e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: var(--ub-s2);\n}\n.ub-agent-fav__add[data-v-53850e9e] > :first-child {\r\n  flex: 1 1 calc(var(--ub-u) * 140);\r\n  min-width: 0;\n}\n.ub-agent-fav__mount .ub-agent__current[data-v-53850e9e] {\r\n  flex: 1 1 auto;\n}\n.ub-agent-fav__mount-actions[data-v-53850e9e] {\r\n  max-width: 100%;\n}\n.ub-agent-fav__takeover[data-v-53850e9e] {\r\n  max-width: 100%;\r\n  min-height: var(--ub-control-h);\r\n  height: auto;\r\n  padding-block: var(--ub-s2);\r\n  line-height: 1.25;\r\n  white-space: normal;\n}\r\n", "src/presentation-v3/pages/AgentPage.vue#style-0-53850e9e");
+var AgentPage_vue_vue_type_style_index_0_scoped_53850e9e_lang = null;
 
 const _hoisted_1$y = { class: "ub-agent__mode" };
 const _hoisted_2$v = { class: "ub-agent__config" };
@@ -194057,7 +194057,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 			createVNode($setup["UbSection"], {
 				id: "agent-favorites",
 				title: "常用世界书",
-				description: "把常用的 Skill 世界书放进来，换新角色卡时勾选几本，一键复制成「角色卡名-原书名」并挂成这张卡的附加世界书。副本与原书互不影响。",
+				description: "把常用的 Skill 世界书放进来，换新角色卡时勾选几本，一键复制成「原书名-角色卡名」并挂成这张卡的附加世界书。副本与原书互不影响。",
 				icon: "fa-solid fa-star",
 				padded: ""
 			}, {
@@ -194289,7 +194289,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$C, [["render", _sfc_render$B], ["__scopeId", "data-v-e58b6402"]]);
+var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$C, [["render", _sfc_render$B], ["__scopeId", "data-v-53850e9e"]]);
 
 const apiCopy = {
     panels: {

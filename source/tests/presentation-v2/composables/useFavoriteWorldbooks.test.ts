@@ -24,7 +24,6 @@ vi.mock('../../../src/service/agent/agent-favorite-worldbooks', () => ({
   },
   readFavoriteWorldbookSkillStatus_ACU: (name: string) => h.status(name),
   mountFavoriteWorldbooksToCurrentCharacter_ACU: (...args: any[]) => h.mount(...args),
-  buildMountedWorldbookName_ACU: (c: string, b: string) => `${c}-${b}`,
 }));
 vi.mock('../../../src/data/gateways/worldbook-file-gateway', () => ({
   getCurrentSingleCharacter_ACU: () => h.character,
@@ -89,9 +88,9 @@ describe('useFavoriteWorldbooks', () => {
   it('挂载：副本已存在时弹三选一，取消按跳过；全部挂上后提示成功并清空勾选', async () => {
     h.choose.mockResolvedValueOnce(null);
     h.mount.mockImplementation(async (_names: string[], options: any) => {
-      expect(await options.resolveExisting('艾琳-战斗技能', '战斗技能')).toBe('skip');
+      expect(await options.resolveExisting('战斗技能-艾琳', '战斗技能')).toBe('skip');
       return { ok: true, characterName: '艾琳', results: [
-        { sourceName: '战斗技能', targetName: '艾琳-战斗技能', copy: 'created', binding: 'bound' },
+        { sourceName: '战斗技能', targetName: '战斗技能-艾琳', copy: 'created', binding: 'bound' },
       ] };
     });
     const fav = useFavoriteWorldbooks({ skillifyBooks: vi.fn() });
@@ -101,16 +100,16 @@ describe('useFavoriteWorldbooks', () => {
     expect(await fav.mountSelected()).toBe(true);
 
     const dialogArg = h.choose.mock.calls[0][0];
-    expect(dialogArg.message).toContain('艾琳-战斗技能');
+    expect(dialogArg.message).toContain('战斗技能-艾琳');
     expect(dialogArg.actions.map((action: any) => action.value)).toEqual(['keep', 'overwrite', 'skip']);
-    expect(h.toast.success).toHaveBeenCalledWith(expect.stringContaining('艾琳-战斗技能'), expect.anything());
+    expect(h.toast.success).toHaveBeenCalledWith(expect.stringContaining('战斗技能-艾琳'), expect.anything());
     expect(fav.selected.value).toEqual([]);
   });
 
   it('挂载接口不可用或失败时如实提示需要手动挂载 / 失败原因', async () => {
     h.mount.mockResolvedValue({ ok: true, characterName: '艾琳', results: [
-      { sourceName: '战斗技能', targetName: '艾琳-战斗技能', copy: 'created', binding: 'unavailable' },
-      { sourceName: '地理百科', targetName: '艾琳-地理百科', copy: 'failed', binding: 'not_attempted', reason: '找不到常用世界书「地理百科」' },
+      { sourceName: '战斗技能', targetName: '战斗技能-艾琳', copy: 'created', binding: 'unavailable' },
+      { sourceName: '地理百科', targetName: '地理百科-艾琳', copy: 'failed', binding: 'not_attempted', reason: '找不到常用世界书「地理百科」' },
     ] });
     const fav = useFavoriteWorldbooks({ skillifyBooks: vi.fn() });
     await fav.refresh();
@@ -123,16 +122,16 @@ describe('useFavoriteWorldbooks', () => {
     expect(enableTakeover).not.toHaveBeenCalled();
     const text = h.toast.warning.mock.calls.map(call => call[0]).join('\n');
     expect(text).toContain('手动');
-    expect(text).toContain('艾琳-战斗技能');
+    expect(text).toContain('战斗技能-艾琳');
     expect(text).toContain('找不到常用世界书「地理百科」');
   });
 
   it('仅将成功挂载或已挂载的副本交给 Agent，接管期间保持挂载操作锁定', async () => {
     h.favorites = ['战斗技能', '地理百科', '艾琳自带'];
     h.mount.mockResolvedValue({ ok: true, characterName: '艾琳', results: [
-      { sourceName: '战斗技能', targetName: '艾琳-战斗技能', copy: 'created', binding: 'bound' },
-      { sourceName: '地理百科', targetName: '艾琳-地理百科', copy: 'kept', binding: 'already' },
-      { sourceName: '艾琳自带', targetName: '艾琳-艾琳自带', copy: 'skipped', binding: 'not_attempted' },
+      { sourceName: '战斗技能', targetName: '战斗技能-艾琳', copy: 'created', binding: 'bound' },
+      { sourceName: '地理百科', targetName: '地理百科-艾琳', copy: 'kept', binding: 'already' },
+      { sourceName: '艾琳自带', targetName: '艾琳自带-艾琳', copy: 'skipped', binding: 'not_attempted' },
     ] });
     const fav = useFavoriteWorldbooks({ skillifyBooks: vi.fn() });
     await fav.refresh();
@@ -144,7 +143,7 @@ describe('useFavoriteWorldbooks', () => {
 
     await expect(fav.mountSelected(enableTakeover)).resolves.toBe(true);
 
-    expect(enableTakeover).toHaveBeenCalledExactlyOnceWith(['艾琳-战斗技能', '艾琳-地理百科']);
+    expect(enableTakeover).toHaveBeenCalledExactlyOnceWith(['战斗技能-艾琳', '地理百科-艾琳']);
     expect(fav.mounting.value).toBe(false);
   });
 
@@ -152,7 +151,7 @@ describe('useFavoriteWorldbooks', () => {
     h.mount.mockImplementation(async () => {
       h.character = { name: '艾琳', avatar: 'Other-Erin.png' };
       return { ok: true, characterName: '艾琳', results: [
-        { sourceName: '战斗技能', targetName: '艾琳-战斗技能', copy: 'created', binding: 'bound' },
+        { sourceName: '战斗技能', targetName: '战斗技能-艾琳', copy: 'created', binding: 'bound' },
       ] };
     });
     const fav = useFavoriteWorldbooks({ skillifyBooks: vi.fn() });

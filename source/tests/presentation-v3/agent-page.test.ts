@@ -103,7 +103,7 @@ vi.mock('../../src/presentation-v2/composables/useFavoriteWorldbooks', async () 
       selected.value = checked ? [...selected.value, name] : selected.value.filter(item => item !== name);
     }),
     mountSelected: vi.fn(async (enableTakeover?: (bookNames: string[]) => Promise<boolean>) => {
-      await enableTakeover?.(['艾琳-战斗技能']);
+      await enableTakeover?.(['战斗技能-艾琳']);
       return true;
     }),
     skillify: vi.fn(async () => undefined),
@@ -188,6 +188,7 @@ describe('AgentPage', () => {
 
     const section = el.querySelector('#agent-favorites')!;
     expect(harness.favorites.refresh).toHaveBeenCalled();
+    expect(section.textContent).toContain('原书名-角色卡名');
     const items = Array.from(section.querySelectorAll('.ub-agent-fav__item'));
     expect(items.map(item => item.textContent)).toEqual([
       expect.stringContaining('已 Skill 化 3/3'),
@@ -229,7 +230,7 @@ describe('AgentPage', () => {
     expect(takeoverButton.getAttribute('aria-busy')).toBe('true');
     await vi.waitFor(() => expect(mountButton.disabled).toBe(false));
     expect(harness.favorites.mountSelected).toHaveBeenCalledTimes(2);
-    expect(harness.setMode).toHaveBeenCalledExactlyOnceWith('agent', ['艾琳-战斗技能']);
+    expect(harness.setMode).toHaveBeenCalledExactlyOnceWith('agent', ['战斗技能-艾琳']);
 
     app.unmount();
   });

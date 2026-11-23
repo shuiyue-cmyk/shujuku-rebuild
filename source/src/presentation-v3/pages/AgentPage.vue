@@ -89,7 +89,7 @@
     <UbSection
       id="agent-favorites"
       title="常用世界书"
-      description="把常用的 Skill 世界书放进来，换新角色卡时勾选几本，一键复制成「角色卡名-原书名」并挂成这张卡的附加世界书。副本与原书互不影响。"
+      description="把常用的 Skill 世界书放进来，换新角色卡时勾选几本，一键复制成「原书名-角色卡名」并挂成这张卡的附加世界书。副本与原书互不影响。"
       icon="fa-solid fa-star"
       padded
     >

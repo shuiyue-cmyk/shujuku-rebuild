@@ -91,10 +91,10 @@ describe('常用世界书名单', () => {
 });
 
 describe('副本命名', () => {
-  it('角色卡名-原书名，去掉文件名不允许的字符', () => {
-    expect(buildMountedWorldbookName_ACU('艾琳', '战斗技能')).toBe('艾琳-战斗技能');
-    expect(buildMountedWorldbookName_ACU('A/B:C', '书*名?')).toBe('A_B_C-书_名_');
-    expect(buildMountedWorldbookName_ACU('  艾琳.  ', '战斗技能.')).toBe('艾琳-战斗技能');
+  it('原书名-角色卡名，去掉文件名不允许的字符', () => {
+    expect(buildMountedWorldbookName_ACU('艾琳', '战斗技能')).toBe('战斗技能-艾琳');
+    expect(buildMountedWorldbookName_ACU('A/B:C', '书*名?')).toBe('书_名_-A_B_C');
+    expect(buildMountedWorldbookName_ACU('  艾琳.  ', '战斗技能.')).toBe('战斗技能-艾琳');
   });
 });
 
@@ -117,7 +117,7 @@ describe('skill 化状态', () => {
 });
 
 describe('挂载到当前角色卡', () => {
-  it('复制成「角色卡名-原书名」并挂成附加世界书；数据库生成与 Agent 状态条目不复制', async () => {
+  it('复制成「原书名-角色卡名」并挂成附加世界书；数据库生成与 Agent 状态条目不复制', async () => {
     h.books.set('战斗技能', book({
       1: { uid: 1, comment: `剑术${SKILL}`, content: '剑术内容' },
       2: { uid: 2, comment: 'TavernDB-ACU-AgentWorldbookConfig', content: '{}' },
@@ -128,11 +128,11 @@ describe('挂载到当前角色卡', () => {
     const result = await mountFavoriteWorldbooksToCurrentCharacter_ACU(['战斗技能'], { resolveExisting: vi.fn() });
 
     expect(result).toEqual({ ok: true, characterName: '艾琳', results: [
-      { sourceName: '战斗技能', targetName: '艾琳-战斗技能', copy: 'created', binding: 'bound' },
+      { sourceName: '战斗技能', targetName: '战斗技能-艾琳', copy: 'created', binding: 'bound' },
     ] });
-    expect(Object.keys(h.books.get('艾琳-战斗技能').entries)).toEqual(['1']);
+    expect(Object.keys(h.books.get('战斗技能-艾琳').entries)).toEqual(['1']);
     expect(h.books.get('战斗技能').entries[2]).toBeDefined();
-    expect(h.bind).toHaveBeenCalledWith({ name: '艾琳', avatar: 'Erin.png' }, '艾琳-战斗技能');
+    expect(h.bind).toHaveBeenCalledWith({ name: '艾琳', avatar: 'Erin.png' }, '战斗技能-艾琳');
   });
 
   it('源书正被别的卡 Agent 接管时，副本还原成接管前的样子：打开开关、去掉接管记录、放行留下的常驻改回', async () => {
@@ -147,7 +147,7 @@ describe('挂载到当前角色卡', () => {
 
     await mountFavoriteWorldbooksToCurrentCharacter_ACU(['战斗技能'], { resolveExisting: vi.fn() });
 
-    const copied = h.books.get('艾琳-战斗技能').entries;
+    const copied = h.books.get('战斗技能-艾琳').entries;
     expect(copied[1]).toMatchObject({ disable: false, constant: false, content: '剑术内容' });
     expect(copied[1].comment).toBe(`剑术${SKILL}`.trim());
     expect(copied[2]).toMatchObject({ disable: false, constant: false });
@@ -162,25 +162,25 @@ describe('挂载到当前角色卡', () => {
     h.books.set('战斗技能', book({ 1: { uid: 1, comment: '新内容' } }));
     h.books.set('地理百科', book({ 1: { uid: 1, comment: '地理' } }));
     h.books.set('历史', book({ 1: { uid: 1, comment: '历史' } }));
-    h.books.set('艾琳-战斗技能', book({ 9: { uid: 9, comment: '我改过的' } }));
-    h.books.set('艾琳-地理百科', book({ 9: { uid: 9, comment: '旧地理' } }));
-    h.books.set('艾琳-历史', book({ 9: { uid: 9, comment: '旧历史' } }));
+    h.books.set('战斗技能-艾琳', book({ 9: { uid: 9, comment: '我改过的' } }));
+    h.books.set('地理百科-艾琳', book({ 9: { uid: 9, comment: '旧地理' } }));
+    h.books.set('历史-艾琳', book({ 9: { uid: 9, comment: '旧历史' } }));
     h.bind.mockResolvedValueOnce('already').mockResolvedValueOnce('bound');
     const resolveExisting = vi.fn(async (targetName: string) => (
-      targetName === '艾琳-战斗技能' ? 'keep' : targetName === '艾琳-地理百科' ? 'overwrite' : 'skip'
+      targetName === '战斗技能-艾琳' ? 'keep' : targetName === '地理百科-艾琳' ? 'overwrite' : 'skip'
     ));
 
     const result: any = await mountFavoriteWorldbooksToCurrentCharacter_ACU(['战斗技能', '地理百科', '历史'], { resolveExisting });
 
     expect(resolveExisting).toHaveBeenCalledTimes(3);
     expect(result.results).toEqual([
-      { sourceName: '战斗技能', targetName: '艾琳-战斗技能', copy: 'kept', binding: 'already' },
-      { sourceName: '地理百科', targetName: '艾琳-地理百科', copy: 'overwritten', binding: 'bound' },
-      { sourceName: '历史', targetName: '艾琳-历史', copy: 'skipped', binding: 'not_attempted' },
+      { sourceName: '战斗技能', targetName: '战斗技能-艾琳', copy: 'kept', binding: 'already' },
+      { sourceName: '地理百科', targetName: '地理百科-艾琳', copy: 'overwritten', binding: 'bound' },
+      { sourceName: '历史', targetName: '历史-艾琳', copy: 'skipped', binding: 'not_attempted' },
     ]);
-    expect(h.books.get('艾琳-战斗技能').entries[9].comment).toBe('我改过的');
-    expect(h.books.get('艾琳-地理百科').entries).toEqual({ 1: { uid: 1, comment: '地理' } });
-    expect(h.books.get('艾琳-历史').entries[9].comment).toBe('旧历史');
+    expect(h.books.get('战斗技能-艾琳').entries[9].comment).toBe('我改过的');
+    expect(h.books.get('地理百科-艾琳').entries).toEqual({ 1: { uid: 1, comment: '地理' } });
+    expect(h.books.get('历史-艾琳').entries[9].comment).toBe('旧历史');
     expect(h.bind).toHaveBeenCalledTimes(2);
   });
 
@@ -197,7 +197,7 @@ describe('挂载到当前角色卡', () => {
     h.bind.mockResolvedValue('unavailable');
     const result: any = await mountFavoriteWorldbooksToCurrentCharacter_ACU(['战斗技能'], { resolveExisting: vi.fn() });
     expect(result.results[0]).toMatchObject({ copy: 'created', binding: 'unavailable' });
-    expect(h.books.has('艾琳-战斗技能')).toBe(true);
+    expect(h.books.has('战斗技能-艾琳')).toBe(true);
   });
 
   it('挂载抛错时记为挂载失败并带原因，不影响下一本', async () => {

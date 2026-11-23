@@ -1,7 +1,7 @@
 /**
  * service/agent/agent-favorite-worldbooks.ts — 常用世界书（用户需求）
  *
- * 用户把几本 skill 化的世界书设为「常用」，换新角色卡时一键复制成「角色卡名-原书名」并挂成该卡的
+ * 用户把几本 skill 化的世界书设为「常用」，换新角色卡时一键复制成「原书名-角色卡名」并挂成该卡的
  * 附加世界书，免去手动复制、改名、挂载。副本与常用书互相独立：每张卡的 Agent 接管、手改互不影响。
  * 名单存插件设置（所有角色卡共用）。
  */
@@ -93,9 +93,9 @@ function sanitizeWorldbookNamePart_ACU(text: string): string {
     .replace(/[.\s]+$/, '');
 }
 
-/** 副本名：角色卡名-原书名（用户决定）。 */
+/** 副本名：原书名-角色卡名。 */
 export function buildMountedWorldbookName_ACU(characterName: string, bookName: string): string {
-  return `${sanitizeWorldbookNamePart_ACU(characterName)}-${sanitizeWorldbookNamePart_ACU(bookName)}`;
+  return `${sanitizeWorldbookNamePart_ACU(bookName)}-${sanitizeWorldbookNamePart_ACU(characterName)}`;
 }
 
 function isAgentRuntimeEntry_ACU(entry: Record<string, any>): boolean {
