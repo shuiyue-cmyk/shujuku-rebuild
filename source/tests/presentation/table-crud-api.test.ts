@@ -20,6 +20,8 @@ vi.mock('../../src/shared/utils', () => ({
   logWarn_ACU: vi.fn(),
   logError_ACU: vi.fn(),
   isSummaryOrOutlineTable_ACU: vi.fn(() => false),
+  pickSummarySheetKeyByPriority_ACU: (keys: string[], getName: (key: string) => unknown) =>
+    keys.find(key => getName(key) === '纪要表'),
 }));
 
 vi.mock('../../src/shared/host-api', () => ({
@@ -165,7 +167,10 @@ import {
   quoteIdentifier,
   findTargetSheet,
   createTableCrudApi,
+  listChronicleCompressionItems_ACU,
+  replaceChronicleContentsIfUnchanged_ACU,
 } from '../../src/presentation/bootstrap/api-groups/table-crud-api';
+import { SqliteEngine } from '../../src/data/sqlite/sqlite-engine';
 import { resolveTableHistoryStateFromChat_ACU } from '../../src/service/table/table-history';
 import { SillyTavern_API_ACU } from '../../src/shared/host-api';
 import { getActiveStorageProvider } from '../../src/service/table/table-storage-strategy';
@@ -338,6 +343,79 @@ describe('createTableCrudApi — SQLite 模式', () => {
       runCommit: async (commitTask: any) => commitTask(),
     }, options.initialData ? JSON.parse(JSON.stringify(options.initialData)) : mockCurrentJsonTableData));
     api = createTableCrudApi(mockCtx);
+  });
+
+  describe('纪要批量替换', () => {
+    const replacements = [
+      { id: '1', original: '晚九点星汐通知夜莺先在门外等待。', replacement: '晚九时星汐告夜莺：门外等。' },
+      { id: '2', original: '次日夜莺告诉星汐调查尚未结束。', replacement: '次日夜莺告星汐：调查未毕。' },
+    ];
+    const ddl = 'CREATE TABLE chronicle ('
+      + 'row_id INTEGER PRIMARY KEY, -- 行号\n'
+      + 'chronicle_entry TEXT, -- 纪要\n'
+      + 'summary TEXT -- 概要\n'
+      + ');';
+
+    beforeEach(() => {
+      mockCurrentJsonTableData = {
+        sheet_chronicle: {
+          uid: 'sheet_chronicle',
+          name: '纪要表',
+          sourceData: { ddl },
+          content: [
+            ['row_id', '纪要', '概要'],
+            [1, replacements[0].original, '等待'],
+            [2, replacements[1].original, '调查未完'],
+            [3, '未经勾选', '保留这条'],
+          ],
+        },
+      };
+    });
+
+    it('替换前发现任一条原文有变化，整批不执行 SQL 或保存', async () => {
+      const plan = listChronicleCompressionItems_ACU()!;
+      expect(plan.items.map(item => item.original)).toEqual([...replacements.map(item => item.original), '未经勾选']);
+      mockCurrentJsonTableData.sheet_chronicle.content[2][1] = '最新正文';
+      await expect(replaceChronicleContentsIfUnchanged_ACU(plan.scope, replacements)).rejects.toThrow('已变更');
+      expect(mockExecuteRuntimeMutation).not.toHaveBeenCalled();
+      expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+    });
+
+    it('使用 SQLite 按行保存纪要正文，其他列和未选中的行不变', async () => {
+      const plan = listChronicleCompressionItems_ACU()!;
+      const engine = new SqliteEngine();
+      await engine.init();
+      try {
+        const table = findTargetSheet('纪要表')!.englishTableName;
+        engine.run(ddl.replace('chronicle (', quoteIdentifier(table) + ' ('));
+        for (const row of mockCurrentJsonTableData.sheet_chronicle.content.slice(1)) {
+          engine.run('INSERT INTO ' + quoteIdentifier(table) + ' VALUES (?, ?, ?)', row);
+        }
+        const getRows = () => engine.query('SELECT * FROM ' + quoteIdentifier(table) + ' ORDER BY row_id').values;
+        mockExecuteRuntimeMutation.mockImplementationOnce((sql, params) => {
+          const mutation = engine.run(sql, params);
+          return { changes: mutation.changes, errors: [] };
+        });
+        mockGetRuntimeData.mockImplementationOnce(() => {
+          const result = structuredClone(mockCurrentJsonTableData);
+          result.sheet_chronicle.content = [result.sheet_chronicle.content[0], ...getRows()];
+          return result;
+        });
+        await replaceChronicleContentsIfUnchanged_ACU(plan.scope, replacements);
+        expect(getRows()).toEqual([
+          [1, replacements[0].replacement, '等待'],
+          [2, replacements[1].replacement, '调查未完'],
+          [3, '未经勾选', '保留这条'],
+        ]);
+        expect(mockPersistTablesToChatMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          targetMessageIndex: 0,
+          strictSave: true,
+          operations: [expect.objectContaining({ kind: 'sql_sheet_batch', sheetKey: 'sheet_chronicle' })],
+        }));
+      } finally {
+        engine.dispose();
+      }
+    });
   });
 
   // ─── AI 填表期间外部写入互斥 ───

@@ -70,12 +70,16 @@
           @update:model-value="handleToggleChange(item.key, $event)"
         />
       </UbRow>
+      <UbRow label="Token 节省" hint="压缩当前纪要或世界书的指定条目，先比较原文和压缩结果。">
+        <UbButton icon="fa-solid fa-compress" @click="tokenSavingsOpen = true">打开</UbButton>
+      </UbRow>
     </UbSection>
+    <TokenSavingsSheet :is-open="tokenSavingsOpen" @close="tokenSavingsOpen = false" />
   </UbPage>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { captureChatActionScope_ACU } from '../../presentation-v2/composables/chat-action-scope';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
 import { useDashboardPage } from '../../presentation-v2/composables/useDashboardPage';
@@ -88,7 +92,9 @@ import { useRouterStore } from '../../presentation-v2/stores/router-store';
 import { useToastStore } from '../../presentation-v2/stores/toast-store';
 import { logError_ACU } from '../../shared/utils';
 import { syncFeaturePageGates_UB } from '../composables/feature-gates';
+import TokenSavingsSheet from '../parts/TokenSavingsSheet.vue';
 import UbBadge from '../ui/UbBadge.vue';
+import UbButton from '../ui/UbButton.vue';
 import UbPage from '../ui/UbPage.vue';
 import UbRow from '../ui/UbRow.vue';
 import UbSection from '../ui/UbSection.vue';
@@ -99,6 +105,7 @@ const plotStore = usePlotPresetStore();
 const routerStore = useRouterStore();
 const dialogStore = useDialogStore();
 const toastStore = useToastStore();
+const tokenSavingsOpen = ref(false);
 
 const healthCards = computed(() => [...dashboard.healthItems.value, dashboard.logHealthItem.value]);
 

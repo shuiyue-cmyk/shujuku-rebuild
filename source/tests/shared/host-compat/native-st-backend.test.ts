@@ -70,6 +70,54 @@ describe('isUsable', () => {
   });
 });
 
+describe('世界书压缩替换', () => {
+  const first = { uid: '1', original: '长文', replacement: '短文' };
+  const second = { uid: '2', original: '背景', replacement: '设定' };
+
+  function makeBook() {
+    return {
+      originalData: { name: '书A' },
+      entries: {
+        1: { uid: 1, content: first.original, key: ['星汐'], disable: true, extensions: { custom: true } },
+        2: { uid: 2, content: second.original },
+        3: { uid: 3, content: '第三条' },
+      },
+    };
+  }
+
+  it('发现任一原文已变更则整批不写', async () => {
+    const book = makeBook();
+    book.entries[2].content = '编辑过的背景';
+    const ctx = buildContext({ loadWorldInfo: vi.fn(async () => book) });
+    const backend = createNativeStBackend_ACU(() => ctx);
+    await expect(backend.replaceWorldbookContentsIfUnchanged('书A', [first, second])).rejects.toThrow('已变更');
+    expect(book.entries[1].content).toBe(first.original);
+    expect(ctx.saveWorldInfo).not.toHaveBeenCalled();
+  });
+
+  it('整批一次保存，只替换选中条目的内容', async () => {
+    const book = makeBook();
+    const expected = makeBook();
+    expected.entries[1].content = first.replacement;
+    expected.entries[2].content = second.replacement;
+    const ctx = buildContext({ loadWorldInfo: vi.fn(async () => book) });
+    const backend = createNativeStBackend_ACU(() => ctx);
+    await backend.replaceWorldbookContentsIfUnchanged('书A', [first, second]);
+    expect(ctx.saveWorldInfo).toHaveBeenCalledExactlyOnceWith('书A', expected, true);
+  });
+
+  it('宿主保存失败时恢复工作副本，允许再次比较和重试', async () => {
+    const book = makeBook();
+    const ctx = buildContext({ loadWorldInfo: vi.fn(async () => book) });
+    ctx.saveWorldInfo.mockRejectedValueOnce(new Error('disk'));
+    const backend = createNativeStBackend_ACU(() => ctx);
+    await expect(backend.replaceWorldbookContentsIfUnchanged('书A', [first])).rejects.toThrow('保存失败');
+    expect(book).toEqual(makeBook());
+    await backend.replaceWorldbookContentsIfUnchanged('书A', [first]);
+    expect(book.entries[1].content).toBe(first.replacement);
+  });
+});
+
 describe('getLorebooks', () => {
   it('优先原生 getWorldInfoNames，不发起 /api/settings/get 请求', async () => {
     const ctx = buildContext({ getWorldInfoNames: vi.fn(() => ['剧情书', '世界书']) });

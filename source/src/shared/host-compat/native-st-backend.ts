@@ -32,6 +32,12 @@ import {
 /** 返回 SillyTavern context 对象（插件模式下为 getContext() 的 Proxy 快照） */
 export type GetStApi_ACU = () => any;
 
+export interface WorldbookContentReplacement_ACU {
+    uid: string;
+    original: string;
+    replacement: string;
+}
+
 const SETTINGS_SNAPSHOT_TTL_MS_ACU = 8000;
 
 interface StSettingsSnapshot_ACU {
@@ -44,6 +50,7 @@ export interface NativeStBackend_ACU {
     getLorebooks: () => Promise<string[]>;
     getLorebookEntries: (bookName: string) => Promise<OldFlatLorebookEntry_ACU[]>;
     setLorebookEntries: (bookName: string, entries: Array<Record<string, any>>) => Promise<void>;
+    replaceWorldbookContentsIfUnchanged: (bookName: string, replacements: readonly WorldbookContentReplacement_ACU[]) => Promise<void>;
     createLorebookEntries: (bookName: string, entries: Array<Record<string, any>>) => Promise<{ entries: OldFlatLorebookEntry_ACU[]; new_uids: number[] }>;
     deleteLorebookEntries: (bookName: string, uids: number[]) => Promise<{ entries: OldFlatLorebookEntry_ACU[]; delete_occurred: boolean }>;
     getCharWorldbookNames: (characterName?: string) => Promise<{ primary: string | null; additional: string[] }>;
@@ -191,6 +198,32 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
             changed = true;
         }
         if (changed) await saveBook(bookName, data);
+    }
+
+    async function replaceWorldbookContentsIfUnchanged(
+        bookName: string, replacements: readonly WorldbookContentReplacement_ACU[],
+    ): Promise<void> {
+        if (!replacements.length) return;
+        return withBookWriteLock(bookName, async () => {
+            const data = await loadBookOrThrow(bookName);
+            const entries = replacements.map(({ uid, original }) => {
+                const entry = Object.prototype.hasOwnProperty.call(data.entries, uid) ? data.entries[uid] : null;
+                if (!entry || String(entry.uid) !== uid || entry.content !== original) {
+                    throw new Error('世界书中所选条目已变更或删除，请重新生成预览。');
+                }
+                return entry;
+            });
+            entries.forEach((entry, index) => { entry.content = replacements[index].replacement; });
+            try {
+                await saveBook(bookName, data);
+            } catch {
+                // TT 可将同一个工作副本留在待保存队列。还原失败的改动，同时保留期间的新编辑。
+                entries.forEach((entry, index) => {
+                    if (entry.content === replacements[index].replacement) entry.content = replacements[index].original;
+                });
+                throw new Error('世界书保存失败，请刷新后重新核对原文。');
+            }
+        });
     }
 
     async function createLorebookEntries(
@@ -429,6 +462,7 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
         getLorebooks,
         getLorebookEntries,
         setLorebookEntries,
+        replaceWorldbookContentsIfUnchanged,
         createLorebookEntries,
         deleteLorebookEntries,
         getCharWorldbookNames,

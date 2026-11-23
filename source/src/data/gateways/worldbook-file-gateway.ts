@@ -7,10 +7,11 @@
  *   charUpdateAddAuxWorld 写入（见 host-world-info-module）。两条都走不通返回 'unavailable'，
  *   由调用方提示用户手动挂载。
  */
-import { SillyTavern_API_ACU } from '../../shared/host-api';
+import { SillyTavern_API_ACU, TavernHelper_API_ACU } from '../../shared/host-api';
 import { getHostWindow } from '../../shared/runtime-env';
 import { loadVerifiedHostWorldInfoModule_ACU } from '../../shared/host-compat/host-world-info-module';
 import { listLorebooks_ACU } from './worldbook-gateway';
+import type { NativeStBackend_ACU, WorldbookContentReplacement_ACU } from '../../shared/host-compat/native-st-backend';
 
 export interface CurrentSingleCharacter_ACU {
     name: string;
@@ -46,6 +47,17 @@ export async function loadWorldbookFile_ACU(name: string): Promise<Record<string
     if (typeof ctx?.loadWorldInfo !== 'function') throw new Error('宿主不支持读取整本世界书。');
     const data = await ctx.loadWorldInfo(name);
     return data && typeof data === 'object' ? data : null;
+}
+
+export async function replaceWorldbookContentsIfUnchanged_ACU(
+    name: string, replacements: readonly WorldbookContentReplacement_ACU[],
+): Promise<void> {
+    const api = TavernHelper_API_ACU as (typeof TavernHelper_API_ACU
+        & Partial<Pick<NativeStBackend_ACU, 'replaceWorldbookContentsIfUnchanged'>>);
+    if (typeof api?.replaceWorldbookContentsIfUnchanged !== 'function') {
+        throw new Error('当前酒馆不支持安全替换世界书条目。');
+    }
+    await api.replaceWorldbookContentsIfUnchanged(name, replacements);
 }
 
 /** 整本写入（同名覆盖，新名字即新建），并刷新宿主世界书列表。 */

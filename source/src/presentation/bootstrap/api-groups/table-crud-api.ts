@@ -8,6 +8,7 @@ import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } 
 import { SillyTavern_API_ACU, type ACUMessage } from '../../../shared/host-api';
 import {
     currentJsonTableData_ACU,
+    currentChatFileIdentifier_ACU,
     settings_ACU,
     getCurrentIsolationKey_ACU,
 } from '../../../service/runtime/state-manager';
@@ -19,9 +20,11 @@ import { getPhysicalTableNameForSheet_ACU } from '../../../shared/sheet-identity
 import { getLatestTableAppendMessageIndexFromChat_ACU } from '../../../service/table/table-history';
 import { enqueueSummaryVectorIndexFlush_ACU } from '../../../service/vector/summary-vector-index-flush-queue';
 import { getCurrentWorldbookConfig_ACU } from '../../../service/settings/settings-readers';
-import { runSqliteRuntimeMutationCommit_ACU } from '../../../service/table/table-update-commit';
+import { runSqliteRuntimeMutationCommit_ACU, runTableUpdateCommit_ACU } from '../../../service/table/table-update-commit';
 import { getTableLockIdentitiesForSheet_ACU } from '../../../service/runtime/helpers-table-lock';
 import { ensureStorageProviderReady_ACU, getActiveStorageProvider } from '../../../service/table/table-storage-strategy';
+import { findSummaryTableSelection_ACU } from '../../../service/vector/summary-vector-index-scope-resolver';
+import type { TokenSavingsItem_ACU } from '../../../service/optimization/token-savings';
 
 /**
  * 从完整表集合分配 runtime 物理表名。collision hash 依赖完整集合，不能从单个
@@ -518,6 +521,128 @@ async function finalizeTableEditAfterCommit_ACU(
         (topLevelWindow_ACU as any).AutoCardUpdaterAPI._notifyTableUpdate(notifyMeta);
     } else if (options.skipNotify) {
         logDebug_ACU(`${methodName}: Skip table update notification for [${tableName}] because this edit is marked as silent.`);
+    }
+}
+
+interface ChronicleCompressionScope_ACU {
+    chatKey: string;
+    isolationKey: string;
+    sheetKey: string;
+    column: string;
+}
+
+export function listChronicleCompressionItems_ACU(): {
+    scope: ChronicleCompressionScope_ACU;
+    items: TokenSavingsItem_ACU[];
+} | null {
+    const chatKey = currentChatFileIdentifier_ACU;
+    if (!chatKey || chatKey === 'unknown_chat_init') return null;
+    const selection = findSummaryTableSelection_ACU();
+    if (!selection || selection.table.name?.trim() === '总体大纲') return null;
+    const { summaryKey: sheetKey, table } = selection;
+    const content: unknown[][] = table.content;
+    const headers = content[0] ?? [];
+    const normalized = headers.map(header => String(header ?? '').replace(/\s+/g, ''));
+    const columnIndex = ['纪要', 'chronicle_entry', '纪要正文', '纪要内容', '事件纪要', '详细纪要', '正文']
+        .map(alias => normalized.indexOf(alias)).find(index => index > 0);
+    if (columnIndex === undefined || normalized.lastIndexOf(normalized[columnIndex]) !== columnIndex) return null;
+    const column = String(headers[columnIndex]);
+    const codeIndex = normalized.findIndex(header => header === '编码索引' || header === 'code_index');
+    const locks = getTableLockIdentitiesForSheet_ACU(sheetKey, table.content);
+    const blockedCells = new Set(locks.cellPairs.filter(([, name]) => name === column).map(([rowId]) => rowId));
+    const columnLocked = locks.colNames.has(column);
+    const items = content.slice(1).flatMap((row, index): TokenSavingsItem_ACU[] => {
+        if (!Array.isArray(row)) return [];
+        const id = String(row[0] ?? '');
+        const original = row[columnIndex];
+        if (!id.trim() || typeof original !== 'string' || !original.trim()) return [];
+        const locked = columnLocked || locks.rowIds.has(id) || blockedCells.has(id);
+        const label = String(row[codeIndex] ?? '').trim() || '第 ' + (index + 1) + ' 条纪要';
+        return [{ id, label, original, blocked: locked ? '纪要已锁定' : undefined }];
+    });
+    return { scope: { chatKey, isolationKey: getCurrentIsolationKey_ACU(), sheetKey, column }, items };
+}
+
+/** 一批纪要只提交一次，写入前在表格事务内比对预览所依据的原文。 */
+export async function replaceChronicleContentsIfUnchanged_ACU(
+    scope: ChronicleCompressionScope_ACU,
+    replacements: readonly { id: string; original: string; replacement: string }[],
+): Promise<void> {
+    if (!replacements.length) return;
+    const { chatKey, isolationKey, sheetKey, column } = scope;
+    const writeSet = replacements.map(({ id }) => ({ kind: 'cell' as const, sheetKey, rowId: id, columnKey: column }));
+    const reason = 'token-savings:chronicle';
+    const result = await runTableUpdateCommit_ACU({
+        source: 'manual_crud',
+        reason,
+        chatKey,
+        isolationKey,
+        writeSet,
+        revisionWriteSet: writeSet,
+        targetMessageIndex: -1,
+        targetSheetKeys: [sheetKey],
+        updateGroupKeys: null,
+        trackingSheetKeys: [],
+        strictSave: true,
+    }, async () => {
+        const provider = await ensureStorageProviderReady_ACU();
+        const latest = listChronicleCompressionItems_ACU();
+        const changed = '当前聊天、纪要表或所选纪要已变更，请重新生成预览。';
+        if (!latest || latest.scope.chatKey !== chatKey || latest.scope.isolationKey !== isolationKey
+            || latest.scope.sheetKey !== sheetKey || latest.scope.column !== column) {
+            return { success: false, error: changed };
+        }
+        const itemsById = new Map(latest.items.map(item => [item.id, item]));
+        if (replacements.some(({ id, original }) => itemsById.get(id)?.original !== original || itemsById.get(id)?.blocked)) {
+            return { success: false, error: changed };
+        }
+        const data = currentJsonTableData_ACU;
+        if (!data || !ensureNameMapperForTableData_ACU(data)) return { success: false, error: changed };
+        const sheet = data[sheetKey];
+        const tableName = getEnglishTableName(data, sheetKey);
+        const { resolved, englishColName } = resolveColumnForSheet(tableName, sheetKey, column);
+        const targetMessageIndex = findTableLatestFloor(sheetKey, sheet.name);
+        if (!resolved || targetMessageIndex < 0) {
+            return { success: false, error: '当前纪要表无法保存，请重新打开聊天后再试。' };
+        }
+        const tableSql = quoteIdentifier(tableName);
+        const columnSql = quoteIdentifier(englishColName);
+        const rowIdSql = quoteIdentifier('row_id');
+        const branches = replacements.map(() => 'WHEN ? THEN ?').join(' ');
+        const ids = replacements.map(({ id }) => id);
+        const sql = 'UPDATE ' + tableSql + ' SET ' + columnSql + ' = CASE ' + rowIdSql + ' ' + branches
+            + ' END WHERE ' + rowIdSql + ' IN (' + ids.map(() => '?').join(', ') + ');';
+        const params = [...replacements.flatMap(({ id, replacement }) => [id, replacement]), ...ids];
+        const mutation = provider.executeMutation(sql, params);
+        if (mutation.errors?.length || mutation.changes !== replacements.length) {
+            return { success: false, error: '纪要替换失败，请重新生成预览。', runtimeMutated: (mutation.changes ?? 0) > 0 };
+        }
+        const tableData = mutation.syncedView ?? provider.getCurrentData();
+        if (!tableData) return { success: false, error: '纪要替换失败，请重新打开聊天。', runtimeMutated: true };
+        return {
+            success: true,
+            tableData,
+            persist: {
+                targetMessageIndex,
+                operations: [{
+                    kind: 'sql_sheet_batch',
+                    sheetKey,
+                    statements: [sql],
+                    params: [params],
+                    tableName,
+                    reason: 'manual_crud',
+                }],
+            },
+        };
+    });
+    if (!result.success) throw new Error(result.error || '纪要保存失败。');
+    try {
+        await finalizeTableEditAfterCommit_ACU('纪要表', sheetKey, reason, result.messageIndex ?? -1, {
+            skipChatSave: false,
+            skipNotify: false,
+        });
+    } catch (error) {
+        logWarn_ACU('[TokenSavings] 纪要已保存，刷新失败。', error);
     }
 }
 

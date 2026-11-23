@@ -229,6 +229,7 @@ export function buildTavernHelperCompat_ACU(rawTH: any, getStApi: GetStApi_ACU):
     for (const name of ['getLorebookEntries', 'setLorebookEntries', 'createLorebookEntries', 'deleteLorebookEntries', 'getLorebooks', 'getCharWorldbookNames'] as WorldbookBackendMethodName_ACU[]) {
         mountWorldbook(name);
     }
+    if (nativeUsable) api.replaceWorldbookContentsIfUnchanged = native.replaceWorldbookContentsIfUnchanged;
     if (typeof worldbookBackend?.getCharWorldbookNames === 'function') {
         api.getCurrentCharPrimaryLorebook = async (): Promise<string | null> => {
             const binding = await worldbookBackend.getCharWorldbookNames!('current');
