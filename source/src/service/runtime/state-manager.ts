@@ -543,6 +543,7 @@ export let settings_ACU: any = {
       maxNestingDepth: 10,
       debugMode: false
     },
+    tokenSavings: { enabled: false, autoChronicle: false, concurrency: 2 },
     contentOptimizationSettings: {
       enabled: false,
       apiPreset: '',

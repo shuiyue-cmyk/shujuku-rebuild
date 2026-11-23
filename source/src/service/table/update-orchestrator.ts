@@ -82,6 +82,7 @@ import { applySpecialIndexSequenceToSummaryTables_ACU } from '../runtime/helpers
 import { isSameSheetHeader_ACU } from '../template/guide-metadata-overlay';
 import { captureTableRuntimeRevisionForWriteSet_ACU, TableWriteChatSwitchedError_ACU } from './table-write-transaction';
 import { runTableUpdateCommit_ACU, type TableUpdateCommitErrorCategory_ACU } from './table-update-commit';
+import { notifyTableFillCommitted_ACU } from './table-fill-committed';
 import { beginChatSaveCoalescing_ACU, endChatSaveCoalescing_ACU } from '../../data/gateways/chat-gateway';
 import { flushRuntimeOnlyPendingChanges_ACU } from './runtime-only-pending-flush';
 import { commitPreparedV2Recovery_ACU, prepareV2Recovery_ACU } from './table-v2-recovery-service';
@@ -459,6 +460,7 @@ async function settleStagedBoundaryAndPublish_ACU(
     originalFullIndex: number,
     session: TableFillStagingSession_ACU | null,
 ): Promise<{ ok: true } | { ok: false; error: string; diagnosticCode?: ManualUpdateResult['diagnosticCode'] }> {
+    const before = currentJsonTableData_ACU;
     const commitResult = await commitStagedSheetsAtFullBoundaryAtomic_ACU(stagingRun.runId, {
         chatKey: stagingRun.chatKey,
         isolationKey: stagingRun.isolationKey,
@@ -481,6 +483,9 @@ async function settleStagedBoundaryAndPublish_ACU(
         chatKey: stagingRun.chatKey,
         isolationKey: stagingRun.isolationKey,
     });
+    if (published.ok && currentJsonTableData_ACU) {
+        notifyTableFillCommitted_ACU({ before, after: currentJsonTableData_ACU, sheetKeys: stagingRun.targetSheetKeys });
+    }
     await session?.discard();
     if (!published.ok) return published;
     return { ok: true };

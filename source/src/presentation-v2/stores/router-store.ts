@@ -13,6 +13,7 @@ import {
   ACU_V2_DEFAULT_PAGE_ID,
   ACU_V2_PAGE_REGISTRY,
   FEATURE_GATE_CONTENT_REPLACE,
+  FEATURE_GATE_TOKEN_SAVINGS,
   FEATURE_FLAG_PLOT_PAUSED,
   FEATURE_GATE_CONTINUATION,
   FEATURE_GATE_DECISION_RECALL,
@@ -26,6 +27,7 @@ import { settings_ACU } from '../../service/runtime/state-manager';
 import { useUiModeStore } from './ui-mode-store';
 import { setContentReplaceEnabledBySettings, syncContentReplaceAvailability } from './content-replace-gate';
 import { isDecisionRecallStandaloneActive_ACU, normalizeDecisionRecallSettings_ACU } from '../../service/decision-recall/decision-recall-settings';
+import { readTokenSavingsSettings_ACU } from '../../service/optimization/token-savings-settings';
 
 const SECTION_KEY = 'router';
 const LEGACY_PAGE_ID_ALIASES: Record<string, string> = {
@@ -56,6 +58,7 @@ function isKnownPage(id: unknown): id is string {
 function readInitialFeatureGates(): Record<string, boolean> {
   return {
     [FEATURE_GATE_CONTENT_REPLACE]: syncContentReplaceAvailability(),
+    [FEATURE_GATE_TOKEN_SAVINGS]: readTokenSavingsSettings_ACU().enabled,
     [FEATURE_GATE_CONTINUATION]: settings_ACU?.continuationPageEnabled !== false,
     [FEATURE_GATE_PLOT]: settings_ACU?.plotSettings?.enabled === true,
     [FEATURE_GATE_VECTOR_INDEX]: settings_ACU?.summaryVectorIndexModeDefault === true,

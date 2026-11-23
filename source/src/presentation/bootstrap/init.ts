@@ -74,6 +74,7 @@ import {
 } from '../../service/table/table-storage-strategy';
 import { captureCheckpointVaultForCurrentChat_ACU, installCheckpointDeleteGuard_ACU, noteMessagesPresentAtDeletion_ACU } from '../../service/chat/checkpoint-delete-guard';
 import { installMaterialCheckpointScheduler_ACU } from '../../service/continuation/agent/agent-checkpoint-scheduler';
+import { installChronicleAutoCompression_ACU } from './chronicle-auto-compression';
 import { auditDormantDataIntegrity_ACU } from '../../service/template/dormant-data-service';
 import { getUiSurface_ACU, showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
 import {
@@ -790,6 +791,7 @@ export   function mainInitialize_ACU() {
       void notifyAcuTauriVersionIfOutdated_ACU();
 
       loadSettings_ACU();
+      installChronicleAutoCompression_ACU();
       // S0-4：注册插件保存后的 checkpoint 保管库同步（删楼恢复的影子基线）。
       installCheckpointDeleteGuard_ACU();
       // TT 帧架构：续写基线跟随表格 checkpoint 落层 + 删楼恢复适配（与删楼守卫并列，函数幂等）。

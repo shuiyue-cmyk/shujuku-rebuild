@@ -13,6 +13,7 @@ import { isAppendedOperationsWriteRejection_ACU, isCompatReadonlyWriteRejection_
 import type { ReplaceExistingIncrementalOptions_ACU } from './storage-frame-v2-persist';
 import type { ManualRefillProgressV2_ACU, TableCheckpointV2_ACU, TableMutationOperationV2_ACU, TableMutationSourceV2_ACU, TableWriteConflictUnitV2_ACU } from './storage-frame-v2-types';
 import { buildSqlSheetBatchOperations_ACU, rebindSqlMutationIdentifiers_ACU } from './sql-table-service';
+import { notifyTableFillCommitted_ACU } from './table-fill-committed';
 import {
   extractPendingSheetKeysFromWriteSet_ACU,
   hasRuntimeOnlyPendingSheets_ACU,
@@ -419,6 +420,7 @@ export async function runTableUpdateCommit_ACU<T>(
             : options.initialData
               ? cloneTableData_ACU(options.initialData)
               : null;
+          const liveDataBeforeApply = currentJsonTableData_ACU;
           preApplySnapshotForRollback = preApplyData;
           const reloadOnFailure = options.applyMutatesRuntime !== false && !options.skipChatSave;
           const applied = await apply({ transactionContext, workingData });
@@ -489,6 +491,10 @@ export async function runTableUpdateCommit_ACU<T>(
 
           requiresRuntimeReload = false;
           _set_currentJsonTableData_ACU(cloneTableData_ACU(applied.tableData));
+          if (!options.skipChatSave && (persistOptions.trackAsUpdate ?? options.trackAsUpdate)
+            && (options.source === 'auto_fill' || options.source === 'manual_fill' || options.source === 'group_fill')) {
+            notifyTableFillCommitted_ACU({ before: liveDataBeforeApply, after: applied.tableData, sheetKeys: targetSheetKeys });
+          }
           return {
             success: true,
             value: applied.value,

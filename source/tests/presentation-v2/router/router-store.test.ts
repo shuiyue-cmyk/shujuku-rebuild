@@ -60,6 +60,7 @@ describe('router-store · pageRegistry 基线', () => {
       ['continuation', '智能续写', 'feature'],
       ['vector-index', '交火模式', 'feature'],
       ['content-replace', '正文替换', 'feature'],
+      ['token-savings', 'Token 节省', 'feature'],
       ['data-mgmt', '数据管理', 'tool'],
       ['advanced-tools', '高级工具', 'tool'],
       ['developer', '开发者选项', 'developer'],

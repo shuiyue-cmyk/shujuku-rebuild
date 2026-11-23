@@ -12,6 +12,7 @@ import { useDevOptionsStore } from '../stores/dev-options-store';
 
 /** 正文替换页对应的 feature gate key；页面可见性由仪表盘常驻的正文替换启用开关控制。 */
 export const FEATURE_GATE_CONTENT_REPLACE = 'content-replace';
+export const FEATURE_GATE_TOKEN_SAVINGS = 'token-savings';
 export const FEATURE_GATE_PLOT = 'plot';
 export const FEATURE_GATE_CONTINUATION = 'continuation';
 export const FEATURE_GATE_VECTOR_INDEX = 'vector-index';
@@ -46,6 +47,7 @@ export const ACU_V2_PAGE_REGISTRY: readonly AcuV2Page[] = Object.freeze([
     group: 'feature',
     featureGate: FEATURE_GATE_CONTENT_REPLACE,
   },
+  { id: 'token-savings', title: 'Token 节省', group: 'feature', featureGate: FEATURE_GATE_TOKEN_SAVINGS },
 
   // 工具
   { id: 'data-mgmt', title: '数据管理', group: 'tool' },

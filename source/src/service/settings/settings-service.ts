@@ -1200,6 +1200,7 @@ export   function buildDefaultSettings_ACU() {
           },
           // [存储模式] 原生模式已移除，恒为 SQLite（字段保留以兼容旧设置数据）
           storageMode: 'sqlite' as const,
+          tokenSavings: { enabled: false, autoChronicle: false, concurrency: 2 },
           // [新增] 正文优化功能
           contentOptimizationSettings: {
             enabled: false,                    // 是否启用正文优化

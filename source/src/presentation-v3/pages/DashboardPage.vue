@@ -70,31 +70,35 @@
           @update:model-value="handleToggleChange(item.key, $event)"
         />
       </UbRow>
-      <UbRow label="Token 节省" hint="压缩当前纪要或世界书的指定条目，先比较原文和压缩结果。">
-        <UbButton icon="fa-solid fa-compress" @click="tokenSavingsOpen = true">打开</UbButton>
+      <UbRow label="Token 节省" hint="开启后，可在侧栏的「Token 节省」里设置自动压缩或手动预览。">
+        <UbSwitch
+          :model-value="routerStore.featureGates[FEATURE_GATE_TOKEN_SAVINGS]"
+          aria-label="Token 节省"
+          data-acu-toggle-key="tokenSavingsEnabled"
+          @update:model-value="toggleTokenSavings"
+        />
       </UbRow>
     </UbSection>
-    <TokenSavingsSheet :is-open="tokenSavingsOpen" @close="tokenSavingsOpen = false" />
   </UbPage>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, watch } from 'vue';
 import { captureChatActionScope_ACU } from '../../presentation-v2/composables/chat-action-scope';
 import { watchChatChanged_ACU } from '../../presentation-v2/composables/useChatChangedListener';
 import { useDashboardPage } from '../../presentation-v2/composables/useDashboardPage';
 import { useTemplateRuntimeChangeTick } from '../../presentation-v2/composables/useTemplateRuntimeChangeListener';
 import { dashboardCopy } from '../../presentation-v2/copy/dashboard-copy';
+import { FEATURE_GATE_TOKEN_SAVINGS } from '../../presentation-v2/router/page-registry';
 import { useDialogStore } from '../../presentation-v2/stores/dialog-store';
 import { useDecisionRecallStore } from '../../presentation-v2/stores/decision-recall-store';
 import { usePlotPresetStore } from '../../presentation-v2/stores/plot-preset-store';
 import { useRouterStore } from '../../presentation-v2/stores/router-store';
 import { useToastStore } from '../../presentation-v2/stores/toast-store';
 import { logError_ACU } from '../../shared/utils';
+import { updateTokenSavingsSettings_UB } from '../composables/token-savings-settings';
 import { syncFeaturePageGates_UB } from '../composables/feature-gates';
-import TokenSavingsSheet from '../parts/TokenSavingsSheet.vue';
 import UbBadge from '../ui/UbBadge.vue';
-import UbButton from '../ui/UbButton.vue';
 import UbPage from '../ui/UbPage.vue';
 import UbRow from '../ui/UbRow.vue';
 import UbSection from '../ui/UbSection.vue';
@@ -105,12 +109,17 @@ const plotStore = usePlotPresetStore();
 const routerStore = useRouterStore();
 const dialogStore = useDialogStore();
 const toastStore = useToastStore();
-const tokenSavingsOpen = ref(false);
 
 const healthCards = computed(() => [...dashboard.healthItems.value, dashboard.logHealthItem.value]);
 
 function syncGates(): void {
   syncFeaturePageGates_UB(routerStore, dashboard.contentReplaceGateEnabled.value, plotStore.enabled === true);
+}
+
+function toggleTokenSavings(enabled: boolean): void {
+  const result = updateTokenSavingsSettings_UB(enabled ? { enabled } : { enabled, autoChronicle: false });
+  if (result.ok) routerStore.syncFeatureGate(FEATURE_GATE_TOKEN_SAVINGS, enabled);
+  else toastStore.error(result.message || 'Token 节省设置保存失败。', { muteable: false });
 }
 
 async function refreshAll(): Promise<void> {

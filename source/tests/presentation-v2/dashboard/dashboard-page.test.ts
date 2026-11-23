@@ -739,6 +739,7 @@ describe("DashboardPage", () => {
       "contentReplaceEnabled",
       "summaryVectorIndexModeEnabled",
       "developerOptionsEnabled",
+      "tokenSavingsEnabled",
     ]);
 
     mount.__resetAcuV2MountForTests();
@@ -811,6 +812,7 @@ describe("DashboardPage", () => {
       "contentReplaceEnabled",
       "summaryVectorIndexModeEnabled",
       "developerOptionsEnabled",
+      "tokenSavingsEnabled",
     ]);
 
     const toggle = document.querySelector(
@@ -828,6 +830,23 @@ describe("DashboardPage", () => {
       document.querySelector(".ub-rail")?.textContent || "",
     ).toContain("正文替换");
 
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it("Token 节省总开关控制侧栏入口，开启时自动压缩保持关闭", async () => {
+    const { mount, settings } = await mountDashboardPage();
+    const toggle = document.querySelector<HTMLButtonElement>('button[data-acu-toggle-key="tokenSavingsEnabled"]')!;
+    const rail = () => document.querySelector(".ub-rail")?.textContent;
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(rail()).not.toContain("Token 节省");
+
+    toggle.click();
+    await vi.waitFor(() => expect(rail()).toContain("Token 节省"));
+    expect(settings.tokenSavings).toMatchObject({ enabled: true, autoChronicle: false });
+
+    toggle.click();
+    await vi.waitFor(() => expect(rail()).not.toContain("Token 节省"));
+    expect(settings.tokenSavings).toMatchObject({ enabled: false, autoChronicle: false });
     mount.__resetAcuV2MountForTests();
   });
 

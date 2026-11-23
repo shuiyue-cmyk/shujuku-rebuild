@@ -23,17 +23,17 @@ function normalizeText_ACU(value: any): string {
  * 定位当前（或指定的）纪要表。archive-service 的 findSummaryTable_ACU 委托到这里，
  * 保证「纪要表是哪张」在全仓只有一份实现——两处判定漂移会让墓碑写到错误 scopeKey 上。
  */
-export function findSummaryTableSelection_ACU(sourceTableKey?: string): SummaryTableSelection_ACU | null {
-    if (!currentJsonTableData_ACU || typeof currentJsonTableData_ACU !== 'object') {
+export function findSummaryTableSelection_ACU(sourceTableKey?: string, data = currentJsonTableData_ACU): SummaryTableSelection_ACU | null {
+    if (!data || typeof data !== 'object') {
         return null;
     }
 
     const requestedKey = normalizeText_ACU(sourceTableKey);
-    const candidateKeys = requestedKey ? [requestedKey] : Object.keys(currentJsonTableData_ACU);
-    const summaryKey = pickSummarySheetKeyByPriority_ACU(candidateKeys, (key) => currentJsonTableData_ACU[key]?.name);
+    const candidateKeys = requestedKey ? [requestedKey] : Object.keys(data);
+    const summaryKey = pickSummarySheetKeyByPriority_ACU(candidateKeys, (key) => data[key]?.name);
 
     if (!summaryKey) return null;
-    const table = currentJsonTableData_ACU[summaryKey];
+    const table = data[summaryKey];
     if (!table || !Array.isArray(table.content)) return null;
 
     return {

@@ -1,6 +1,8 @@
 import { callAIWithResolvedPreset_ACU } from '../ai/api-call';
 import { estimateTextTokens_ACU, measureTextTokens_ACU } from '../ai/token-counter';
 import { resolveApiConfigByPreset_ACU, resolveDisplayedActiveApiPresetName_ACU } from '../settings/api-preset-service';
+import { mapWithBoundedConcurrency_ACU } from '../../shared/bounded-concurrency';
+import { readTokenSavingsSettings_ACU } from './token-savings-settings';
 
 export type TokenSavingsSource_ACU = 'chronicle' | 'worldbook';
 
@@ -22,6 +24,29 @@ export interface TokenSavingsPreview_ACU {
   item: TokenSavingsItem_ACU;
   candidate?: TokenSavingsCandidate_ACU;
   skipped?: string;
+}
+
+export function previewTokenSavingsBatch_ACU(
+  items: readonly TokenSavingsItem_ACU[],
+  source: TokenSavingsSource_ACU,
+  presets: TokenSavingsPresets_ACU,
+  signal: AbortSignal,
+  concurrency: number,
+  onProgress?: (completed: number, total: number) => void,
+): Promise<TokenSavingsPreview_ACU[]> {
+  let completed = 0;
+  onProgress?.(completed, items.length);
+  return mapWithBoundedConcurrency_ACU(items, concurrency, async item => {
+    if (signal.aborted) return { item, skipped: '已停止压缩' };
+    try {
+      const result = await previewTokenSavingsItem_ACU(item, source, presets, signal);
+      onProgress?.(++completed, items.length);
+      return result;
+    } catch (error) {
+      if (!signal.aborted) throw error;
+      return { item, skipped: '已停止压缩' };
+    }
+  });
 }
 
 // BabelTele §3 & §4.3 (arXiv:2606.19857v1): use self-contained telegraphic text
@@ -63,13 +88,30 @@ function isStructuredJson(content: string): boolean {
   }
 }
 
-export function resolveTokenSavingsPreset_ACU() {
-  const name = resolveDisplayedActiveApiPresetName_ACU();
+function resolveTokenSavingsPreset(name: string, role: string) {
   const preset = resolveApiConfigByPreset_ACU(name);
   if ((name && !preset.resolved) || !preset.apiConfig.url || !preset.apiConfig.model) {
-    throw new Error('请先在「接口配置」设置可用的模型。');
+    throw new Error(role + '预设不可用，请在「Token 节省」选择可用的预设，或检查当前接口配置。');
   }
   return { ...preset, presetName: name };
+}
+
+type TokenSavingsPreset_ACU = ReturnType<typeof resolveTokenSavingsPreset>;
+export interface TokenSavingsPresets_ACU {
+  compression: TokenSavingsPreset_ACU;
+  audit: TokenSavingsPreset_ACU;
+}
+
+export function resolveTokenSavingsPresets_ACU(): TokenSavingsPresets_ACU {
+  const { compressionPreset, auditPreset } = readTokenSavingsSettings_ACU();
+  const current = resolveDisplayedActiveApiPresetName_ACU();
+  const compressionName = compressionPreset || current;
+  const auditName = auditPreset || current;
+  const compression = resolveTokenSavingsPreset(compressionName, '压缩');
+  return {
+    compression,
+    audit: auditName === compressionName ? compression : resolveTokenSavingsPreset(auditName, '核验'),
+  };
 }
 
 function readJson(response: string | null): Record<string, unknown> | null {
@@ -102,11 +144,11 @@ function preservesAnchors(original: string, candidate: string): boolean {
 export async function previewTokenSavingsItem_ACU(
   item: TokenSavingsItem_ACU,
   source: TokenSavingsSource_ACU,
-  preset: ReturnType<typeof resolveTokenSavingsPreset_ACU>,
+  presets: TokenSavingsPresets_ACU,
   signal: AbortSignal,
 ): Promise<TokenSavingsPreview_ACU> {
   if (item.blocked) return { item, skipped: item.blocked };
-  const call = async (system: string, data: object) => {
+  const call = async (system: string, data: object, preset: TokenSavingsPreset_ACU) => {
     if (signal.aborted) throw new Error('压缩已停止。');
     return readJson(await callAIWithResolvedPreset_ACU([
       { role: 'system', content: system },
@@ -119,7 +161,7 @@ export async function previewTokenSavingsItem_ACU(
     let skipped = '没有通过复核的压缩结果';
     for (const conservative of [false, true]) {
       const guidance = conservative ? '\n上一轮未通过。只压缩语句中可确认的冗余，遇到歧义就保留原措辞。' : '';
-      const result = await call(COMPRESSION_PROMPT + '\n' + SOURCE_RULES[source] + guidance, { original: item.original });
+      const result = await call(COMPRESSION_PROMPT + '\n' + SOURCE_RULES[source] + guidance, { original: item.original }, presets.compression);
       const text = typeof result?.text === 'string' ? result.text.trimEnd() : '';
       // 先验标签、标识符和数字，再请模型作独立语义复核。
       if (!text.trim() || getWorldbookCompressionBlock_ACU('', text) || !preservesAnchors(item.original, text)) continue;
@@ -131,7 +173,7 @@ export async function previewTokenSavingsItem_ACU(
         skipped = '未节省 Token';
         continue;
       }
-      const audit = await call(AUDIT_PROMPT + '\n' + SOURCE_RULES[source], { original: item.original, candidate: text });
+      const audit = await call(AUDIT_PROMPT + '\n' + SOURCE_RULES[source], { original: item.original, candidate: text }, presets.audit);
       if (signal.aborted) throw new Error('压缩已停止。');
       if (audit?.equivalent === true && Object.keys(audit).length === 1) {
         return { item, candidate: { text, before, after, estimated } };

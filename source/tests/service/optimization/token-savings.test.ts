@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { callAIWithResolvedPreset_ACU } from '../../../src/service/ai/api-call';
 import {
   getWorldbookCompressionBlock_ACU,
+  previewTokenSavingsBatch_ACU,
   previewTokenSavingsItem_ACU,
-  type resolveTokenSavingsPreset_ACU,
+  type TokenSavingsPresets_ACU,
 } from '../../../src/service/optimization/token-savings';
 
 vi.mock('../../../src/service/ai/api-call', () => ({ callAIWithResolvedPreset_ACU: vi.fn() }));
@@ -13,20 +14,36 @@ vi.mock('../../../src/service/ai/token-counter', () => ({
 }));
 
 const call = vi.mocked(callAIWithResolvedPreset_ACU);
-const preset = { presetName: 'test' } as ReturnType<typeof resolveTokenSavingsPreset_ACU>;
+const presets = { compression: { presetName: '压缩' }, audit: { presetName: '核验' } } as TokenSavingsPresets_ACU;
 const item = { id: '42', label: 'AM0042', original: '星汐在晚上 9 点告诉夜莺，先等在外面，不可以自行进入。' };
 
 function preview(signal = new AbortController().signal) {
-  return previewTokenSavingsItem_ACU(item, 'chronicle', preset, signal);
+  return previewTokenSavingsItem_ACU(item, 'chronicle', presets, signal);
 }
 
 function reply(text: string): string {
   return JSON.stringify({ text });
 }
 
-beforeEach(() => call.mockReset());
+beforeEach(() => { call.mockReset(); });
 
 describe('Token 节省候选', () => {
+  it('并发达到设定上限后等待，最终按选中顺序返回', async () => {
+    const pending: Array<() => void> = [];
+    call.mockImplementation(async messages => {
+      if (JSON.parse(messages[1].content).candidate) return '{"equivalent":true}';
+      return new Promise(resolve => pending.push(() => resolve(reply('晚9点星汐告夜莺：在外等，禁自行进入。'))));
+    });
+    const rows = ['a', 'b', 'c'].map(id => ({ ...item, id }));
+    const result = previewTokenSavingsBatch_ACU(rows, 'chronicle', presets, new AbortController().signal, 2);
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    pending[1]();
+    await vi.waitFor(() => expect(pending).toHaveLength(3));
+    pending[2]();
+    pending[0]();
+    expect((await result).map(row => row.item.id)).toEqual(['a', 'b', 'c']);
+  });
+
   it('压缩与复核是独立请求，复核只接收原文和候选作为数据', async () => {
     const text = '晚9点星汐告夜莺：在外等，禁自行进入。';
     call.mockResolvedValueOnce(reply(text)).mockResolvedValueOnce('{"equivalent":true}');
@@ -35,6 +52,8 @@ describe('Token 节省候选', () => {
     expect(call).toHaveBeenCalledTimes(2);
     expect(JSON.parse(call.mock.calls[0][0][1].content)).toEqual({ original: item.original });
     expect(JSON.parse(call.mock.calls[1][0][1].content)).toEqual({ original: item.original, candidate: text });
+    expect(call.mock.calls[0][1]).toBe(presets.compression);
+    expect(call.mock.calls[1][1]).toBe(presets.audit);
   });
 
   it('数值变化不送审，且复核拒绝或异常格式时不输出可替换结果', async () => {

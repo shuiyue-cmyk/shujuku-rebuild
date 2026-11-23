@@ -524,20 +524,20 @@ async function finalizeTableEditAfterCommit_ACU(
     }
 }
 
-interface ChronicleCompressionScope_ACU {
+export interface ChronicleCompressionScope_ACU {
     chatKey: string;
     isolationKey: string;
     sheetKey: string;
     column: string;
 }
 
-export function listChronicleCompressionItems_ACU(): {
+export function listChronicleCompressionItems_ACU(data = currentJsonTableData_ACU): {
     scope: ChronicleCompressionScope_ACU;
     items: TokenSavingsItem_ACU[];
 } | null {
     const chatKey = currentChatFileIdentifier_ACU;
     if (!chatKey || chatKey === 'unknown_chat_init') return null;
-    const selection = findSummaryTableSelection_ACU();
+    const selection = findSummaryTableSelection_ACU(undefined, data);
     if (!selection || selection.table.name?.trim() === '总体大纲') return null;
     const { summaryKey: sheetKey, table } = selection;
     const content: unknown[][] = table.content;
@@ -567,8 +567,9 @@ export function listChronicleCompressionItems_ACU(): {
 export async function replaceChronicleContentsIfUnchanged_ACU(
     scope: ChronicleCompressionScope_ACU,
     replacements: readonly { id: string; original: string; replacement: string }[],
+    isCurrent?: () => boolean,
 ): Promise<void> {
-    if (!replacements.length) return;
+    if (!replacements.length || isCurrent?.() === false) return;
     const { chatKey, isolationKey, sheetKey, column } = scope;
     const writeSet = replacements.map(({ id }) => ({ kind: 'cell' as const, sheetKey, rowId: id, columnKey: column }));
     const reason = 'token-savings:chronicle';
@@ -586,6 +587,7 @@ export async function replaceChronicleContentsIfUnchanged_ACU(
         strictSave: true,
     }, async () => {
         const provider = await ensureStorageProviderReady_ACU();
+        if (isCurrent?.() === false) return { success: false, error: '纪要自动压缩已停止。' };
         const latest = listChronicleCompressionItems_ACU();
         const changed = '当前聊天、纪要表或所选纪要已变更，请重新生成预览。';
         if (!latest || latest.scope.chatKey !== chatKey || latest.scope.isolationKey !== isolationKey

@@ -18,6 +18,7 @@ import DeveloperPage from '../pages/DeveloperPage.vue';
 import FormFillPage from '../pages/FormFillPage.vue';
 import PlotPage from '../pages/PlotPage.vue';
 import TablePage from '../pages/TablePage.vue';
+import TokenSavingsPage from '../pages/TokenSavingsPage.vue';
 import VectorIndexPage from '../pages/VectorIndexPage.vue';
 
 export interface UbPageEntry {
@@ -38,6 +39,7 @@ export const UB_PAGE_CATALOG: Readonly<Record<string, UbPageEntry>> = Object.fre
   continuation: { component: markRaw(ContinuationPage), icon: 'fa-solid fa-feather-pointed', blurb: '交给 AI 自动续写剧情。' },
   'vector-index': { component: markRaw(VectorIndexPage), icon: 'fa-solid fa-bolt', blurb: '向量召回增强记忆（交火模式）。' },
   'content-replace': { component: markRaw(ContentReplacePage), icon: 'fa-solid fa-wand-magic-sparkles', blurb: '正文生成后自动检查并润色。' },
+  'token-savings': { component: markRaw(TokenSavingsPage), icon: 'fa-solid fa-compress', blurb: '压缩纪要和世界书条目，减少模型读入的 Token。' },
   'data-mgmt': { component: markRaw(DataMgmtPage), icon: 'fa-solid fa-box-archive', blurb: '导入导出、备份与清理数据。' },
   'advanced-tools': { component: markRaw(AdvancedToolsPage), icon: 'fa-solid fa-screwdriver-wrench', blurb: 'SQL 控制台、运行日志与诊断。' },
   developer: { component: markRaw(DeveloperPage), icon: 'fa-solid fa-flask', blurb: '面向开发与排障的选项。' },

@@ -439,6 +439,7 @@ function snapshotApiFields_ACU(): Record<string, unknown> {
     tableApiPresetOverridesByName: clone(settings_ACU.tableApiPresetOverridesByName),
     plotTaskApiPresetOverridesById: clone(settings_ACU.plotTaskApiPresetOverridesById),
     contentOptimizationApiPreset: settings_ACU.contentOptimizationSettings?.apiPreset,
+    tokenSavings: settings_ACU.tokenSavings == null ? settings_ACU.tokenSavings : clone(settings_ACU.tokenSavings),
   };
 }
 
@@ -456,6 +457,7 @@ function restoreApiFields_ACU(snapshot: Record<string, unknown>): void {
   if (settings_ACU.contentOptimizationSettings && typeof settings_ACU.contentOptimizationSettings === 'object') {
     settings_ACU.contentOptimizationSettings.apiPreset = snapshot.contentOptimizationApiPreset;
   }
+  settings_ACU.tokenSavings = snapshot.tokenSavings;
 }
 
 function finalizeSave_ACU(snapshot: Record<string, unknown>): ApiPresetWriteResult_ACU {
@@ -517,6 +519,8 @@ export function renameApiPresetReferences_ACU(oldName: string, newName: string):
   if (settings_ACU.contentOptimizationSettings?.apiPreset === oldN) {
     settings_ACU.contentOptimizationSettings.apiPreset = newN;
   }
+  if (settings_ACU.tokenSavings?.compressionPreset === oldN) settings_ACU.tokenSavings.compressionPreset = newN;
+  if (settings_ACU.tokenSavings?.auditPreset === oldN) settings_ACU.tokenSavings.auditPreset = newN;
   if (settings_ACU.tableApiPresetOverridesByName && typeof settings_ACU.tableApiPresetOverridesByName === 'object') {
     for (const key of Object.keys(settings_ACU.tableApiPresetOverridesByName)) {
       if (settings_ACU.tableApiPresetOverridesByName[key] === oldN) {

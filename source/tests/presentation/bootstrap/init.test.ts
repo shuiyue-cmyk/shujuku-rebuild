@@ -84,6 +84,7 @@ vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect
 vi.mock('../../../src/service/runtime/helpers-remaining', () => ({ ensureInitialSeedCheckpoint_ACU: (...args: any[]) => m.ensureSeedCheckpoint(...args), handleChatCompletionReady_ACU: vi.fn(), loadPresetAndCleanCharacterData_ACU: m.loadPreset }));
 vi.mock('../../../src/service/table/runtime-only-pending-flush', () => ({ flushRuntimeOnlyPendingChanges_ACU: (...args: any[]) => m.runtimeOnlyFlush(...args) }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
+  onTableFillRunEnded_ACU: vi.fn(() => () => undefined),
   chatMutationDebounceTimer_ACU: null, _set_chatMutationDebounceTimer_ACU: m.setChatMutationTimer, generationGate_ACU: m.gate,
   markChatChangedForEndedGate_ACU: m.markChatChangedForEndedGate,
   markStoppedSendForRetry_ACU: m.markStoppedSendForRetry, clearStoppedSendRetry_ACU: vi.fn(), isRetryOfStoppedSend_ACU: (...args: any[]) => m.isRetryOfStoppedSend(...args),
