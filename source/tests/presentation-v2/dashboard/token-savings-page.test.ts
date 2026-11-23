@@ -97,6 +97,12 @@ afterEach(() => {
 });
 
 describe('Token 节省双确认流程', () => {
+  it('在页首显示论文来源与有损压缩提示', () => {
+    const intro = document.querySelector('.ub-page')?.firstElementChild;
+    expect(intro?.querySelector('a')?.getAttribute('href')).toBe('https://arxiv.org/abs/2606.19857v1');
+    expect(intro?.querySelector('.ub-callout--warning')?.textContent).toContain('这是有损压缩');
+  });
+
   it('当前纪要先请求确认再生成预览，取消第二次确认后仍可再次核对', async () => {
     for (const [label, name] of [['压缩 API 预设', '压缩模型'], ['核验 API 预设', '核验模型']]) {
       const select = document.querySelector<HTMLSelectElement>('select[aria-label="' + label + '"]')!;

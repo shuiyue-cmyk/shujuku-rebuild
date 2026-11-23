@@ -1,6 +1,8 @@
 <template>
   <div ref="root" class="ub-page" :class="{ 'ub-page--wide': wide }">
-    <p v-if="lead" class="ub-page__lead">{{ lead }}</p>
+    <slot name="lead">
+      <p v-if="lead" class="ub-page__lead">{{ lead }}</p>
+    </slot>
     <nav v-if="sections && sections.length > 1" class="ub-page__jump" aria-label="页内跳转">
       <button
         v-for="item in sections"

@@ -1,5 +1,17 @@
 <template>
   <UbPage :sections="sections">
+    <template #lead>
+      <div class="compression-intro">
+        <p class="compression-intro__source">
+          本功能参考论文
+          <a href="https://arxiv.org/abs/2606.19857v1" target="_blank" rel="noopener noreferrer">《Large Language Models Do Not Always Need Readable Language》</a>
+          中的 BabelTele 思路，让模型先将原文改写得更简短，再对照原文核验。
+        </p>
+        <UbCallout kind="warning">
+          <strong>这是有损压缩。</strong> 即使通过模型核验，仍可能遗漏细节或改变原意。
+        </UbCallout>
+      </div>
+    </template>
     <UbCallout v-if="settingsError" kind="error">{{ settingsError }}</UbCallout>
     <UbSection id="token-savings-settings" title="压缩设置" icon="fa-solid fa-sliders">
       <UbRow label="压缩 API 预设" hint="生成候选压缩文本时使用。">
@@ -441,6 +453,20 @@ async function replace(): Promise<void> {
 </script>
 
 <style scoped>
+.compression-intro {
+  display: grid;
+  gap: var(--ub-s2);
+}
+.compression-intro__source {
+  margin: 0;
+  color: var(--ub-text-2);
+  font-size: var(--ub-fs-sm);
+  line-height: 1.65;
+}
+.compression-intro__source a {
+  color: var(--ub-accent-ink);
+  text-decoration: underline;
+}
 .manual {
   display: grid;
   gap: var(--ub-s3);

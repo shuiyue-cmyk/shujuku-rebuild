@@ -96080,7 +96080,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * shared/build-info.ts — 构建期注入信息的唯一读取口
  *
  * rollup 打包时把版本写进 `"Unbirth A.D. 6386"`（与 manifest.json / source/package.json
- * 同值），构建时间戳写进 `"20261123-1831"`。源码直跑、测试环境或注入失败时读不到，
+ * 同值），构建时间戳写进 `"20261123-1837"`。源码直跑、测试环境或注入失败时读不到，
  * 一律回退到固定字面量（不猜、不抛）。
  *
  * 之所以单独一个模块：此前 useDebugPanel 与 plot-entry 各写了一份同样的 try/catch 读取，
@@ -96099,7 +96099,7 @@ function readAcuBuildVersion_ACU() {
 /** 构建时间戳；读不到返回 'dev'（与构建徽章的既有回退一致）。 */
 function readAcuBuildStamp_ACU() {
     try {
-        const stamp = "20261123-1831";
+        const stamp = "20261123-1837";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -158638,7 +158638,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20261123-1831";
+        const stamp = "20261123-1837";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186128,7 +186128,7 @@ const _hoisted_11$e = {
 	class: "ub-vai__diffs"
 };
 const _hoisted_12$d = { class: "ub-vai__diff-title" };
-const _hoisted_13$b = { class: "ub-vai__list" };
+const _hoisted_13$c = { class: "ub-vai__list" };
 const _hoisted_14$8 = { class: "ub-vai__raw" };
 const _hoisted_15$8 = {
 	key: 4,
@@ -186363,7 +186363,7 @@ function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
 												toDisplayString(group.title),
 												1
 												/* TEXT */
-											), createBaseVNode("ul", _hoisted_13$b, [(openBlock(true), createElementBlock(
+											), createBaseVNode("ul", _hoisted_13$c, [(openBlock(true), createElementBlock(
 												Fragment,
 												null,
 												renderList(group.items, (item) => {
@@ -187833,7 +187833,7 @@ const _hoisted_12$c = [
 	"onPointerdown",
 	"onFocusin"
 ];
-const _hoisted_13$a = { class: "ub-vfield__label" };
+const _hoisted_13$b = { class: "ub-vfield__label" };
 const _hoisted_14$7 = { class: "ub-vfield__name" };
 const _hoisted_15$7 = { class: "ub-vfield__locks" };
 const _hoisted_16$5 = [
@@ -187994,7 +187994,7 @@ function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
 											"data-ub-viz-field-layout": fieldRow.wide ? "wide" : "half",
 											onPointerdown: ($event) => $setup.setActiveField(row.index, field.columnIndex),
 											onFocusin: ($event) => $setup.setActiveField(row.index, field.columnIndex)
-										}, [createBaseVNode("div", _hoisted_13$a, [createBaseVNode(
+										}, [createBaseVNode("div", _hoisted_13$b, [createBaseVNode(
 											"span",
 											_hoisted_14$7,
 											toDisplayString(field.header),
@@ -188616,7 +188616,7 @@ const _hoisted_9$e = ["aria-expanded"];
 const _hoisted_10$d = { class: "ub-viz__switcher-name" };
 const _hoisted_11$c = { class: "ub-viz__titles" };
 const _hoisted_12$b = { class: "ub-viz__title" };
-const _hoisted_13$9 = { class: "ub-viz__sub" };
+const _hoisted_13$a = { class: "ub-viz__sub" };
 const _hoisted_14$6 = {
 	key: 0,
 	class: "ub-viz__conflict"
@@ -188722,7 +188722,7 @@ function _sfc_render$I(_ctx, _cache, $props, $setup, $data, $options) {
 					toDisplayString($setup.headTitle),
 					1
 					/* TEXT */
-				), createBaseVNode("p", _hoisted_13$9, [createTextVNode(
+				), createBaseVNode("p", _hoisted_13$a, [createTextVNode(
 					"模板：" + toDisplayString($setup.templateLabel),
 					1
 					/* TEXT */
@@ -190444,15 +190444,15 @@ var _sfc_main$I = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.ub-page[data-v-2ff73a0a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s4);\r\n  width: 100%;\r\n  max-width: var(--ub-page-max);\r\n  min-width: 0;\r\n  margin: 0 auto;\r\n  padding: var(--ub-s2) var(--ub-page-pad) calc(var(--ub-s8) + var(--ub-safe-bottom));\n}\n.ub-page--wide[data-v-2ff73a0a] {\r\n  max-width: var(--ub-page-max-wide);\n}\n.ub-page__lead[data-v-2ff73a0a] {\r\n  margin: 0;\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.65;\n}\n.ub-page__jump[data-v-2ff73a0a] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 5;\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  margin: 0 calc(var(--ub-page-pad) * -1);\r\n  padding: var(--ub-s2) var(--ub-page-pad);\r\n  overflow-x: auto;\r\n  background: linear-gradient(var(--ub-bg) 78%, transparent);\r\n  scrollbar-width: none;\n}\n.ub-page__jump[data-v-2ff73a0a]::-webkit-scrollbar {\r\n  display: none;\n}\n.ub-page__chip[data-v-2ff73a0a] {\r\n  flex: 0 0 auto;\r\n  padding: var(--ub-s1) var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-panel);\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\r\n  cursor: pointer;\r\n  transition: color 0.14s ease, border-color 0.14s ease;\n}\n.ub-page__chip[data-v-2ff73a0a]:hover {\r\n  border-color: var(--ub-accent);\r\n  color: var(--ub-accent-ink);\n}\n.ub-page__body[data-v-2ff73a0a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\r\n", "src/presentation-v3/ui/UbPage.vue#style-0-2ff73a0a");
-var UbPage_vue_vue_type_style_index_0_scoped_2ff73a0a_lang = null;
+injectSfcStyle("\n.ub-page[data-v-166d9546] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s4);\r\n  width: 100%;\r\n  max-width: var(--ub-page-max);\r\n  min-width: 0;\r\n  margin: 0 auto;\r\n  padding: var(--ub-s2) var(--ub-page-pad) calc(var(--ub-s8) + var(--ub-safe-bottom));\n}\n.ub-page--wide[data-v-166d9546] {\r\n  max-width: var(--ub-page-max-wide);\n}\n.ub-page__lead[data-v-166d9546] {\r\n  margin: 0;\r\n  color: var(--ub-text-2);\r\n  font-size: var(--ub-fs-sm);\r\n  line-height: 1.65;\n}\n.ub-page__jump[data-v-166d9546] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 5;\r\n  display: flex;\r\n  gap: var(--ub-s2);\r\n  margin: 0 calc(var(--ub-page-pad) * -1);\r\n  padding: var(--ub-s2) var(--ub-page-pad);\r\n  overflow-x: auto;\r\n  background: linear-gradient(var(--ub-bg) 78%, transparent);\r\n  scrollbar-width: none;\n}\n.ub-page__jump[data-v-166d9546]::-webkit-scrollbar {\r\n  display: none;\n}\n.ub-page__chip[data-v-166d9546] {\r\n  flex: 0 0 auto;\r\n  padding: var(--ub-s1) var(--ub-s3);\r\n  border: 1px solid var(--ub-line-soft);\r\n  border-radius: 999px;\r\n  background: var(--ub-panel);\r\n  color: var(--ub-text-2);\r\n  font: inherit;\r\n  font-size: var(--ub-fs-xs);\r\n  font-weight: 600;\r\n  cursor: pointer;\r\n  transition: color 0.14s ease, border-color 0.14s ease;\n}\n.ub-page__chip[data-v-166d9546]:hover {\r\n  border-color: var(--ub-accent);\r\n  color: var(--ub-accent-ink);\n}\n.ub-page__body[data-v-166d9546] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--ub-s6);\r\n  min-width: 0;\n}\r\n", "src/presentation-v3/ui/UbPage.vue#style-0-166d9546");
+var UbPage_vue_vue_type_style_index_0_scoped_166d9546_lang = null;
 
 const _hoisted_1$E = {
 	key: 0,
 	class: "ub-page__lead"
 };
 const _hoisted_2$A = {
-	key: 1,
+	key: 0,
 	class: "ub-page__jump",
 	"aria-label": "页内跳转"
 };
@@ -190466,13 +190466,13 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 			class: normalizeClass(["ub-page", { "ub-page--wide": $props.wide }])
 		},
 		[
-			$props.lead ? (openBlock(), createElementBlock(
+			renderSlot(_ctx.$slots, "lead", {}, () => [$props.lead ? (openBlock(), createElementBlock(
 				"p",
 				_hoisted_1$E,
 				toDisplayString($props.lead),
 				1
 				/* TEXT */
-			)) : createCommentVNode("v-if", true),
+			)) : createCommentVNode("v-if", true)], true),
 			$props.sections && $props.sections.length > 1 ? (openBlock(), createElementBlock("nav", _hoisted_2$A, [(openBlock(true), createElementBlock(
 				Fragment,
 				null,
@@ -190493,7 +190493,7 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var UbPage = /* @__PURE__ */ _export_sfc(_sfc_main$I, [["render", _sfc_render$H], ["__scopeId", "data-v-2ff73a0a"]]);
+var UbPage = /* @__PURE__ */ _export_sfc(_sfc_main$I, [["render", _sfc_render$H], ["__scopeId", "data-v-166d9546"]]);
 
 var _sfc_main$H = /*@__PURE__*/ defineComponent({
     __name: 'AdvancedToolsPage',
@@ -190596,7 +190596,7 @@ const _hoisted_12$a = {
 	key: 0,
 	class: "ub-at__empty"
 };
-const _hoisted_13$8 = ["onClick"];
+const _hoisted_13$9 = ["onClick"];
 const _hoisted_14$5 = { class: "ub-at__history-meta" };
 const _hoisted_15$5 = { class: "ub-at__logs" };
 const _hoisted_16$3 = { class: "ub-at__filters" };
@@ -190837,7 +190837,7 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 									toDisplayString(item.sql),
 									1
 									/* TEXT */
-								)], 10, _hoisted_13$8);
+								)], 10, _hoisted_13$9);
 							}),
 							128
 							/* KEYED_FRAGMENT */
@@ -193650,7 +193650,7 @@ const _hoisted_12$9 = {
 	key: 1,
 	class: "ub-wbe__skill"
 };
-const _hoisted_13$7 = { class: "ub-wbe__skill-actions" };
+const _hoisted_13$8 = { class: "ub-wbe__skill-actions" };
 function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$B, [createBaseVNode("div", _hoisted_2$y, [createVNode($setup["UbInput"], {
 		class: "ub-wbe__search",
@@ -193857,7 +193857,7 @@ function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 										"auto-resize": "",
 										"onUpdate:modelValue": ($event) => $setup.patchSkillDraft(entry, { triggerWhen: $event })
 									}, null, 8, ["model-value", "onUpdate:modelValue"]),
-									createBaseVNode("div", _hoisted_13$7, [createVNode($setup["UbButton"], {
+									createBaseVNode("div", _hoisted_13$8, [createVNode($setup["UbButton"], {
 										size: "sm",
 										variant: "danger",
 										onClick: ($event) => $setup.emit("delete-skill", entry.bookName, entry.uid)
@@ -194314,7 +194314,7 @@ const _hoisted_9$b = { class: "ub-agent-fav__add" };
 const _hoisted_10$a = { class: "ub-agent-fav__mount" };
 const _hoisted_11$9 = { class: "ub-agent__current" };
 const _hoisted_12$8 = { key: 0 };
-const _hoisted_13$6 = { class: "ub-agent-fav__mount-actions" };
+const _hoisted_13$7 = { class: "ub-agent-fav__mount-actions" };
 function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], {
 		lead: "独立管理 Agent 的世界书范围、Skill 元数据和接管状态。",
@@ -194654,7 +194654,7 @@ function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
 							1
 							/* TEXT */
 						)) : createCommentVNode("v-if", true)
-					]), createBaseVNode("div", _hoisted_13$6, [createVNode($setup["UbButton"], {
+					]), createBaseVNode("div", _hoisted_13$7, [createVNode($setup["UbButton"], {
 						class: "ub-agent-fav__takeover",
 						variant: "primary",
 						icon: "fa-solid fa-robot",
@@ -195194,7 +195194,7 @@ const _hoisted_10$9 = {
 };
 const _hoisted_11$8 = { class: "ub-picker-panel__main" };
 const _hoisted_12$7 = { class: "ub-picker-panel__name" };
-const _hoisted_13$5 = {
+const _hoisted_13$6 = {
 	key: 0,
 	class: "ub-picker-panel__meta"
 };
@@ -195284,7 +195284,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 							/* TEXT */
 						), item.meta ? (openBlock(), createElementBlock(
 							"span",
-							_hoisted_13$5,
+							_hoisted_13$6,
 							toDisplayString(item.meta),
 							1
 							/* TEXT */
@@ -197584,7 +197584,7 @@ const _hoisted_9$9 = ["onClick"];
 const _hoisted_10$8 = { class: "ub-pps-task__name" };
 const _hoisted_11$7 = { class: "ub-pps-task__meta" };
 const _hoisted_12$6 = { title: "阶段号 — 同阶段并发，跨阶段串行" };
-const _hoisted_13$4 = {
+const _hoisted_13$5 = {
 	key: 0,
 	class: "ub-pps-empty"
 };
@@ -197831,7 +197831,7 @@ function _sfc_render$v(_ctx, _cache, $props, $setup, $data, $options) {
 						}),
 						128
 						/* KEYED_FRAGMENT */
-					)), !$setup.tasks.length ? (openBlock(), createElementBlock("p", _hoisted_13$4, "暂无任务，点右上 + 新增。")) : createCommentVNode("v-if", true)])]),
+					)), !$setup.tasks.length ? (openBlock(), createElementBlock("p", _hoisted_13$5, "暂无任务，点右上 + 新增。")) : createCommentVNode("v-if", true)])]),
 					_: 1
 				}),
 				createVNode($setup["PlotTaskEditor"], {
@@ -202834,7 +202834,7 @@ const _hoisted_10$6 = {
 };
 const _hoisted_11$5 = { class: "ub-feed__thought-label" };
 const _hoisted_12$4 = { key: 0 };
-const _hoisted_13$3 = ["onClick"];
+const _hoisted_13$4 = ["onClick"];
 const _hoisted_14$3 = {
 	key: 0,
 	class: "fa-solid fa-circle-notch fa-spin",
@@ -202991,7 +202991,7 @@ function _sfc_render$o(_ctx, _cache, $props, $setup, $data, $options) {
 										2
 										/* CLASS */
 									)) : createCommentVNode("v-if", true)
-								], 8, _hoisted_13$3),
+								], 8, _hoisted_13$4),
 								entry.detail && !$setup.isExpanded(entry) ? (openBlock(), createElementBlock("p", {
 									key: 0,
 									class: "ub-feed__preview",
@@ -203859,7 +203859,7 @@ const _hoisted_9$6 = { class: "ub-cm__tags" };
 const _hoisted_10$5 = { class: "ub-cm__body" };
 const _hoisted_11$4 = { class: "ub-cm__meta" };
 const _hoisted_12$3 = ["title"];
-const _hoisted_13$2 = { class: "ub-cm__meta" };
+const _hoisted_13$3 = { class: "ub-cm__meta" };
 const _hoisted_14$2 = { class: "ub-cm__node-head" };
 const _hoisted_15$2 = { class: "ub-cm__body" };
 const _hoisted_16$1 = { class: "ub-cm__turns" };
@@ -204205,7 +204205,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						)], 8, _hoisted_12$3),
 						createBaseVNode(
 							"p",
-							_hoisted_13$2,
+							_hoisted_13$3,
 							" 完成 " + toDisplayString($props.activeStage.completedTurns) + " / " + toDisplayString($props.activeRevision.outline.totalTurns) + " 轮 · 剩余 " + toDisplayString($setup.remainingTurns($props.activeStage, $props.activeRevision)) + " 轮 · 所属 active 卷：" + toDisplayString($setup.activeVolume ? `[${$setup.activeVolume.id}]「${$setup.activeVolume.title}」` : "未识别（故事总纲尚未加载或当前没有 active 卷）"),
 							1
 							/* TEXT */
@@ -213672,7 +213672,7 @@ const _hoisted_12$2 = {
 	role: "cell",
 	"data-label": "上次更新"
 };
-const _hoisted_13$1 = {
+const _hoisted_13$2 = {
 	role: "cell",
 	"data-label": "下次触发"
 };
@@ -213802,7 +213802,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 											1
 											/* TEXT */
 										),
-										createBaseVNode("span", _hoisted_13$1, [row.ready ? (openBlock(), createBlock($setup["UbBadge"], {
+										createBaseVNode("span", _hoisted_13$2, [row.ready ? (openBlock(), createBlock($setup["UbBadge"], {
 											key: 0,
 											variant: "success"
 										}, {
@@ -215273,32 +215273,61 @@ var _sfc_main$9 = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.manual[data-v-c48c6e00] {\n  display: grid;\n  gap: var(--ub-s3);\n}\n.actions[data-v-c48c6e00] {\n  display: flex;\n  justify-content: flex-end;\n  flex-wrap: wrap;\n  gap: var(--ub-s2);\n}\n.selection[data-v-c48c6e00] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: var(--ub-s2);\n}\n.item-list[data-v-c48c6e00] {\n  display: grid;\n  gap: var(--ub-s3);\n  max-height: min(calc(var(--tt-base-viewport-height, 100vh) * 0.48), calc(var(--ub-u) * 460));\n  overflow-y: auto;\n  padding: var(--ub-s3);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n}\n.hint[data-v-c48c6e00] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.result[data-v-c48c6e00] {\n  display: grid;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n}\n.result summary[data-v-c48c6e00] {\n  cursor: pointer;\n  overflow-wrap: anywhere;\n}\n.result summary .hint[data-v-c48c6e00] {\n  margin-inline-start: var(--ub-s2);\n}\n.comparison[data-v-c48c6e00] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: var(--ub-s3);\n  margin-top: var(--ub-s2);\n}\n.comparison h4[data-v-c48c6e00] {\n  margin: 0 0 var(--ub-s1);\n  font-size: var(--ub-fs-xs);\n}\n.comparison pre[data-v-c48c6e00] {\n  max-height: 320px;\n  margin: 0;\n  padding: var(--ub-s2);\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  background: var(--ub-sunken);\n  color: var(--ub-text);\n  font: inherit;\n  font-size: var(--ub-fs-sm);\n}\n@media (max-width: 650px) {\n.comparison[data-v-c48c6e00] {\n    grid-template-columns: minmax(0, 1fr);\n}\n}\n", "src/presentation-v3/pages/TokenSavingsPage.vue#style-0-c48c6e00");
-var TokenSavingsPage_vue_vue_type_style_index_0_scoped_c48c6e00_lang = null;
+injectSfcStyle("\n.compression-intro[data-v-afe0fbec] {\n  display: grid;\n  gap: var(--ub-s2);\n}\n.compression-intro__source[data-v-afe0fbec] {\n  margin: 0;\n  color: var(--ub-text-2);\n  font-size: var(--ub-fs-sm);\n  line-height: 1.65;\n}\n.compression-intro__source a[data-v-afe0fbec] {\n  color: var(--ub-accent-ink);\n  text-decoration: underline;\n}\n.manual[data-v-afe0fbec] {\n  display: grid;\n  gap: var(--ub-s3);\n}\n.actions[data-v-afe0fbec] {\n  display: flex;\n  justify-content: flex-end;\n  flex-wrap: wrap;\n  gap: var(--ub-s2);\n}\n.selection[data-v-afe0fbec] {\n  display: flex;\n  flex-wrap: wrap;\n  align-items: center;\n  gap: var(--ub-s2);\n}\n.item-list[data-v-afe0fbec] {\n  display: grid;\n  gap: var(--ub-s3);\n  max-height: min(calc(var(--tt-base-viewport-height, 100vh) * 0.48), calc(var(--ub-u) * 460));\n  overflow-y: auto;\n  padding: var(--ub-s3);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n}\n.hint[data-v-afe0fbec] {\n  color: var(--ub-text-3);\n  font-size: var(--ub-fs-xs);\n}\n.result[data-v-afe0fbec] {\n  display: grid;\n  gap: var(--ub-s2);\n  padding: var(--ub-s3);\n  border: 1px solid var(--ub-line-soft);\n  border-radius: var(--ub-r-control);\n}\n.result summary[data-v-afe0fbec] {\n  cursor: pointer;\n  overflow-wrap: anywhere;\n}\n.result summary .hint[data-v-afe0fbec] {\n  margin-inline-start: var(--ub-s2);\n}\n.comparison[data-v-afe0fbec] {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));\n  gap: var(--ub-s3);\n  margin-top: var(--ub-s2);\n}\n.comparison h4[data-v-afe0fbec] {\n  margin: 0 0 var(--ub-s1);\n  font-size: var(--ub-fs-xs);\n}\n.comparison pre[data-v-afe0fbec] {\n  max-height: 320px;\n  margin: 0;\n  padding: var(--ub-s2);\n  overflow: auto;\n  white-space: pre-wrap;\n  overflow-wrap: anywhere;\n  background: var(--ub-sunken);\n  color: var(--ub-text);\n  font: inherit;\n  font-size: var(--ub-fs-sm);\n}\n@media (max-width: 650px) {\n.comparison[data-v-afe0fbec] {\n    grid-template-columns: minmax(0, 1fr);\n}\n}\n", "src/presentation-v3/pages/TokenSavingsPage.vue#style-0-afe0fbec");
+var TokenSavingsPage_vue_vue_type_style_index_0_scoped_afe0fbec_lang = null;
 
-const _hoisted_1$7 = { class: "manual" };
-const _hoisted_2$6 = { class: "selection" };
-const _hoisted_3$6 = { "aria-live": "polite" };
-const _hoisted_4$5 = {
+const _hoisted_1$7 = { class: "compression-intro" };
+const _hoisted_2$6 = { class: "manual" };
+const _hoisted_3$6 = { class: "selection" };
+const _hoisted_4$5 = { "aria-live": "polite" };
+const _hoisted_5$4 = {
 	key: 0,
 	class: "item-list"
 };
-const _hoisted_5$4 = {
+const _hoisted_6$3 = {
 	key: 0,
 	class: "hint"
 };
-const _hoisted_6$3 = {
+const _hoisted_7$3 = {
 	key: 1,
 	class: "hint"
 };
-const _hoisted_7$3 = { key: 0 };
-const _hoisted_8$3 = ["open"];
-const _hoisted_9$2 = { class: "hint" };
-const _hoisted_10$1 = { class: "comparison" };
-const _hoisted_11$1 = { key: 0 };
-const _hoisted_12$1 = { class: "actions" };
+const _hoisted_8$3 = { key: 0 };
+const _hoisted_9$2 = ["open"];
+const _hoisted_10$1 = { class: "hint" };
+const _hoisted_11$1 = { class: "comparison" };
+const _hoisted_12$1 = { key: 0 };
+const _hoisted_13$1 = { class: "actions" };
 function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["UbPage"], { sections: $setup.sections }, {
+		lead: withCtx(() => [createBaseVNode("div", _hoisted_1$7, [_cache[9] || (_cache[9] = createBaseVNode(
+			"p",
+			{ class: "compression-intro__source" },
+			[
+				createTextVNode(" 本功能参考论文 "),
+				createBaseVNode("a", {
+					href: "https://arxiv.org/abs/2606.19857v1",
+					target: "_blank",
+					rel: "noopener noreferrer"
+				}, "《Large Language Models Do Not Always Need Readable Language》"),
+				createTextVNode(" 中的 BabelTele 思路，让模型先将原文改写得更简短，再对照原文核验。 ")
+			],
+			-1
+			/* CACHED */
+		)), createVNode($setup["UbCallout"], { kind: "warning" }, {
+			default: withCtx(() => [..._cache[8] || (_cache[8] = [createBaseVNode(
+				"strong",
+				null,
+				"这是有损压缩。",
+				-1
+				/* CACHED */
+			), createTextVNode(
+				" 即使通过模型核验，仍可能遗漏细节或改变原意。 ",
+				-1
+				/* CACHED */
+			)])]),
+			_: 1
+		})])]),
 		default: withCtx(() => [
 			$setup.settingsError ? (openBlock(), createBlock($setup["UbCallout"], {
 				key: 0,
@@ -215377,7 +215406,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 				icon: "fa-solid fa-compress",
 				padded: ""
 			}, {
-				default: withCtx(() => [createBaseVNode("div", _hoisted_1$7, [
+				default: withCtx(() => [createBaseVNode("div", _hoisted_2$6, [
 					$setup.error ? (openBlock(), createBlock($setup["UbCallout"], {
 						key: 0,
 						kind: "error"
@@ -215432,7 +215461,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 								_: 1
 							})) : createCommentVNode("v-if", true),
 							$setup.loading ? (openBlock(), createBlock($setup["UbCallout"], { key: 2 }, {
-								default: withCtx(() => [..._cache[8] || (_cache[8] = [createTextVNode(
+								default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
 									"正在读取内容…",
 									-1
 									/* CACHED */
@@ -215455,10 +215484,10 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 										}, null, 8, ["modelValue", "disabled"])]),
 										_: 1
 									}),
-									createBaseVNode("div", _hoisted_2$6, [
+									createBaseVNode("div", _hoisted_3$6, [
 										createBaseVNode(
 											"span",
-											_hoisted_3$6,
+											_hoisted_4$5,
 											"已选 " + toDisplayString($setup.selected.size) + " 条",
 											1
 											/* TEXT */
@@ -215481,7 +215510,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 											disabled: $setup.busy || !$setup.selected.size,
 											onClick: _cache[6] || (_cache[6] = ($event) => $setup.selected = new Set())
 										}, {
-											default: withCtx(() => [..._cache[9] || (_cache[9] = [createTextVNode(
+											default: withCtx(() => [..._cache[11] || (_cache[11] = [createTextVNode(
 												" 清空选择 ",
 												-1
 												/* CACHED */
@@ -215489,7 +215518,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 											_: 1
 										}, 8, ["disabled"])
 									]),
-									$setup.visibleItems.length ? (openBlock(), createElementBlock("div", _hoisted_4$5, [(openBlock(true), createElementBlock(
+									$setup.visibleItems.length ? (openBlock(), createElementBlock("div", _hoisted_5$4, [(openBlock(true), createElementBlock(
 										Fragment,
 										null,
 										renderList($setup.visibleItems, (item) => {
@@ -215505,7 +215534,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 													/* TEXT */
 												), item.blocked ? (openBlock(), createElementBlock(
 													"span",
-													_hoisted_5$4,
+													_hoisted_6$3,
 													"· " + toDisplayString(item.blocked),
 													1
 													/* TEXT */
@@ -215519,7 +215548,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 										}),
 										128
 										/* KEYED_FRAGMENT */
-									))])) : (openBlock(), createElementBlock("p", _hoisted_6$3, "没有匹配的条目。"))
+									))])) : (openBlock(), createElementBlock("p", _hoisted_7$3, "没有匹配的条目。"))
 								],
 								64
 								/* STABLE_FRAGMENT */
@@ -215531,7 +215560,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 								)]),
 								_: 1
 							})) : !$setup.error && !$setup.bookOptions.length ? (openBlock(), createBlock($setup["UbCallout"], { key: 5 }, {
-								default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
+								default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
 									"酒馆里没有可选的世界书。",
 									-1
 									/* CACHED */
@@ -215551,7 +215580,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 								/* TEXT */
 							), $setup.includedTotals.before ? (openBlock(), createElementBlock(
 								"span",
-								_hoisted_7$3,
+								_hoisted_8$3,
 								" 已勾选 " + toDisplayString($setup.included.size) + " 条，" + toDisplayString($setup.includedTotals.estimated ? "估算" : "按酒馆分词") + " " + toDisplayString($setup.includedTotals.before) + " → " + toDisplayString($setup.includedTotals.after) + " Token，节省 " + toDisplayString($setup.savingsPercent($setup.includedTotals.before, $setup.includedTotals.after)) + "%。 ",
 								1
 								/* TEXT */
@@ -215581,11 +215610,11 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 									/* TEXT */
 								), createBaseVNode(
 									"span",
-									_hoisted_9$2,
+									_hoisted_10$1,
 									toDisplayString(preview.candidate ? $setup.tokenLabel(preview.candidate) : "保留原文 · " + preview.skipped),
 									1
 									/* TEXT */
-								)]), createBaseVNode("div", _hoisted_10$1, [createBaseVNode("section", null, [_cache[11] || (_cache[11] = createBaseVNode(
+								)]), createBaseVNode("div", _hoisted_11$1, [createBaseVNode("section", null, [_cache[13] || (_cache[13] = createBaseVNode(
 									"h4",
 									null,
 									"原文",
@@ -215597,7 +215626,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 									toDisplayString(preview.item.original),
 									1
 									/* TEXT */
-								)]), preview.candidate ? (openBlock(), createElementBlock("section", _hoisted_11$1, [_cache[12] || (_cache[12] = createBaseVNode(
+								)]), preview.candidate ? (openBlock(), createElementBlock("section", _hoisted_12$1, [_cache[14] || (_cache[14] = createBaseVNode(
 									"h4",
 									null,
 									"压缩后",
@@ -215609,7 +215638,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 									toDisplayString(preview.candidate.text),
 									1
 									/* TEXT */
-								)])) : createCommentVNode("v-if", true)])], 8, _hoisted_8$3)]);
+								)])) : createCommentVNode("v-if", true)])], 8, _hoisted_9$2)]);
 							}),
 							128
 							/* KEYED_FRAGMENT */
@@ -215617,12 +215646,12 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 						64
 						/* STABLE_FRAGMENT */
 					)),
-					createBaseVNode("div", _hoisted_12$1, [
+					createBaseVNode("div", _hoisted_13$1, [
 						$setup.controller ? (openBlock(), createBlock($setup["UbButton"], {
 							key: 0,
 							onClick: _cache[7] || (_cache[7] = ($event) => $setup.controller.abort())
 						}, {
-							default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
+							default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 								"停止压缩",
 								-1
 								/* CACHED */
@@ -215634,7 +215663,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.busy,
 							onClick: $setup.refreshSource
 						}, {
-							default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
+							default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
 								"返回选择",
 								-1
 								/* CACHED */
@@ -215647,7 +215676,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.busy || !$setup.included.size,
 							onClick: $setup.replace
 						}, {
-							default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+							default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
 								" 确认替换压缩 ",
 								-1
 								/* CACHED */
@@ -215659,7 +215688,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.busy || $setup.loading || !$setup.selected.size,
 							onClick: $setup.compress
 						}, {
-							default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+							default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 								" 压缩并预览 ",
 								-1
 								/* CACHED */
@@ -215674,7 +215703,7 @@ function _sfc_render$8(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	});
 }
-var TokenSavingsPage = /* @__PURE__ */ _export_sfc(_sfc_main$9, [["render", _sfc_render$8], ["__scopeId", "data-v-c48c6e00"]]);
+var TokenSavingsPage = /* @__PURE__ */ _export_sfc(_sfc_main$9, [["render", _sfc_render$8], ["__scopeId", "data-v-afe0fbec"]]);
 
 const RERANK_BATCH_SIZE_LIMITS = {
     min: VECTOR_RERANK_MIN_BATCH_SIZE_ACU,
